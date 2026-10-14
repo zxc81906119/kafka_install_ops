@@ -1,0 +1,7 @@
+# Copy to %USERPROFILE%\.wslconfig, then run:  wsl --shutdown   (Docker Desktop restarts the engine)
+[wsl2]
+memory=12GB
+processors=8
+swap=4GB
+# Kafka needs more memory map areas than the WSL default; vm.* cannot be set inside containers.
+kernelCommandLine = sysctl.vm.max_map_count=262144 sysctl.vm.swappiness=1

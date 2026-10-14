@@ -1,0 +1,22 @@
+############################# Identity provider (Active Directory over LDAPS) #############################
+ldap.java.naming.factory.initial=com.sun.jndi.ldap.LdapCtxFactory
+ldap.com.sun.jndi.ldap.read.timeout=5000
+ldap.java.naming.provider.url=ldaps://${AD_FQDN}:636
+ldap.java.naming.security.protocol=SSL
+ldap.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
+ldap.ssl.truststore.password=${STORE_PASSWORD}
+ldap.ssl.truststore.type=PKCS12
+ldap.java.naming.security.authentication=simple
+ldap.java.naming.security.principal=${LDAP_BIND_DN}
+ldap.java.naming.security.credentials=${LDAP_BIND_PASSWORD}
+ldap.search.mode=GROUPS
+ldap.user.search.base=${AD_OU}
+ldap.user.search.scope=2
+ldap.user.object.class=user
+ldap.user.name.attribute=sAMAccountName
+ldap.group.search.base=OU=Groups,${AD_OU}
+ldap.group.search.scope=2
+ldap.group.object.class=group
+ldap.group.name.attribute=cn
+ldap.group.member.attribute=member
+ldap.group.member.attribute.pattern=CN=([^,]+),.*

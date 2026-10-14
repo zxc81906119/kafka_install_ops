@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# cpctl - Confluent Platform offline installer / operator tool (runs on the ops host as cpadmin).
+#
+# Usage: cpctl <command> [options]
+#   repo import|verify|list            landing zone -> internal repo, check it, list it
+#   install [--from NN]                run steps 00..10 (idempotent; resumable)
+#   step <NN_name>                     run a single step
+#   verify                             end-to-end checks (same as step 10)
+#   status                             step stamps + service states
+#   upgrade plan|backup|stage|rolling|finalize|rollback --to <version>
+#   controller add|remove|replace --host <kcNN> [--old <kcNN>]
+#   uninstall --yes-really             remove packages, configs and data (keeps the internal repo + PKI)
+# Global options:
+#   --check     dry run: report what would change, change nothing
+#   --diff      with --check (or alone): show config diffs (secrets masked)
+#   --force     ignore step stamps (re-run apply even if inputs did not change)
+set -Eeuo pipefail
+
+CPCTL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+export CPCTL_HOME
+
+# shellcheck source=../lib/core.sh
+source "$CPCTL_HOME/lib/core.sh"
+for _f in log inventory remote render handler step health lock pki rbac verify; do
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/$_f.sh"
+done
+
+usage() { sed -n '2,19p' "$CPCTL_HOME/bin/cpctl" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# ---- global options
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --check) export CPCTL_CHECK=1; shift ;;
+    --diff) export CPCTL_DIFF=1; shift ;;
+    --force) export CPCTL_FORCE=1; shift ;;
+    -h | --help) usage 0 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+inv::load
+# Drill / staged rollouts: install an older version than conf/versions.env without editing it
+# The ops host keeps the tools of conf/versions.env (newer CLI tools work against older clusters)
+CP_TOOLS_VERSION=$CP_VERSION
+if [[ -n ${CPCTL_CP_VERSION:-} ]]; then
+  CP_VERSION=$CPCTL_CP_VERSION
+  CP_RELEASE=${CP_VERSION%.*}
+fi
+# Strategy selection from the inventory
+[[ -f $CPCTL_HOME/lib/install/$INSTALL_METHOD.sh ]] ||
+  core::die "$E_PRECHECK" "INSTALL_METHOD=$INSTALL_METHOD is not implemented yet (implemented: rpm)"
+# shellcheck source=/dev/null
+source "$CPCTL_HOME/lib/install/$INSTALL_METHOD.sh"
+# shellcheck source=/dev/null
+source "$CPCTL_HOME/lib/repo/$REPO_PROVIDER.sh"
+for _f in "$CPCTL_HOME"/roles/*.sh; do
+  # shellcheck source=/dev/null
+  source "$_f"
+done
+
+core::init_dirs
+trap 'rm -f "$RUN_DIR"/render.* 2>/dev/null; true' EXIT
+
+cmd=${1:-}; shift || true
+case $cmd in
+  repo)
+    lock::acquire
+    case ${1:-} in
+      import) repo::import ;;
+      verify) repo::verify ;;
+      list) repo::list ;;
+      *) usage 2 ;;
+    esac
+    log::recap
+    ;;
+  install)
+    lock::acquire
+    repo::verify >/dev/null || core::die "$E_PRECHECK" "internal repo not served - run: cpctl repo import"
+    step::run_all "$@"
+    log::recap
+    ;;
+  step)
+    lock::acquire
+    [[ -n ${1:-} ]] || usage 2
+    step::run "$1"
+    log::recap
+    ;;
+  verify)
+    verify::run_all && rc=0 || rc=$?
+    log::recap
+    exit "$rc"
+    ;;
+  status)
+    step::status
+    printf '\n%-10s %-22s %s\n' HOST SERVICE STATE
+    for _h in $(inv::hosts controller) $(inv::hosts broker); do
+      printf '%-10s %-22s %s\n' "$_h" confluent-server "$(remote::exec "$_h" 'systemctl is-active confluent-server' 2>/dev/null || true)"
+    done
+    for _h in $(inv::hosts rest); do
+      printf '%-10s %-22s %s\n' "$_h" confluent-kafka-rest "$(remote::exec "$_h" 'systemctl is-active confluent-kafka-rest' 2>/dev/null || true)"
+    done
+    for _h in $(inv::hosts c3); do
+      for _u in prometheus alertmanager confluent-control-center; do
+        printf '%-10s %-22s %s\n' "$_h" "$_u" "$(remote::exec "$_h" "systemctl is-active $_u" 2>/dev/null || true)"
+      done
+    done
+    ;;
+  upgrade)
+    lock::acquire
+    sub=${1:-}; shift || true
+    # shellcheck source=../upgrade/_upgrade.sh
+    source "$CPCTL_HOME/upgrade/_upgrade.sh"
+    upgrade::main "$sub" "$@"
+    log::recap
+    ;;
+  controller)
+    lock::acquire
+    # shellcheck source=../upgrade/controller.sh
+    source "$CPCTL_HOME/upgrade/controller.sh"
+    controller::main "$@"
+    log::recap
+    ;;
+  uninstall)
+    lock::acquire
+    [[ ${1:-} == --yes-really ]] || core::die "$E_USAGE" "uninstall removes packages, configs and ALL Kafka data; re-run with --yes-really"
+    # shellcheck source=../upgrade/uninstall.sh
+    source "$CPCTL_HOME/upgrade/uninstall.sh"
+    uninstall::main
+    log::recap
+    ;;
+  help | "") usage 0 ;;
+  *) usage 2 ;;
+esac

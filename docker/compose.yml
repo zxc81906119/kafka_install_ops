@@ -1,0 +1,145 @@
+# Confluent Platform offline-install PoC - simulated hosts.
+# Only lb01 is attached to "frontnet" (published ports); every other host lives on the internal-only "cpnet".
+name: cp-poc
+
+x-hosts: &hosts
+  - "ops01.poc.lab=172.30.0.10"
+  - "ops01=172.30.0.10"
+  - "ad01.poc.lab=172.30.0.11"
+  - "ad01=172.30.0.11"
+  - "lb01.poc.lab=172.30.0.12"
+  - "lb01=172.30.0.12"
+  - "rest.poc.lab=172.30.0.12"
+  - "c3.poc.lab=172.30.0.12"
+  - "kc01.poc.lab=172.30.0.21"
+  - "kc01=172.30.0.21"
+  - "kc02.poc.lab=172.30.0.22"
+  - "kc02=172.30.0.22"
+  - "kc03.poc.lab=172.30.0.23"
+  - "kc03=172.30.0.23"
+  - "kc04.poc.lab=172.30.0.24"
+  - "kc04=172.30.0.24"
+  - "kb01.poc.lab=172.30.0.31"
+  - "kb01=172.30.0.31"
+  - "kb02.poc.lab=172.30.0.32"
+  - "kb02=172.30.0.32"
+  - "kb03.poc.lab=172.30.0.33"
+  - "kb03=172.30.0.33"
+  - "kb04.poc.lab=172.30.0.34"
+  - "kb04=172.30.0.34"
+  - "rest01.poc.lab=172.30.0.41"
+  - "rest01=172.30.0.41"
+  - "rest02.poc.lab=172.30.0.42"
+  - "rest02=172.30.0.42"
+  - "c3-01.poc.lab=172.30.0.51"
+  - "c3-01=172.30.0.51"
+
+x-node: &node
+  image: cp-node:poc
+  domainname: poc.lab
+  privileged: true
+  cgroup: host
+  stop_signal: SIGRTMIN+3
+  tmpfs:
+    - /run
+    - /run/lock
+    - /tmp:exec,mode=1777,size=2g
+  volumes:
+    - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    - ssh-keys:/etc/ssh/authorized_keys.d:ro
+  extra_hosts: *hosts
+  environment:
+    TZ: Asia/Taipei
+  ulimits:
+    nofile: { soft: 128000, hard: 128000 }
+    nproc: 65536
+  sysctls:
+    net.core.somaxconn: "4096"
+    net.ipv4.tcp_max_syn_backlog: "4096"
+  restart: unless-stopped
+
+services:
+  ops01:
+    <<: *node
+    image: cp-ops:poc
+    hostname: ops01
+    networks: { cpnet: { ipv4_address: 172.30.0.10 } }
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ssh-keys:/etc/ssh/authorized_keys.d
+      - ../installer:/opt/cp-installer:ro
+      - ../packages:/mnt/exchange:ro
+      - ops-state:/var/lib/cp-installer
+      - ops-repo:/srv/repo
+      - ops-home:/home/cpadmin
+
+  ad01:
+    image: cp-ad:poc
+    hostname: ad01
+    domainname: poc.lab
+    privileged: true
+    networks: { cpnet: { ipv4_address: 172.30.0.11 } }
+    extra_hosts: *hosts
+    env_file: ../installer/conf/secrets.env
+    environment:
+      AD_REALM: CORP.POC.LAB
+      AD_DOMAIN: CORP
+      TZ: Asia/Taipei
+    volumes:
+      - ssh-keys:/etc/ssh/authorized_keys.d:ro
+      - ad-data:/var/lib/samba
+      - ad-etc:/etc/samba
+    restart: unless-stopped
+
+  lb01:
+    image: cp-lb:poc
+    hostname: lb01
+    domainname: poc.lab
+    networks:
+      cpnet: { ipv4_address: 172.30.0.12 }
+      frontnet: { ipv4_address: 172.31.0.12 }
+    ports:
+      - "8082:8082"
+      - "9021:9021"
+    extra_hosts: *hosts
+    environment:
+      TZ: Asia/Taipei
+    volumes:
+      - ssh-keys:/etc/ssh/authorized_keys.d:ro
+    restart: unless-stopped
+
+  kc01: { <<: *node, hostname: kc01, networks: { cpnet: { ipv4_address: 172.30.0.21 } } }
+  kc02: { <<: *node, hostname: kc02, networks: { cpnet: { ipv4_address: 172.30.0.22 } } }
+  kc03: { <<: *node, hostname: kc03, networks: { cpnet: { ipv4_address: 172.30.0.23 } } }
+  # Spare controller for the dynamic-quorum replacement drill: docker compose --profile spare up -d kc04
+  kc04: { <<: *node, hostname: kc04, profiles: ["spare"], networks: { cpnet: { ipv4_address: 172.30.0.24 } } }
+
+  kb01: { <<: *node, hostname: kb01, networks: { cpnet: { ipv4_address: 172.30.0.31 } } }
+  kb02: { <<: *node, hostname: kb02, networks: { cpnet: { ipv4_address: 172.30.0.32 } } }
+  kb03: { <<: *node, hostname: kb03, networks: { cpnet: { ipv4_address: 172.30.0.33 } } }
+  kb04: { <<: *node, hostname: kb04, networks: { cpnet: { ipv4_address: 172.30.0.34 } } }
+
+  rest01: { <<: *node, hostname: rest01, networks: { cpnet: { ipv4_address: 172.30.0.41 } } }
+  rest02: { <<: *node, hostname: rest02, networks: { cpnet: { ipv4_address: 172.30.0.42 } } }
+
+  c3-01:
+    <<: *node
+    hostname: c3-01
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    networks: { cpnet: { ipv4_address: 172.30.0.51 } }
+
+networks:
+  cpnet:
+    internal: true
+    ipam: { config: [ { subnet: 172.30.0.0/24 } ] }
+  frontnet:
+    ipam: { config: [ { subnet: 172.31.0.0/24 } ] }
+
+volumes:
+  ssh-keys:
+  ops-state:
+  ops-repo:
+  ops-home:
+  ad-data:
+  ad-etc:

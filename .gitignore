@@ -1,0 +1,19 @@
+# Offline packages (landing zone) - large binaries, never committed
+packages/*
+!packages/.gitkeep
+
+# Secrets and license - provided per environment
+installer/conf/secrets.env
+installer/conf/license.txt
+
+# Generated at runtime
+logs/
+state/
+*.p12
+*.pem
+*.key
+*.crt
+
+# IDE
+.idea/
+*.iml

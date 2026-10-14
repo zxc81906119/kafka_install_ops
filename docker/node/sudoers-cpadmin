@@ -1,0 +1,3 @@
+# PoC only. Production should use installer/conf/sudoers.d/cpadmin.restricted
+cpadmin ALL=(ALL) NOPASSWD: ALL
+Defaults:cpadmin !requiretty
