@@ -25,6 +25,8 @@ role::common_vars() {
   C3_FQDN=$(inv::fqdn "$(inv::hosts c3 | head -1)")
   AD_FQDN=$(inv::fqdn "$AD_HOST")
   LDAP_BIND_DN="CN=svc-mds-bind,OU=Service,$AD_OU"
+  export LDAP_PROVIDER_URLS
+  LDAP_PROVIDER_URLS=$(for d in ${AD_LDAP_HOSTS:-$AD_HOST}; do printf 'ldaps://%s:636 ' "$(inv::fqdn "$d")"; done | sed 's/ $//')
   # kafka-internal: brokers/controllers; kafka-admin: SCRAM break-glass; svc-cpctl: AD installer account (RBAC bootstrap)
   SUPER_USERS="User:kafka-internal;User:kafka-admin;User:svc-cpctl"
   IMPERSONATION_SUPER_USERS="User:svc-rest"
@@ -42,7 +44,13 @@ role::common_vars() {
   else
     LICENSE_LINE="# confluent.license not set: evaluation mode (conf/license.txt is empty)"
   fi
-  export STORE_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD
+  # audit logs: dedicated SCRAM writer on the CLIENT listener, routing from conf/audit.env
+  export AUDIT_BOOTSTRAP AUDIT_PRINCIPAL AUDIT_PASSWORD AUDIT_RETENTION_MS AUDIT_ROUTER_JSON
+  AUDIT_BOOTSTRAP=$(inv::endpoints broker "$PORT_CLIENT")
+  AUDIT_PASSWORD=$(inv::secret AUDIT_PASSWORD)
+  AUDIT_RETENTION_MS=$((AUDIT_RETENTION_DAYS * 86400000))
+  AUDIT_ROUTER_JSON=$(role::audit_router_json)
+  export STORE_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD MDS_TOKEN_PASSPHRASE
   export AD_OU PORT_CONTROLLER PORT_INTERNAL PORT_TOKEN PORT_CLIENT PORT_LDAP PORT_MDS PORT_REST PORT_C3 \
     PORT_PROMETHEUS PORT_ALERTMANAGER LB_REST_NAME
 }
@@ -51,11 +59,29 @@ role::common_vars() {
 role::protected_users() {
   local p out=() svc
   IFS=';' read -ra out <<<"$SUPER_USERS"
-  for svc in $AD_SERVICE_ACCOUNTS; do
+  for svc in $AD_SERVICE_ACCOUNTS ${AUDIT_PRINCIPAL:-}; do
     p="User:$svc"
-    printf '%s\n' "${out[@]}" | grep -qxF "$p" || out+=("$p")
+    [[ " ${out[*]} " == *" $p "* ]] || out+=("$p")
   done
   core::join ';' "${out[@]}"
+}
+
+# confluent.security.event.router.config (one line of JSON) from conf/audit.env:
+#   default topic for every allowed/denied event; on sensitive prefixes produce+consume (allowed+denied)
+#   and DENIED describe (a denied producer fails at metadata, before any Produce request) -> own topic
+role::audit_router_json() {
+  local p routes='{}'
+  for p in $AUDIT_SENSITIVE_PREFIXES; do
+    routes=$(jq -c --arg crn "crn:///kafka=*/topic=$p*" --arg t "$AUDIT_SENSITIVE_TOPIC" \
+      '. + {($crn): {produce: {allowed: $t, denied: $t}, consume: {allowed: $t, denied: $t}, describe: {allowed: "", denied: $t}}}' <<<"$routes")
+  done
+  jq -nc --arg d "$AUDIT_TOPIC" --arg s "$AUDIT_SENSITIVE_TOPIC" \
+    --argjson rd $((AUDIT_RETENTION_DAYS * 86400000)) --argjson rs $((AUDIT_SENSITIVE_RETENTION_DAYS * 86400000)) \
+    --argjson routes "$routes" --arg ex "$AUDIT_EXCLUDED_PRINCIPALS" '{
+      destinations: {topics: {($d): {retention_ms: $rd}, ($s): {retention_ms: $rs}}},
+      default_topics: {allowed: $d, denied: $d},
+      excluded_principals: ($ex | split(" ") | map(select(. != ""))),
+      routes: $routes}'
 }
 
 # REST Proxy accepts only legacy apps (APP_CHANNEL_<app>=rest): one rule matching exactly those CNs and
@@ -97,6 +123,47 @@ role::push_rendered() {
   render::to "$tpl" "$t"
   remote::put "$host" "$t" "$dst" "$o" "$g" "$m"
   rm -f "$t"
+}
+
+# role::push_properties <host> <template> <dest> <component>   -> REMOTE_CHANGED
+# Like push_rendered (root:confluent 0640) but with Secret Protection: no plaintext password reaches the node.
+role::push_properties() {
+  local host=$1 tpl=$2 dst=$3 comp=$4 t
+  t=$(render::tmp)
+  render::to "$tpl" "$t"
+  if sp::enabled; then
+    sp::push "$host" "$comp" "$t" "$dst" root confluent 0640
+  else
+    remote::put "$host" "$t" "$dst" root confluent 0640
+  fi
+  rm -f "$t"
+}
+
+# role::jmx_exporter <host> <component kafka|kafka-rest> <rules file> <keystore name>  -> REMOTE_CHANGED
+# Sets JMX_AGENT_OPTS (the -javaagent option for the systemd drop-in; empty when JMX_EXPORTER=off).
+role::jmx_exporter() {
+  local host=$1 comp=$2 rules=$3 ks=$4 jar t any=0 salt
+  JMX_AGENT_OPTS=""
+  export JMX_AGENT_OPTS
+  [[ ${JMX_EXPORTER:-off} == on ]] || { REMOTE_CHANGED=0; return 0; }
+  jar="jmx_prometheus_javaagent-$JMX_EXPORTER_VERSION.jar"
+  [[ -f $REPO_LOCAL_ROOT/raw/tools/$jar ]] || core::die "$E_PRECHECK" "$jar not in the internal repo (cpctl repo import)"
+  remote::apply "$host" ensure::dir "$JMX_EXPORTER_DIR" root root 0755
+  remote::put "$host" "$REPO_LOCAL_ROOT/raw/tools/$jar" "$JMX_EXPORTER_DIR/$jar" root root 0644; [[ $REMOTE_CHANGED == 1 ]] && any=1
+  # stable salt per cluster: same input -> same file -> no restart
+  [[ -s $STATE_DIR/jmx-exporter.salt ]] || { openssl rand -hex 16 >"$STATE_DIR/jmx-exporter.salt"; chmod 0600 "$STATE_DIR/jmx-exporter.salt"; }
+  salt=$(cat "$STATE_DIR/jmx-exporter.salt")
+  export JMX_COMPONENT=$comp JMX_KEYSTORE=$ks JMX_PASSWORD_SALT=$salt JMX_EXPORTER_USER HOST_FQDN
+  HOST_FQDN=$(inv::fqdn "$host")
+  JMX_PASSWORD_HASH=$(printf '%s:%s' "$salt" "$(inv::secret JMX_EXPORTER_PASSWORD)" | sha256sum | awk '{print $1}')
+  export JMX_PASSWORD_HASH
+  t=$(render::tmp)
+  render::to jmx/exporter-http.yml.tpl "$t"
+  cat "$(render::find "jmx/$rules")" >>"$t"
+  remote::put "$host" "$t" "/etc/confluent/$comp/jmx-exporter.yml" root confluent 0640; [[ $REMOTE_CHANGED == 1 ]] && any=1
+  rm -f "$t"
+  JMX_AGENT_OPTS="-javaagent:$JMX_EXPORTER_DIR/$jar=$PORT_JMX_EXPORTER:/etc/confluent/$comp/jmx-exporter.yml"
+  REMOTE_CHANGED=$any
 }
 
 # role::systemd_dropin <host> <unit> <template>   (exports UNIT for the template)

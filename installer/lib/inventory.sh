@@ -7,6 +7,7 @@ inv::load() {
   core::load_env "$CONF_DIR/inventory.env"
   core::load_env "$CONF_DIR/versions.env"
   core::load_env "$CONF_DIR/apps.env"
+  [[ -f $CONF_DIR/audit.env ]] && core::load_env "$CONF_DIR/audit.env"
   [[ -f $CONF_DIR/secrets.env ]] && core::load_env "$CONF_DIR/secrets.env"
   return 0
 }
@@ -23,7 +24,8 @@ inv::hosts() {
 inv::roles() {
   local host=$1 role
   for role in controller broker rest c3 lb ad ops controller_spare; do
-    inv::hosts "$role" | grep -qx "$host" && printf '%s\n' "$role"
+    # here-string, not a pipe: "producer | grep -q" can SIGPIPE the producer -> false negative under pipefail
+    grep -qx "$host" <<<"$(inv::hosts "$role")" && printf '%s\n' "$role"
   done
   return 0
 }

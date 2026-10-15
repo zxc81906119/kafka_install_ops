@@ -12,7 +12,7 @@ precheck::inventory() {
     core::die "$E_PRECHECK" "need an odd number (>=3) of controllers"
   [[ $(inv::hosts broker | wc -l) -ge 3 ]] || core::die "$E_PRECHECK" "need >= 3 brokers for RF=3 / min.insync=2"
   log::ok "inventory: $(inv::hosts controller | wc -l) controllers, $(inv::hosts broker | wc -l) brokers, $(inv::hosts rest | wc -l) REST, $(inv::hosts c3 | wc -l) C3"
-  for s in AD_ADMIN_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD SVC_CPCTL_PASSWORD KAFKA_ADMIN_PASSWORD STORE_PASSWORD; do
+  for s in AD_ADMIN_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD SVC_CPCTL_PASSWORD KAFKA_ADMIN_PASSWORD STORE_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE; do
     inv::secret "$s" >/dev/null
   done
   for s in $(inv::apps scram); do inv::secret "$(inv::app_secret_var "$s")" >/dev/null; done

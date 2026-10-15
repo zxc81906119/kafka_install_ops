@@ -19,7 +19,7 @@ repo::_as_owner() { sudo -n -u "$REPO_OWNER" bash -c 'umask 022; exec "$@"' _ "$
 repo::_dest() {
   case $1 in
     rpm/*) printf '%s/%s' "$REPO_LOCAL_ROOT" "$1" ;;
-    tar/*) printf '%s/raw/%s' "$REPO_LOCAL_ROOT" "$1" ;;
+    tar/* | tools/*) printf '%s/raw/%s' "$REPO_LOCAL_ROOT" "$1" ;;
     gpg-keys/*) printf '%s/%s' "$REPO_LOCAL_ROOT" "$1" ;;
     *) return 1 ;;
   esac
@@ -36,7 +36,7 @@ repo::_verify_landing() {
   for k in "$REPO_LANDING"/gpg-keys/*.asc; do sudo -n rpm --import "$k"; done
   local bad=0 f
   while IFS= read -r -d '' f; do
-    if ! rpm -K "$f" 2>/dev/null | grep -q 'digests signatures OK'; then
+    if ! grep -q 'digests signatures OK' <<<"$(rpm -K "$f" 2>/dev/null)"; then
       log::error "GPG signature check failed: ${f#$REPO_LANDING/}"
       bad=1
     fi

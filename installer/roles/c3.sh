@@ -30,7 +30,7 @@ role::c3::configure() {
 
   # Control Center
   remote::apply "$host" ensure::dir /etc/confluent/control-center root confluent 0750
-  role::push_rendered "$host" control-center.properties.tpl "$C3_CONF" root confluent 0640
+  role::push_properties "$host" control-center.properties.tpl "$C3_CONF" control-center
   [[ $REMOTE_CHANGED == 1 ]] && any_c3=1
   export CONFIG_FILE=$C3_CONF HEAP JAVA_HOME COMPONENT=control-center
   HEAP=$(inv::heap c3)

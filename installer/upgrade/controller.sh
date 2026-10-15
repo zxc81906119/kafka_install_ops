@@ -60,8 +60,11 @@ ctl::add() { # <host>
   health::wait 300 "[$h] observer caught up with the metadata log" ctl::observer_caught_up "$id"
   ctl::node_command_config "$h"
   log::changed "[$h] add-controller id=$id"
-  remote::exec "$h" "sudo -n -u cp-kafka env JAVA_HOME=$(install::java_home) KAFKA_HEAP_OPTS=-Xmx256m $(install::bin kafka-metadata-quorum) \
-    --command-config /etc/confluent/kafka/add-controller.properties --bootstrap-controller $CONTROLLER_BOOTSTRAP add-controller"
+  # the copied config may contain ${securepass:...}: pass the master key from the root-only service.env
+  remote::exec "$h" "sudo -n bash -c 'set -a; . /etc/confluent/kafka/service.env 2>/dev/null || true; set +a; \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=$(install::java_home) KAFKA_HEAP_OPTS=-Xmx256m \
+    $(install::bin kafka-metadata-quorum) --command-config /etc/confluent/kafka/add-controller.properties \
+    --bootstrap-controller $CONTROLLER_BOOTSTRAP add-controller'"
   health::wait 180 "[$h] node $id is a voter" ctl::is_voter "$id"
 }
 

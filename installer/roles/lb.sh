@@ -10,7 +10,7 @@ lb::upstream_lines() {
   local h line
   for h in $(inv::hosts rest); do
     line="    server $(inv::fqdn "$h"):$PORT_REST max_fails=2 fail_timeout=10s"
-    if printf '%s\n' "$@" | grep -qx "$h"; then line+=" down"; fi
+    if [[ " $* " == *" $h "* ]]; then line+=" down"; fi
     printf '%s;\n' "$line"
   done
 }

@@ -20,7 +20,10 @@ kafka_node::format() {
   _mark changed "kafka-storage format (cluster.id=$cid)"
   [[ ${CPCTL_CHECK:-0} == 1 ]] && return 0
   install -d -o cp-kafka -g confluent -m 0750 "$KAFKA_DATA"
-  sudo -u cp-kafka env JAVA_HOME="$jh" KAFKA_HEAP_OPTS=-Xmx256m \
+  # Secret Protection: the config holds ${securepass:...} references -> the tool needs the master key too
+  local mk=""
+  [[ -f /etc/confluent/kafka/service.env ]] && mk=$(sed -n 's/^CONFLUENT_SECURITY_MASTER_KEY=//p' /etc/confluent/kafka/service.env)
+  sudo -u cp-kafka env JAVA_HOME="$jh" KAFKA_HEAP_OPTS=-Xmx256m ${mk:+CONFLUENT_SECURITY_MASTER_KEY="$mk"} \
     KAFKA_OPTS="-Dlog4j2.configurationFile=$etc/tools-log4j2.yaml" \
     "$bindir/kafka-storage" format --cluster-id "$cid" --config "$cfg" "$@" | grep -v -i scram || true
   [[ -f $KAFKA_DATA/meta.properties ]] || { _mark warn "format did not create meta.properties"; return 1; }
@@ -36,14 +39,30 @@ kafka_node::wipe() {
 # java_node::trust_ca <java home> <ca pem> <storepass>
 # Imports the internal CA into the JDK default truststore (lets components that build their own
 # HTTPS/LDAPS clients trust internal endpoints without passing truststore passwords on the command line).
+# The file may be a BUNDLE (CA rotation): every CA gets alias cp-ca-<fingerprint>, stale cp-ca-* aliases
+# (and the legacy cp-internal-ca alias) are removed, so the JDK trusts exactly the bundle.
 java_node::trust_ca() {
-  local jh=$1 ca=$2 cacerts
+  local jh=$1 bundle=$2 cacerts kt d f fp alias want=() have
+  kt=("$jh/bin/keytool" -cacerts -storepass changeit)
   cacerts=$(readlink -f "$jh/lib/security/cacerts")
-  if "$jh/bin/keytool" -list -cacerts -storepass changeit -alias cp-internal-ca >/dev/null 2>&1; then
-    _mark ok "JDK truststore has internal CA ($cacerts)"
-    return 0
-  fi
-  _mark changed "import internal CA into JDK truststore ($cacerts)"
-  [[ ${CPCTL_CHECK:-0} == 1 ]] && return 0
-  "$jh/bin/keytool" -importcert -noprompt -cacerts -storepass changeit -alias cp-internal-ca -file "$ca" >/dev/null
+  d=$(mktemp -d)
+  awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' "$bundle"
+  for f in "$d"/ca-*.pem; do
+    fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f' | cut -c1-16)
+    alias="cp-ca-$fp"
+    want+=("$alias")
+    if "${kt[0]}" -list "${kt[@]:1}" -alias "$alias" >/dev/null 2>&1; then
+      _mark ok "JDK truststore has $alias"
+    else
+      _mark changed "JDK truststore: import $alias ($cacerts)"
+      [[ ${CPCTL_CHECK:-0} == 1 ]] || "${kt[0]}" -importcert -noprompt "${kt[@]:1}" -alias "$alias" -file "$f" >/dev/null
+    fi
+  done
+  rm -rf "$d"
+  have=$("${kt[0]}" -list "${kt[@]:1}" 2>/dev/null | grep -o -E '^(cp-ca-[0-9a-f]+|cp-internal-ca)' || true)
+  for alias in $have; do
+    [[ " ${want[*]} " == *" $alias "* ]] && continue
+    _mark changed "JDK truststore: remove $alias (no longer in the trust bundle)"
+    [[ ${CPCTL_CHECK:-0} == 1 ]] || "${kt[0]}" -delete "${kt[@]:1}" -alias "$alias" >/dev/null
+  done
 }

@@ -64,10 +64,29 @@ verify::produce() { # <bootstrap> <config> <topic> <message>
   ! grep -q -i -E 'authoriz|exception|error' <<<"$out"
 }
 
+# verify::audit_has <topic> <principal> <granted true|false> [method regex]  -> such an event exists
+verify::audit_has() {
+  local out
+  out=$(timeout 120 env KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
+    "$(install::bin kafka-console-consumer)" --bootstrap-server "$(kafka::bootstrap_internal)" \
+    --consumer.config "$(kafka::admin_config)" --topic "$1" --from-beginning --timeout-ms 30000 2>/dev/null || true)
+  # aggregate first: jq 1.6 "-e" reports only the LAST input's result
+  jq -e -n -R --arg p "$2" --argjson g "$3" --arg m "${4:-.}" '[inputs | fromjson? | select((.data.methodName | test($m))
+    and .data.authenticationInfo.principal == $p and .data.authorizationInfo.granted == $g)] | length > 0' <<<"$out" >/dev/null
+}
+
 verify::consume_contains() { # <bootstrap> <config> <topic> <group> <message>
-  timeout 90 env KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
-    "$(install::bin kafka-console-consumer)" --bootstrap-server "$1" --consumer.config "$2" --topic "$3" --group "$4" \
-    --from-beginning --timeout-ms 45000 2>/dev/null | grep -qF "$5"
+  local out attempt
+  # one retry: right after rolling restarts the group coordinator may still be moving
+  for attempt in 1 2; do
+    # capture first: "consumer | grep -q" would SIGPIPE the consumer under pipefail
+    out=$(timeout 90 env KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
+      "$(install::bin kafka-console-consumer)" --bootstrap-server "$1" --consumer.config "$2" --topic "$3" --group "$4" \
+      --from-beginning --timeout-ms 45000 2>/dev/null || true)
+    grep -qF "$5" <<<"$out" && return 0
+    [[ $attempt == 1 ]] && log::info "consume check: message not seen yet, retrying once"
+  done
+  return 1
 }
 
 # REST v3 produce answers HTTP 200 and reports each record's outcome in the body ("error_code": 200 | 403xx ...)
@@ -78,8 +97,8 @@ verify::rest_produce_code() { # <url> <cert>
 }
 
 verify::has_scram() { # <user>
-  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
-    --describe --entity-type users --entity-name "$1" 2>/dev/null | grep -q SCRAM-SHA-512
+  grep -q SCRAM-SHA-512 <<<"$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+    --describe --entity-type users --entity-name "$1" 2>/dev/null)"
 }
 
 
@@ -172,7 +191,12 @@ verify::run_all() {
     verify::fail "no io_confluent_kafka_server metrics in Prometheus yet (first scrape can take ~2 min)"
 
   log::step "---- Audit, packages, offline"
-  verify::check "audit log topic confluent-audit-log-events exists" kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" --describe --topic confluent-audit-log-events
+  verify::check "audit log topic $AUDIT_TOPIC exists" kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" --describe --topic "$AUDIT_TOPIC"
+  # earlier checks: alice produced to payments.events (allowed), app-orders tried (denied) -> routed to the sensitive topic
+  verify::check "audit: allowed produce of User:alice on payments.* is in $AUDIT_SENSITIVE_TOPIC" verify::audit_has "$AUDIT_SENSITIVE_TOPIC" User:alice true "^kafka.Produce$"
+  verify::check "audit: denied access of User:app-orders to payments.* is in $AUDIT_SENSITIVE_TOPIC" verify::audit_has "$AUDIT_SENSITIVE_TOPIC" User:app-orders false
+  verify::check "audit writer is the dedicated principal $AUDIT_PRINCIPAL (not a super user)" \
+    bash -c '[[ ";$1;" != *";User:$2;"* ]]' _ "$SUPER_USERS" "$AUDIT_PRINCIPAL"
   local h
   for h in $(inv::hosts broker | head -1) $(inv::hosts rest | head -1) $(inv::hosts c3) $(inv::hosts ops); do
     verify::check_not "[$h] has no Internet access (offline)" remote::exec "$h" "curl -s -m 5 -o /dev/null https://packages.confluent.io"
@@ -183,8 +207,20 @@ verify::run_all() {
     verify::check_not "[$h] has no Confluent Platform packages (C3 host must stay clean)" remote::exec "$h" "rpm -q confluent-server confluent-common >/dev/null 2>&1 || test -e /opt/confluent/current"
   done
 
-  if [[ ! -s $CONF_DIR/license.txt ]]; then
-    log::warn "no license configured (conf/license.txt) - running in evaluation mode"
+  if [[ ${JMX_EXPORTER:-off} == on ]]; then
+    log::step "---- External monitoring (JMX exporter)"
+    verify::check "every controller / broker / REST exporter: HTTPS, auth required, metrics served" monitoring::check
   fi
+
+  log::step "---- Certificates"
+  pki::status || true   # expiring soon / not yet switched = warning only (cpctl certs status shows served certs too)
+  verify::check "[$first_broker] MDS presents the current cp-server certificate" \
+    test "$(pki::served_serial "$first_broker:$PORT_MDS")" = "$(pki::serial cp-server)"
+
+  log::step "---- License"
+  local lrc=0
+  license::status || lrc=$?
+  [[ $lrc -eq 1 ]] && VERIFY_FAILED=1   # expired = failure; expiring soon / trial = warning only
+  [[ -s $CONF_DIR/license.txt ]] || log::warn "evaluation mode: put the purchased license in conf/license.txt before go-live"
   return "$VERIFY_FAILED"
 }

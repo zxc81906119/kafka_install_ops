@@ -3,13 +3,15 @@
 STEP_DESC="render and push configuration for every role (restart only what changed, rolling)"
 
 step_inputs() {
-  cat "$CONF_DIR/inventory.env" "$CONF_DIR/apps.env" "$CONF_DIR/versions.env"
+  cat "$CONF_DIR/inventory.env" "$CONF_DIR/apps.env" "$CONF_DIR/versions.env" "$CONF_DIR/audit.env"
   find "$CPCTL_HOME/templates" "$CPCTL_HOME/roles" -type f -exec cat {} + ; cat "$PKI_DIR"/*.crt 2>/dev/null || true
   [[ -f $CONF_DIR/license.txt ]] && cat "$CONF_DIR/license.txt"; return 0
 }
 
 step_apply() {
   local role
+  # create the Secret Protection master key once, before the parallel configure jobs
+  if sp::enabled && step::mutating; then sp::master_key >/dev/null; fi
   for role in controller broker rest c3; do
     remote::parallel "role::$role::configure" $(inv::hosts "$role")
   done

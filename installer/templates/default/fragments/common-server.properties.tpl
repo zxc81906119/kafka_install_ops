@@ -17,9 +17,9 @@ authorizer.class.name=io.confluent.kafka.security.authorizer.ConfluentServerAuth
 confluent.authorizer.access.rule.providers=KRAFT_ACL,CONFLUENT
 super.users=${SUPER_USERS}
 allow.everyone.if.no.acl.found=false
-confluent.metadata.server.token.key.path=/etc/confluent/ssl/mds-token-keypair.pem
+confluent.metadata.server.token.key.path=/etc/confluent/ssl/mds-token-keypair.enc.pem
+confluent.metadata.server.token.key.passphrase=${MDS_TOKEN_PASSPHRASE}
 confluent.metadata.topic.replication.factor=3
-confluent.security.event.logger.exporter.kafka.topic.replicas=3
 
 ############################# License #############################
 ${LICENSE_LINE}

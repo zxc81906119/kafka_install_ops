@@ -79,7 +79,7 @@ install::os_dep_version() {
 }
 
 # install::available <cp version>  -> target packages are published in the internal repo
-install::available() { find "$REPO_LOCAL_ROOT/rpm/confluent" -name "confluent-server-$1-*.rpm" | grep -q .; }
+install::available() { [[ -n $(find "$REPO_LOCAL_ROOT/rpm/confluent" -name "confluent-server-$1-*.rpm") ]]; }
 
 # install::pinned <host>  -> the installed version is protected against accidental OS patching
 install::pinned() { remote::exec "$1" "sudo -n dnf versionlock list 2>/dev/null | grep -q confluent-server"; }

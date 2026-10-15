@@ -8,7 +8,7 @@ readonly KAFKA_CONF=/etc/confluent/kafka/server.properties
 kafka::_configure() { # <role> <host>
   local role=$1 host=$2 any=0
   role::common_vars
-  export HOST_FQDN NODE_ID RACK COMMON_BLOCK LDAP_BLOCK TELEMETRY_BLOCK
+  export HOST_FQDN NODE_ID RACK COMMON_BLOCK LDAP_BLOCK TELEMETRY_BLOCK AUDIT_BLOCK
   HOST_FQDN=$(inv::fqdn "$host")
   NODE_ID=$(inv::get "$host" NODE_ID)
   [[ -n $NODE_ID ]] || core::die "inventory: HOST_${host}_NODE_ID missing"
@@ -16,13 +16,20 @@ kafka::_configure() { # <role> <host>
   COMMON_BLOCK=$(role::render_block common-server.properties.tpl)
   LDAP_BLOCK=$(role::render_block ldap.properties.tpl)
   TELEMETRY_BLOCK=$(role::render_block telemetry.properties.tpl)
+  AUDIT_BLOCK=$(role::render_block audit.properties.tpl)
 
-  local ssl=(ca.pem truststore.p12 kafka-internal.p12 mds-token-keypair.pem mds-public.pem)
+  local ssl=(ca.pem truststore.p12 kafka-internal.p12 mds-token-keypair.enc.pem mds-public.pem)
   [[ $role == broker ]] && ssl+=(cp-server.p12)
   role::push_ssl "$host" "${ssl[@]}"; [[ $REMOTE_CHANGED == 1 ]] && any=1
+  # the unencrypted token key from earlier versions must not stay on the node
+  remote::apply "$host" ensure::absent /etc/confluent/ssl/mds-token-keypair.pem
 
   remote::apply "$host" ensure::dir /etc/confluent/kafka root confluent 0750
-  role::push_rendered "$host" "$role.properties.tpl" "$KAFKA_CONF" root confluent 0640
+  role::push_properties "$host" "$role.properties.tpl" "$KAFKA_CONF" kafka
+  [[ $REMOTE_CHANGED == 1 ]] && any=1
+
+  # controllers have no cp-server.p12: their exporter serves the internal certificate (SANs cover kc*)
+  role::jmx_exporter "$host" kafka rules-kafka.yml "$([[ $role == broker ]] && echo cp-server || echo kafka-internal)"
   [[ $REMOTE_CHANGED == 1 ]] && any=1
 
   export CONFIG_FILE=$KAFKA_CONF HEAP JAVA_HOME COMPONENT=kafka
@@ -103,8 +110,9 @@ kafka::_broker_healthy() {
   local host=$1 id cfg out
   id=$(inv::get "$host" NODE_ID)
   cfg=$(kafka::admin_config)
-  kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_internal)" \
-    --command-config "$cfg" 2>/dev/null | grep -q "(id: $id rack" || return 1
+  out=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_internal)" \
+    --command-config "$cfg" 2>/dev/null || true)
+  grep -qF "(id: $id rack" <<<"$out" || return 1
   out=$(kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" \
     --describe --under-replicated-partitions 2>/dev/null) || return 1
   [[ -z $out ]]

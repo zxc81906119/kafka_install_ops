@@ -69,7 +69,7 @@ bash windows/verify-packages.sh            # 放行前驗證：sha256、原廠�
 bash windows/poc.sh up                     # 啟動 13 台模擬主機
 bash windows/poc.sh cpctl repo import      # 落地區 → 內部 repo（先驗證，同名不同內容一律拒絕）
 bash windows/poc.sh cpctl install          # 步驟 00–10，可中斷後重跑
-bash windows/poc.sh cpctl verify           # 端到端驗證（34 項）
+bash windows/poc.sh cpctl verify           # 端到端驗證（37 項）
 ```
 
 瀏覽器開啟 `https://localhost:9021`（C3，需信任 `ops01:/var/lib/cp-installer/pki/ca.pem`），用 `conf/apps.env` 中的 AD 帳號登入（例如 `alice`，密碼為 `HUMAN_DEFAULT_PASSWORD`）。
@@ -117,6 +117,11 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 | `cpctl verify` / `cpctl status` | 端到端驗證 / 各步驟最後成功時間與服務狀態 |
 | `cpctl upgrade plan\|backup\|stage\|rolling\|finalize\|rollback --to <ver>` | 滾動升級（見下方 SOP） |
 | `cpctl controller replace --old kc03 --host kc04` | 動態 quorum 成員替換 |
+| `cpctl certs status` | 憑證到期日，以及各服務**目前實際出示**的憑證序號 |
+| `cpctl certs rotate [--cert a,b\|all]` | 重簽 leaf 憑證（預設 kafka-internal、cp-server），滾動重啟 |
+| `cpctl certs rotate-ca --phase add\|switch\|retire` | 不停機的 CA 輪替（分三次執行） |
+| `cpctl license status` | 生效中的 license（檔案或試用）、到期日、剩餘天數 |
+| `cpctl monitoring export\|check` | 產生給行內 Prometheus 的 scrape 設定與告警規則 / 檢查所有 exporter |
 | `cpctl uninstall --yes-really` | 移除套件、設定與資料；保留內部 repo、PKI、AD 帳號 |
 
 步驟：`00 precheck` → `01 os_baseline` → `02 distribute`（RPM）→ `03 pki` → `04 ad_bootstrap` → `05 configure` → `06 kraft_format`（`--initial-controllers` 動態 quorum）→ `07 start_core` → `08 security_bootstrap`（SCRAM、RBAC、topic）→ `09 start_edge`（REST、C3、LB）→ `10 verify`。
@@ -125,7 +130,23 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 
 - 所有變更都經過 `ensure::*`：先比較目前狀態，一致就報 `ok`，不一致才動作並報 `changed`（設定檔以 sha256 比對，覆蓋前保留 `.bak.<時間>`）。
 - 設定有變時只通知 handler，之後逐台重啟並通過健康檢查（health gate）才處理下一台。待重啟清單保存在 `state/handlers.pending`，中斷後不會遺失。
-- 驗收結果：在已安裝的環境再跑一次 `cpctl install --force` 得到 **changed=0**（562 ok，含 34 項 verify）。
+- 驗收結果：在已安裝的環境再跑一次 `cpctl install --force` 得到 **changed=0**（860 ok、0 failed，含 37 項 verify；2026-10-15，含本次新增的營運設定）。
+- 程式規則：禁止 `指令 | grep -q`（pipefail 下 grep 提早結束會讓前段收到 SIGPIPE 而隨機誤判），一律寫成 `grep -q 樣式 <<<"$(指令)"`；`tools/lint.sh` 會擋下違規。精簡 OS 沒有 diffutils，檔案比對一律用 sha256。
+
+## 正式營運需要的設定（對照官方文件補齊）
+
+| 項目 | 做法 | 驗證 |
+|---|---|---|
+| Secret Protection | 所有 `.properties` 的密碼（含 JAAS 內的 password）以 `confluent secret file encrypt` 加密成 `${securepass:...}`；master key 只存在操作機（0600）與各節點 root-only 的 `service.env` | 全節點掃描 0 筆明文密碼；重跑 changed=0 |
+| MDS token 私鑰 | 節點只拿到 PKCS#8 AES-256 加密版，passphrase 本身也經 Secret Protection | 舊的明文私鑰會被自動移除 |
+| 憑證輪替 | leaf：`certs rotate`；CA：三階段（add → switch → retire），過程中所有節點同時信任新舊 CA；JDK / OS trust store 依 bundle 指紋同步 | 持續流量下 leaf 與 CA 三階段輪替全程 **0 遺失、REST 0 失敗** |
+| License 監控 | 從 `conf/license.txt` 或 `_confluent-command` 讀 JWT 解出到期日；30 天內警告、過期即 verify 失敗 | `cpctl license status` |
+| Log 保留 | log4j2 只輪替不刪除 → `systemd-tmpfiles` 每日刪除 `LOG_RETENTION_DAYS`（預設 14 天）前的檔案；journald 上限 1G | step 01 |
+| LDAP 韌性 | 多台 AD（`AD_LDAP_HOSTS`）、連線逾時 3 秒、群組快取 60 秒更新，AD 中斷時沿用快取最長 24 小時 | 憑證輪替時 Samba 重啟，登入不中斷 |
+| Telemetry | `confluent.telemetry.enabled=false`（不送 Confluent Cloud / Health+）；只保留送往 C3 Prometheus 的 `_c3` exporter | — |
+| **稽核日誌** | 專用低權限 SCRAM 帳號 `confluent-audit`（只有稽核 topic 的 DeveloperWrite/Manage），不使用 broker 身分；`payments.*` 的 produce/consume（允許＋拒絕）與**被拒絕的 describe** 導向 `confluent-audit-log-events_sensitive`（保留 365 天），其餘 90 天；排除 `kafka-internal`、`svc-c3` 的雜訊（`conf/audit.env`） | verify：alice 的允許事件、app-orders 的拒絕事件都已進入敏感稽核 topic |
+| **外部監控** | Prometheus JMX exporter（javaagent，**同樣經離線引進流程**：下載機驗 sha1 → SHA256SUMS → repo import → SSH 派送）；HTTPS（節點憑證）＋ basic auth（加鹽 SHA-256，節點上沒有明文密碼）；`cpctl monitoring export` 產出 scrape 設定、9 條告警規則、CA bundle 給行內 Prometheus | 9 個 exporter 皆需認證、可抓取；以 C3 附的 Prometheus 載入匯出檔實測：9/9 target up、9 條規則全部 ok |
+| **OS 層** | THP=never（`disable-thp.service`，容器內由 systemd 自動略過）；chrony 指向 `NTP_SERVERS`（PoC 由 ops01 提供時間）；firewalld 依角色只開必要 port＋ssh，關閉預設的 cockpit / dhcpv6-client；SELinux 檢查 enforcing 並對自訂路徑 restorecon。chrony、firewalld 由內部 os-deps repo 安裝 | 不在清單上的 port 被擋、ssh 正常；第二次執行全部 ok |
 
 ## 升級 SOP（依 CP 8.3 官方文件：broker 先、controller 後）
 
@@ -147,11 +168,16 @@ cpctl upgrade finalize --to 8.3.2   # kafka-features upgrade --release-version�
 | 憑證 | 自建 CA（RSA 3072，效期 1 年） | 改用行內 CA 簽發，放進 `state/pki` |
 | heap / retention | `PROFILE=poc` 數值 | `PROFILE=prod`（官方建議值） |
 | 核心參數 | vm.* 等只能在 WSL2 主機設定（腳本會警告） | 腳本直接寫入 `/etc/sysctl.d` |
+| THP / SELinux | 容器共用 WSL2 核心：THP 只回報、SELinux 不存在 → `skipped` | `disable-thp.service` 生效；SELinux enforcing＋restorecon |
+| 時間同步 | chrony 以 `-x` 執行（只跟隨不調整共用時鐘），ops01 當 NTP 來源 | `NTP_SERVERS` 改為行內 NTP，移除 `-x` |
+| 防火牆 | firewalld 只作用在各容器自己的網路命名空間 | 依實際網段與行內網路防火牆政策調整，或 `FIREWALLD=off` |
 | 內部 repo 傳輸 | HTTP（RPM 有 gpgcheck，其餘檔案有 sha256） | 建議改用 HTTPS |
 | License | 未設定，以評估模式執行 | 放入 `conf/license.txt` |
 
 ## 已知限制與風險
 
-- `kafka-internal` 憑證由所有 controller 和 broker 共用，而且是 super user：任何一台的私鑰外洩，等於整個叢集被取得。緩解方式：私鑰權限 0640、定期輪替；正式環境也可以改成每台各自一張憑證。
+- `kafka-internal` 憑證由所有 controller 和 broker 共用，而且是 super user：任何一台的私鑰外洩，等於整個叢集被取得。緩解方式：私鑰權限 0640、以 `cpctl certs rotate` 定期（或事故時立即）輪替；正式環境也可以改成每台各自一張憑證。
+- JMX exporter 的 keystore 密碼必須以明文寫在 exporter 的 YAML（0640 root:confluent；YAML 不支援 Secret Protection）。scrape 密碼則只存雜湊。
+- Confluent Server 不以 JMX 提供 raft 指標；controller quorum 健康以 `ActiveControllerCount` 告警，詳細狀態用 `cpctl verify`。consumer lag 不是 broker JMX 指標，由 C3 顯示（或另接 lag exporter）。
 - svc-cpctl 是安裝用的 bootstrap 帳號，列在 `super.users` 中；安裝完成後建議停用，需要時再由 break-glass 程序啟用。
 - 在 Docker Desktop 上，從 Windows 發出的請求來源 IP 都相同，LB 的 source-hash 黏著會把它們全部送到同一台 REST Proxy；負載分散要從 cpnet 內的不同來源驗證。

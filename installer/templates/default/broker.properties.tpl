@@ -19,6 +19,8 @@ principal.builder.class=io.confluent.kafka.security.authenticator.OAuthKafkaPrin
 
 ${COMMON_BLOCK}
 
+${AUDIT_BLOCK}
+
 ############################# External listeners: shared server certificate #############################
 listener.name.token.ssl.keystore.type=PKCS12
 listener.name.token.ssl.keystore.location=/etc/confluent/ssl/cp-server.p12

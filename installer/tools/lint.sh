@@ -9,3 +9,9 @@ printf 'shellcheck: %s files\n' "${#files[@]}"
 shellcheck -x -S warning -e SC1090,SC1091,SC2034 -s bash "${files[@]}"
 printf 'shfmt (diff only, 2-space indent)\n'
 shfmt -i 2 -ci -d "${files[@]}" >/dev/null && echo "shfmt: clean" || echo "shfmt: formatting differences (non-blocking)"
+# Project rule: no "producer | grep -q" pipelines. Under pipefail grep's early exit SIGPIPEs the producer and the
+# test turns false at random (it once archived a managed certificate). Use: grep -q PAT <<<"$(producer)".
+# Commands sent to remote shells as strings (no pipefail there) are exempt.
+bad=$(grep -n -E '\|[[:space:]]*grep -[a-zA-Z]*q' "${files[@]}" | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#|remote::exec' || true)
+if [[ -n $bad ]]; then printf 'pipe-to-grep -q (SIGPIPE race under pipefail):\n%s\n' "$bad"; exit 1; fi
+echo "pipe-to-grep -q: none"

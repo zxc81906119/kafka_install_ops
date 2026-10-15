@@ -40,5 +40,5 @@ fi
 
 log "writing SHA256SUMS (inside a Linux container: Git Bash sha256sum is unreliable on multi-GB files)"
 docker run --rm -v "$(winpath "$PACKAGES_DIR"):/out" cp-node:poc bash -c \
-  'cd /out && find rpm tar gpg-keys -type f 2>/dev/null | LC_ALL=C sort | xargs -r sha256sum >SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS'
+  'cd /out && find rpm tar tools gpg-keys -type f 2>/dev/null | LC_ALL=C sort | xargs -r sha256sum >SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS'
 log "done: $(wc -l <"$PACKAGES_DIR/SHA256SUMS") files listed; next run windows/verify-packages.sh"

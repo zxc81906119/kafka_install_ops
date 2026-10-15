@@ -42,7 +42,12 @@ ensure::file() {
   if [[ -n $old ]]; then
     _mark changed "file $dst (content changed)"
     if [[ ${CPCTL_DIFF:-0} == 1 ]]; then
-      diff -u "$dst" "$src" | sed -e 's/^/    /' | head -80 | grep -v -i -E 'password|secret|credentials' || true
+      if command -v diff >/dev/null; then
+        diff -u "$dst" "$src" | sed -e 's/^/    /' | head -80 | grep -v -i -E 'password|secret|credentials' || true
+      else # minimal OS without diffutils: removed / added lines (order-insensitive)
+        { grep -Fxv -f "$src" "$dst" | sed 's/^/    -/'; grep -Fxv -f "$dst" "$src" | sed 's/^/    +/'; } |
+          head -80 | grep -v -i -E 'password|secret|credentials|securepass|ENC\[' || true
+      fi
     fi
   else
     _mark changed "file $dst (new)"
@@ -118,7 +123,7 @@ ensure::user_exists() {
 # ensure::ca_trust <pem file>  -> OS trust store (curl/openssl/LDAP tools)
 ensure::ca_trust() {
   local src=$1 dst=/etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
-  if cmp -s "$src" "$dst"; then _mark ok "OS trust has internal CA"; return 0; fi
+  if [[ -f $dst && $(sha256sum <"$src") == $(sha256sum <"$dst") ]]; then _mark ok "OS trust has internal CA"; return 0; fi
   _mark changed "OS trust: install internal CA"
   _checking && return 0
   install -m 0644 "$src" "$dst"
@@ -136,7 +141,7 @@ node::facts() {
   printf 'mem_mb=%s\n' "$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
   printf 'disk_var_free_mb=%s\n' "$(df -Pm /var | awk 'NR==2 {print $4}')"
   printf 'tmp_free_mb=%s\n' "$(df -Pm /tmp | awk 'NR==2 {print $4}')"
-  printf 'tmp_noexec=%s\n' "$(findmnt -no OPTIONS /tmp 2>/dev/null | grep -q noexec && echo yes || echo no)"
+  printf 'tmp_noexec=%s\n' "$(grep -q noexec <<<"$(findmnt -no OPTIONS /tmp 2>/dev/null)" && echo yes || echo no)"
   printf 'nofile=%s\n' "$(ulimit -n)"
   printf 'time_epoch=%s\n' "$(date +%s)"
 }

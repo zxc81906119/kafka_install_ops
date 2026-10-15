@@ -79,16 +79,14 @@ install::_units() { # <host> <unit...>
 install::prepare() {
   local host=$1 role
   role=$(inv::roles "$host" | grep -E '^(ops|controller|broker|rest|c3|controller_spare)$' | head -1)
-  # C3 prerequisites (cyrus-sasl, openssl-devel) still come from the internal OS-deps yum repo
-  if [[ $role == c3 ]]; then
-    local tmp
-    tmp=$(render::tmp)
-    printf '# Managed by cpctl - internal OS dependencies only\n[cp-internal-os-deps]\nname=Internal mirror - OS dependencies\nbaseurl=%s/os-deps\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9\n' \
-      "${REPO_YUM_BASEURL%/}" >"$tmp"
-    remote::put "$host" "$tmp" /etc/yum.repos.d/cp-internal.repo root root 0644
-    remote::put "$host" "$REPO_LOCAL_ROOT/gpg-keys/rocky-9.asc" /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9 root root 0644
-    remote::apply "$host" rpm_node::import_keys /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
-  fi
+  # OS packages (C3 prerequisites, chrony, firewalld) still come from the internal OS-deps yum repo
+  local tmp
+  tmp=$(render::tmp)
+  printf '# Managed by cpctl - internal OS dependencies only\n[cp-internal-os-deps]\nname=Internal mirror - OS dependencies\nbaseurl=%s/os-deps\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9\n' \
+    "${REPO_YUM_BASEURL%/}" >"$tmp"
+  remote::put "$host" "$tmp" /etc/yum.repos.d/cp-internal.repo root root 0644
+  remote::put "$host" "$REPO_LOCAL_ROOT/gpg-keys/rocky-9.asc" /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9 root root 0644
+  remote::apply "$host" rpm_node::import_keys /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
   # service accounts and directories (the RPM scriptlets do this in the rpm strategy)
   case $role in
     controller | broker | controller_spare)

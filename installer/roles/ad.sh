@@ -52,11 +52,11 @@ role::ad::check_accounts() {
   local rc=0 who pw name
   who=$(ad::bind_dn svc-mds-bind); pw=$(inv::secret LDAP_BIND_PASSWORD)
   for name in $AD_SERVICE_ACCOUNTS; do
-    if ad::ldapsearch "$who" "$pw" "(sAMAccountName=$name)" dn | grep -q '^dn:'; then log::ok "AD account $name"
+    if grep -q '^dn:' <<<"$(ad::ldapsearch "$who" "$pw" "(sAMAccountName=$name)" dn)"; then log::ok "AD account $name"
     else log::error "AD account $name missing (request it from the AD team)"; rc=1; fi
   done
   for name in $AD_GROUPS; do
-    if ad::ldapsearch "$who" "$pw" "(&(objectClass=group)(cn=$name))" dn | grep -q '^dn:'; then log::ok "AD group $name"
+    if grep -q '^dn:' <<<"$(ad::ldapsearch "$who" "$pw" "(&(objectClass=group)(cn=$name))" dn)"; then log::ok "AD group $name"
     else log::error "AD group $name missing"; rc=1; fi
   done
   return "$rc"
@@ -64,8 +64,8 @@ role::ad::check_accounts() {
 
 # LDAPS up and certificate chain valid (anonymous RootDSE, no account needed yet)
 ad::_ldaps_tls_ok() {
-  LDAPTLS_CACERT=$PKI_DIR/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H "ldaps://$(inv::fqdn "$AD_HOST"):636" \
-    -s base -b "" namingContexts | grep -q "^namingContexts:"
+  grep -q "^namingContexts:" <<<"$(LDAPTLS_CACERT=$PKI_DIR/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H "ldaps://$(inv::fqdn "$AD_HOST"):636" \
+    -s base -b "" namingContexts)"
 }
 
 ad::_ldaps_ok() {

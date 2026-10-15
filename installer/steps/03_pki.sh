@@ -13,6 +13,7 @@ step_apply() {
   # machines: client certificates ONLY for legacy apps that use REST Proxy (principal = CN)
   local app
   for app in $(inv::apps rest); do pki::issue "$app" "" clientAuth; done
+  pki::prune
   pki::mds_keypair
   [[ -f $PKI_DIR/ca.pem ]] || return 0   # check mode on a fresh host
 

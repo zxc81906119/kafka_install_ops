@@ -1,13 +1,13 @@
 # Node-side helpers for the simulated Active Directory (Samba AD DC). PoC mode only.
 
 ad::_exists() { # <ldb filter>
-  ldbsearch -H /var/lib/samba/private/sam.ldb "$1" dn 2>/dev/null | grep -q '^dn:'
+  grep -q '^dn:' <<<"$(ldbsearch -H /var/lib/samba/private/sam.ldb "$1" dn 2>/dev/null)"
 }
 
 # ad::ensure_ou <ou dn>
 ad::ensure_ou() {
   local dn=$1 rdn=${1%%,DC=*}
-  if ldbsearch -H /var/lib/samba/private/sam.ldb -b "$dn" -s base dn 2>/dev/null | grep -q '^dn:'; then
+  if grep -q '^dn:' <<<"$(ldbsearch -H /var/lib/samba/private/sam.ldb -b "$dn" -s base dn 2>/dev/null)"; then
     _mark ok "AD OU $dn"
     return 0
   fi
@@ -33,7 +33,7 @@ ad::ensure_user() {
 
 # ad::ensure_member <group> <user>
 ad::ensure_member() {
-  if samba-tool group listmembers "$1" 2>/dev/null | grep -qx "$2"; then _mark ok "AD $2 in $1"; return 0; fi
+  if grep -qx "$2" <<<"$(samba-tool group listmembers "$1" 2>/dev/null)"; then _mark ok "AD $2 in $1"; return 0; fi
   _mark changed "AD add $2 to $1"
   [[ ${CPCTL_CHECK:-0} == 1 ]] || samba-tool group addmembers "$1" "$2" >/dev/null
 }

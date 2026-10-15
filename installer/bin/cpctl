@@ -7,6 +7,11 @@
 #   step <NN_name>                     run a single step
 #   verify                             end-to-end checks (same as step 10)
 #   status                             step stamps + service states
+#   license status                     effective license (file or trial), expiry, days left
+#   certs status                       certificate expiry + what the running services present
+#   certs rotate [--cert a,b|all]      re-issue leaf certs (default kafka-internal,cp-server), rolling restart
+#   certs rotate-ca --phase add|switch|retire   zero-downtime CA rotation (three runs)
+#   monitoring export|check            scrape config + alert rules for the bank Prometheus; probe exporters
 #   upgrade plan|backup|stage|rolling|finalize|rollback --to <version>
 #   controller add|remove|replace --host <kcNN> [--old <kcNN>]
 #   uninstall --yes-really             remove packages, configs and data (keeps the internal repo + PKI)
@@ -21,12 +26,12 @@ export CPCTL_HOME
 
 # shellcheck source=../lib/core.sh
 source "$CPCTL_HOME/lib/core.sh"
-for _f in log inventory remote render handler step health lock pki rbac verify; do
+for _f in log inventory remote render handler step health lock pki rbac verify license secretprotect monitoring; do
   # shellcheck source=/dev/null
   source "$CPCTL_HOME/lib/$_f.sh"
 done
 
-usage() { sed -n '2,19p' "$CPCTL_HOME/bin/cpctl" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,21p' "$CPCTL_HOME/bin/cpctl" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # ---- global options
 ARGS=()
@@ -94,6 +99,11 @@ case $cmd in
     log::recap
     exit "$rc"
     ;;
+  license)
+    [[ ${1:-} == status ]] || usage 2
+    license::status && rc=0 || rc=$?
+    exit "$rc"
+    ;;
   status)
     step::status
     printf '\n%-10s %-22s %s\n' HOST SERVICE STATE
@@ -116,6 +126,21 @@ case $cmd in
     source "$CPCTL_HOME/upgrade/_upgrade.sh"
     upgrade::main "$sub" "$@"
     log::recap
+    ;;
+  monitoring)
+    case ${1:-} in
+      export) monitoring::export ;;
+      check) monitoring::check && rc=0 || rc=$?; exit "$rc" ;;
+      *) usage 2 ;;
+    esac
+    ;;
+  certs)
+    [[ ${1:-} == status ]] || lock::acquire
+    # shellcheck source=../upgrade/certs.sh
+    source "$CPCTL_HOME/upgrade/certs.sh"
+    certs::main "$@" && rc=0 || rc=$?
+    log::recap
+    exit "$rc"
     ;;
   controller)
     lock::acquire

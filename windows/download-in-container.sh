@@ -63,6 +63,7 @@ sets=(
   "$(cp_set "$CP_UPGRADE_FROM")"
   "confluent-control-center-next-gen-$C3_VERSION $PKGS_C3_OS"
   "$JDK_PACKAGE-$JDK_VERSION"
+  "$PKGS_OS_BASELINE"
 )
 for s in "${sets[@]}"; do
   log "dnf download --resolve: $s"
@@ -96,6 +97,15 @@ while IFS= read -r -d '' f; do
   rpm -K "$f" | grep -q 'digests signatures OK' || { echo "BAD SIGNATURE: $f"; bad=1; }
 done < <(find "$out/rpm" -name '*.rpm' -print0)
 [[ $bad -eq 0 ]] || exit 1
+
+log "monitoring agent: Prometheus JMX exporter $JMX_EXPORTER_VERSION"
+mkdir -p "$out/tools"
+jar="$out/tools/$(basename "$JMX_EXPORTER_URL")"
+[[ -s $jar ]] || curl -fsSL --retry 3 -o "$jar" "$JMX_EXPORTER_URL"
+want=$(curl -fsSL "$JMX_EXPORTER_URL.sha1")
+have=$(sha1sum "$jar" | awk '{print $1}')
+[[ $have == "$want" ]] || { echo "JMX exporter checksum mismatch ($have != $want)"; exit 1; }
+log "ok (Maven Central sha1): $(basename "$jar")"
 
 log "writing manifest-rpm.json"
 python3 - "$out" <<'PY'

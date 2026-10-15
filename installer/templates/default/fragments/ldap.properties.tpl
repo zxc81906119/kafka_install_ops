@@ -1,7 +1,13 @@
 ############################# Identity provider (Active Directory over LDAPS) #############################
 ldap.java.naming.factory.initial=com.sun.jndi.ldap.LdapCtxFactory
+ldap.com.sun.jndi.ldap.connect.timeout=3000
 ldap.com.sun.jndi.ldap.read.timeout=5000
-ldap.java.naming.provider.url=ldaps://${AD_FQDN}:636
+# Several domain controllers, space separated: JNDI fails over in order (conf/inventory.env AD_LDAP_HOSTS)
+ldap.java.naming.provider.url=${LDAP_PROVIDER_URLS}
+# Group membership is cached and refreshed; if AD stays unreachable longer than the retry timeout,
+# MDS stops trusting the cache and group-based authorization fails -> monitor AD reachability.
+ldap.refresh.interval.ms=60000
+ldap.retry.timeout.ms=86400000
 ldap.java.naming.security.protocol=SSL
 ldap.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 ldap.ssl.truststore.password=${STORE_PASSWORD}

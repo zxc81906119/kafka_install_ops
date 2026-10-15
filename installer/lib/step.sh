@@ -35,7 +35,9 @@ step::run() {
     source "$file"
     log::step "==== $name: $STEP_DESC"
     local t0=$SECONDS hash stamp="$STAMP_DIR/$name"
-    hash=$( { cat "$file"; step_inputs; } | sha256sum | awk '{print $1}')
+    # stamp = step file + its declared inputs + ALL library/role code (a code change must re-run the step)
+    hash=$( { cat "$file"; step_inputs; cat "$CPCTL_HOME"/lib/*.sh "$CPCTL_HOME"/lib/*/*.sh "$CPCTL_HOME"/roles/*.sh; } |
+      sha256sum | awk '{print $1}')
     if [[ $CPCTL_FORCE != 1 && -f $stamp && $(cat "$stamp") == "$hash" ]] && ! core::is_check_mode; then
       if step_verify >/dev/null 2>&1; then
         log::skipped "$name: inputs unchanged since last success and verify passed"

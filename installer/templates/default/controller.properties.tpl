@@ -11,6 +11,8 @@ log.dirs=/var/lib/kafka/data
 
 ${COMMON_BLOCK}
 
+${AUDIT_BLOCK}
+
 ############################# MDS on KRaft controllers #############################
 confluent.metadata.server.kraft.controller.enabled=true
 # The RBAC store (_confluent-metadata-auth) is read from the brokers' INTERNAL listener with the shared internal cert

@@ -13,8 +13,9 @@ role::rest::configure() {
   REST_ID=$(inv::get "$host" REST_ID "$host")
   role::push_ssl "$host" ca.pem truststore.p12 cp-server.p12 mds-public.pem; [[ $REMOTE_CHANGED == 1 ]] && any=1
   remote::apply "$host" ensure::dir /etc/confluent/kafka-rest root confluent 0750
-  role::push_rendered "$host" kafka-rest.properties.tpl "$REST_CONF" root confluent 0640
+  role::push_properties "$host" kafka-rest.properties.tpl "$REST_CONF" kafka-rest
   [[ $REMOTE_CHANGED == 1 ]] && any=1
+  role::jmx_exporter "$host" kafka-rest rules-rest.yml cp-server; [[ $REMOTE_CHANGED == 1 ]] && any=1
   export CONFIG_FILE=$REST_CONF HEAP JAVA_HOME COMPONENT=kafka-rest
   HEAP=$(inv::heap rest)
   JAVA_HOME=$(install::java_home)

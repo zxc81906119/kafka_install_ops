@@ -137,3 +137,37 @@ EOF
   ! [[ "C=TW,O=Bank,CN=app-legacy-evil" =~ $re ]]
   ! [[ "C=TW,O=Bank,CN=app-a" =~ $re ]]
 }
+
+# ---------- audit log routing (conf/audit.env -> confluent.security.event.router.config)
+@test "audit router: default + sensitive topics, retention, exclusions, routes incl. denied describe" {
+  AUDIT_TOPIC=confluent-audit-log-events AUDIT_SENSITIVE_TOPIC=confluent-audit-log-events_sensitive
+  AUDIT_RETENTION_DAYS=90 AUDIT_SENSITIVE_RETENTION_DAYS=365
+  AUDIT_SENSITIVE_PREFIXES="payments. cards." AUDIT_EXCLUDED_PRINCIPALS="User:kafka-internal User:svc-c3"
+  j=$(role::audit_router_json)
+  [ "$(jq -r '.default_topics.denied' <<<"$j")" = confluent-audit-log-events ]
+  [ "$(jq -r '.destinations.topics["confluent-audit-log-events_sensitive"].retention_ms' <<<"$j")" = 31536000000 ]
+  [ "$(jq -c '.excluded_principals' <<<"$j")" = '["User:kafka-internal","User:svc-c3"]' ]
+  [ "$(jq -r '.routes | keys | join(" ")' <<<"$j")" = "crn:///kafka=*/topic=cards.* crn:///kafka=*/topic=payments.*" ]
+  [ "$(jq -r '.routes["crn:///kafka=*/topic=payments.*"].describe.allowed' <<<"$j")" = "" ]
+  [ "$(jq -r '.routes["crn:///kafka=*/topic=payments.*"].consume.denied' <<<"$j")" = confluent-audit-log-events_sensitive ]
+  [[ $j != *$'\n'* ]]   # one line (properties value)
+}
+
+# ---------- PKI: only managed leaves are rotated / checked
+@test "managed leaf certificates = shared certs + legacy REST apps only" {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/pki.sh"
+  [ "$(pki::leaves | paste -sd' ' -)" = "kafka-internal cp-server app-legacy" ]
+}
+
+# ---------- OS: firewall ports derived from roles
+@test "firewall ports follow the host roles" {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/steps/01_os_baseline.sh"
+  PORT_CONTROLLER=9093 PORT_JMX_EXPORTER=7071 PORT_INTERNAL=9092 PORT_TOKEN=9094 PORT_CLIENT=9095 PORT_LDAP=9096
+  PORT_MDS=8090 PORT_REST=8082 PORT_C3=9021 PORT_PROMETHEUS=9090 FIREWALL_EXTRA_ops=8080
+  [ "$(os::fw_ports controller)" = "7071 9093" ]
+  [ "$(os::fw_ports broker)" = "7071 8090 9092 9094 9095 9096" ]
+  [ "$(os::fw_ports c3)" = "9021 9090" ]
+  [ "$(os::fw_ports ops)" = "8080" ]
+}

@@ -1,0 +1,60 @@
+# Managed by cpctl - alert rules for the bank's Prometheus (metrics from the JMX exporter javaagent).
+# Thresholds follow Confluent's monitoring guidance; tune "for:" to the bank's paging policy.
+# Consumer-group lag is not a broker JMX metric: use Control Center (built in) or a lag exporter.
+groups:
+  - name: confluent-platform
+    rules:
+      - alert: KafkaTargetDown
+        expr: up{job=~"confluent-.*"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }} ({{ $labels.job }}) cannot be scraped"
+      - alert: KafkaUnderReplicatedPartitions
+        expr: sum by (instance) (kafka_server_replicamanager_underreplicatedpartitions) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: {{ $value }} under-replicated partitions"
+      - alert: KafkaUnderMinIsrPartitions
+        expr: sum by (instance) (kafka_server_replicamanager_underminisrpartitioncount) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }}: partitions below min.insync.replicas (producers with acks=all fail)"
+      - alert: KafkaOfflinePartitions
+        expr: max(kafka_controller_kafkacontroller_offlinepartitionscount) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $value }} partitions have no leader"
+      - alert: KafkaActiveControllerCount
+        expr: sum(kafka_controller_kafkacontroller_activecontrollercount{job="confluent-controller"}) != 1
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "KRaft active controller count is {{ $value }} (expected exactly 1)"
+      - alert: KafkaRequestHandlerSaturated
+        expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent) < 0.3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: request handler threads less than 30% idle"
+      - alert: KafkaNetworkProcessorSaturated
+        expr: avg by (instance) (kafka_network_socketserver_networkprocessoravgidlepercent) < 0.3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: network threads less than 30% idle"
+      - alert: KafkaProduceLatencyHigh
+        expr: max by (instance) (kafka_network_requestmetrics_totaltimems{request="Produce",quantile="0.99"}) > 500
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: produce p99 {{ $value }} ms"
+      - alert: JvmHeapHigh
+        expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.9
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: JVM heap above 90%"

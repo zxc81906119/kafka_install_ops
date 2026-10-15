@@ -20,4 +20,6 @@ confluent.telemetry.exporter._c3.buffer.batch.items.max=4000
 confluent.telemetry.exporter._c3.buffer.inflight.submissions.max=10
 confluent.telemetry.metrics.collector.interval.ms=60000
 confluent.telemetry.remoteconfig._confluent.enabled=false
+# Offline / bank policy: nothing is sent to Confluent (Health+ off). The local _c3 exporter above is independent.
+confluent.telemetry.enabled=false
 confluent.consumer.lag.emitter.enabled=true
