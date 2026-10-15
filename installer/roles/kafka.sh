@@ -64,7 +64,7 @@ kafka::bootstrap_internal() { inv::endpoints broker "$PORT_INTERNAL"; }
 # kafka::admin <tool> [args...]  run a Kafka CLI tool on the ops host as the internal super-user
 kafka::admin() {
   local tool=$1; shift
-  KAFKA_HEAP_OPTS="-Xmx256m" KAFKA_OPTS="-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml" \
+  KAFKA_HEAP_OPTS="-Xmx256m" KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
     "$(install::bin "$tool")" "$@"
 }
 

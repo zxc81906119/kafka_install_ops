@@ -51,9 +51,9 @@ upgrade::plan() {
   if [[ " ${!jdkvar:-} " == *" $jmaj "* ]]; then log::ok "JDK $jmaj supported by CP $to_mm"
   else log::error "JDK $jmaj not supported by CP $to_mm"; ok=0; fi
   # target packages must already be in the internal repo
-  if find "$REPO_LOCAL_ROOT/rpm/confluent" -name "confluent-server-$to-*.rpm" | grep -q .; then
-    log::ok "confluent-server-$to present in the internal repo"
-  else log::error "confluent-server-$to not in the internal repo (cpctl repo import first)"; ok=0; fi
+  if install::available "$to"; then
+    log::ok "CP $to present in the internal repo ($INSTALL_METHOD)"
+  else log::error "CP $to not in the internal repo for INSTALL_METHOD=$INSTALL_METHOD (cpctl repo import first)"; ok=0; fi
   # forbidden static configs
   local forb
   forb=$(upgrade::_v FORBIDDEN_CONFIGS "$to")
@@ -103,8 +103,7 @@ upgrade::backup() {
 
 upgrade::stage() {
   local to=$1 h
-  find "$REPO_LOCAL_ROOT/rpm/confluent" -name "confluent-server-$to-*.rpm" | grep -q . ||
-    core::die "$E_PRECHECK" "confluent-server-$to not in the internal repo"
+  install::available "$to" || core::die "$E_PRECHECK" "CP $to not in the internal repo ($INSTALL_METHOD)"
   log::info "rendering configuration with templates for $(upgrade::_mm "$to") (check mode, nothing is pushed)"
   (
     export CPCTL_CHECK=1 CPCTL_DIFF=1 RENDER_VERSION=$to

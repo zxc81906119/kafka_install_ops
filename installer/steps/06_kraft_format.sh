@@ -32,13 +32,13 @@ kraft::initial_controllers() {
 }
 
 kraft::format_controller() {
-  remote::apply "$1" kafka_node::format "$CLUSTER_ID" "$KAFKA_CONF" "$(install::java_home)" \
+  remote::apply "$1" kafka_node::format "$CLUSTER_ID" "$KAFKA_CONF" "$(install::java_home)" "$(install::bin_dir)" "$(install::kafka_etc)" \
     --initial-controllers "$(kraft::initial_controllers)" \
     --add-scram "SCRAM-SHA-512=[name=kafka-admin,password=$(inv::secret KAFKA_ADMIN_PASSWORD)]"
 }
 
 kraft::format_broker() {
-  remote::apply "$1" kafka_node::format "$CLUSTER_ID" "$KAFKA_CONF" "$(install::java_home)" --no-initial-controllers
+  remote::apply "$1" kafka_node::format "$CLUSTER_ID" "$KAFKA_CONF" "$(install::java_home)" "$(install::bin_dir)" "$(install::kafka_etc)" --no-initial-controllers
 }
 
 step_apply() {

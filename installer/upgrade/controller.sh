@@ -54,13 +54,13 @@ ctl::add() { # <host>
   role::controller::configure "$h"
   : >"$(handler::_file)"
   core::load_env "$STATE_DIR/kraft.env"
-  remote::apply "$h" kafka_node::format "$CLUSTER_ID" "$KAFKA_CONF" "$(install::java_home)" --no-initial-controllers
+  remote::apply "$h" kafka_node::format "$CLUSTER_ID" "$KAFKA_CONF" "$(install::java_home)" "$(install::bin_dir)" "$(install::kafka_etc)" --no-initial-controllers
   role::controller::start "$h"
   step::mutating || return 0
   health::wait 300 "[$h] observer caught up with the metadata log" ctl::observer_caught_up "$id"
   ctl::node_command_config "$h"
   log::changed "[$h] add-controller id=$id"
-  remote::exec "$h" "sudo -n -u cp-kafka env JAVA_HOME=$(install::java_home) KAFKA_HEAP_OPTS=-Xmx256m /usr/bin/kafka-metadata-quorum \
+  remote::exec "$h" "sudo -n -u cp-kafka env JAVA_HOME=$(install::java_home) KAFKA_HEAP_OPTS=-Xmx256m $(install::bin kafka-metadata-quorum) \
     --command-config /etc/confluent/kafka/add-controller.properties --bootstrap-controller $CONTROLLER_BOOTSTRAP add-controller"
   health::wait 180 "[$h] node $id is a voter" ctl::is_voter "$id"
 }

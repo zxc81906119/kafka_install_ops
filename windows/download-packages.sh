@@ -29,16 +29,13 @@ if [[ $method == rpm || $method == both ]]; then
 fi
 
 if [[ $method == tar || $method == both ]]; then
-  load_versions
-  mkdir -p "$PACKAGES_DIR/tar"
-  for url in \
-    "$CONFLUENT_TAR_BASE/$CP_RELEASE/confluent-$CP_VERSION.tar.gz" \
-    "https://packages.confluent.io/confluent-control-center-next-gen/archive/confluent-control-center-next-gen-$C3_VERSION.tar.gz"; do
-    f="$PACKAGES_DIR/tar/$(basename "$url")"
-    if [[ -s $f ]]; then log "exists: $(basename "$f")"; continue; fi
-    log "downloading $url"
-    curl -fL --retry 3 -o "$f.part" "$url" && mv "$f.part" "$f"
-  done
+  log "downloading tar.gz archives (CP, C3, Temurin JDK, Confluent CLI)"
+  docker run --rm \
+    -v "$(winpath "$PACKAGES_DIR"):/out" \
+    -v "$(winpath "$CONF_DIR/versions.env"):/in/versions.env:ro" \
+    -v "$(winpath "$WIN_DIR/download-tar-in-container.sh"):/in/download-tar.sh:ro" \
+    -e DOWNLOADED_BY="${USERNAME:-$USER}@$(hostname)" \
+    cp-node:poc bash /in/download-tar.sh
 fi
 
 log "writing SHA256SUMS (inside a Linux container: Git Bash sha256sum is unreliable on multi-GB files)"

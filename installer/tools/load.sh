@@ -10,7 +10,14 @@ PKI=$STATE/pki
 TOPIC=orders.load
 BOOT=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095
 CFG=$STATE/client/app-orders-scram.properties
-export KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+# Kafka tools from whichever install strategy is present on the ops host (tar first, then RPM)
+if [[ -x /opt/confluent/current/bin/kafka-topics ]]; then
+  export PATH=/opt/confluent/current/bin:$PATH JAVA_HOME=/opt/java/current
+  KAFKA_ETC=/opt/confluent/current/etc/kafka
+else
+  KAFKA_ETC=/etc/kafka
+fi
+export KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=$KAFKA_ETC/tools-log4j2.yaml
 mkdir -p "$DIR"
 
 start() {

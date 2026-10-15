@@ -85,7 +85,8 @@ cmd_cpctl() {
   local tty=(docker exec -i)
   [[ -t 1 ]] && tty=(docker exec -it)
   local envs=()
-  [[ -n ${CPCTL_CP_VERSION:-} ]] && envs=(-e "CPCTL_CP_VERSION=$CPCTL_CP_VERSION")
+  [[ -n ${CPCTL_CP_VERSION:-} ]] && envs+=(-e "CPCTL_CP_VERSION=$CPCTL_CP_VERSION")
+  [[ -n ${CPCTL_INSTALL_METHOD:-} ]] && envs+=(-e "CPCTL_INSTALL_METHOD=$CPCTL_INSTALL_METHOD")
   "${tty[@]}" "${envs[@]}" -u cpadmin -w /home/cpadmin "$(container ops01)" /usr/local/bin/cpctl "$@"
 }
 

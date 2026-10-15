@@ -57,16 +57,16 @@ verify::nocert_config() {
 verify::produce() { # <bootstrap> <config> <topic> <message>
   local out
   out=$(printf '%s\n' "$4" | timeout 60 env KAFKA_HEAP_OPTS=-Xmx256m \
-    KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-    /usr/bin/kafka-console-producer --bootstrap-server "$1" --producer.config "$2" --topic "$3" \
+    KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
+    "$(install::bin kafka-console-producer)" --bootstrap-server "$1" --producer.config "$2" --topic "$3" \
     --producer-property acks=all --producer-property max.block.ms=20000 --producer-property delivery.timeout.ms=30000 \
     --producer-property request.timeout.ms=15000 2>&1) || return 1
   ! grep -q -i -E 'authoriz|exception|error' <<<"$out"
 }
 
 verify::consume_contains() { # <bootstrap> <config> <topic> <group> <message>
-  timeout 90 env KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-    /usr/bin/kafka-console-consumer --bootstrap-server "$1" --consumer.config "$2" --topic "$3" --group "$4" \
+  timeout 90 env KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
+    "$(install::bin kafka-console-consumer)" --bootstrap-server "$1" --consumer.config "$2" --topic "$3" --group "$4" \
     --from-beginning --timeout-ms 45000 2>/dev/null | grep -qF "$5"
 }
 
@@ -82,7 +82,6 @@ verify::has_scram() { # <user>
     --describe --entity-type users --entity-name "$1" 2>/dev/null | grep -q SCRAM-SHA-512
 }
 
-verify::_locked() { remote::exec "$1" "sudo -n dnf versionlock list 2>/dev/null | grep -q confluent-server"; }
 
 verify::rest_code() { # <url> <cert name|-> [curl args...]
   local url=$1 cert=$2; shift 2
@@ -127,7 +126,7 @@ verify::run_all() {
 
   log::step "---- Internal mTLS (shared internal certificate)"
   verify::check_not "controller rejects a client without certificate" timeout 40 env KAFKA_HEAP_OPTS=-Xmx128m \
-    KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml /usr/bin/kafka-metadata-quorum \
+    KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" "$(install::bin kafka-metadata-quorum)" \
     --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(verify::nocert_config)" describe --status
   verify::check "controller accepts the shared internal certificate (super user)" kafka::admin kafka-metadata-quorum \
     --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$cfg" describe --status
@@ -178,9 +177,10 @@ verify::run_all() {
   for h in $(inv::hosts broker | head -1) $(inv::hosts rest | head -1) $(inv::hosts c3) $(inv::hosts ops); do
     verify::check_not "[$h] has no Internet access (offline)" remote::exec "$h" "curl -s -m 5 -o /dev/null https://packages.confluent.io"
   done
-  verify::check "[$(inv::hosts broker | head -1)] confluent-server is versionlocked" verify::_locked "$(inv::hosts broker | head -1)"
+  verify::check "[$(inv::hosts broker | head -1)] CP version is pinned ($INSTALL_METHOD: $( [[ $INSTALL_METHOD == rpm ]] && echo 'dnf versionlock' || echo 'current symlink'))" \
+    install::pinned "$(inv::hosts broker | head -1)"
   for h in $(inv::hosts c3); do
-    verify::check_not "[$h] has no Confluent Platform packages (C3 host must stay clean)" remote::exec "$h" "rpm -q confluent-server confluent-common >/dev/null 2>&1"
+    verify::check_not "[$h] has no Confluent Platform packages (C3 host must stay clean)" remote::exec "$h" "rpm -q confluent-server confluent-common >/dev/null 2>&1 || test -e /opt/confluent/current"
   done
 
   if [[ ! -s $CONF_DIR/license.txt ]]; then

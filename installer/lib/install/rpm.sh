@@ -78,11 +78,23 @@ install::os_dep_version() {
   rpm -qp --qf '%{VERSION}' "$f" 2>/dev/null
 }
 
+# install::available <cp version>  -> target packages are published in the internal repo
+install::available() { find "$REPO_LOCAL_ROOT/rpm/confluent" -name "confluent-server-$1-*.rpm" | grep -q .; }
+
+# install::pinned <host>  -> the installed version is protected against accidental OS patching
+install::pinned() { remote::exec "$1" "sudo -n dnf versionlock list 2>/dev/null | grep -q confluent-server"; }
+
 install::version() { remote::run "$1" rpm_node::installed confluent-server 2>/dev/null || true; }
 install::rest_version() { remote::run "$1" rpm_node::installed confluent-kafka-rest 2>/dev/null || true; }
 
-install::bin() { printf '/usr/bin/%s' "$1"; }
+# Paths (the tar strategy implements the same functions with /opt/... locations)
+install::bin_dir() { printf '/usr/bin'; }
+install::bin() { printf '%s/%s' "$(install::bin_dir)" "$1"; }
+install::kafka_etc() { printf '/etc/kafka'; }            # shipped log4j2.yaml / tools-log4j2.yaml
+install::c3_bin_dir() { printf '/usr/bin'; }
+install::cli() { printf '/usr/bin/confluent'; }
 install::java_home() { printf '/usr/lib/jvm/temurin-21-jdk'; }
+install::tools_opts() { printf -- '-Dlog4j2.configurationFile=%s/tools-log4j2.yaml' "$(install::kafka_etc)"; }
 
 # install::unit <role> -> systemd unit shipped by the RPM
 install::unit() {

@@ -49,7 +49,7 @@ installer/      掛載到 ops01:/opt/cp-installer
   conf/         inventory / versions / apps / os-tuning / compat / secrets（secrets 不進版控）
   lib/          框架：core log inventory remote(Facade) render handler(Observer) step(Template Method) …
   lib/node/     送到目標主機執行的冪等原語（ensure::*、svc::*、kafka/ad 輔助）
-  lib/install/  安裝 Strategy：rpm（已實作）；tar 只預留切換點，尚未實作
+  lib/install/  安裝 Strategy：rpm（預設、建議）/ tar（版本並存 + symlink）
   lib/repo/     內部 repo Adapter：local（createrepo_c + httpd）
   roles/        角色 Strategy：controller broker rest c3 lb ad
   steps/        安裝流程 00–10
@@ -82,7 +82,27 @@ download-     verify-        （PoC：packages/    cpctl repo     dnf install（
 packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versionlock
 ```
 
-- **RPM 為主**：使用原廠 GPG 簽章，套件自帶 systemd unit，也能接上 RHEL 9 的 Satellite／dnf 維運流程。tar.gz 策略**尚未實作**：只預留 `INSTALL_METHOD=tar` 切換點（設定後 cpctl 會明確報錯）與 `download-packages.sh --method tar` 下載段；需要時補 `lib/install/tar.sh`（版本並存目錄 + symlink + 自產 systemd unit）。
+- **RPM 為主**：使用原廠 GPG 簽章，套件自帶 systemd unit，也能接上 RHEL 9 的 Satellite／dnf 維運流程。
+- **tar.gz 為替代策略**（`INSTALL_METHOD=tar`，或執行時用 `CPCTL_INSTALL_METHOD=tar` 覆寫）：適合不允許安裝第三方 RPM、或希望多版本並存的環境。
+
+  | 項目 | RPM | tar |
+  |---|---|---|
+  | 套件來源 | 內部 yum repo（gpgcheck=1） | 內部 raw repo `/raw/tar/`；節點下載後**比對 sha256**，相符才解壓 |
+  | 完整性 | 原廠 GPG 簽章 | CP / C3 原廠**沒有提供簽章**，只能依賴下載時記錄的 sha256；Temurin JDK 有比對原廠 checksum |
+  | 安裝位置 | `/usr/bin`、`/usr/share/java` | `/opt/confluent/confluent-<版本>/`，`current` symlink 指向目前版本；C3 用 `c3-current`；JDK 在 `/opt/java/current` |
+  | 服務帳號、systemd unit | RPM 自動建立 | cpctl 建立：帳號名稱、unit 名稱、路徑都和 RPM 版相同，所以 drop-in、角色、升級流程共用 |
+  | 升級 / 回滾 | `dnf install` / `dnf downgrade` | 解壓新版到另一個目錄 → 切換 `current`；回滾就是把 symlink 切回舊版 |
+  | 防止誤升級 | `dnf versionlock` | 不受 OS 套件管理影響；切換版本只能透過 `cpctl upgrade` |
+  | C3 前置套件 | yum | 仍從內部 OS 相依 repo 安裝（cyrus-sasl、openssl-devel） |
+
+  **tar 策略實測結果**（2026-10-14）：
+  - 安裝 8.2.4：34/34 驗證通過；以 `install --force` 重跑一次，結果 **changed=0**。
+  - 演練順序：8.2.4 → 8.3.2 → 回滾 8.2.4 → 8.3.2 → finalize。全程有持續流量，SCRAM 寫入 5,320 筆、**0 筆遺失**，REST 0 失敗。
+  - 回滾約 3.5 分鐘（RPM 的 `dnf downgrade` 約 8 分鐘），因為舊版目錄還在，只要切換 symlink 再重啟。
+  - **磁碟規劃**：
+    - 每個版本目錄約 1.6–1.8GB，多個版本會並存。
+    - 下載的壓縮檔快取在 `/var/cache/cp-installer`，每台約 2.7GB。
+    - 正式環境請預留空間，或在 finalize 之後手動清除舊版目錄與快取。
 - **內部 repo 的實作可替換**：安裝只依賴標準 yum `baseurl`。行內若有 Satellite、Artifactory 或 Nexus，只要換掉 `lib/repo/` 的匯入 adapter 並修改 `REPO_*_BASEURL`。若行內沒有任何制品庫，就用 `local`，由操作機自己提供 repo。
 - **舊版本一律保留**：`dnf downgrade` 回滾需要舊版套件，而且 Confluent 會把 EOL 版本從官方 repo 移除。
 - **稽核軌跡**：每次匯入都把 `SHA256SUMS`、`manifest-rpm.json`、驗證報告保存在 `/srv/repo/manifests/<時間>/`。

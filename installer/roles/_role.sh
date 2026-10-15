@@ -30,6 +30,11 @@ role::common_vars() {
   IMPERSONATION_SUPER_USERS="User:svc-rest"
   IMPERSONATION_PROTECTED_USERS=$(role::protected_users)
   REST_PRINCIPAL_RULES=$(role::rest_principal_rules)
+  # install-strategy paths used by the systemd drop-ins (rpm: /usr/bin..., tar: /opt/confluent/current/...)
+  export BIN_DIR KAFKA_ETC C3_BIN_DIR
+  BIN_DIR=$(install::bin_dir)
+  KAFKA_ETC=$(install::kafka_etc)
+  C3_BIN_DIR=$(install::c3_bin_dir)
   CLUSTER_NAME=poc-cluster
   C3_DOCS_HOST=docs.confluent.io
   if [[ -s $CONF_DIR/license.txt ]]; then

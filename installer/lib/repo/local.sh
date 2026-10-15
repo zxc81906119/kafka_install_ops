@@ -85,7 +85,7 @@ repo::import() {
     audit="$REPO_LOCAL_ROOT/manifests/$(date +%Y%m%d-%H%M%S)"
     repo::_as_owner install -d -m 0755 "$audit"
     local m
-    for m in SHA256SUMS manifest-rpm.json; do
+    for m in SHA256SUMS manifest-rpm.json manifest-tar.json; do
       [[ -f $REPO_LANDING/$m ]] && repo::_as_owner install -m 0644 "$REPO_LANDING/$m" "$audit/$m"
     done
     if [[ -d $REPO_LANDING/report ]]; then repo::_as_owner cp -r "$REPO_LANDING/report" "$audit/"; fi

@@ -49,6 +49,7 @@ if [[ -n ${CPCTL_CP_VERSION:-} ]]; then
   CP_VERSION=$CPCTL_CP_VERSION
   CP_RELEASE=${CP_VERSION%.*}
 fi
+[[ -n ${CPCTL_INSTALL_METHOD:-} ]] && INSTALL_METHOD=$CPCTL_INSTALL_METHOD
 # Strategy selection from the inventory
 [[ -f $CPCTL_HOME/lib/install/$INSTALL_METHOD.sh ]] ||
   core::die "$E_PRECHECK" "INSTALL_METHOD=$INSTALL_METHOD is not implemented yet (implemented: rpm)"

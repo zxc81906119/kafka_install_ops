@@ -10,9 +10,12 @@ step_apply() {
     return 0
   fi
   role::ad::configure
-  step::mutating && health::wait 120 "[$AD_HOST] LDAPS answers with the internal-CA certificate" ad::_ldaps_tls_ok
+  if step::mutating; then
+    health::wait 120 "[$AD_HOST] LDAPS answers with the internal-CA certificate" ad::_ldaps_tls_ok
+  fi
   role::ad::accounts
-  step::mutating && role::ad::health
+  # explicit if: a trailing "cond && cmd" would make the step fail in --check mode
+  if step::mutating; then role::ad::health; fi
 }
 
 step_verify() { role::ad::health; }

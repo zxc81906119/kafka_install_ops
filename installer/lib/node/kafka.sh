@@ -5,11 +5,11 @@ readonly KAFKA_DATA=/var/lib/kafka/data
 # kafka_node::meta <key>  -> value from meta.properties (empty if not formatted)
 kafka_node::meta() { sed -n "s/^$1=//p" "$KAFKA_DATA/meta.properties" 2>/dev/null || true; }
 
-# kafka_node::format <cluster id> <config> <java home> <format args...>
+# kafka_node::format <cluster id> <config> <java home> <bin dir> <kafka etc dir> <format args...>
 # Runs kafka-storage format as cp-kafka once. Already formatted with the same cluster id -> ok;
 # formatted with a different cluster id -> error (never reformat a node silently).
 kafka_node::format() {
-  local cid=$1 cfg=$2 jh=$3; shift 3
+  local cid=$1 cfg=$2 jh=$3 bindir=$4 etc=$5; shift 5
   local have
   have=$(kafka_node::meta cluster.id)
   if [[ -n $have ]]; then
@@ -21,8 +21,8 @@ kafka_node::format() {
   [[ ${CPCTL_CHECK:-0} == 1 ]] && return 0
   install -d -o cp-kafka -g confluent -m 0750 "$KAFKA_DATA"
   sudo -u cp-kafka env JAVA_HOME="$jh" KAFKA_HEAP_OPTS=-Xmx256m \
-    KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-    /usr/bin/kafka-storage format --cluster-id "$cid" --config "$cfg" "$@" | grep -v -i scram || true
+    KAFKA_OPTS="-Dlog4j2.configurationFile=$etc/tools-log4j2.yaml" \
+    "$bindir/kafka-storage" format --cluster-id "$cid" --config "$cfg" "$@" | grep -v -i scram || true
   [[ -f $KAFKA_DATA/meta.properties ]] || { _mark warn "format did not create meta.properties"; return 1; }
 }
 
