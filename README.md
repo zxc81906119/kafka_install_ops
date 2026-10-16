@@ -41,8 +41,10 @@ cpnet (internal, 無外網) ─────────────────�
 ## 目錄
 
 ```
-windows/        Git Bash：環境控制 poc.sh、外網下載 download-packages.sh、驗證 verify-packages.sh、掃描 hook scan.d/
-docker/         模擬主機 image（node / ops / ad / lb）與 compose.yml
+windows/        Git Bash：環境控制 poc.sh、外網下載 download-packages.sh、驗證 verify-packages.sh、掃描 hook scan.d/、
+                OP menu 打包 package-opmenu.sh
+opmenu/         堡壘機上的維運操作選單（OP menu）原始碼；經離線引進流程打包、由 cpctl step 11 部署
+docker/         模擬主機 image（node / ops / ad / lb）與 compose.yml（jump01 = 模擬堡壘機）
 packages/       落地區（不進版控）：RPM、GPG key、SHA256SUMS、manifest、驗證報告
 installer/      掛載到 ops01:/opt/cp-installer
   bin/cpctl     唯一入口
@@ -51,8 +53,8 @@ installer/      掛載到 ops01:/opt/cp-installer
   lib/node/     送到目標主機執行的冪等原語（ensure::*、svc::*、kafka/ad 輔助）
   lib/install/  安裝 Strategy：rpm（預設、建議）/ tar（版本並存 + symlink）
   lib/repo/     內部 repo Adapter：local（createrepo_c + httpd）
-  roles/        角色 Strategy：controller broker rest c3 lb ad
-  steps/        安裝流程 00–10
+  roles/        角色 Strategy：controller broker rest c3 lb ad jump（堡壘機）
+  steps/        安裝流程 00–11（11 = OP menu）
   upgrade/      升級、controller 替換、uninstall
   templates/    設定檔模板（依版本 templates/<major.minor>/，無則 default/）
   tools/        lint.sh（shellcheck + shfmt）、load.sh（演練用持續流量）
@@ -69,7 +71,7 @@ bash windows/verify-packages.sh            # 放行前驗證：sha256、原廠�
 bash windows/poc.sh up                     # 啟動 13 台模擬主機
 bash windows/poc.sh cpctl repo import      # 落地區 → 內部 repo（先驗證，同名不同內容一律拒絕）
 bash windows/poc.sh cpctl install          # 步驟 00–10，可中斷後重跑
-bash windows/poc.sh cpctl verify           # 端到端驗證（37 項）
+bash windows/poc.sh cpctl verify           # 端到端驗證（48 項）
 ```
 
 瀏覽器開啟 `https://localhost:9021`（C3，需信任 `ops01:/var/lib/cp-installer/pki/ca.pem`），用 `conf/apps.env` 中的 AD 帳號登入（例如 `alice`，密碼為 `HUMAN_DEFAULT_PASSWORD`）。
@@ -124,13 +126,13 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 | `cpctl monitoring export\|check` | 產生給行內 Prometheus 的 scrape 設定與告警規則 / 檢查所有 exporter |
 | `cpctl uninstall --yes-really` | 移除套件、設定與資料；保留內部 repo、PKI、AD 帳號 |
 
-步驟：`00 precheck` → `01 os_baseline` → `02 distribute`（RPM）→ `03 pki` → `04 ad_bootstrap` → `05 configure` → `06 kraft_format`（`--initial-controllers` 動態 quorum）→ `07 start_core` → `08 security_bootstrap`（SCRAM、RBAC、topic）→ `09 start_edge`（REST、C3、LB）→ `10 verify`。
+步驟：`00 precheck` → `01 os_baseline` → `02 distribute`（RPM）→ `03 pki` → `04 ad_bootstrap` → `05 configure` → `06 kraft_format`（`--initial-controllers` 動態 quorum）→ `07 start_core` → `08 security_bootstrap`（SCRAM、RBAC、topic）→ `09 start_edge`（REST、C3、LB）→ `10 verify` → `11 opmenu`（堡壘機的維運選單；`OPMENU=off` 時略過）。
 
 ### 冪等性
 
 - 所有變更都經過 `ensure::*`：先比較目前狀態，一致就報 `ok`，不一致才動作並報 `changed`（設定檔以 sha256 比對，覆蓋前保留 `.bak.<時間>`）。
 - 設定有變時只通知 handler，之後逐台重啟並通過健康檢查（health gate）才處理下一台。待重啟清單保存在 `state/handlers.pending`，中斷後不會遺失。
-- 驗收結果：在已安裝的環境再跑一次 `cpctl install --force` 得到 **changed=0**（860 ok、0 failed，含 37 項 verify；2026-10-15，含本次新增的營運設定）。
+- 驗收結果：在已安裝的環境再跑一次 `cpctl install --force` 得到 **changed=0**（993 ok、0 failed，含 48 項 verify；2026-10-16，含堡壘機與 OP menu）。
 - 程式規則：禁止 `指令 | grep -q`（pipefail 下 grep 提早結束會讓前段收到 SIGPIPE 而隨機誤判），一律寫成 `grep -q 樣式 <<<"$(指令)"`；`tools/lint.sh` 會擋下違規。精簡 OS 沒有 diffutils，檔案比對一律用 sha256。
 
 ## 正式營運需要的設定（對照官方文件補齊）
@@ -147,6 +149,31 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 | **稽核日誌** | 專用低權限 SCRAM 帳號 `confluent-audit`（只有稽核 topic 的 DeveloperWrite/Manage），不使用 broker 身分；`payments.*` 的 produce/consume（允許＋拒絕）與**被拒絕的 describe** 導向 `confluent-audit-log-events_sensitive`（保留 365 天），其餘 90 天；排除 `kafka-internal`、`svc-c3` 的雜訊（`conf/audit.env`） | verify：alice 的允許事件、app-orders 的拒絕事件都已進入敏感稽核 topic |
 | **外部監控** | Prometheus JMX exporter（javaagent，**同樣經離線引進流程**：下載機驗 sha1 → SHA256SUMS → repo import → SSH 派送）；HTTPS（節點憑證）＋ basic auth（加鹽 SHA-256，節點上沒有明文密碼）；`cpctl monitoring export` 產出 scrape 設定、9 條告警規則、CA bundle 給行內 Prometheus | 9 個 exporter 皆需認證、可抓取；以 C3 附的 Prometheus 載入匯出檔實測：9/9 target up、9 條規則全部 ok |
 | **OS 層** | THP=never（`disable-thp.service`，容器內由 systemd 自動略過）；chrony 指向 `NTP_SERVERS`（PoC 由 ops01 提供時間）；firewalld 依角色只開必要 port＋ssh，關閉預設的 cockpit / dhcpv6-client；SELinux 檢查 enforcing 並對自訂路徑 restorecon。chrony、firewalld 由內部 os-deps repo 安裝 | 不在清單上的 port 被擋、ssh 正常；第二次執行全部 ok |
+
+## 日常維運：堡壘機上的 OP menu（固定帳號情境）
+
+客戶情境：堡壘機與各主機**都不接 AD、只有固定帳號**。設計原則是「作業系統帳號只管連線，身分一律用 AD」：
+
+| 工作 | 工具 | 執行帳號 | 誰能做 |
+|---|---|---|---|
+| 平台變更（安裝、升級、憑證輪替、controller 替換） | cpctl（操作機） | `cpadmin`（只給 cpctl，金鑰登入） | 平台工程師，變更時段 |
+| 日常維運（查看、重啟、日誌、topic 與權限作業） | OP menu（堡壘機） | 堡壘機 `opuser` → 各主機 `kafkaops` | 依 AD 群組（Kafka RBAC） |
+| 緊急處理（item 91） | OP menu → `opmenu-bootstrap` | `opbootstrap` 保管的 `opmenu-breakglass` 憑證 | 有權限的人，必填原因，記為 EMERGENCY |
+
+| 帳號 | 在哪 | 限制 |
+|---|---|---|
+| `opuser` | 堡壘機 | 登入殼層就是選單；sshd `ForceCommand`，不能轉埠、不能 scp；選單內以**本人 AD 帳密**登入（`OPMENU_USER_FROM_OS=0`） |
+| `opbootstrap` | 堡壘機 | nologin；保管緊急用憑證，`opuser` 只能經 sudo 執行包裝腳本，讀不到私鑰 |
+| `kafkaops` | 每台 controller / broker / REST / C3 | 只接受**來自堡壘機 IP** 的 `opuser` 金鑰；金鑰檔屬 root，帳號不能自行加 key；sudo 只能重啟**自己那台**的服務、`journalctl`（NOEXEC）、清理日誌腳本 |
+
+**為什麼共用帳號也能追溯與控管**
+- Kafka 動作：用本人 AD 帳密走 LDAP listener，RBAC 依 AD 群組決定；選單紀錄與 Kafka 稽核日誌都是本人。
+- 主機動作：碰 node 之前，選單以本人 token 呼叫 MDS `PUT /security/1.0/authorize`（預設要求叢集層級的 Topic Describe，即 Operator 以上）。MDS 會展開 AD 群組，而且只能問自己。
+- 紀錄同時送 syslog（共用帳號改得到本機檔案，改不到 SIEM）。
+
+**部署（離線引進）**：`windows/package-opmenu.sh` 打包 `opmenu/` → `packages/tools/opmenu-<日期>.<sha8>.tar.gz`（版本由內容決定，內容不同就不會覆蓋）→ `verify-packages.sh` → `cpctl repo import` → `cpctl step 11_opmenu`。版本切換是 `/opt/opmenu` symlink，舊版保留可切回。
+
+**對 opmenu 的修補（2026-10-16，原始專案同步修改）**：主機類動作的權限閘門；item 21（重啟單一 broker）的前置檢查失敗時拒絕（原本會放行）。
 
 ## 升級 SOP（依 CP 8.3 官方文件：broker 先、controller 後）
 
@@ -167,7 +194,7 @@ cpctl upgrade finalize --to 8.3.2   # kafka-features upgrade --release-version�
 | AD | Samba 模擬，由 cpctl 建立帳號 | `PROFILE=prod`：由 AD 團隊依申請單建立，cpctl 只檢查 |
 | 憑證 | 自建 CA（RSA 3072，效期 1 年） | 改用行內 CA 簽發，放進 `state/pki` |
 | heap / retention | `PROFILE=poc` 數值 | `PROFILE=prod`（官方建議值） |
-| 核心參數 | vm.* 等只能在 WSL2 主機設定（腳本會警告） | 腳本直接寫入 `/etc/sysctl.d` |
+| 核心參數 | vm.* 等只能在 WSL2 主機設定（腳本會警告）；容器重開後 net.* 會回到預設值，下一次 cpctl 會偵測並修正（2026-10-16 實測：4 台 broker 各 2 項） | 腳本直接寫入 `/etc/sysctl.d`，開機自動套用 |
 | THP / SELinux | 容器共用 WSL2 核心：THP 只回報、SELinux 不存在 → `skipped` | `disable-thp.service` 生效；SELinux enforcing＋restorecon |
 | 時間同步 | chrony 以 `-x` 執行（只跟隨不調整共用時鐘），ops01 當 NTP 來源 | `NTP_SERVERS` 改為行內 NTP，移除 `-x` |
 | 防火牆 | firewalld 只作用在各容器自己的網路命名空間 | 依實際網段與行內網路防火牆政策調整，或 `FIREWALLD=off` |
@@ -181,3 +208,5 @@ cpctl upgrade finalize --to 8.3.2   # kafka-features upgrade --release-version�
 - Confluent Server 不以 JMX 提供 raft 指標；controller quorum 健康以 `ActiveControllerCount` 告警，詳細狀態用 `cpctl verify`。consumer lag 不是 broker JMX 指標，由 C3 顯示（或另接 lag exporter）。
 - svc-cpctl 是安裝用的 bootstrap 帳號，列在 `super.users` 中；安裝完成後建議停用，需要時再由 break-glass 程序啟用。
 - 在 Docker Desktop 上，從 Windows 發出的請求來源 IP 都相同，LB 的 source-hash 黏著會把它們全部送到同一台 REST Proxy；負載分散要從 cpnet 內的不同來源驗證。
+- **整個環境冷開機**（例如停電後所有主機同時開機）：C3 若比 MDS 先啟動，會卡在「client has already been closed」且不開 9021（2026-10-16 實測）。已在 C3 的 systemd drop-in 加上啟動前等待 MDS（最多 5 分鐘，逾時仍會啟動）。正式環境的開機順序建議仍是 controller → broker → REST / C3。
+- 模擬環境用 `bash windows/poc.sh start` 啟動時會帶 `spare` profile：controller 替換演練後 kc04 是正式 voter，少了它 quorum 只剩兩台。

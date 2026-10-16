@@ -25,6 +25,7 @@ start() {
   kafka-topics --bootstrap-server "${BOOT%%,*}" --command-config "$CFG" --create --if-not-exists \
     --topic "$TOPIC" --partitions 6 --replication-factor 3 --config min.insync.replicas=2 >/dev/null 2>&1 || true
   : >"$DIR/produced.seq"
+  : >"$DIR/rest.log"   # per run: the report must not count earlier runs (or a torn write from an unclean shutdown)
   (
     i=0
     while [[ -f $DIR/running ]]; do

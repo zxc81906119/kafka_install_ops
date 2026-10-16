@@ -59,7 +59,9 @@ role::common_vars() {
 role::protected_users() {
   local p out=() svc
   IFS=';' read -ra out <<<"$SUPER_USERS"
-  for svc in $AD_SERVICE_ACCOUNTS ${AUDIT_PRINCIPAL:-}; do
+  local bg=""
+  [[ ${OPMENU:-off} == on ]] && bg=${OPMENU_BREAKGLASS:-}
+  for svc in $AD_SERVICE_ACCOUNTS ${AUDIT_PRINCIPAL:-} $bg; do
     p="User:$svc"
     [[ " ${out[*]} " == *" $p "* ]] || out+=("$p")
   done

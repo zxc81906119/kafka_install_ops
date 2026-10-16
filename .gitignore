@@ -17,3 +17,8 @@ state/
 # IDE
 .idea/
 *.iml
+
+# deck generator dependencies (npm ci in docs/deck-src)
+node_modules/
+# PowerPoint lock files
+~$*

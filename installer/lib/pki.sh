@@ -138,7 +138,30 @@ pki::truststore() {
 }
 
 # pki::leaves -> the leaf certificates cpctl manages (shared certs + client certs of legacy REST apps)
-pki::leaves() { printf '%s\n' kafka-internal cp-server; inv::apps rest; }
+pki::leaves() {
+  printf '%s\n' kafka-internal cp-server
+  [[ ${OPMENU:-off} == on ]] && printf '%s\n' "$OPMENU_BREAKGLASS"
+  inv::apps rest
+}
+
+# pki::truststore_named <file> <password>  -> PKCS12 truststore of the trust bundle with its own password
+# (for consumers outside the cluster, e.g. the bastion: never hand out STORE_PASSWORD, which also opens keystores)
+pki::truststore_named() {
+  local ts=$1 pw=$2 mark="$1.bundle.sha256" sha d f i=0
+  sha=$(core::sha256 "$PKI_DIR/ca.pem")
+  if [[ -f $ts && -f $mark && $(cat "$mark") == "$sha" ]]; then return 0; fi
+  step::mutating || return 0
+  d=$(mktemp -d)
+  pki::split_bundle "$PKI_DIR/ca.pem" "$d"
+  rm -f "$ts"
+  for f in "$d"/ca-*.pem; do
+    i=$((i + 1))
+    pki::keytool -importcert -noprompt -alias "internal-ca-$i" -file "$f" -keystore "$ts" -storetype PKCS12 -storepass "$pw" >/dev/null
+  done
+  rm -rf "$d"
+  printf '%s' "$sha" >"$mark"
+  log::changed "truststore $(basename "$ts") rebuilt from the trust bundle"
+}
 
 # pki::prune -> leaf certificates no longer managed (e.g. an app moved from REST to SCRAM) leave the
 # working directory for archive/retired-<ts>/ so they are neither rotated, trusted nor handed out again

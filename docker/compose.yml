@@ -129,6 +129,17 @@ services:
       nofile: { soft: 65536, hard: 65536 }
     networks: { cpnet: { ipv4_address: 172.30.0.51 } }
 
+  # Simulated bastion (堡壘機): fixed OS account opuser whose login shell is the OP menu; not joined to AD.
+  # Reached through Docker DNS (alias) on purpose: adding it to the shared x-hosts list would make compose
+  # recreate every node container (Kafka data lives in the container layer).
+  jump01:
+    <<: *node
+    hostname: jump01
+    networks:
+      cpnet:
+        ipv4_address: 172.30.0.13
+        aliases: [jump01.poc.lab]
+
 networks:
   cpnet:
     internal: true

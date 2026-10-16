@@ -171,3 +171,27 @@ EOF
   [ "$(os::fw_ports c3)" = "9021 9090" ]
   [ "$(os::fw_ports ops)" = "8080" ]
 }
+
+# ---------- OP menu (bastion)
+@test "break-glass certificate is managed (rotated, never pruned) only when the OP menu is on" {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/pki.sh"
+  OPMENU=off
+  [[ $(pki::leaves | paste -sd' ' -) != *opmenu-breakglass* ]]
+  OPMENU=on OPMENU_BREAKGLASS=opmenu-breakglass
+  [ "$(pki::leaves | paste -sd' ' -)" = "kafka-internal cp-server opmenu-breakglass app-legacy" ]
+}
+
+@test "node access: a node may restart only its own units; the bastion opens no service port" {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/roles/jump.sh"
+  HOSTS_rest="rest01" HOSTS_jump="jump01"
+  [ "$(jump::units_of kc01)" = "confluent-server" ]
+  [ "$(jump::units_of kb01)" = "confluent-server" ]
+  [ "$(jump::units_of rest01)" = "confluent-kafka-rest" ]
+  [ "$(jump::units_of c3-01)" = "confluent-control-center" ]
+  [ -z "$(jump::units_of jump01)" ]
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/steps/01_os_baseline.sh"
+  [ -z "$(os::fw_ports jump)" ]
+}

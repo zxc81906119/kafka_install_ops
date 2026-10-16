@@ -78,7 +78,7 @@ install::_units() { # <host> <unit...>
 # ---- interface
 install::prepare() {
   local host=$1 role
-  role=$(inv::roles "$host" | grep -E '^(ops|controller|broker|rest|c3|controller_spare)$' | head -1)
+  role=$(inv::roles "$host" | grep -E '^(ops|controller|broker|rest|c3|controller_spare|jump)$' | head -1)
   # OS packages (C3 prerequisites, chrony, firewalld) still come from the internal OS-deps yum repo
   local tmp
   tmp=$(render::tmp)
@@ -142,7 +142,7 @@ install::ensure() {
   case $role in
     controller | broker | controller_spare) install::_units "$host" confluent-server ;;
     rest) install::_units "$host" confluent-kafka-rest ;;
-    ops) : ;; # tools only (kafka-*, confluent CLI from the same archive) - no service
+    ops | jump) : ;; # tools only (kafka-*, confluent CLI from the same archive) - no service
   esac
 }
 

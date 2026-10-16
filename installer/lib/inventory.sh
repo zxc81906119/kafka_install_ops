@@ -23,7 +23,7 @@ inv::hosts() {
 # inv::roles <host>   -> roles the host belongs to
 inv::roles() {
   local host=$1 role
-  for role in controller broker rest c3 lb ad ops controller_spare; do
+  for role in controller broker rest c3 lb ad ops controller_spare jump; do
     # here-string, not a pipe: "producer | grep -q" can SIGPIPE the producer -> false negative under pipefail
     grep -qx "$host" <<<"$(inv::hosts "$role")" && printf '%s\n' "$role"
   done

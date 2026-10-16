@@ -13,13 +13,15 @@ step_apply() {
   # machines: client certificates ONLY for legacy apps that use REST Proxy (principal = CN)
   local app
   for app in $(inv::apps rest); do pki::issue "$app" "" clientAuth; done
+  # OP menu break-glass identity (menu item 91; RBAC SystemAdmin, key held by opbootstrap on the bastion)
+  if [[ ${OPMENU:-off} == on ]]; then pki::issue "$OPMENU_BREAKGLASS" "" clientAuth; fi
   pki::prune
   pki::mds_keypair
   [[ -f $PKI_DIR/ca.pem ]] || return 0   # check mode on a fresh host
 
   # every Java host trusts the internal CA (OS store + JDK default store)
   local h
-  for h in $(inv::hosts ops) $(inv::hosts controller) $(inv::hosts broker) $(inv::hosts rest) $(inv::hosts c3); do
+  for h in $(inv::hosts ops) $(inv::hosts controller) $(inv::hosts broker) $(inv::hosts rest) $(inv::hosts c3) $(inv::hosts jump); do
     remote::put "$h" "$PKI_DIR/ca.pem" /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem root root 0644
     if [[ $REMOTE_CHANGED == 1 ]] && step::mutating; then remote::exec "$h" "sudo -n update-ca-trust extract"; fi
     remote::apply "$h" java_node::trust_ca "$(install::java_home)" /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem

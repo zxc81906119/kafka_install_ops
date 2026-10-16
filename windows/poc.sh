@@ -27,7 +27,8 @@ cmd_secrets() {
   # shellcheck source=/dev/null
   source "$CONF_DIR/apps.env"
   local keys=(AD_ADMIN_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD SVC_CPCTL_PASSWORD
-    KAFKA_ADMIN_PASSWORD STORE_PASSWORD HUMAN_DEFAULT_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE AUDIT_PASSWORD JMX_EXPORTER_PASSWORD)
+    KAFKA_ADMIN_PASSWORD STORE_PASSWORD HUMAN_DEFAULT_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE AUDIT_PASSWORD JMX_EXPORTER_PASSWORD
+    OPMENU_TRUSTSTORE_PASSWORD OPMENU_BREAKGLASS_STORE_PASSWORD)
   local app
   for app in $APPS; do keys+=("APP_$(tr 'a-z-' 'A-Z_' <<<"$app")_PASSWORD"); done
   touch "$f"
@@ -96,7 +97,7 @@ main() {
     secrets) cmd_secrets ;;
     build) cmd_build ;;
     up) cmd_up "$@" ;;
-    start) ensure_docker; "${COMPOSE[@]}" start ;;
+    start) ensure_docker; "${COMPOSE[@]}" --profile spare start ;;   # spare profile too: kc04 may be an active controller after the replacement drill
     stop) "${COMPOSE[@]}" --profile spare stop ;;
     down) "${COMPOSE[@]}" --profile spare down ;;
     reset) "${COMPOSE[@]}" --profile spare down -v ;;

@@ -75,6 +75,53 @@ verify::audit_has() {
     and .data.authenticationInfo.principal == $p and .data.authorizationInfo.granted == $g)] | length > 0' <<<"$out" >/dev/null
 }
 
+# verify::opmenu <conf> <ad user> <password> <item> [args...]
+#   runs one menu item non-interactively AS THE FIXED BASTION ACCOUNT with someone's AD credentials (PoC test conf);
+#   prints the menu output followed by "@@LOG@@ <last opmenu.log line>"
+verify::opmenu() {
+  local conf=$1 u=$2 pw=$3 j; shift 3
+  j=$(inv::hosts jump | head -1)
+  remote::exec "$j" "sudo -n -u $OPMENU_OS_USER env OPMENU_CONF=$conf OPMENU_USER=$u OPMENU_PASS=$(printf %q "$pw") \
+    OPMENU_TICKET=CHG-2026-0001 OPMENU_YES=1 OPMENU_REASON=verify /opt/opmenu/opmenu.sh --run $* </dev/null 2>&1; \
+    echo \"@@LOG@@ \$(sudo -n tail -1 /var/log/opmenu/opmenu.log)\"" 2>/dev/null || true
+}
+# verify::opmenu_result <output> -> the RESULT field of the logged line (OK / DENIED / AUTH_FAIL / FAIL ...)
+verify::opmenu_result() { sed -n 's/^@@LOG@@ //p' <<<"$1" | awk -F' [|] ' '{print $7}'; }
+verify::opmenu_user() { sed -n 's/^@@LOG@@ //p' <<<"$1" | awk -F' [|] ' '{print $3}'; }
+
+verify::opmenu_section() {
+  local t=/etc/opmenu/opmenu-test.conf pw j out
+  pw=$(inv::secret HUMAN_DEFAULT_PASSWORD)
+  j=$(inv::hosts jump | head -1)
+  log::step "---- OP menu on the bastion (fixed accounts; identity = own AD login)"
+  out=$(verify::opmenu "$t" alice "$pw" 12)
+  verify::check "alice (kafka-admins) lists topics through the menu" test "$(verify::opmenu_result "$out")" = OK
+  verify::check "the menu logs the AD identity (alice), not the shared OS account $OPMENU_OS_USER" test "$(verify::opmenu_user "$out")" = alice
+  out=$(verify::opmenu "$t" alice wrong-password 12)
+  verify::check "wrong AD password is rejected at menu login" test "$(verify::opmenu_result "$out")" = AUTH_FAIL
+  out=$(verify::opmenu "$t" bob "$pw" 23 "$(inv::fqdn "$(inv::hosts broker | head -1)"):confluent-server" 20)
+  verify::check "bob (kafka-operators) may run a host action (broker logs over ssh as $OPMENU_NODE_USER)" test "$(verify::opmenu_result "$out")" = OK
+  out=$(verify::opmenu "$t" carol "$pw" 23 "$(inv::fqdn "$(inv::hosts broker | head -1)"):confluent-server" 20)
+  verify::check "carol (kafka-devs) is stopped by the host-action gate (MDS authorize)" test "$(verify::opmenu_result "$out")" = DENIED
+  out=$(verify::opmenu "$t" carol "$pw" 22 "$(inv::fqdn "$(inv::hosts rest | head -1)"):confluent-kafka-rest")
+  verify::check "carol cannot restart REST Proxy through the shared node account" test "$(verify::opmenu_result "$out")" = DENIED
+  # item 21 must refuse when its safety check cannot run (it used to count a failed check as "0 under-replicated")
+  remote::exec "$j" "printf '. /etc/opmenu/opmenu-test.conf\nOPMENU_BOOTSTRAP=nowhere.invalid:9096\n' | sudo -n tee /tmp/opmenu-broken.conf >/dev/null; sudo -n chmod 0644 /tmp/opmenu-broken.conf"
+  out=$(verify::opmenu /tmp/opmenu-broken.conf alice "$pw" 21 "$(inv::fqdn "$(inv::hosts broker | head -1)"):confluent-server")
+  verify::check "item 21 refuses to restart when the safety check fails (fail closed)" \
+    bash -c '[[ $1 == *"無法檢查"* && $1 != *"已重啟"* ]]' _ "$out"
+  remote::exec "$j" "sudo -n rm -f /tmp/opmenu-broken.conf"
+  out=$(verify::opmenu "$t" alice "$pw" 91 kafka-topics --list)
+  verify::check "break-glass (item 91) runs as the certificate identity through opbootstrap" \
+    bash -c '[[ $1 == *"orders.events"* ]]' _ "$out"
+  verify::check "break-glass use is logged as EMERGENCY with the operator's name" \
+    remote::exec "$j" "sudo -n grep -q '| alice | 91 bootstrap .*| EMERGENCY |' /var/log/opmenu/opmenu.log"
+  out=$(remote::exec "$j" "sudo -n su - $OPMENU_OS_USER -c id </dev/null 2>&1" || true)
+  verify::check "the fixed account gets no shell: 'su - $OPMENU_OS_USER -c id' does not run id" bash -c '[[ $1 != *"uid="* ]]' _ "$out"
+  verify::check_not "the bastion account cannot read the break-glass key" \
+    remote::exec "$j" "sudo -n -u $OPMENU_OS_USER cat /etc/opmenu/bootstrap/breakglass.key"
+}
+
 verify::consume_contains() { # <bootstrap> <config> <topic> <group> <message>
   local out attempt
   # one retry: right after rolling restarts the group coordinator may still be moving
@@ -211,6 +258,9 @@ verify::run_all() {
     log::step "---- External monitoring (JMX exporter)"
     verify::check "every controller / broker / REST exporter: HTTPS, auth required, metrics served" monitoring::check
   fi
+
+  # OP menu: only once step 11 has run (fresh installs verify in step 10, before the bastion exists)
+  if jump::enabled && [[ -f $STAMP_DIR/11_opmenu ]]; then verify::opmenu_section; fi
 
   log::step "---- Certificates"
   pki::status || true   # expiring soon / not yet switched = warning only (cpctl certs status shows served certs too)

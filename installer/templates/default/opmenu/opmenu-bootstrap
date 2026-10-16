@@ -1,0 +1,22 @@
+#!/bin/bash
+# Managed by cpctl - break-glass wrapper for the OP menu (item 91 and second-person queries).
+# Runs as opbootstrap through sudo; operators never read the certificate. Same interface as the opmenu demo wrapper:
+#   opmenu-bootstrap kafka <tool> <args...>       Kafka CLI as the break-glass identity (INTERNAL listener, mTLS)
+#   opmenu-bootstrap mds <METHOD> <path> [json]   MDS call with the break-glass certificate; last line "HTTP <code>"
+set -uo pipefail
+. /etc/opmenu/opmenu.conf
+B=/etc/opmenu/bootstrap
+case "${1:-}" in
+  kafka)
+    tool="${2:?tool}"; shift 2
+    case "$tool" in kafka-*) ;; *) echo "only kafka-* tools are allowed"; exit 2 ;; esac
+    exec env KAFKA_HEAP_OPTS="-Xmx256m" "$tool" --bootstrap-server "$OPMENU_BREAKGLASS_BOOTSTRAP" --command-config "$B/breakglass.properties" "$@" ;;
+  mds)
+    m="${2:?METHOD}"; p="${3:?path}"; b="${4:-}"
+    a=(-s --max-time 10 --cacert "$B/ca.pem" -X "$m" --cert "$B/breakglass.pem" --key "$B/breakglass.key"
+      -H "Content-Type: application/json" -w $'\nHTTP %{http_code}')
+    [ -n "$b" ] && a+=(-d "$b")
+    for u in ${OPMENU_MDS_URL//,/ }; do out=$(curl "${a[@]}" "$u$p") && { printf '%s' "$out"; exit 0; }; done
+    echo "MDS unreachable: $OPMENU_MDS_URL" >&2; exit 1 ;;
+  *) echo "usage: opmenu-bootstrap kafka <tool> ... | mds <METHOD> <path> [json]"; exit 2 ;;
+esac

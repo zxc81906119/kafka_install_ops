@@ -124,7 +124,7 @@ step_apply() {
   core::load_env "$CONF_DIR/os-tuning.env"
   local h
   local hosts
-  hosts=$({ inv::hosts ops; inv::hosts controller; inv::hosts broker; inv::hosts rest; inv::hosts c3; })
+  hosts=$({ inv::hosts ops; inv::hosts controller; inv::hosts broker; inv::hosts rest; inv::hosts c3; inv::hosts jump; })
   for h in $hosts; do
     os::baseline_host "$h"
   done
