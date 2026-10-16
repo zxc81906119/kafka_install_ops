@@ -88,6 +88,13 @@ setup() { setup_cpctl; setup_node; }
   [ "$(stat -c %a "$d/conf")" = 750 ]
 }
 
+@test "backups never stay in the trust anchors (every file there is trusted), elsewhere they stay next to the file" {
+  ensure::_consumes_all /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+  run ensure::_consumes_all /etc/confluent/kafka/server.properties; [ "$status" -ne 0 ]
+  run ensure::_consumes_all /etc/sysctl.d/90-confluent.conf; [ "$status" -ne 0 ]
+  [[ $ENSURE_BACKUP_DIR == /var/* ]]
+}
+
 @test "ensure::dir and ensure::symlink converge and then report ok" {
   d="$BATS_TEST_TMPDIR/s"
   run ensure::dir "$d" "$ME" "$MYGROUP" 0750; [[ "$output" == *"::changed::"* ]]

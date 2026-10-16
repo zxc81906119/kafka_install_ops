@@ -22,3 +22,7 @@ state/
 node_modules/
 # PowerPoint lock files
 ~$*
+
+# Full manual (no cpctl) run: separate landing zone and secrets
+packages-manual/
+docker/manual/secrets.env

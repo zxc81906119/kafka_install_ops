@@ -1,0 +1,4 @@
+##### 3.0 前置(帳號開通,root):cpadmin 金鑰。正式環境由行內帳號開通流程把公鑰放到各主機
+sudo -u cpadmin ssh-keygen -q -t ed25519 -N '' -C cpadmin@ops02 -f /home/cpadmin/.ssh/id_ed25519 && ls -l /home/cpadmin/.ssh
+install -m 0644 /home/cpadmin/.ssh/id_ed25519.pub /etc/ssh/authorized_keys.d/cpadmin && ls -l /etc/ssh/authorized_keys.d/
+cat /etc/ssh/sshd_config.d/10-cp.conf /etc/sudoers.d/cpadmin

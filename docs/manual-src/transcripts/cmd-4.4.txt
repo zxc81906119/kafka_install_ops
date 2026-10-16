@@ -1,0 +1,38 @@
+##### 4.4.1 啟動 controller(三台同時)
+for h in kc01 kc02 kc03; do ssh $h.poc.lab "sudo systemctl enable -q confluent-server && sudo systemctl start confluent-server" & done; wait; echo started
+##### 4.4.2 controller 健康檢查
+{{
+for h in kc01 kc02 kc03; do for i in $(seq 1 60); do timeout 3 bash -c "exec 3<>/dev/tcp/$h.poc.lab/9093" 2>/dev/null && { echo "$h 9093 open (${i}x3s)"; break; }; sleep 3; done; done
+}}
+{{
+. ~/manual.env
+for i in $(seq 1 40); do kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --status > /tmp/q 2>&1 && grep -q '^LeaderId' /tmp/q && break; sleep 3; done; cat /tmp/q
+}}
+##### 4.4.3 每個 voter 都跟上(lag 0)
+{{
+. ~/manual.env
+kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication
+for id in 1 2 3; do kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {print id, (ok?"caught-up":"NOT-READY")}'; done
+kafka-features --bootstrap-controller $CB --command-config $ADMIN_CFG describe | grep kraft.version
+}}
+##### 4.4.4 啟動 broker
+for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab "sudo systemctl enable -q confluent-server && sudo systemctl start confluent-server" & done; wait; echo started
+##### 4.4.5 broker 健康檢查
+{{
+for h in kb01 kb02 kb03 kb04; do for p in 9092 8090; do for i in $(seq 1 80); do timeout 3 bash -c "exec 3<>/dev/tcp/$h.poc.lab/$p" 2>/dev/null && { echo "$h $p open"; break; }; sleep 3; done; done; done
+}}
+{{
+. ~/manual.env
+kafka-broker-api-versions --bootstrap-server $BI --command-config $ADMIN_CFG 2>/dev/null | grep '(id:'
+for i in $(seq 1 30); do out=$(kafka-topics --bootstrap-server $BI --command-config $ADMIN_CFG --describe --under-replicated-partitions 2>&1); [ -z "$out" ] && break; sleep 5; done; echo "under-replicated: [${out}]"
+kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk '$NF=="Observer"'
+}}
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+curl -s --cacert $PKI/ca.pem https://kb01.poc.lab:8090/v1/metadata/id; echo
+curl -s -o /dev/null -w 'activenodes without credentials: %{http_code}\n' --cacert $PKI/ca.pem https://kb01.poc.lab:8090/security/1.0/activenodes/https
+install -m 0600 /dev/null ~/.netrc-alice && printf 'machine kb01.poc.lab login alice password %s\n' "$HUMAN_DEFAULT_PASSWORD" > ~/.netrc-alice
+curl -s -w '  (http %{http_code})\n' --cacert $PKI/ca.pem --netrc-file ~/.netrc-alice https://kb01.poc.lab:8090/security/1.0/activenodes/https
+rm -f ~/.netrc-alice
+}}
+for h in kc01 kb01; do ssh $h.poc.lab "systemctl is-active confluent-server; sudo grep -m1 -E 'Kafka Server started|KafkaRaftServer.*started|Transitioning from' /var/log/kafka/server.log | cut -c1-160"; done

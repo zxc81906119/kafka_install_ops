@@ -1,0 +1,112 @@
+##### 3.4 步驟 03:內部 PKI(ops02,cpadmin,不加 sudo)。密碼從 0600 的 secrets.env 載入環境變數,不出現在指令列
+install -d -m 0700 /var/lib/cp-installer/pki && stat -c '%U:%G %a %n' /var/lib/cp-installer /var/lib/cp-installer/pki
+##### 3.4.1 內部 CA
+{{
+cd /var/lib/cp-installer/pki && umask 077
+openssl genrsa -out ca.key 3072 2>/dev/null
+chmod 0600 ca.key
+openssl req -x509 -new -key ca.key -sha256 -days 3650 -out ca.crt \
+  -subj "/CN=PoC Internal CA $(date +%Y%m%d)/OU=Confluent/O=PoC Bank/C=TW" \
+  -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+cat ca.crt > ca.pem
+chmod 0644 ca.pem
+openssl x509 -in ca.crt -noout -subject -dates -ext basicConstraints,keyUsage
+openssl x509 -in ca.crt -noout -text | grep 'Public-Key'
+}}
+##### 3.4.2 truststore.p12
+{{
+cd /var/lib/cp-installer/pki && umask 077 && set -a && . ../secrets.env && set +a
+KT=/usr/lib/jvm/temurin-21-jdk/bin/keytool
+d=$(mktemp -d)
+awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' ca.pem
+rm -f truststore.p12
+i=0; for f in "$d"/ca-*.pem; do i=$((i+1))
+  "$KT" -importcert -noprompt -alias "internal-ca-$i" -file "$f" -keystore truststore.p12 -storetype PKCS12 -storepass:env STORE_PASSWORD
+done
+rm -rf "$d"
+sha256sum ca.pem | awk '{printf "%s",$1}' > truststore.bundle.sha256
+"$KT" -list -keystore truststore.p12 -storepass:env STORE_PASSWORD | grep -E 'entr|internal-ca'
+}}
+##### 3.4.3–3.4.6 簽發 leaf 憑證(issue 函式照手冊 3.4.3)與 MDS token 金鑰
+{{
+cd /var/lib/cp-installer/pki && umask 077 && set -a && . ../secrets.env && set +a
+issue() {  # <name> <EKU> [SAN 逗號清單]
+  local n=$1 eku=$2 sans=${3:-}
+  { printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n'
+    printf 'extendedKeyUsage=%s\n' "$eku"
+    [ -n "$sans" ] && printf 'subjectAltName=%s\n' "$(tr ',' '\n' <<<"$sans" | sort -u | sed 's/^/DNS:/' | paste -sd, -)"
+  } > "$n.ext"
+  openssl genrsa -out "$n.key" 3072 2>/dev/null
+  chmod 0600 "$n.key"
+  openssl req -new -key "$n.key" -out "$n.csr" -subj "/CN=$n/OU=Confluent/O=PoC Bank/C=TW"
+  openssl x509 -req -in "$n.csr" -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 -sha256 -extfile "$n.ext" -out "$n.crt" 2>/dev/null
+  rm -f "$n.ext" "$n.csr"
+  openssl pkcs12 -export -name "$n" -inkey "$n.key" -in "$n.crt" -certfile ca.crt -passout env:STORE_PASSWORD -out "$n.p12"
+  cat "$n.crt" ca.crt > "$n.chain.pem"
+  echo "issued $n"
+}
+issue kafka-internal serverAuth,clientAuth kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
+issue cp-server serverAuth,clientAuth ops02.poc.lab,ops02,ad01.poc.lab,ad01,lb01.poc.lab,lb01,kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,rest.poc.lab,c3.poc.lab,localhost
+issue app-legacy-billing clientAuth
+issue opmenu-breakglass clientAuth
+openssl genrsa -out mds-token-keypair.pem 2048 2>/dev/null
+chmod 0600 mds-token-keypair.pem
+openssl rsa -in mds-token-keypair.pem -pubout -out mds-public.pem 2>/dev/null
+openssl pkcs8 -topk8 -v2 aes256 -in mds-token-keypair.pem -passout env:MDS_TOKEN_PASSPHRASE -out mds-token-keypair.enc.pem
+chmod 0600 mds-token-keypair.enc.pem
+}}
+##### 3.4 驗證(ops02)
+{{
+cd /var/lib/cp-installer/pki && set -a && . ../secrets.env && set +a
+openssl x509 -in kafka-internal.crt -noout -subject -ext subjectAltName,extendedKeyUsage
+openssl x509 -in cp-server.crt -noout -ext subjectAltName | tail -n +2 | tr ',' '\n' | wc -l
+openssl x509 -in app-legacy-billing.crt -noout -subject -ext extendedKeyUsage
+openssl pkey -in mds-token-keypair.enc.pem -passin env:MDS_TOKEN_PASSPHRASE -noout && echo ENC_OK
+openssl verify -CAfile ca.pem kafka-internal.crt cp-server.crt app-legacy-billing.crt opmenu-breakglass.crt
+ls -l
+}}
+##### 3.4.7 派送到 /etc/confluent/ssl(每台只拿自己角色需要的檔案)
+{{
+cd /var/lib/cp-installer/pki
+push() {  # <host> <files...>
+  local h=$1; shift
+  scp -q "$@" $h.poc.lab:/tmp/
+  ssh $h.poc.lab "FILES='$(for f in "$@"; do basename "$f"; done | tr '\n' ' ')' bash -s" <<'EOS'
+set -e
+sudo install -d -o root -g root -m 0755 /etc/confluent
+sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl
+for f in $FILES; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/$f && rm -f /tmp/$f; done
+sudo rm -f /etc/confluent/ssl/mds-token-keypair.pem
+echo "$(hostname): $(sudo ls /etc/confluent/ssl | tr '\n' ' ')"
+EOS
+}
+CTL="ca.pem truststore.p12 kafka-internal.p12 mds-token-keypair.enc.pem mds-public.pem"
+for h in kc01 kc02 kc03; do push $h $CTL; done
+for h in kb01 kb02 kb03 kb04; do push $h $CTL cp-server.p12; done
+for h in rest01 rest02; do push $h ca.pem truststore.p12 cp-server.p12 mds-public.pem; done
+push c3-01 ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key mds-public.pem
+}}
+ssh kb01.poc.lab "sudo ls -l /etc/confluent/ssl; sudo -u cp-kafka test -r /etc/confluent/ssl/kafka-internal.p12 && echo READABLE-by-cp-kafka"
+##### 3.4.8 主機信任內部 CA(OS trust anchor,再 JDK cacerts;順序:先 update-ca-trust 再 keytool)
+{{
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  scp -q /var/lib/cp-installer/pki/ca.pem $h.poc.lab:/tmp/cp-internal-ca.pem
+  ssh $h.poc.lab 'bash -s' <<'EOS'
+set -e
+sudo install -o root -g root -m 0644 /tmp/cp-internal-ca.pem /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+rm -f /tmp/cp-internal-ca.pem
+sudo update-ca-trust extract
+JH=/usr/lib/jvm/temurin-21-jdk
+d=$(mktemp -d)
+awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+for f in "$d"/ca-*.pem; do
+  fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f' | cut -c1-16)
+  sudo "$JH/bin/keytool" -list -cacerts -storepass changeit -alias "cp-ca-$fp" >/dev/null 2>&1 || \
+  sudo "$JH/bin/keytool" -importcert -noprompt -cacerts -storepass changeit -alias "cp-ca-$fp" -file "$f" >/dev/null
+done
+rm -rf "$d"
+echo "$(hostname): $(trust list --filter=ca-anchors | grep -c 'PoC Internal CA') OS anchor, JDK $(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -o '^cp-ca-[0-9a-f]*')"
+EOS
+done
+}}
+ssh kb01.poc.lab "openssl x509 -in /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem -noout -subject -fingerprint -sha256; ls /etc/pki/ca-trust/source/anchors/"

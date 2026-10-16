@@ -58,7 +58,10 @@ installer/      掛載到 ops01:/opt/cp-installer
   upgrade/      升級、controller 替換、uninstall
   templates/    設定檔模板（依版本 templates/<major.minor>/，無則 default/）
   tools/        lint.sh（shellcheck + shfmt）、load.sh（演練用持續流量）
+docs/           全流程簡報（deck-src/ 產生）、手動安裝手冊 Confluent-手動安裝手冊.docx（manual-src/ 產生）
 ```
+
+想知道 cpctl 每一步實際做了什麼，請看 `docs/Confluent-手動安裝手冊.docx`：離線引進、步驟 00–11、tar.gz 安裝方式都拆成不經 cpctl 的手動指令（指令、設定檔內容、驗證、對應的 cpctl 函式），並附在備用節點 kc03 上實際手動跑過的紀錄。
 
 ## 快速開始（Windows 11 + Docker Desktop，Git Bash）
 

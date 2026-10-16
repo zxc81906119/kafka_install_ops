@@ -1,0 +1,127 @@
+##### 3.3.1.1–3.3.1.2(先做,3.2.7 會用到):內部 repo 定義檔與 GPG 金鑰 → 所有 01 主機(ops02 自己也是)
+# (重做) 第一次執行時 ops02 排在第一台:遠端步驟 rm -f /tmp/cp-internal.repo 在 ops02 上刪掉了要派送的檔案,後面 11 台都沒拿到 → 暫存檔改放 /var/lib/cp-installer/manual/。broker 的 net.core.rmem_max/wmem_max 在容器內不存在,sysctl -q -w 失敗卻回傳 0 → 改成先檢查 /proc/sys
+# (再修正) 容器內 net.core.rmem_max/wmem_max 是唯讀,sysctl -w 失敗仍回傳 0 → 改成設定後讀回比對
+{{
+cat > /var/lib/cp-installer/manual/cp-internal.repo <<'EOF'
+# Managed by cpctl - internal mirror only (public repos are not reachable from this network)
+[cp-internal-confluent]
+name=Internal mirror - Confluent Platform and Control Center
+baseurl=http://ops02.poc.lab:8080/rpm/confluent
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+
+[cp-internal-adoptium]
+name=Internal mirror - Eclipse Temurin
+baseurl=http://ops02.poc.lab:8080/rpm/adoptium
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+
+[cp-internal-os-deps]
+name=Internal mirror - OS dependencies
+baseurl=http://ops02.poc.lab:8080/rpm/os-deps
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+EOF
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  for k in confluent adoptium rocky-9; do scp -q /srv/repo/gpg-keys/$k.asc $h.poc.lab:/tmp/RPM-GPG-KEY-cp-$k; done
+  scp -q /var/lib/cp-installer/manual/cp-internal.repo $h.poc.lab:/tmp/cp-internal.repo
+  ssh $h.poc.lab 'set -e
+    for k in confluent adoptium rocky-9; do sudo install -o root -g root -m 0644 /tmp/RPM-GPG-KEY-cp-$k /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; rm -f /tmp/RPM-GPG-KEY-cp-$k; done
+    for k in confluent adoptium rocky-9; do sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; done
+    sudo install -o root -g root -m 0644 /tmp/cp-internal.repo /etc/yum.repos.d/cp-internal.repo; rm -f /tmp/cp-internal.repo
+    echo "$(hostname): keys=$(rpm -q gpg-pubkey | wc -l) repos=$(sudo dnf -q repolist --enabled | grep -c cp-internal)"'
+done
+}}
+ssh kb01.poc.lab "gpg --show-keys /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent 2>&1 | head -3; rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SUMMARY}\n'; sudo dnf -q repolist"
+##### 3.2 步驟 01:OS 基線(每台主機依角色;cpadmin + sudo)
+{{
+baseline() {   # <host> <role> <ports...>
+  local h=$1 role=$2; shift 2
+  ssh $h.poc.lab "ROLE=$role PORTS='$*' bash -s" <<'EOS'
+set -e
+incontainer=no; systemd-detect-virt -c -q && incontainer=yes
+# 3.2.1 sysctl(容器內 vm.* 屬於 host kernel,不寫入;net.* 可設)
+lines=""
+case $ROLE in controller|broker) lines+="vm.max_map_count = 262144"$'\n' ;; esac
+if [ "$ROLE" = broker ]; then
+  lines+="vm.swappiness = 1"$'\n'"vm.dirty_background_ratio = 5"$'\n'"vm.dirty_ratio = 60"$'\n'
+  lines+="net.core.rmem_max = 2097152"$'\n'"net.core.wmem_max = 2097152"$'\n'
+  lines+="net.ipv4.tcp_rmem = 4096 65536 2097152"$'\n'"net.ipv4.tcp_wmem = 4096 65536 2097152"$'\n'
+fi
+lines+="net.core.somaxconn = 4096"$'\n'"net.ipv4.tcp_max_syn_backlog = 4096"$'\n'
+if [ $incontainer = yes ]; then
+  keep=""
+  while IFS= read -r l; do
+    [ -z "$l" ] && continue
+    k=${l%% =*}
+    case $k in vm.*) echo "skipped(container) $k"; continue ;; esac
+    v=${l#*= }; sudo sysctl -q -w "$k=$v" 2>/dev/null; if [ "$(sysctl -n "$k" 2>/dev/null | tr -s "	 " "  ")" = "$v" ]; then keep+="$l"$'\n'; else echo "skipped(container) $k"; fi
+  done <<<"$lines"
+  lines=$keep
+fi
+sudo install -d -m 0755 /etc/sysctl.d
+printf '%s' "$lines" | sudo tee /etc/sysctl.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/sysctl.d/90-confluent.conf
+sudo sysctl -q -p /etc/sysctl.d/90-confluent.conf
+# 3.2.2 limits
+printf '# Managed by cpctl\n@confluent soft nofile 128000\n@confluent hard nofile 128000\n@confluent soft nproc 65536\n@confluent hard nproc 65536\n' | sudo tee /etc/security/limits.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/security/limits.d/90-confluent.conf
+# 3.2.3 journald
+sudo install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
+printf '# Managed by cpctl\n[Journal]\nSystemMaxUse=1G\n' | sudo tee /etc/systemd/journald.conf.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/systemd/journald.conf.d/90-confluent.conf
+sudo systemctl restart systemd-journald
+# 3.2.4 時區
+sudo ln -sfn /usr/share/zoneinfo/Asia/Taipei /etc/localtime
+# 3.2.5 tmpfiles
+printf '# Managed by cpctl - delete rolled Confluent logs after 14 days (systemd-tmpfiles-clean.timer)\ne /var/log/kafka - - - 14d\ne /var/log/confluent - - - 14d\n' | sudo tee /etc/tmpfiles.d/90-confluent-logs.conf >/dev/null
+sudo chmod 0644 /etc/tmpfiles.d/90-confluent-logs.conf
+# 3.2.6 /etc/confluent
+sudo install -d -o root -g root -m 0755 /etc/confluent
+# 3.2.7 OS 套件(只從內部 os-deps)
+rpm -q chrony firewalld >/dev/null 2>&1 || sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-os-deps' --setopt=install_weak_deps=False install chrony firewalld >/dev/null
+# 3.2.8 THP(controller、broker;容器內 ConditionVirtualization 讓它不執行)
+if [ "$ROLE" = controller ] || [ "$ROLE" = broker ]; then
+  printf '%s\n' '# Managed by cpctl - Kafka recommends transparent hugepages = never' '[Unit]' 'Description=Disable transparent hugepages (Confluent Platform)' 'DefaultDependencies=no' 'After=sysinit.target local-fs.target' 'Before=confluent-server.service' 'ConditionVirtualization=!container' '' '[Service]' 'Type=oneshot' "ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled; echo never > /sys/kernel/mm/transparent_hugepage/defrag'" '' '[Install]' 'WantedBy=basic.target' | sudo tee /etc/systemd/system/disable-thp.service >/dev/null
+  sudo chmod 0644 /etc/systemd/system/disable-thp.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable -q disable-thp.service
+  sudo systemctl start disable-thp.service
+fi
+# 3.2.9 chrony(ops02 = NTP server;其他跟 ops02)
+if [ "$ROLE" = ops ]; then
+  printf '# Managed by cpctl\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\nallow 172.32.0.0/24\nlocal stratum 10\n' | sudo tee /etc/chrony.conf >/dev/null
+else
+  printf '# Managed by cpctl\nserver ops02.poc.lab iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\n' | sudo tee /etc/chrony.conf >/dev/null
+fi
+if [ $incontainer = yes ]; then echo 'OPTIONS="-F 2 -x"'; else echo 'OPTIONS="-F 2"'; fi | sudo tee /etc/sysconfig/chronyd >/dev/null
+sudo chmod 0644 /etc/chrony.conf /etc/sysconfig/chronyd
+sudo systemctl enable -q chronyd
+sudo systemctl restart chronyd
+# 3.2.10 firewalld
+sudo systemctl enable -q --now firewalld
+for p in $PORTS; do sudo firewall-cmd -q --permanent --add-port=$p; done
+sudo firewall-cmd -q --permanent --add-service=ssh
+for s in cockpit dhcpv6-client; do sudo firewall-cmd --permanent --query-service=$s >/dev/null 2>&1 && sudo firewall-cmd -q --permanent --remove-service=$s; done
+sudo firewall-cmd -q --reload
+# 3.2.11 SELinux
+if command -v getenforce >/dev/null; then getenforce; else echo "selinux: skipped(container) - getenforce not available"; fi
+echo "$(hostname): baseline done ($ROLE, container=$incontainer)"
+EOS
+}
+baseline ops02 ops 8080/tcp 123/udp
+for h in kc01 kc02 kc03; do baseline $h controller 9093/tcp 7071/tcp; done
+for h in kb01 kb02 kb03 kb04; do baseline $h broker 7071/tcp 8090/tcp 9092/tcp 9094/tcp 9095/tcp 9096/tcp; done
+for h in rest01 rest02; do baseline $h rest 8082/tcp 7071/tcp; done
+baseline c3-01 c3 9021/tcp 9090/tcp
+baseline jump01 jump
+}}
+##### 3.2 驗證
+ssh kb01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sysctl net.core.somaxconn net.ipv4.tcp_rmem vm.swappiness vm.max_map_count; ls -l /etc/localtime; date; rpm -q chrony firewalld; sudo firewall-cmd --permanent --list-all | grep -E ' services| ports'; systemctl is-enabled disable-thp.service; cat /sys/kernel/mm/transparent_hugepage/enabled"
+ssh kc01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sudo firewall-cmd --list-ports"
+ssh ops02.poc.lab "sudo firewall-cmd --list-all | grep -E ' services| ports'; grep -E 'allow|local' /etc/chrony.conf"
+sleep 20; for h in kc01 kb01 rest01 c3-01 jump01; do ssh $h.poc.lab "chronyc -n sources | tail -1"; done
+for h in kc01 kb04 c3-01; do ssh $h.poc.lab "systemd-analyze cat-config systemd/journald.conf | grep SystemMaxUse; systemctl is-enabled systemd-tmpfiles-clean.timer; stat -c '%U:%G:%a %n' /etc/confluent"; done

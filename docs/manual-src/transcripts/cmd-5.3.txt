@@ -1,0 +1,108 @@
+##### 5.3 步驟 10:端對端驗收(ops02,cpadmin)— 測試用 client 設定(0600)
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+CD=$S/client; umask 077
+TS="ssl.truststore.type=PKCS12
+ssl.truststore.location=$PKI/truststore.p12
+ssl.truststore.password=$STORE_PASSWORD"
+printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="%s";\n%s\n' "$APP_APP_ORDERS_PASSWORD" "$TS" > $CD/app-orders-scram.properties
+printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="wrong-password";\n%s\n' "$TS" > $CD/app-orders-wrongpw.properties
+for u in alice carol; do printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="%s" password="%s";\n%s\n' "$u" "$HUMAN_DEFAULT_PASSWORD" "$TS" > $CD/$u-ldap.properties; done
+printf 'security.protocol=SSL\n%s\n' "$TS" > $CD/nocert.properties
+ls -l $CD
+}}
+{{
+cat >> ~/manual.env <<'EOF'
+export CD=$S/client BC=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095 BL=kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096
+P() { printf '%s\n' "$4" | kafka-console-producer --bootstrap-server "$1" --producer.config "$2" --topic "$3" --producer-property acks=all --producer-property max.block.ms=20000 --producer-property delivery.timeout.ms=30000 --producer-property request.timeout.ms=15000 2>&1 | grep -oE '[A-Za-z]+(Authorization|Authentication)Exception|ERROR.*' | head -1; }
+EOF
+echo ok
+}}
+##### #1–#5 KRaft 與 broker
+{{
+. ~/manual.env
+kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --status | grep -E 'LeaderId|CurrentVoters' | sed -E 's/"endpoints[^]]*\]//g'
+kafka-features --bootstrap-controller "$CB" --command-config "$CFG" describe | grep -oE 'kraft.version.*FinalizedVersionLevel: [0-9]+' | tr -s ' '
+kafka-features --bootstrap-server "$B" --command-config "$CFG" describe | grep -oE 'confluent.metadata.version.*FinalizedVersionLevel: [0-9]+' | tr -s ' '
+kafka-broker-api-versions --bootstrap-server "$B" --command-config "$CFG" 2>/dev/null | grep -o '(id:[^)]*)'
+}}
+##### #6–#7 內部 mTLS
+{{
+. ~/manual.env
+timeout 40 kafka-metadata-quorum --bootstrap-controller "$CB" --command-config $CD/nocert.properties describe --status >/dev/null 2>&1 && echo "#6 FAIL: accepted without cert" || echo "#6 PASS: rejected without client cert"
+kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --status >/dev/null && echo "#7 PASS: kafka-internal accepted"
+}}
+##### #8–#11 App over SCRAM + RBAC
+{{
+. ~/manual.env
+M=manual-$(date +%s); echo "message: $M"
+r=$(P "$BC" $CD/app-orders-scram.properties orders.events "$M"); echo "#8  produce orders.events: ${r:-OK}"
+kafka-console-consumer --bootstrap-server "$BC" --consumer.config $CD/app-orders-scram.properties --topic orders.events --group orders-verify --from-beginning --timeout-ms 45000 2>/dev/null | grep -cF "$M" | sed 's/^/#9  consumed back: /'
+r=$(P "$BC" $CD/app-orders-scram.properties payments.events "$M"); echo "#10 produce payments.events (expect denied): ${r:-OK}"
+r=$(P "$BC" $CD/app-orders-wrongpw.properties orders.events "$M"); echo "#11 wrong password (expect denied): ${r:-OK}"
+}}
+##### #12–#15 人員 LDAP + MDS
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+M=manual-$(date +%s)
+r=$(P "$BL" $CD/alice-ldap.properties payments.events "$M-alice"); echo "#12 alice (kafka-admins) produce payments.events: ${r:-OK}"
+r=$(P "$BL" $CD/carol-ldap.properties orders.events "$M-carol"); echo "#13 carol (kafka-devs, read-only) produce orders.events (expect denied): ${r:-OK}"
+install -m 0600 /dev/null ~/.netrc-a && printf 'machine kb01.poc.lab login alice password %s\n' "$HUMAN_DEFAULT_PASSWORD" > ~/.netrc-a
+curl -s -o /dev/null -w '#14 MDS authenticate alice: %{http_code}\n' --cacert $PKI/ca.pem --netrc-file ~/.netrc-a https://kb01.poc.lab:8090/security/1.0/authenticate
+printf 'machine kb01.poc.lab login alice password wrong\n' > ~/.netrc-a
+curl -s -o /dev/null -w '#15 MDS authenticate wrong password: %{http_code}\n' --cacert $PKI/ca.pem --netrc-file ~/.netrc-a https://kb01.poc.lab:8090/security/1.0/authenticate
+rm -f ~/.netrc-a
+}}
+##### #16–#22 REST Proxy 經 LB
+{{
+. ~/manual.env
+BASE=https://rest.poc.lab:8082/v3/clusters
+C="--cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key"
+curl -s -o /dev/null -w '#16 legacy cert GET /v3/clusters: %{http_code}\n' $C $BASE
+curl -s -o /dev/null -w '#17 no client cert: %{http_code}\n' --cacert $PKI/ca.pem $BASE
+for t in billing.events orders.events; do echo "#18/#19 produce $t: $(curl -s $C -X POST -H 'Content-Type: application/json' -d '{"value":{"type":"JSON","data":{"source":"manual"}}}' "$BASE/$CID/topics/$t/records" | grep -o '"error_code":[0-9]*' | head -1)"; done
+for c in cp-server kafka-internal; do curl -s -o /dev/null -w "#20/#21 $c cert: %{http_code}\n" --cacert $PKI/ca.pem --cert $PKI/$c.crt --key $PKI/$c.key "$BASE/$CID/topics"; done
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --describe --entity-type users --entity-name app-legacy-billing | grep -c SCRAM | sed 's/^/#22 SCRAM credentials for app-legacy-billing: /'
+}}
+##### #23–#25 C3 與 Prometheus
+{{
+. ~/manual.env
+curl -s -o /dev/null -w '#23 C3 UI via LB: %{http_code}\n' --cacert $PKI/ca.pem https://c3.poc.lab:9021/
+curl -s -o /dev/null -w '#24 Prometheus without client cert: %{http_code}\n' --cacert $PKI/ca.pem https://c3-01.poc.lab:9090/-/ready
+for i in $(seq 1 30); do n=$(curl -s --cacert $PKI/ca.pem --cert $PKI/cp-server.crt --key $PKI/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'io_confluent_kafka_server[a-z_]*' | sort -u | wc -l); [ "$n" -gt 0 ] && break; sleep 10; done; echo "#25 kafka server metric names in Prometheus: $n"
+}}
+##### #26–#29 Audit
+{{
+. ~/manual.env
+kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe --topic confluent-audit-log-events | head -1 | cut -c1-90
+kafka-console-consumer --bootstrap-server "$B" --consumer.config "$CFG" --topic confluent-audit-log-events_sensitive --from-beginning --timeout-ms 30000 2>/dev/null > /tmp/sens.json
+echo "#27 alice allowed kafka.Produce: $(jq -R -n '[inputs|fromjson?|select(.data.authenticationInfo.principal=="User:alice" and .data.authorizationInfo.granted==true and (.data.methodName|test("^kafka.Produce$")))]|length' /tmp/sens.json)"
+echo "#28 app-orders denied: $(jq -R -n '[inputs|fromjson?|select(.data.authenticationInfo.principal=="User:app-orders" and .data.authorizationInfo.granted==false)]|length' /tmp/sens.json)"
+rm -f /tmp/sens.json
+ssh kb01.poc.lab 'sudo grep "^super.users" /etc/confluent/kafka/server.properties'
+}}
+##### #30–#35 離線、套件
+{{
+for h in kb01 rest01 c3-01; do ssh $h.poc.lab 'curl -s -m 5 -o /dev/null https://packages.confluent.io; echo "$(hostname) internet rc=$?"'; done
+curl -s -m 5 -o /dev/null https://packages.confluent.io; echo "ops02 internet rc=$?"
+ssh kb01.poc.lab 'sudo dnf -q versionlock list | grep confluent-server'
+ssh c3-01.poc.lab 'rpm -q confluent-server confluent-common; test -e /opt/confluent/current; echo "/opt/confluent/current exists rc=$?"'
+}}
+##### #36 JMX exporter(HTTPS;匿名 401;帶帳密有指標)
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+install -m 0600 /dev/null ~/.netrc-j
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do printf 'machine %s.poc.lab login prometheus password %s\n' $h "$JMX_EXPORTER_PASSWORD" >> ~/.netrc-j; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do
+  a=$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem https://$h.poc.lab:7071/metrics)
+  n=$(curl -s --cacert $PKI/ca.pem --netrc-file ~/.netrc-j https://$h.poc.lab:7071/metrics | grep -c '^[a-z]')
+  echo "$h anonymous=$a metrics=$n"
+done
+rm -f ~/.netrc-j
+}}
+##### #48 憑證:kb01:8090 實際出示的序號 = PKI 的 cp-server 序號
+{{
+. ~/manual.env
+echo "served: $(openssl s_client -connect kb01.poc.lab:8090 -CAfile $PKI/ca.pem </dev/null 2>/dev/null | openssl x509 -noout -serial)"
+echo "pki:    $(openssl x509 -in $PKI/cp-server.crt -noout -serial)"
+}}

@@ -54,9 +54,40 @@ ensure::file() {
   fi
   if _checking; then rm -f "$src"; return 0; fi
   [[ -d $(dirname "$dst") ]] || install -d "$(dirname "$dst")"   # never touch an existing dir's mode
-  [[ -n $old ]] && cp -p "$dst" "$dst.bak.$(date +%Y%m%d%H%M%S)"
+  [[ -n $old ]] && ensure::_backup "$dst"
   install -o "$o" -g "$g" -m "$m" "$src" "$dst"
   rm -f "$src"
+}
+
+# Directories whose every file is consumed (not just *.conf): a backup kept next to the file
+# would stay active - e.g. an old CA left in the trust anchors would still be trusted.
+readonly ENSURE_BACKUP_DIR=/var/backups/cp-installer
+ensure::_consumes_all() { [[ $1 == /etc/pki/ca-trust/source/anchors/* ]]; }
+
+# ensure::_backup <file>  -> <file>.bak.<ts>, or under $ENSURE_BACKUP_DIR for consume-all directories
+ensure::_backup() {
+  local f=$1 ts
+  ts=$(date +%Y%m%d%H%M%S)
+  if ensure::_consumes_all "$f"; then
+    install -d -m 0700 "$ENSURE_BACKUP_DIR$(dirname "$f")"
+    cp -p "$f" "$ENSURE_BACKUP_DIR$f.bak.$ts"
+  else
+    cp -p "$f" "$f.bak.$ts"
+  fi
+}
+
+# ensure::anchor_backups_moved -> move backups left in the trust anchors by older versions out of it
+ensure::anchor_backups_moved() {
+  local d=/etc/pki/ca-trust/source/anchors f moved=0
+  for f in "$d"/*.bak.*; do
+    [[ -e $f ]] || continue
+    _mark changed "move stale backup out of the trust anchors: $(basename "$f")"
+    _checking && continue
+    install -d -m 0700 "$ENSURE_BACKUP_DIR$d"
+    mv "$f" "$ENSURE_BACKUP_DIR$d/"
+    moved=1
+  done
+  if [[ $moved == 1 ]]; then update-ca-trust extract; else _mark ok "no backups in the trust anchors"; fi
 }
 
 # ensure::symlink <target> <link>

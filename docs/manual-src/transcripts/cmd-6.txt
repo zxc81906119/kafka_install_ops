@@ -1,0 +1,186 @@
+##### 6 步驟 11:堡壘機 OP menu(ops02,cpadmin → jump01 / 各節點,sudo)
+##### 6.1 固定帳號(jump01)
+{{
+ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+getent group opmenu || groupadd opmenu
+if id opuser >/dev/null 2>&1; then usermod -s /opt/opmenu/opmenu.sh -aG opmenu opuser
+else useradd -m -G opmenu -s /opt/opmenu/opmenu.sh opuser; fi
+id opbootstrap >/dev/null 2>&1 || useradd -r -m -d /etc/opmenu/bootstrap -s /sbin/nologin opbootstrap
+getent passwd opuser opbootstrap; getent group opmenu
+EOF
+}}
+##### 6.2 安裝 opmenu 套件(從內部 repo;版本目錄並存 + symlink)
+{{
+V=20261016.591e6d9a
+test -f /srv/repo/raw/tools/opmenu-$V.tar.gz && scp -q /srv/repo/raw/tools/opmenu-$V.tar.gz jump01.poc.lab:/tmp/
+ssh jump01.poc.lab "V=$V sudo -E bash -s" <<'EOF'
+set -e
+install -d -o root -g root -m 0755 /var/cache/cp-installer
+install -o root -g root -m 0644 /tmp/opmenu-$V.tar.gz /var/cache/cp-installer/opmenu-$V.tar.gz && rm -f /tmp/opmenu-$V.tar.gz
+if [ ! -x /opt/opmenu-$V/opmenu.sh ]; then
+  t=$(mktemp -d); tar -xzf /var/cache/cp-installer/opmenu-$V.tar.gz -C "$t"
+  test -x "$t/opmenu/opmenu.sh" || { echo "package has no opmenu/opmenu.sh"; exit 1; }
+  chown -R root:root "$t/opmenu"; chmod -R go-w "$t/opmenu"
+  mv "$t/opmenu" /opt/opmenu-$V; rm -rf "$t"
+fi
+ln -sfn /opt/opmenu-$V /opt/opmenu
+ls -l /opt | grep opmenu; test -x /opt/opmenu/opmenu.sh && echo ok
+EOF
+}}
+##### 6.3 /etc/opmenu:選單自己的 truststore(獨立密碼)與 opmenu.conf(不含密碼)
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+cd $PKI
+d=$(mktemp -d); awk -v d="$d" '/BEGIN CERT/{n++} {print > (d "/ca-" n ".pem")}' ca.pem
+rm -f opmenu-truststore.p12; i=0
+for f in "$d"/ca-*.pem; do i=$((i+1)); /usr/lib/jvm/temurin-21-jdk/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore opmenu-truststore.p12 -storetype PKCS12 -storepass:env OPMENU_TRUSTSTORE_PASSWORD; done; rm -rf "$d"
+W=$S/manual/jump01; install -d -m 0700 $W; umask 077
+printf '%s' "$OPMENU_TRUSTSTORE_PASSWORD" > $W/truststore_creds
+cat > $W/opmenu.conf <<EOF
+OPMENU_BACKEND=vm
+OPMENU_ENV_LABEL=POC
+OPMENU_LOG=/var/log/opmenu/opmenu.log
+OPMENU_OUT_DIR=/var/log/opmenu
+OPMENU_SYSLOG=1
+OPMENU_ALLOW_ENV_OVERRIDE=0
+OPMENU_BOOTSTRAP='kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096'
+OPMENU_MDS_URL='https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090'
+OPMENU_KAFKA_CLUSTER_ID='$CID'
+OPMENU_CERT_DIR=/etc/opmenu/certs
+OPMENU_BROKER_SERVICES='kb01.poc.lab:confluent-server kb02.poc.lab:confluent-server kb03.poc.lab:confluent-server kb04.poc.lab:confluent-server'
+OPMENU_AUX_SERVICES='rest01.poc.lab:confluent-kafka-rest rest02.poc.lab:confluent-kafka-rest c3-01.poc.lab:confluent-control-center'
+OPMENU_CONTROLLER_HOSTS='kc01.poc.lab kc02.poc.lab kc03.poc.lab'
+OPMENU_DATA_DIR=/var/lib/kafka/data
+OPMENU_USER_FROM_OS=0
+OPMENU_SSH_USER=kafkaops
+OPMENU_SSH_AUTH=key
+OPMENU_HOST_ACTION_AUTHZ='Topic:__opmenu-host-ops:Describe'
+OPMENU_TICKET_MODE=required
+OPMENU_TICKET_CHECK=format
+OPMENU_CHANGE_WINDOW=''
+OPMENU_IDLE_TIMEOUT=900
+OPMENU_AUDIT_TOPIC=confluent-audit-log-events
+OPMENU_BREAKGLASS_BOOTSTRAP='kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092'
+export PATH="/usr/bin:\$PATH" JAVA_HOME="/usr/lib/jvm/temurin-21-jdk"
+EOF
+scp -q $PKI/opmenu-truststore.p12 $PKI/ca.pem $PKI/cp-server.crt $PKI/kafka-internal.crt $W/truststore_creds $W/opmenu.conf jump01.poc.lab:/tmp/
+ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+install -d -o root -g root   -m 0755 /etc/opmenu
+install -d -o root -g opmenu -m 0750 /etc/opmenu/certs
+install -o root -g opmenu -m 0640 /tmp/opmenu-truststore.p12 /etc/opmenu/certs/truststore.p12
+install -o root -g opmenu -m 0640 /tmp/truststore_creds /etc/opmenu/certs/truststore_creds
+install -o root -g opmenu -m 0644 /tmp/ca.pem /etc/opmenu/certs/ca.pem
+install -o root -g opmenu -m 0644 /tmp/cp-server.crt /etc/opmenu/certs/cp-server.pem
+install -o root -g opmenu -m 0644 /tmp/kafka-internal.crt /etc/opmenu/certs/kafka-internal.pem
+install -o root -g root   -m 0644 /tmp/opmenu.conf /etc/opmenu/opmenu.conf
+install -d -o root -g opmenu -m 2775 /var/log/opmenu
+printf '. /etc/opmenu/opmenu.conf\nOPMENU_ALLOW_ENV_OVERRIDE=1\n' > /etc/opmenu/opmenu-test.conf
+chown root:opmenu /etc/opmenu/opmenu-test.conf; chmod 0640 /etc/opmenu/opmenu-test.conf
+rm -f /tmp/opmenu-truststore.p12 /tmp/truststore_creds /tmp/cp-server.crt /tmp/kafka-internal.crt /tmp/opmenu.conf
+ls -la /etc/opmenu /etc/opmenu/certs
+EOF
+}}
+##### 6.4 Break-glass(opbootstrap 專用;操作員看不到憑證)
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+cd $PKI; umask 077
+openssl pkcs12 -export -name opmenu-breakglass -inkey opmenu-breakglass.key -in opmenu-breakglass.crt -certfile ca.crt -passout env:OPMENU_BREAKGLASS_STORE_PASSWORD -out opmenu-breakglass.bg.p12
+W=$S/manual/jump01
+printf '%s\n' security.protocol=SSL ssl.keystore.type=PKCS12 ssl.keystore.location=/etc/opmenu/bootstrap/breakglass.p12 "ssl.keystore.password=$OPMENU_BREAKGLASS_STORE_PASSWORD" "ssl.key.password=$OPMENU_BREAKGLASS_STORE_PASSWORD" ssl.truststore.type=PKCS12 ssl.truststore.location=/etc/opmenu/bootstrap/truststore.p12 "ssl.truststore.password=$OPMENU_TRUSTSTORE_PASSWORD" ssl.endpoint.identification.algorithm=https > $W/breakglass.properties
+scp -q opmenu-breakglass.bg.p12 opmenu-breakglass.crt opmenu-breakglass.key opmenu-truststore.p12 ca.pem $W/breakglass.properties $S/manual/ref/opmenu-bootstrap jump01.poc.lab:/tmp/
+ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+install -d -o opbootstrap -g opbootstrap -m 0700 /etc/opmenu/bootstrap
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.bg.p12 /etc/opmenu/bootstrap/breakglass.p12
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.crt    /etc/opmenu/bootstrap/breakglass.pem
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.key    /etc/opmenu/bootstrap/breakglass.key
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-truststore.p12    /etc/opmenu/bootstrap/truststore.p12
+install -o opbootstrap -g opbootstrap -m 0644 /tmp/ca.pem                   /etc/opmenu/bootstrap/ca.pem
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/breakglass.properties    /etc/opmenu/bootstrap/breakglass.properties
+install -o root -g root -m 0755 /tmp/opmenu-bootstrap /usr/local/sbin/opmenu-bootstrap
+shred -u /tmp/opmenu-breakglass.key /tmp/opmenu-breakglass.bg.p12 2>/dev/null; rm -f /tmp/opmenu-breakglass.crt /tmp/opmenu-truststore.p12 /tmp/ca.pem /tmp/breakglass.properties /tmp/opmenu-bootstrap
+ls -la /etc/opmenu/bootstrap | grep -v skel
+EOF
+rm -f $S/manual/jump01/breakglass.properties
+}}
+##### 6.5 sudoers(先 visudo 驗證)
+{{
+printf '# OP menu bastion\nopuser ALL=(opbootstrap) NOPASSWD: /usr/local/sbin/opmenu-bootstrap\n' > /tmp/opmenu.sudoers
+/usr/sbin/visudo -cqf /tmp/opmenu.sudoers && echo valid
+scp -q /tmp/opmenu.sudoers jump01.poc.lab:/tmp/ && rm -f /tmp/opmenu.sudoers
+ssh jump01.poc.lab 'sudo install -o root -g root -m 0440 /tmp/opmenu.sudoers /etc/sudoers.d/opmenu && rm -f /tmp/opmenu.sudoers && sudo visudo -c | tail -1 && sudo sudo -l -U opuser | tail -2'
+}}
+##### 6.6 sshd Match 區塊(附加在 sshd_config 最後;sshd -t 通過才換)
+{{
+ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+printf '%s\n' 'PermitUserEnvironment no' 'Match Group opmenu' '  ForceCommand /opt/opmenu/opmenu.sh' '  AllowTcpForwarding no' '  AllowAgentForwarding no' '  X11Forwarding no' '  PermitTunnel no' '  PermitTTY yes' > /etc/ssh/cpctl-opmenu.block
+cfg=/etc/ssh/sshd_config; t=$(mktemp)
+sed '/^# BEGIN cpctl opmenu$/,/^# END cpctl opmenu$/d' "$cfg" > "$t"
+{ echo '# BEGIN cpctl opmenu'; cat /etc/ssh/cpctl-opmenu.block; echo '# END cpctl opmenu'; } >> "$t"
+sshd -t -f "$t" || { echo "sshd -t rejected"; rm -f "$t"; exit 1; }
+cp -p "$cfg" "$cfg.bak.$(date +%Y%m%d%H%M%S)"
+cat "$t" > "$cfg"; rm -f "$t"
+systemctl reload sshd
+tail -10 $cfg; sshd -T -C user=opuser,host=x,addr=127.0.0.1 | grep -i forcecommand
+EOF
+ssh jump01.poc.lab 'echo "cpadmin can still log in to $(hostname)"'
+}}
+##### 6.7 opuser 金鑰與全域 known_hosts
+{{
+ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+h=$(getent passwd opuser | cut -d: -f6)
+if [ ! -s $h/.ssh/id_ed25519 ]; then
+  install -d -o opuser -g opuser -m 0700 $h/.ssh
+  sudo -u opuser ssh-keygen -q -t ed25519 -N '' -C "opuser@$(hostname -s)" -f $h/.ssh/id_ed25519
+fi
+N="kc01.poc.lab kc02.poc.lab kc03.poc.lab kb01.poc.lab kb02.poc.lab kb03.poc.lab kb04.poc.lab rest01.poc.lab rest02.poc.lab c3-01.poc.lab"
+t=$(mktemp)
+{ echo '# node host keys for the OP menu'; ssh-keyscan -T 5 -t ed25519 $N 2>/dev/null | sort; } > "$t"
+[ "$(grep -vc '^#' "$t")" -eq 10 ] || { echo "keyscan incomplete"; exit 1; }
+install -o root -g root -m 0644 "$t" /etc/ssh/ssh_known_hosts; rm -f "$t"
+echo "known hosts: $(grep -vc '^#' /etc/ssh/ssh_known_hosts)"; ls -la $h/.ssh
+EOF
+}}
+##### 6.8 各節點 kafkaops 帳號(來源 IP 綁定的金鑰;sudo 只到本機 unit)
+{{
+IP=$(getent hosts jump01.poc.lab | awk '{print $1; exit}')
+PUB=$(ssh jump01.poc.lab 'sudo -n cat ~opuser/.ssh/id_ed25519.pub')
+printf 'from="%s",no-port-forwarding,no-agent-forwarding,no-X11-forwarding %s\n' "$IP" "$PUB" > /tmp/kafkaops.authorized_keys
+cut -c1-90 /tmp/kafkaops.authorized_keys
+for H in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  case $H in kc*|kb*) UNIT=confluent-server ;; rest*) UNIT=confluent-kafka-rest ;; c3*) UNIT=confluent-control-center ;; esac
+  printf '%s\n' '# fixed node account of the OP menu: only these commands, only these units' 'Defaults:kafkaops !requiretty' "kafkaops ALL=(root) NOPASSWD: /usr/bin/systemctl restart $UNIT" "kafkaops ALL=(root) NOPASSWD: NOEXEC: /usr/bin/journalctl -u $UNIT -n * --no-pager" 'kafkaops ALL=(root) NOPASSWD: NOEXEC: /usr/bin/journalctl -u confluent-\* -n 500 --no-pager' 'kafkaops ALL=(root) NOPASSWD: /usr/local/sbin/opmenu-clean-logs' > /tmp/opmenu-kafkaops.sudoers
+  /usr/sbin/visudo -cqf /tmp/opmenu-kafkaops.sudoers || { echo "$H sudoers invalid"; break; }
+  scp -q /tmp/kafkaops.authorized_keys /tmp/opmenu-kafkaops.sudoers /var/lib/cp-installer/manual/ref/opmenu-clean-logs $H.poc.lab:/tmp/
+  ssh $H.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+id kafkaops >/dev/null 2>&1 || { useradd -m -s /bin/bash kafkaops; passwd -l kafkaops >/dev/null; }
+h=$(getent passwd kafkaops | cut -d: -f6)
+install -d -o root -g kafkaops -m 0750 $h/.ssh
+install -o root -g kafkaops -m 0640 /tmp/kafkaops.authorized_keys $h/.ssh/authorized_keys
+install -o root -g root -m 0755 /tmp/opmenu-clean-logs /usr/local/sbin/opmenu-clean-logs
+install -o root -g root -m 0440 /tmp/opmenu-kafkaops.sudoers /etc/sudoers.d/opmenu-kafkaops
+rm -f /tmp/kafkaops.authorized_keys /tmp/opmenu-kafkaops.sudoers /tmp/opmenu-clean-logs
+visudo -c >/dev/null && echo "$(hostname): kafkaops ok ($(passwd -S kafkaops | awk '{print $2}'))"
+EOF
+done
+rm -f /tmp/kafkaops.authorized_keys /tmp/opmenu-kafkaops.sudoers
+}}
+ssh kb01.poc.lab "sudo sudo -l -U kafkaops | tail -5; sudo ls -la ~kafkaops/.ssh 2>/dev/null || sudo ls -la /home/kafkaops/.ssh"
+##### 6.9 break-glass 的 RBAC 綁定
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+HOME=$S/cli-home confluent iam rbac role-binding create --principal User:opmenu-breakglass --role SystemAdmin --kafka-cluster $CID -o json >/dev/null && echo bound
+install -m 0600 /dev/null ~/.netrc-mds && printf 'machine kb01.poc.lab login svc-cpctl password %s\n' "$SVC_CPCTL_PASSWORD" > ~/.netrc-mds
+curl -s --cacert $PKI/ca.pem --netrc-file ~/.netrc-mds -H 'Content-Type: application/json' -X POST -d "{\"clusters\":{\"kafka-cluster\":\"$CID\"}}" "$MDS/security/1.0/lookup/principal/User:opmenu-breakglass/resources"; echo
+rm -f ~/.netrc-mds
+}}
+##### 6.10 / 6.4 驗證
+ssh jump01.poc.lab 'test -x /opt/opmenu/opmenu.sh && sudo -n -u opuser /opt/opmenu/opmenu.sh --list | head -12 && echo ok'
+ssh jump01.poc.lab 'sudo -u opbootstrap /usr/local/sbin/opmenu-bootstrap kafka kafka-topics --list 2>/dev/null | grep -E "events$"'
+ssh jump01.poc.lab 'sudo -n -u opuser cat /etc/opmenu/bootstrap/breakglass.key 2>&1 | head -1'
+ssh jump01.poc.lab 'sudo -u opuser ssh -o BatchMode=yes kafkaops@kb01.poc.lab sudo -n /usr/bin/journalctl -u confluent-server -n 2 --no-pager | cut -c1-120'
+ssh jump01.poc.lab 'sudo -u opuser ssh -o BatchMode=yes kafkaops@kb01.poc.lab sudo -n /usr/bin/systemctl restart confluent-kafka-rest 2>&1 | head -1'

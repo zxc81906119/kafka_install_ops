@@ -1,0 +1,2800 @@
+##### 3.0 前置(帳號開通,root):cpadmin 金鑰。正式環境由行內帳號開通流程把公鑰放到各主機
+
+$ sudo -u cpadmin ssh-keygen -q -t ed25519 -N '' -C cpadmin@ops02 -f /home/cpadmin/.ssh/id_ed25519 && ls -l /home/cpadmin/.ssh
+total 8
+-rw------- 1 cpadmin cpadmin 399 Oct 16 13:09 id_ed25519
+-rw-r--r-- 1 cpadmin cpadmin  95 Oct 16 13:09 id_ed25519.pub
+[rc=0]
+
+$ install -m 0644 /home/cpadmin/.ssh/id_ed25519.pub /etc/ssh/authorized_keys.d/cpadmin && ls -l /etc/ssh/authorized_keys.d/
+total 4
+-rw-r--r-- 1 root root 95 Oct 16 13:09 cpadmin
+[rc=0]
+
+$ cat /etc/ssh/sshd_config.d/10-cp.conf /etc/sudoers.d/cpadmin
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys.d/%u
+UseDNS no
+# PoC only. Production should use installer/conf/sudoers.d/cpadmin.restricted
+cpadmin ALL=(ALL) NOPASSWD: ALL
+Defaults:cpadmin !requiretty
+[rc=0]
+##### 3.1 步驟 00:安裝前預檢(ops02,cpadmin)
+
+$ for c in ssh scp openssl curl sha256sum flock; do command -v "$c" >/dev/null || echo "MISSING $c"; done; echo tools-checked
+tools-checked
+[rc=0]
+
+$ for h in ops02 ad01 lb01 jump01 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do printf '%-7s ' $h; ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 cpadmin@$h.poc.lab 'sudo -n true && . /etc/os-release && echo "$ID-$VERSION_ID tmp=$(findmnt -no OPTIONS /tmp | grep -o noexec || echo exec-ok) tmpfree=$(df -Pm /tmp | awk "NR==2{print \$4}")MB skew=$(( $(date +%s) - '"$(date +%s)"' ))"' 2>&1 | tail -1; done
+ops02   rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+ad01    debian-12 tmp=exec-ok tmpfree=805377MB skew=0
+lb01    debian-13 tmp=exec-ok tmpfree=805376MB skew=0
+jump01  rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=1
+kc01    rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+kc02    rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+kc03    rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+kb01    rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=1
+kb02    rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+kb03    rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+kb04    rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+rest01  rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+rest02  rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=1
+c3-01   rocky-9.8 tmp=exec-ok tmpfree=2048MB skew=0
+[rc=0]
+
+$ for src in kc01 kb01 rest01 c3-01 jump01; do for h in ops02 ad01 lb01 jump01 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh -o BatchMode=yes $src.poc.lab "getent hosts $h.poc.lab >/dev/null" || echo "$src cannot resolve $h.poc.lab"; done; done; echo dns-checked
+dns-checked
+[rc=0]
+##### 準備密碼檔(ops02,cpadmin):/var/lib/cp-installer/secrets.env,0600。AD_ADMIN_PASSWORD 由 AD 管理者提供(模擬環境:ad01 建置時的值)
+
+$ cd /var/lib/cp-installer && umask 077 && for k in LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD SVC_CPCTL_PASSWORD KAFKA_ADMIN_PASSWORD STORE_PASSWORD HUMAN_DEFAULT_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE AUDIT_PASSWORD JMX_EXPORTER_PASSWORD OPMENU_TRUSTSTORE_PASSWORD OPMENU_BREAKGLASS_STORE_PASSWORD APP_APP_ORDERS_PASSWORD APP_APP_PAYMENTS_PASSWORD APP_APP_LEGACY_BILLING_PASSWORD; do grep -q "^$k=" secrets.env || printf '%s=%sAa1-\n' "$k" "$(openssl rand -hex 12)" >> secrets.env; done; stat -c '%U:%G %a %n' secrets.env; sed 's/=.*/=<password>/' secrets.env
+cpadmin:cpadmin 600 secrets.env
+AD_ADMIN_PASSWORD=<password>
+LDAP_BIND_PASSWORD=<password>
+SVC_REST_PASSWORD=<password>
+SVC_C3_PASSWORD=<password>
+SVC_CPCTL_PASSWORD=<password>
+KAFKA_ADMIN_PASSWORD=<password>
+STORE_PASSWORD=<password>
+HUMAN_DEFAULT_PASSWORD=<password>
+SECRET_MASTER_PASSPHRASE=<password>
+MDS_TOKEN_PASSPHRASE=<password>
+AUDIT_PASSWORD=<password>
+JMX_EXPORTER_PASSWORD=<password>
+OPMENU_TRUSTSTORE_PASSWORD=<password>
+OPMENU_BREAKGLASS_STORE_PASSWORD=<password>
+APP_APP_ORDERS_PASSWORD=<password>
+APP_APP_PAYMENTS_PASSWORD=<password>
+APP_APP_LEGACY_BILLING_PASSWORD=<password>
+[rc=0]
+##### 2.9 內部 repo 主機準備(ops02;cpadmin + sudo)。httpd/createrepo_c 正式環境由行內 RHEL 鏡像安裝;模擬環境用落地區 bootstrap/ 的檔案
+
+$ sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9 && rpm -K /mnt/exchange/bootstrap/*.rpm | grep -vc 'digests signatures OK'
+0
+[rc=1]
+
+$ sudo dnf -y -q --disablerepo='*' install /mnt/exchange/bootstrap/*.rpm && rpm -q httpd createrepo_c jq openldap-clients
+
+Installed:
+  apr-1.7.0-12.el9_3.x86_64                                                     
+  apr-util-1.6.1-23.el9_8.1.x86_64                                              
+  apr-util-bdb-1.6.1-23.el9_8.1.x86_64                                          
+  apr-util-openssl-1.6.1-23.el9_8.1.x86_64                                      
+  createrepo_c-0.20.1-4.el9.x86_64                                              
+  createrepo_c-libs-0.20.1-4.el9.x86_64                                         
+  httpd-2.4.62-13.el9_8.6.x86_64                                                
+  httpd-core-2.4.62-13.el9_8.6.x86_64                                           
+  httpd-filesystem-2.4.62-13.el9_8.6.noarch                                     
+  httpd-tools-2.4.62-13.el9_8.6.x86_64                                          
+  jq-1.6-19.el9_8.2.x86_64                                                      
+  libbrotli-1.0.9-10.el9_8.x86_64                                               
+  mailcap-2.1.49-5.el9.0.2.noarch                                               
+  mod_http2-2.0.26-6.el9_8.2.x86_64                                             
+  mod_lua-2.4.62-13.el9_8.6.x86_64                                              
+  oniguruma-6.9.6-1.el9.6.x86_64                                                
+  openldap-clients-2.6.8-4.el9.0.1.x86_64                                       
+  rocky-logos-httpd-90.17-1.el9.noarch                                          
+
+httpd-2.4.62-13.el9_8.6.x86_64
+createrepo_c-0.20.1-4.el9.x86_64
+jq-1.6-19.el9_8.2.x86_64
+openldap-clients-2.6.8-4.el9.0.1.x86_64
+[rc=0]
+
+$ sudo sed -i 's/^Listen 80$/Listen 8080/' /etc/httpd/conf/httpd.conf && sudo rm -f /etc/httpd/conf.d/welcome.conf && grep -n '^Listen' /etc/httpd/conf/httpd.conf
+47:Listen 8080
+[rc=0]
+
+$ printf 'DocumentRoot "/srv/repo"\n<Directory "/srv/repo">\n    Options Indexes FollowSymLinks\n    AllowOverride None\n    Require all granted\n    <LimitExcept GET HEAD OPTIONS>\n        Require all denied\n    </LimitExcept>\n</Directory>\n' | sudo tee /etc/httpd/conf.d/cp-repo.conf
+DocumentRoot "/srv/repo"
+<Directory "/srv/repo">
+    Options Indexes FollowSymLinks
+    AllowOverride None
+    Require all granted
+    <LimitExcept GET HEAD OPTIONS>
+        Require all denied
+    </LimitExcept>
+</Directory>
+[rc=0]
+
+$ id repoadmin 2>/dev/null || sudo useradd -r -s /sbin/nologin repoadmin; sudo install -d -o repoadmin -g repoadmin -m 0755 /srv/repo && stat -c '%U:%G %a %n' /srv/repo
+repoadmin:repoadmin 755 /srv/repo
+[rc=0]
+
+$ sudo httpd -t && sudo systemctl enable -q --now httpd && systemctl is-active httpd && ss -ltn | grep 8080
+Syntax OK
+active
+LISTEN 0      511          0.0.0.0:8080       0.0.0.0:*   
+[rc=0]
+
+$ curl -s -o /dev/null -w 'GET  %{http_code}\n' http://ops02.poc.lab:8080/ && curl -s -o /dev/null -w 'PUT  %{http_code}\n' -X PUT http://ops02.poc.lab:8080/x
+GET  200
+PUT  405
+[rc=0]
+##### 2.10 內網匯入:在落地區再驗一次(ops02,cpadmin)
+
+$ ls /mnt/exchange && findmnt -no OPTIONS /mnt/exchange | grep -o '^ro'
+SHA256SUMS
+bootstrap
+gpg-keys
+manifest-rpm.txt
+manifest-tar.txt
+report
+rpm
+tar
+tools
+ro
+[rc=0]
+
+$ cd /mnt/exchange && sha256sum --quiet -c SHA256SUMS && echo "landing zone: all $(wc -l < SHA256SUMS) files match SHA256SUMS"
+landing zone: all 81 files match SHA256SUMS
+[rc=0]
+
+$ for k in /mnt/exchange/gpg-keys/*.asc; do sudo rpm --import "$k"; done; rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION} %{SUMMARY}\n'
+gpg-pubkey-350d275d Rocky Enterprise Software Foundation - Release key 2022 <releng@rockylinux.org> public key
+gpg-pubkey-65f8f04b Adoptium GPG Key (DEB/RPM Signing Key) <temurin-dev@eclipse.org> public key
+gpg-pubkey-0c2bf624 Confluent Packaging <packages@confluent.io> public key
+[rc=0]
+
+$ find /mnt/exchange/rpm -name '*.rpm' -print0 | xargs -0 rpm -K | grep -v 'digests signatures OK'; echo "bad-signatures=$(find /mnt/exchange/rpm -name '*.rpm' -print0 | xargs -0 rpm -K | grep -vc 'digests signatures OK')"
+bad-signatures=0
+[rc=0]
+##### 2.11 發佈到 /srv/repo(先預檢衝突,全部沒問題才發佈;以 repoadmin 寫入,絕不覆寫)
+
+$ cd /mnt/exchange && while read -r sum rel; do case $rel in rpm/*|gpg-keys/*) d=/srv/repo/$rel ;; tar/*|tools/*) d=/srv/repo/raw/$rel ;; *) continue ;; esac; if [ -f "$d" ]; then [ "$(sha256sum "$d" | awk '{print $1}')" = "$sum" ] || echo "CONFLICT: $rel"; else echo "would publish $rel"; fi; done < SHA256SUMS | sort | uniq -c -w 14 | head; echo precheck-done
+     63 would publish gpg-keys/adoptium.asc
+precheck-done
+[rc=0]
+
+$ cd /mnt/exchange && n=0; while read -r sum rel; do case $rel in rpm/*|gpg-keys/*) d=/srv/repo/$rel ;; tar/*|tools/*) d=/srv/repo/raw/$rel ;; *) continue ;; esac; [ -f "$d" ] && continue; sudo -u repoadmin bash -c 'umask 022; exec install -D -m 0644 "$1" "$2"' _ "/mnt/exchange/$rel" "$d" && n=$((n+1)); done < SHA256SUMS; echo "published $n files"
+published 63 files
+[rc=0]
+
+$ cd /mnt/exchange && while read -r sum rel; do case $rel in rpm/*|gpg-keys/*) d=/srv/repo/$rel ;; tar/*|tools/*) d=/srv/repo/raw/$rel ;; *) continue ;; esac; echo "$sum  $d"; done < SHA256SUMS | sha256sum --quiet -c && echo all-published-match; find /srv/repo -type f | sed 's|/[^/]*$||' | sort | uniq -c; stat -c '%U:%G %a %n' /srv/repo/raw/tar/confluent-8.3.2.tar.gz
+all-published-match
+      4 /srv/repo/gpg-keys
+      2 /srv/repo/raw/tar
+      2 /srv/repo/raw/tools
+      1 /srv/repo/rpm/adoptium
+     11 /srv/repo/rpm/confluent
+     43 /srv/repo/rpm/os-deps
+repoadmin:repoadmin 644 /srv/repo/raw/tar/confluent-8.3.2.tar.gz
+[rc=0]
+##### 2.12 建立 repodata
+
+$ for r in confluent adoptium os-deps; do sudo -u repoadmin bash -c 'umask 022; exec createrepo_c -q --update "$1"' _ /srv/repo/rpm/$r && echo "repodata: rpm/$r $(zcat /srv/repo/rpm/$r/repodata/*-primary.xml.gz | grep -c '<package ') packages"; done
+repodata: rpm/confluent 11 packages
+repodata: rpm/adoptium 1 packages
+repodata: rpm/os-deps 43 packages
+[rc=0]
+##### 2.13 留存稽核副本
+
+$ ts=$(date +%Y%m%d-%H%M%S) && sudo -u repoadmin bash -c 'umask 022; install -d -m 0755 "$1" && cp "$2"/SHA256SUMS "$2"/manifest-rpm.txt "$2"/manifest-tar.txt "$1"/ && cp -r "$2"/report "$1"/' _ /srv/repo/manifests/$ts /mnt/exchange && ls -R /srv/repo/manifests/$ts
+/srv/repo/manifests/20261016-135928:
+SHA256SUMS
+manifest-rpm.txt
+manifest-tar.txt
+report
+
+/srv/repo/manifests/20261016-135928/report:
+verify-20261016-053419.txt
+[rc=0]
+##### 2.14 確認 repo 有在服務
+
+$ for r in confluent adoptium os-deps; do curl -fsS -o /dev/null http://ops02.poc.lab:8080/rpm/$r/repodata/repomd.xml && echo "repo $r served at http://ops02.poc.lab:8080/rpm/$r" || echo "repo $r NOT served"; done
+repo confluent served at http://ops02.poc.lab:8080/rpm/confluent
+repo adoptium served at http://ops02.poc.lab:8080/rpm/adoptium
+repo os-deps served at http://ops02.poc.lab:8080/rpm/os-deps
+[rc=0]
+
+$ for f in raw/tar/confluent-8.3.2.tar.gz raw/tools/jmx_prometheus_javaagent-1.0.1.jar gpg-keys/confluent.asc; do curl -s -o /dev/null -w "%{http_code} %{size_download} $f\n" http://ops02.poc.lab:8080/$f; done; ls /srv/repo/raw/tools/ /srv/repo/raw/tar/
+200 1349961106 raw/tar/confluent-8.3.2.tar.gz
+200 2886599 raw/tools/jmx_prometheus_javaagent-1.0.1.jar
+200 3147 gpg-keys/confluent.asc
+/srv/repo/raw/tar/:
+OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz
+confluent-8.3.2.tar.gz
+
+/srv/repo/raw/tools/:
+jmx_prometheus_javaagent-1.0.1.jar
+opmenu-20261016.591e6d9a.tar.gz
+[rc=0]
+##### 3.3.1.1–3.3.1.2(先做,3.2.7 會用到):內部 repo 定義檔與 GPG 金鑰 → 所有 01 主機(ops02 自己也是)
+
+$ cat > /tmp/cp-internal.repo <<'EOF'
+# Managed by cpctl - internal mirror only (public repos are not reachable from this network)
+[cp-internal-confluent]
+name=Internal mirror - Confluent Platform and Control Center
+baseurl=http://ops02.poc.lab:8080/rpm/confluent
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+
+[cp-internal-adoptium]
+name=Internal mirror - Eclipse Temurin
+baseurl=http://ops02.poc.lab:8080/rpm/adoptium
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+
+[cp-internal-os-deps]
+name=Internal mirror - OS dependencies
+baseurl=http://ops02.poc.lab:8080/rpm/os-deps
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+EOF
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  for k in confluent adoptium rocky-9; do scp -q /srv/repo/gpg-keys/$k.asc $h.poc.lab:/tmp/RPM-GPG-KEY-cp-$k; done
+  scp -q /tmp/cp-internal.repo $h.poc.lab:/tmp/cp-internal.repo
+  ssh $h.poc.lab 'set -e
+    for k in confluent adoptium rocky-9; do sudo install -o root -g root -m 0644 /tmp/RPM-GPG-KEY-cp-$k /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; rm -f /tmp/RPM-GPG-KEY-cp-$k; done
+    for k in confluent adoptium rocky-9; do sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; done
+    sudo install -o root -g root -m 0644 /tmp/cp-internal.repo /etc/yum.repos.d/cp-internal.repo; rm -f /tmp/cp-internal.repo
+    echo "$(hostname): keys=$(rpm -q gpg-pubkey | wc -l) repos=$(sudo dnf -q repolist --enabled | grep -c cp-internal)"'
+done
+
+ops02: keys=3 repos=3
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+scp: stat local "/tmp/cp-internal.repo": No such file or directory
+install: cannot stat '/tmp/cp-internal.repo': No such file or directory
+[rc=1]
+
+$ ssh kb01.poc.lab "gpg --show-keys /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent 2>&1 | head -3; rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SUMMARY}\n'; sudo dnf -q repolist"
+gpg: directory '/home/cpadmin/.gnupg' created
+gpg: keybox '/home/cpadmin/.gnupg/pubring.kbx' created
+pub   rsa4096 2021-05-03 [SC]
+gpg-pubkey-350d275d-6279464b Rocky Enterprise Software Foundation - Release key 2022 <releng@rockylinux.org> public key
+gpg-pubkey-0c2bf624-60904208 Confluent Packaging <packages@confluent.io> public key
+gpg-pubkey-65f8f04b-6193bd34 Adoptium GPG Key (DEB/RPM Signing Key) <temurin-dev@eclipse.org> public key
+[rc=0]
+##### 3.2 步驟 01:OS 基線(每台主機依角色;cpadmin + sudo)
+
+$ baseline() {   # <host> <role> <ports...>
+  local h=$1 role=$2; shift 2
+  ssh $h.poc.lab "ROLE=$role PORTS='$*' bash -s" <<'EOS'
+set -e
+incontainer=no; systemd-detect-virt -c -q && incontainer=yes
+# 3.2.1 sysctl(容器內 vm.* 屬於 host kernel,不寫入;net.* 可設)
+lines=""
+case $ROLE in controller|broker) lines+="vm.max_map_count = 262144"$'\n' ;; esac
+if [ "$ROLE" = broker ]; then
+  lines+="vm.swappiness = 1"$'\n'"vm.dirty_background_ratio = 5"$'\n'"vm.dirty_ratio = 60"$'\n'
+  lines+="net.core.rmem_max = 2097152"$'\n'"net.core.wmem_max = 2097152"$'\n'
+  lines+="net.ipv4.tcp_rmem = 4096 65536 2097152"$'\n'"net.ipv4.tcp_wmem = 4096 65536 2097152"$'\n'
+fi
+lines+="net.core.somaxconn = 4096"$'\n'"net.ipv4.tcp_max_syn_backlog = 4096"$'\n'
+if [ $incontainer = yes ]; then
+  keep=""
+  while IFS= read -r l; do
+    [ -z "$l" ] && continue
+    k=${l%% =*}
+    case $k in vm.*) echo "skipped(container) $k"; continue ;; esac
+    if sudo sysctl -q -w "$k=${l#*= }" 2>/dev/null; then keep+="$l"$'\n'; else echo "skipped(container) $k"; fi
+  done <<<"$lines"
+  lines=$keep
+fi
+sudo install -d -m 0755 /etc/sysctl.d
+printf '%s' "$lines" | sudo tee /etc/sysctl.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/sysctl.d/90-confluent.conf
+sudo sysctl -q -p /etc/sysctl.d/90-confluent.conf
+# 3.2.2 limits
+printf '# Managed by cpctl\n@confluent soft nofile 128000\n@confluent hard nofile 128000\n@confluent soft nproc 65536\n@confluent hard nproc 65536\n' | sudo tee /etc/security/limits.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/security/limits.d/90-confluent.conf
+# 3.2.3 journald
+sudo install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
+printf '# Managed by cpctl\n[Journal]\nSystemMaxUse=1G\n' | sudo tee /etc/systemd/journald.conf.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/systemd/journald.conf.d/90-confluent.conf
+sudo systemctl restart systemd-journald
+# 3.2.4 時區
+sudo ln -sfn /usr/share/zoneinfo/Asia/Taipei /etc/localtime
+# 3.2.5 tmpfiles
+printf '# Managed by cpctl - delete rolled Confluent logs after 14 days (systemd-tmpfiles-clean.timer)\ne /var/log/kafka - - - 14d\ne /var/log/confluent - - - 14d\n' | sudo tee /etc/tmpfiles.d/90-confluent-logs.conf >/dev/null
+sudo chmod 0644 /etc/tmpfiles.d/90-confluent-logs.conf
+# 3.2.6 /etc/confluent
+sudo install -d -o root -g root -m 0755 /etc/confluent
+# 3.2.7 OS 套件(只從內部 os-deps)
+rpm -q chrony firewalld >/dev/null 2>&1 || sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-os-deps' --setopt=install_weak_deps=False install chrony firewalld >/dev/null
+# 3.2.8 THP(controller、broker;容器內 ConditionVirtualization 讓它不執行)
+if [ "$ROLE" = controller ] || [ "$ROLE" = broker ]; then
+  printf '%s\n' '# Managed by cpctl - Kafka recommends transparent hugepages = never' '[Unit]' 'Description=Disable transparent hugepages (Confluent Platform)' 'DefaultDependencies=no' 'After=sysinit.target local-fs.target' 'Before=confluent-server.service' 'ConditionVirtualization=!container' '' '[Service]' 'Type=oneshot' "ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled; echo never > /sys/kernel/mm/transparent_hugepage/defrag'" '' '[Install]' 'WantedBy=basic.target' | sudo tee /etc/systemd/system/disable-thp.service >/dev/null
+  sudo chmod 0644 /etc/systemd/system/disable-thp.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable -q disable-thp.service
+  sudo systemctl start disable-thp.service
+fi
+# 3.2.9 chrony(ops02 = NTP server;其他跟 ops02)
+if [ "$ROLE" = ops ]; then
+  printf '# Managed by cpctl\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\nallow 172.32.0.0/24\nlocal stratum 10\n' | sudo tee /etc/chrony.conf >/dev/null
+else
+  printf '# Managed by cpctl\nserver ops02.poc.lab iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\n' | sudo tee /etc/chrony.conf >/dev/null
+fi
+if [ $incontainer = yes ]; then echo 'OPTIONS="-F 2 -x"'; else echo 'OPTIONS="-F 2"'; fi | sudo tee /etc/sysconfig/chronyd >/dev/null
+sudo chmod 0644 /etc/chrony.conf /etc/sysconfig/chronyd
+sudo systemctl enable -q chronyd
+sudo systemctl restart chronyd
+# 3.2.10 firewalld
+sudo systemctl enable -q --now firewalld
+for p in $PORTS; do sudo firewall-cmd -q --permanent --add-port=$p; done
+sudo firewall-cmd -q --permanent --add-service=ssh
+for s in cockpit dhcpv6-client; do sudo firewall-cmd --permanent --query-service=$s >/dev/null 2>&1 && sudo firewall-cmd -q --permanent --remove-service=$s; done
+sudo firewall-cmd -q --reload
+# 3.2.11 SELinux
+if command -v getenforce >/dev/null; then getenforce; else echo "selinux: skipped(container) - getenforce not available"; fi
+echo "$(hostname): baseline done ($ROLE, container=$incontainer)"
+EOS
+}
+baseline ops02 ops 8080/tcp 123/udp
+for h in kc01 kc02 kc03; do baseline $h controller 9093/tcp 7071/tcp; done
+for h in kb01 kb02 kb03 kb04; do baseline $h broker 7071/tcp 8090/tcp 9092/tcp 9094/tcp 9095/tcp 9096/tcp; done
+for h in rest01 rest02; do baseline $h rest 8082/tcp 7071/tcp; done
+baseline c3-01 c3 9021/tcp 9090/tcp
+baseline jump01 jump
+
+selinux: skipped(container) - getenforce not available
+ops02: baseline done (ops, container=yes)
+skipped(container) vm.max_map_count
+Error: Unknown repo: 'cp-internal-os-deps'
+skipped(container) vm.max_map_count
+Error: Unknown repo: 'cp-internal-os-deps'
+skipped(container) vm.max_map_count
+Error: Unknown repo: 'cp-internal-os-deps'
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+Error: Unknown repo: 'cp-internal-os-deps'
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+Error: Unknown repo: 'cp-internal-os-deps'
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+Error: Unknown repo: 'cp-internal-os-deps'
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+Error: Unknown repo: 'cp-internal-os-deps'
+Error: Unknown repo: 'cp-internal-os-deps'
+Error: Unknown repo: 'cp-internal-os-deps'
+Error: Unknown repo: 'cp-internal-os-deps'
+Error: Unknown repo: 'cp-internal-os-deps'
+[rc=1]
+##### 3.2 驗證
+
+$ ssh kb01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sysctl net.core.somaxconn net.ipv4.tcp_rmem vm.swappiness vm.max_map_count; ls -l /etc/localtime; date; rpm -q chrony firewalld; sudo firewall-cmd --permanent --list-all | grep -E ' services| ports'; systemctl is-enabled disable-thp.service; cat /sys/kernel/mm/transparent_hugepage/enabled"
+net.core.rmem_max = 2097152
+net.core.wmem_max = 2097152
+net.ipv4.tcp_rmem = 4096 65536 2097152
+net.ipv4.tcp_wmem = 4096 65536 2097152
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+net.core.somaxconn = 4096
+net.ipv4.tcp_rmem = 4096	65536	2097152
+vm.swappiness = 60
+vm.max_map_count = 262144
+lrwxrwxrwx 1 root root 31 Oct 16 14:06 /etc/localtime -> /usr/share/zoneinfo/Asia/Taipei
+Fri Oct 16 14:06:35 CST 2026
+package chrony is not installed
+package firewalld is not installed
+sudo: firewall-cmd: command not found
+Failed to get unit file state for disable-thp.service: No such file or directory
+always [madvise] never
+[rc=0]
+
+$ ssh kc01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sudo firewall-cmd --list-ports"
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+sudo: firewall-cmd: command not found
+[rc=1]
+
+$ ssh ops02.poc.lab "sudo firewall-cmd --list-all | grep -E ' services| ports'; grep -E 'allow|local' /etc/chrony.conf"
+  services: ssh
+  ports: 8080/tcp 123/udp
+allow 172.32.0.0/24
+local stratum 10
+[rc=0]
+
+$ sleep 20; for h in kc01 kb01 rest01 c3-01 jump01; do ssh $h.poc.lab "chronyc -n sources | tail -1"; done
+bash: line 1: chronyc: command not found
+bash: line 1: chronyc: command not found
+bash: line 1: chronyc: command not found
+bash: line 1: chronyc: command not found
+bash: line 1: chronyc: command not found
+[rc=0]
+
+$ for h in kc01 kb04 c3-01; do ssh $h.poc.lab "systemd-analyze cat-config systemd/journald.conf | grep SystemMaxUse; systemctl is-enabled systemd-tmpfiles-clean.timer; stat -c '%U:%G:%a %n' /etc/confluent"; done
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+[rc=0]
+##### 3.3.1.1–3.3.1.2(先做,3.2.7 會用到):內部 repo 定義檔與 GPG 金鑰 → 所有 01 主機(ops02 自己也是)
+# (重做) 第一次執行時 ops02 排在第一台:遠端步驟 rm -f /tmp/cp-internal.repo 在 ops02 上刪掉了要派送的檔案,後面 11 台都沒拿到 → 暫存檔改放 /var/lib/cp-installer/manual/。broker 的 net.core.rmem_max/wmem_max 在容器內不存在,sysctl -q -w 失敗卻回傳 0 → 改成先檢查 /proc/sys
+
+$ cat > /var/lib/cp-installer/manual/cp-internal.repo <<'EOF'
+# Managed by cpctl - internal mirror only (public repos are not reachable from this network)
+[cp-internal-confluent]
+name=Internal mirror - Confluent Platform and Control Center
+baseurl=http://ops02.poc.lab:8080/rpm/confluent
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+
+[cp-internal-adoptium]
+name=Internal mirror - Eclipse Temurin
+baseurl=http://ops02.poc.lab:8080/rpm/adoptium
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+
+[cp-internal-os-deps]
+name=Internal mirror - OS dependencies
+baseurl=http://ops02.poc.lab:8080/rpm/os-deps
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+EOF
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  for k in confluent adoptium rocky-9; do scp -q /srv/repo/gpg-keys/$k.asc $h.poc.lab:/tmp/RPM-GPG-KEY-cp-$k; done
+  scp -q /var/lib/cp-installer/manual/cp-internal.repo $h.poc.lab:/tmp/cp-internal.repo
+  ssh $h.poc.lab 'set -e
+    for k in confluent adoptium rocky-9; do sudo install -o root -g root -m 0644 /tmp/RPM-GPG-KEY-cp-$k /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; rm -f /tmp/RPM-GPG-KEY-cp-$k; done
+    for k in confluent adoptium rocky-9; do sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; done
+    sudo install -o root -g root -m 0644 /tmp/cp-internal.repo /etc/yum.repos.d/cp-internal.repo; rm -f /tmp/cp-internal.repo
+    echo "$(hostname): keys=$(rpm -q gpg-pubkey | wc -l) repos=$(sudo dnf -q repolist --enabled | grep -c cp-internal)"'
+done
+
+ops02: keys=3 repos=3
+kc01: keys=3 repos=3
+kc02: keys=3 repos=3
+kc03: keys=3 repos=3
+kb01: keys=3 repos=3
+kb02: keys=3 repos=3
+kb03: keys=3 repos=3
+kb04: keys=3 repos=3
+rest01: keys=3 repos=3
+rest02: keys=3 repos=3
+c3-01: keys=3 repos=3
+jump01: keys=3 repos=3
+[rc=0]
+
+$ ssh kb01.poc.lab "gpg --show-keys /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent 2>&1 | head -3; rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SUMMARY}\n'; sudo dnf -q repolist"
+pub   rsa4096 2021-05-03 [SC]
+      CBBB821E8FAF364F79835C438B1DA6120C2BF624
+uid                      Confluent Packaging <packages@confluent.io>
+gpg-pubkey-350d275d-6279464b Rocky Enterprise Software Foundation - Release key 2022 <releng@rockylinux.org> public key
+gpg-pubkey-0c2bf624-60904208 Confluent Packaging <packages@confluent.io> public key
+gpg-pubkey-65f8f04b-6193bd34 Adoptium GPG Key (DEB/RPM Signing Key) <temurin-dev@eclipse.org> public key
+repo id                repo name
+cp-internal-adoptium   Internal mirror - Eclipse Temurin
+cp-internal-confluent  Internal mirror - Confluent Platform and Control Center
+cp-internal-os-deps    Internal mirror - OS dependencies
+[rc=0]
+##### 3.2 步驟 01:OS 基線(每台主機依角色;cpadmin + sudo)
+
+$ baseline() {   # <host> <role> <ports...>
+  local h=$1 role=$2; shift 2
+  ssh $h.poc.lab "ROLE=$role PORTS='$*' bash -s" <<'EOS'
+set -e
+incontainer=no; systemd-detect-virt -c -q && incontainer=yes
+# 3.2.1 sysctl(容器內 vm.* 屬於 host kernel,不寫入;net.* 可設)
+lines=""
+case $ROLE in controller|broker) lines+="vm.max_map_count = 262144"$'\n' ;; esac
+if [ "$ROLE" = broker ]; then
+  lines+="vm.swappiness = 1"$'\n'"vm.dirty_background_ratio = 5"$'\n'"vm.dirty_ratio = 60"$'\n'
+  lines+="net.core.rmem_max = 2097152"$'\n'"net.core.wmem_max = 2097152"$'\n'
+  lines+="net.ipv4.tcp_rmem = 4096 65536 2097152"$'\n'"net.ipv4.tcp_wmem = 4096 65536 2097152"$'\n'
+fi
+lines+="net.core.somaxconn = 4096"$'\n'"net.ipv4.tcp_max_syn_backlog = 4096"$'\n'
+if [ $incontainer = yes ]; then
+  keep=""
+  while IFS= read -r l; do
+    [ -z "$l" ] && continue
+    k=${l%% =*}
+    case $k in vm.*) echo "skipped(container) $k"; continue ;; esac
+    if [ -e "/proc/sys/$(echo "$k" | tr . /)" ] && sudo sysctl -q -w "$k=${l#*= }" 2>/dev/null; then keep+="$l"$'\n'; else echo "skipped(container) $k"; fi
+  done <<<"$lines"
+  lines=$keep
+fi
+sudo install -d -m 0755 /etc/sysctl.d
+printf '%s' "$lines" | sudo tee /etc/sysctl.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/sysctl.d/90-confluent.conf
+sudo sysctl -q -p /etc/sysctl.d/90-confluent.conf
+# 3.2.2 limits
+printf '# Managed by cpctl\n@confluent soft nofile 128000\n@confluent hard nofile 128000\n@confluent soft nproc 65536\n@confluent hard nproc 65536\n' | sudo tee /etc/security/limits.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/security/limits.d/90-confluent.conf
+# 3.2.3 journald
+sudo install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
+printf '# Managed by cpctl\n[Journal]\nSystemMaxUse=1G\n' | sudo tee /etc/systemd/journald.conf.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/systemd/journald.conf.d/90-confluent.conf
+sudo systemctl restart systemd-journald
+# 3.2.4 時區
+sudo ln -sfn /usr/share/zoneinfo/Asia/Taipei /etc/localtime
+# 3.2.5 tmpfiles
+printf '# Managed by cpctl - delete rolled Confluent logs after 14 days (systemd-tmpfiles-clean.timer)\ne /var/log/kafka - - - 14d\ne /var/log/confluent - - - 14d\n' | sudo tee /etc/tmpfiles.d/90-confluent-logs.conf >/dev/null
+sudo chmod 0644 /etc/tmpfiles.d/90-confluent-logs.conf
+# 3.2.6 /etc/confluent
+sudo install -d -o root -g root -m 0755 /etc/confluent
+# 3.2.7 OS 套件(只從內部 os-deps)
+rpm -q chrony firewalld >/dev/null 2>&1 || sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-os-deps' --setopt=install_weak_deps=False install chrony firewalld >/dev/null
+# 3.2.8 THP(controller、broker;容器內 ConditionVirtualization 讓它不執行)
+if [ "$ROLE" = controller ] || [ "$ROLE" = broker ]; then
+  printf '%s\n' '# Managed by cpctl - Kafka recommends transparent hugepages = never' '[Unit]' 'Description=Disable transparent hugepages (Confluent Platform)' 'DefaultDependencies=no' 'After=sysinit.target local-fs.target' 'Before=confluent-server.service' 'ConditionVirtualization=!container' '' '[Service]' 'Type=oneshot' "ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled; echo never > /sys/kernel/mm/transparent_hugepage/defrag'" '' '[Install]' 'WantedBy=basic.target' | sudo tee /etc/systemd/system/disable-thp.service >/dev/null
+  sudo chmod 0644 /etc/systemd/system/disable-thp.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable -q disable-thp.service
+  sudo systemctl start disable-thp.service
+fi
+# 3.2.9 chrony(ops02 = NTP server;其他跟 ops02)
+if [ "$ROLE" = ops ]; then
+  printf '# Managed by cpctl\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\nallow 172.32.0.0/24\nlocal stratum 10\n' | sudo tee /etc/chrony.conf >/dev/null
+else
+  printf '# Managed by cpctl\nserver ops02.poc.lab iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\n' | sudo tee /etc/chrony.conf >/dev/null
+fi
+if [ $incontainer = yes ]; then echo 'OPTIONS="-F 2 -x"'; else echo 'OPTIONS="-F 2"'; fi | sudo tee /etc/sysconfig/chronyd >/dev/null
+sudo chmod 0644 /etc/chrony.conf /etc/sysconfig/chronyd
+sudo systemctl enable -q chronyd
+sudo systemctl restart chronyd
+# 3.2.10 firewalld
+sudo systemctl enable -q --now firewalld
+for p in $PORTS; do sudo firewall-cmd -q --permanent --add-port=$p; done
+sudo firewall-cmd -q --permanent --add-service=ssh
+for s in cockpit dhcpv6-client; do sudo firewall-cmd --permanent --query-service=$s >/dev/null 2>&1 && sudo firewall-cmd -q --permanent --remove-service=$s; done
+sudo firewall-cmd -q --reload
+# 3.2.11 SELinux
+if command -v getenforce >/dev/null; then getenforce; else echo "selinux: skipped(container) - getenforce not available"; fi
+echo "$(hostname): baseline done ($ROLE, container=$incontainer)"
+EOS
+}
+baseline ops02 ops 8080/tcp 123/udp
+for h in kc01 kc02 kc03; do baseline $h controller 9093/tcp 7071/tcp; done
+for h in kb01 kb02 kb03 kb04; do baseline $h broker 7071/tcp 8090/tcp 9092/tcp 9094/tcp 9095/tcp 9096/tcp; done
+for h in rest01 rest02; do baseline $h rest 8082/tcp 7071/tcp; done
+baseline c3-01 c3 9021/tcp 9090/tcp
+baseline jump01 jump
+
+selinux: skipped(container) - getenforce not available
+ops02: baseline done (ops, container=yes)
+skipped(container) vm.max_map_count
+selinux: skipped(container) - getenforce not available
+kc01: baseline done (controller, container=yes)
+skipped(container) vm.max_map_count
+selinux: skipped(container) - getenforce not available
+kc02: baseline done (controller, container=yes)
+skipped(container) vm.max_map_count
+selinux: skipped(container) - getenforce not available
+kc03: baseline done (controller, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+selinux: skipped(container) - getenforce not available
+kb01: baseline done (broker, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+selinux: skipped(container) - getenforce not available
+kb02: baseline done (broker, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+selinux: skipped(container) - getenforce not available
+kb03: baseline done (broker, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+sysctl: setting key "net.core.rmem_max": No such file or directory
+sysctl: setting key "net.core.wmem_max": No such file or directory
+selinux: skipped(container) - getenforce not available
+kb04: baseline done (broker, container=yes)
+selinux: skipped(container) - getenforce not available
+rest01: baseline done (rest, container=yes)
+selinux: skipped(container) - getenforce not available
+rest02: baseline done (rest, container=yes)
+selinux: skipped(container) - getenforce not available
+c3-01: baseline done (c3, container=yes)
+selinux: skipped(container) - getenforce not available
+jump01: baseline done (jump, container=yes)
+[rc=0]
+##### 3.2 驗證
+
+$ ssh kb01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sysctl net.core.somaxconn net.ipv4.tcp_rmem vm.swappiness vm.max_map_count; ls -l /etc/localtime; date; rpm -q chrony firewalld; sudo firewall-cmd --permanent --list-all | grep -E ' services| ports'; systemctl is-enabled disable-thp.service; cat /sys/kernel/mm/transparent_hugepage/enabled"
+net.core.rmem_max = 2097152
+net.core.wmem_max = 2097152
+net.ipv4.tcp_rmem = 4096 65536 2097152
+net.ipv4.tcp_wmem = 4096 65536 2097152
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+net.core.somaxconn = 4096
+net.ipv4.tcp_rmem = 4096	65536	2097152
+vm.swappiness = 60
+vm.max_map_count = 262144
+lrwxrwxrwx 1 root root 31 Oct 16 14:07 /etc/localtime -> /usr/share/zoneinfo/Asia/Taipei
+Fri Oct 16 14:08:24 CST 2026
+chrony-4.8-1.el9.x86_64
+firewalld-1.3.4-20.el9_8.noarch
+  services: ssh
+  ports: 7071/tcp 8090/tcp 9092/tcp 9094/tcp 9095/tcp 9096/tcp
+enabled
+always [madvise] never
+[rc=0]
+
+$ ssh kc01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sudo firewall-cmd --list-ports"
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+7071/tcp 9093/tcp
+[rc=0]
+
+$ ssh ops02.poc.lab "sudo firewall-cmd --list-all | grep -E ' services| ports'; grep -E 'allow|local' /etc/chrony.conf"
+  services: ssh
+  ports: 8080/tcp 123/udp
+allow 172.32.0.0/24
+local stratum 10
+[rc=0]
+
+$ sleep 20; for h in kc01 kb01 rest01 c3-01 jump01; do ssh $h.poc.lab "chronyc -n sources | tail -1"; done
+^* 172.32.0.10                  10   6    17    54  +3946ns[  -11us] +/-   35us
+^* 172.32.0.10                  10   6    17    43    +20us[  +40us] +/-   58us
+^* 172.32.0.10                  10   6    17    27    +14us[  +16us] +/-   48us
+^* 172.32.0.10                  10   6    17    20  +9402ns[  +11us] +/-   82us
+^* 172.32.0.10                  10   6    17    17  +3313ns[-8454ns] +/-   49us
+[rc=0]
+
+$ for h in kc01 kb04 c3-01; do ssh $h.poc.lab "systemd-analyze cat-config systemd/journald.conf | grep SystemMaxUse; systemctl is-enabled systemd-tmpfiles-clean.timer; stat -c '%U:%G:%a %n' /etc/confluent"; done
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+[rc=0]
+##### 3.3.1.1–3.3.1.2(先做,3.2.7 會用到):內部 repo 定義檔與 GPG 金鑰 → 所有 01 主機(ops02 自己也是)
+# (重做) 第一次執行時 ops02 排在第一台:遠端步驟 rm -f /tmp/cp-internal.repo 在 ops02 上刪掉了要派送的檔案,後面 11 台都沒拿到 → 暫存檔改放 /var/lib/cp-installer/manual/。broker 的 net.core.rmem_max/wmem_max 在容器內不存在,sysctl -q -w 失敗卻回傳 0 → 改成先檢查 /proc/sys
+# (再修正) 容器內 net.core.rmem_max/wmem_max 是唯讀,sysctl -w 失敗仍回傳 0 → 改成設定後讀回比對
+
+$ cat > /var/lib/cp-installer/manual/cp-internal.repo <<'EOF'
+# Managed by cpctl - internal mirror only (public repos are not reachable from this network)
+[cp-internal-confluent]
+name=Internal mirror - Confluent Platform and Control Center
+baseurl=http://ops02.poc.lab:8080/rpm/confluent
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+
+[cp-internal-adoptium]
+name=Internal mirror - Eclipse Temurin
+baseurl=http://ops02.poc.lab:8080/rpm/adoptium
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+
+[cp-internal-os-deps]
+name=Internal mirror - OS dependencies
+baseurl=http://ops02.poc.lab:8080/rpm/os-deps
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+EOF
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  for k in confluent adoptium rocky-9; do scp -q /srv/repo/gpg-keys/$k.asc $h.poc.lab:/tmp/RPM-GPG-KEY-cp-$k; done
+  scp -q /var/lib/cp-installer/manual/cp-internal.repo $h.poc.lab:/tmp/cp-internal.repo
+  ssh $h.poc.lab 'set -e
+    for k in confluent adoptium rocky-9; do sudo install -o root -g root -m 0644 /tmp/RPM-GPG-KEY-cp-$k /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; rm -f /tmp/RPM-GPG-KEY-cp-$k; done
+    for k in confluent adoptium rocky-9; do sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k; done
+    sudo install -o root -g root -m 0644 /tmp/cp-internal.repo /etc/yum.repos.d/cp-internal.repo; rm -f /tmp/cp-internal.repo
+    echo "$(hostname): keys=$(rpm -q gpg-pubkey | wc -l) repos=$(sudo dnf -q repolist --enabled | grep -c cp-internal)"'
+done
+
+ops02: keys=3 repos=3
+kc01: keys=3 repos=3
+kc02: keys=3 repos=3
+kc03: keys=3 repos=3
+kb01: keys=3 repos=3
+kb02: keys=3 repos=3
+kb03: keys=3 repos=3
+kb04: keys=3 repos=3
+rest01: keys=3 repos=3
+rest02: keys=3 repos=3
+c3-01: keys=3 repos=3
+jump01: keys=3 repos=3
+[rc=0]
+
+$ ssh kb01.poc.lab "gpg --show-keys /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent 2>&1 | head -3; rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SUMMARY}\n'; sudo dnf -q repolist"
+pub   rsa4096 2021-05-03 [SC]
+      CBBB821E8FAF364F79835C438B1DA6120C2BF624
+uid                      Confluent Packaging <packages@confluent.io>
+gpg-pubkey-350d275d-6279464b Rocky Enterprise Software Foundation - Release key 2022 <releng@rockylinux.org> public key
+gpg-pubkey-0c2bf624-60904208 Confluent Packaging <packages@confluent.io> public key
+gpg-pubkey-65f8f04b-6193bd34 Adoptium GPG Key (DEB/RPM Signing Key) <temurin-dev@eclipse.org> public key
+repo id                repo name
+cp-internal-adoptium   Internal mirror - Eclipse Temurin
+cp-internal-confluent  Internal mirror - Confluent Platform and Control Center
+cp-internal-os-deps    Internal mirror - OS dependencies
+[rc=0]
+##### 3.2 步驟 01:OS 基線(每台主機依角色;cpadmin + sudo)
+
+$ baseline() {   # <host> <role> <ports...>
+  local h=$1 role=$2; shift 2
+  ssh $h.poc.lab "ROLE=$role PORTS='$*' bash -s" <<'EOS'
+set -e
+incontainer=no; systemd-detect-virt -c -q && incontainer=yes
+# 3.2.1 sysctl(容器內 vm.* 屬於 host kernel,不寫入;net.* 可設)
+lines=""
+case $ROLE in controller|broker) lines+="vm.max_map_count = 262144"$'\n' ;; esac
+if [ "$ROLE" = broker ]; then
+  lines+="vm.swappiness = 1"$'\n'"vm.dirty_background_ratio = 5"$'\n'"vm.dirty_ratio = 60"$'\n'
+  lines+="net.core.rmem_max = 2097152"$'\n'"net.core.wmem_max = 2097152"$'\n'
+  lines+="net.ipv4.tcp_rmem = 4096 65536 2097152"$'\n'"net.ipv4.tcp_wmem = 4096 65536 2097152"$'\n'
+fi
+lines+="net.core.somaxconn = 4096"$'\n'"net.ipv4.tcp_max_syn_backlog = 4096"$'\n'
+if [ $incontainer = yes ]; then
+  keep=""
+  while IFS= read -r l; do
+    [ -z "$l" ] && continue
+    k=${l%% =*}
+    case $k in vm.*) echo "skipped(container) $k"; continue ;; esac
+    v=${l#*= }; sudo sysctl -q -w "$k=$v" 2>/dev/null; if [ "$(sysctl -n "$k" 2>/dev/null | tr -s "	 " "  ")" = "$v" ]; then keep+="$l"$'\n'; else echo "skipped(container) $k"; fi
+  done <<<"$lines"
+  lines=$keep
+fi
+sudo install -d -m 0755 /etc/sysctl.d
+printf '%s' "$lines" | sudo tee /etc/sysctl.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/sysctl.d/90-confluent.conf
+sudo sysctl -q -p /etc/sysctl.d/90-confluent.conf
+# 3.2.2 limits
+printf '# Managed by cpctl\n@confluent soft nofile 128000\n@confluent hard nofile 128000\n@confluent soft nproc 65536\n@confluent hard nproc 65536\n' | sudo tee /etc/security/limits.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/security/limits.d/90-confluent.conf
+# 3.2.3 journald
+sudo install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
+printf '# Managed by cpctl\n[Journal]\nSystemMaxUse=1G\n' | sudo tee /etc/systemd/journald.conf.d/90-confluent.conf >/dev/null
+sudo chmod 0644 /etc/systemd/journald.conf.d/90-confluent.conf
+sudo systemctl restart systemd-journald
+# 3.2.4 時區
+sudo ln -sfn /usr/share/zoneinfo/Asia/Taipei /etc/localtime
+# 3.2.5 tmpfiles
+printf '# Managed by cpctl - delete rolled Confluent logs after 14 days (systemd-tmpfiles-clean.timer)\ne /var/log/kafka - - - 14d\ne /var/log/confluent - - - 14d\n' | sudo tee /etc/tmpfiles.d/90-confluent-logs.conf >/dev/null
+sudo chmod 0644 /etc/tmpfiles.d/90-confluent-logs.conf
+# 3.2.6 /etc/confluent
+sudo install -d -o root -g root -m 0755 /etc/confluent
+# 3.2.7 OS 套件(只從內部 os-deps)
+rpm -q chrony firewalld >/dev/null 2>&1 || sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-os-deps' --setopt=install_weak_deps=False install chrony firewalld >/dev/null
+# 3.2.8 THP(controller、broker;容器內 ConditionVirtualization 讓它不執行)
+if [ "$ROLE" = controller ] || [ "$ROLE" = broker ]; then
+  printf '%s\n' '# Managed by cpctl - Kafka recommends transparent hugepages = never' '[Unit]' 'Description=Disable transparent hugepages (Confluent Platform)' 'DefaultDependencies=no' 'After=sysinit.target local-fs.target' 'Before=confluent-server.service' 'ConditionVirtualization=!container' '' '[Service]' 'Type=oneshot' "ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled; echo never > /sys/kernel/mm/transparent_hugepage/defrag'" '' '[Install]' 'WantedBy=basic.target' | sudo tee /etc/systemd/system/disable-thp.service >/dev/null
+  sudo chmod 0644 /etc/systemd/system/disable-thp.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable -q disable-thp.service
+  sudo systemctl start disable-thp.service
+fi
+# 3.2.9 chrony(ops02 = NTP server;其他跟 ops02)
+if [ "$ROLE" = ops ]; then
+  printf '# Managed by cpctl\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\nallow 172.32.0.0/24\nlocal stratum 10\n' | sudo tee /etc/chrony.conf >/dev/null
+else
+  printf '# Managed by cpctl\nserver ops02.poc.lab iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\n' | sudo tee /etc/chrony.conf >/dev/null
+fi
+if [ $incontainer = yes ]; then echo 'OPTIONS="-F 2 -x"'; else echo 'OPTIONS="-F 2"'; fi | sudo tee /etc/sysconfig/chronyd >/dev/null
+sudo chmod 0644 /etc/chrony.conf /etc/sysconfig/chronyd
+sudo systemctl enable -q chronyd
+sudo systemctl restart chronyd
+# 3.2.10 firewalld
+sudo systemctl enable -q --now firewalld
+for p in $PORTS; do sudo firewall-cmd -q --permanent --add-port=$p; done
+sudo firewall-cmd -q --permanent --add-service=ssh
+for s in cockpit dhcpv6-client; do sudo firewall-cmd --permanent --query-service=$s >/dev/null 2>&1 && sudo firewall-cmd -q --permanent --remove-service=$s; done
+sudo firewall-cmd -q --reload
+# 3.2.11 SELinux
+if command -v getenforce >/dev/null; then getenforce; else echo "selinux: skipped(container) - getenforce not available"; fi
+echo "$(hostname): baseline done ($ROLE, container=$incontainer)"
+EOS
+}
+baseline ops02 ops 8080/tcp 123/udp
+for h in kc01 kc02 kc03; do baseline $h controller 9093/tcp 7071/tcp; done
+for h in kb01 kb02 kb03 kb04; do baseline $h broker 7071/tcp 8090/tcp 9092/tcp 9094/tcp 9095/tcp 9096/tcp; done
+for h in rest01 rest02; do baseline $h rest 8082/tcp 7071/tcp; done
+baseline c3-01 c3 9021/tcp 9090/tcp
+baseline jump01 jump
+
+selinux: skipped(container) - getenforce not available
+ops02: baseline done (ops, container=yes)
+skipped(container) vm.max_map_count
+selinux: skipped(container) - getenforce not available
+kc01: baseline done (controller, container=yes)
+skipped(container) vm.max_map_count
+selinux: skipped(container) - getenforce not available
+kc02: baseline done (controller, container=yes)
+skipped(container) vm.max_map_count
+selinux: skipped(container) - getenforce not available
+kc03: baseline done (controller, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+skipped(container) net.core.rmem_max
+skipped(container) net.core.wmem_max
+selinux: skipped(container) - getenforce not available
+kb01: baseline done (broker, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+skipped(container) net.core.rmem_max
+skipped(container) net.core.wmem_max
+selinux: skipped(container) - getenforce not available
+kb02: baseline done (broker, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+skipped(container) net.core.rmem_max
+skipped(container) net.core.wmem_max
+selinux: skipped(container) - getenforce not available
+kb03: baseline done (broker, container=yes)
+skipped(container) vm.max_map_count
+skipped(container) vm.swappiness
+skipped(container) vm.dirty_background_ratio
+skipped(container) vm.dirty_ratio
+skipped(container) net.core.rmem_max
+skipped(container) net.core.wmem_max
+selinux: skipped(container) - getenforce not available
+kb04: baseline done (broker, container=yes)
+selinux: skipped(container) - getenforce not available
+rest01: baseline done (rest, container=yes)
+selinux: skipped(container) - getenforce not available
+rest02: baseline done (rest, container=yes)
+selinux: skipped(container) - getenforce not available
+c3-01: baseline done (c3, container=yes)
+selinux: skipped(container) - getenforce not available
+jump01: baseline done (jump, container=yes)
+[rc=0]
+##### 3.2 驗證
+
+$ ssh kb01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sysctl net.core.somaxconn net.ipv4.tcp_rmem vm.swappiness vm.max_map_count; ls -l /etc/localtime; date; rpm -q chrony firewalld; sudo firewall-cmd --permanent --list-all | grep -E ' services| ports'; systemctl is-enabled disable-thp.service; cat /sys/kernel/mm/transparent_hugepage/enabled"
+net.ipv4.tcp_rmem = 4096 65536 2097152
+net.ipv4.tcp_wmem = 4096 65536 2097152
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+net.core.somaxconn = 4096
+net.ipv4.tcp_rmem = 4096	65536	2097152
+vm.swappiness = 60
+vm.max_map_count = 262144
+lrwxrwxrwx 1 root root 31 Oct 16 14:09 /etc/localtime -> /usr/share/zoneinfo/Asia/Taipei
+Fri Oct 16 14:09:51 CST 2026
+chrony-4.8-1.el9.x86_64
+firewalld-1.3.4-20.el9_8.noarch
+  services: ssh
+  ports: 7071/tcp 8090/tcp 9092/tcp 9094/tcp 9095/tcp 9096/tcp
+enabled
+always [madvise] never
+[rc=0]
+
+$ ssh kc01.poc.lab "cat /etc/sysctl.d/90-confluent.conf; sudo firewall-cmd --list-ports"
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+7071/tcp 9093/tcp
+[rc=0]
+
+$ ssh ops02.poc.lab "sudo firewall-cmd --list-all | grep -E ' services| ports'; grep -E 'allow|local' /etc/chrony.conf"
+  services: ssh
+  ports: 8080/tcp 123/udp
+allow 172.32.0.0/24
+local stratum 10
+[rc=0]
+
+$ sleep 20; for h in kc01 kb01 rest01 c3-01 jump01; do ssh $h.poc.lab "chronyc -n sources | tail -1"; done
+^* 172.32.0.10                  10   6    17    36  -4907ns[  -13us] +/-   36us
+^* 172.32.0.10                  10   6    17    31    -17us[  -21us] +/-   46us
+^* 172.32.0.10                  10   6    17    21    -23us[  -25us] +/-   69us
+^* 172.32.0.10                  10   6    17    18  -1072ns[-6711ns] +/-   16us
+^* 172.32.0.10                  10   6    17    16  -1375ns[-6737ns] +/-   32us
+[rc=0]
+
+$ for h in kc01 kb04 c3-01; do ssh $h.poc.lab "systemd-analyze cat-config systemd/journald.conf | grep SystemMaxUse; systemctl is-enabled systemd-tmpfiles-clean.timer; stat -c '%U:%G:%a %n' /etc/confluent"; done
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+#SystemMaxUse=
+SystemMaxUse=1G
+static
+root:root:755 /etc/confluent
+[rc=0]
+##### 3.3.1.3 步驟 02:依角色安裝精確版本 + versionlock(ops02 先做;cpadmin + sudo)
+
+$ install_pkgs() {   # <host> <package-version...>
+  local h=$1; shift
+  ssh $h.poc.lab "PKGS='$*' bash -s" <<'EOS'
+set -e
+rpm -q --qf '%{NAME} %{VERSION}\n' temurin-21-jdk confluent-server confluent-kafka-rest confluent-control-center-next-gen 2>/dev/null | grep -v 'not installed' || echo "no Java/Confluent package installed yet"
+sudo dnf -y -q --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False install $PKGS >/dev/null
+for p in $PKGS; do sudo dnf -q versionlock add "$p" >/dev/null; done
+echo "$(hostname): $(rpm -q --qf '%{NAME}-%{VERSION} ' $(for p in $PKGS; do echo "${p%-*}"; done))"
+EOS
+}
+J=temurin-21-jdk-21.0.12.1.0.1
+install_pkgs ops02 $J confluent-server-8.3.2 confluent-security-8.3.2 confluent-cli-8.3.2
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 jump01; do install_pkgs $h $J confluent-server-8.3.2 confluent-security-8.3.2; done
+for h in rest01 rest02; do install_pkgs $h $J confluent-kafka-rest-8.3.2 confluent-security-8.3.2; done
+c3os=$(for p in cyrus-sasl openssl-devel; do ls /srv/repo/rpm/os-deps/$p-[0-9]*.rpm | sort -V | tail -1 | xargs rpm -qp --qf "%{NAME}-%{VERSION}\n"; done | tr '\n' ' ')
+echo "c3 OS dependencies from the internal repo: $c3os"
+install_pkgs c3-01 $J confluent-control-center-next-gen-2.6.1 $c3os
+
+no Java/Confluent package installed yet
+ops02: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 confluent-cli-8.3.2 
+no Java/Confluent package installed yet
+kc01: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+kc02: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+kc03: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+kb01: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+kb02: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+kb03: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+kb04: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+jump01: temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+rest01: temurin-21-jdk-21.0.12.1.0.1 confluent-kafka-rest-8.3.2 confluent-security-8.3.2 
+no Java/Confluent package installed yet
+rest02: temurin-21-jdk-21.0.12.1.0.1 confluent-kafka-rest-8.3.2 confluent-security-8.3.2 
+c3 OS dependencies from the internal repo: cyrus-sasl-2.1.27 openssl-devel-3.5.8 
+no Java/Confluent package installed yet
+c3-01: temurin-21-jdk-21.0.12.1.0.1 confluent-control-center-next-gen-2.6.1 cyrus-sasl-2.1.27 openssl-devel-3.5.8 
+[rc=0]
+##### 3.3 驗證
+
+$ for h in kc01 kb01 rest01 c3-01 ops02 jump01; do echo "== $h"; ssh $h.poc.lab "sudo dnf -q versionlock list; rpm -q --qf '%{VERSION}\n' confluent-server confluent-kafka-rest 2>/dev/null | grep -v 'not installed'"; done
+== kc01
+temurin-21-jdk-0:21.0.12.1.0.1-0.*
+confluent-server-1:8.3.2-1.*
+confluent-security-0:8.3.2-1.*
+8.3.2
+8.3.2
+== kb01
+temurin-21-jdk-0:21.0.12.1.0.1-0.*
+confluent-server-1:8.3.2-1.*
+confluent-security-0:8.3.2-1.*
+8.3.2
+8.3.2
+== rest01
+temurin-21-jdk-0:21.0.12.1.0.1-0.*
+confluent-kafka-rest-0:8.3.2-1.*
+confluent-security-0:8.3.2-1.*
+8.3.2
+== c3-01
+temurin-21-jdk-0:21.0.12.1.0.1-0.*
+confluent-control-center-next-gen-0:2.6.1-1.*
+cyrus-sasl-0:2.1.27-22.el9_7.*
+openssl-devel-1:3.5.8-2.el9_8.*
+== ops02
+temurin-21-jdk-0:21.0.12.1.0.1-0.*
+confluent-server-1:8.3.2-1.*
+confluent-security-0:8.3.2-1.*
+confluent-cli-0:8.3.2-1.*
+8.3.2
+8.3.2
+== jump01
+temurin-21-jdk-0:21.0.12.1.0.1-0.*
+confluent-server-1:8.3.2-1.*
+confluent-security-0:8.3.2-1.*
+8.3.2
+8.3.2
+[rc=0]
+
+$ for h in kc01 rest01 c3-01; do ssh $h.poc.lab 'echo "$(hostname): $(getent passwd cp-kafka cp-kafka-rest cp-control-center | cut -d: -f1 | tr "\n" " ")group=$(getent group confluent | cut -d: -f1)"; ls -l /usr/lib/jvm/temurin-21-jdk; /usr/lib/jvm/temurin-21-jdk/bin/java -version 2>&1 | head -1'; done
+kc01: cp-kafka cp-kafka-rest group=confluent
+lrwxrwxrwx 1 root root 32 Oct 16 14:12 /usr/lib/jvm/temurin-21-jdk -> /usr/lib/jvm/java-21-temurin-jdk
+openjdk version "21.0.12.1" 2026-08-18 LTS
+rest01: cp-kafka-rest group=confluent
+lrwxrwxrwx 1 root root 32 Oct 16 14:20 /usr/lib/jvm/temurin-21-jdk -> /usr/lib/jvm/java-21-temurin-jdk
+openjdk version "21.0.12.1" 2026-08-18 LTS
+c3-01: cp-control-center group=confluent
+lrwxrwxrwx 1 root root 32 Oct 16 14:21 /usr/lib/jvm/temurin-21-jdk -> /usr/lib/jvm/java-21-temurin-jdk
+openjdk version "21.0.12.1" 2026-08-18 LTS
+[rc=0]
+
+$ ssh c3-01.poc.lab "rpm -qa | grep -c '^confluent-' ; rpm -qa 'confluent-*'"
+1
+confluent-control-center-next-gen-2.6.1-1.noarch
+[rc=0]
+
+$ ssh ops02.poc.lab "confluent version 2>&1 | head -3; kafka-topics --version 2>&1 | tail -1"
+confluent - Confluent CLI
+
+Version:     v4.72.0
+8.3.2-ce
+[rc=0]
+##### 3.4 步驟 03:內部 PKI(ops02,cpadmin,不加 sudo)。密碼從 0600 的 secrets.env 載入環境變數,不出現在指令列
+
+$ install -d -m 0700 /var/lib/cp-installer/pki && stat -c '%U:%G %a %n' /var/lib/cp-installer /var/lib/cp-installer/pki
+cpadmin:cpadmin 750 /var/lib/cp-installer
+cpadmin:cpadmin 700 /var/lib/cp-installer/pki
+[rc=0]
+##### 3.4.1 內部 CA
+
+$ cd /var/lib/cp-installer/pki && umask 077
+openssl genrsa -out ca.key 3072 2>/dev/null
+chmod 0600 ca.key
+openssl req -x509 -new -key ca.key -sha256 -days 3650 -out ca.crt \
+  -subj "/CN=PoC Internal CA $(date +%Y%m%d)/OU=Confluent/O=PoC Bank/C=TW" \
+  -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+cat ca.crt > ca.pem
+chmod 0644 ca.pem
+openssl x509 -in ca.crt -noout -subject -dates -ext basicConstraints,keyUsage
+openssl x509 -in ca.crt -noout -text | grep 'Public-Key'
+
+subject=CN=PoC Internal CA 20261016, OU=Confluent, O=PoC Bank, C=TW
+notBefore=Oct 16 06:22:32 2026 GMT
+notAfter=Oct 13 06:22:32 2036 GMT
+X509v3 Basic Constraints: critical
+    CA:TRUE
+X509v3 Key Usage: critical
+    Certificate Sign, CRL Sign
+                Public-Key: (3072 bit)
+[rc=0]
+##### 3.4.2 truststore.p12
+
+$ cd /var/lib/cp-installer/pki && umask 077 && set -a && . ../secrets.env && set +a
+KT=/usr/lib/jvm/temurin-21-jdk/bin/keytool
+d=$(mktemp -d)
+awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' ca.pem
+rm -f truststore.p12
+i=0; for f in "$d"/ca-*.pem; do i=$((i+1))
+  "$KT" -importcert -noprompt -alias "internal-ca-$i" -file "$f" -keystore truststore.p12 -storetype PKCS12 -storepass:env STORE_PASSWORD
+done
+rm -rf "$d"
+sha256sum ca.pem | awk '{printf "%s",$1}' > truststore.bundle.sha256
+"$KT" -list -keystore truststore.p12 -storepass:env STORE_PASSWORD | grep -E 'entr|internal-ca'
+
+Certificate was added to keystore
+Your keystore contains 1 entry
+internal-ca-1, Oct 16, 2026, trustedCertEntry, 
+[rc=0]
+##### 3.4.3–3.4.6 簽發 leaf 憑證(issue 函式照手冊 3.4.3)與 MDS token 金鑰
+
+$ cd /var/lib/cp-installer/pki && umask 077 && set -a && . ../secrets.env && set +a
+issue() {  # <name> <EKU> [SAN 逗號清單]
+  local n=$1 eku=$2 sans=${3:-}
+  { printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n'
+    printf 'extendedKeyUsage=%s\n' "$eku"
+    [ -n "$sans" ] && printf 'subjectAltName=%s\n' "$(tr ',' '\n' <<<"$sans" | sort -u | sed 's/^/DNS:/' | paste -sd, -)"
+  } > "$n.ext"
+  openssl genrsa -out "$n.key" 3072 2>/dev/null
+  chmod 0600 "$n.key"
+  openssl req -new -key "$n.key" -out "$n.csr" -subj "/CN=$n/OU=Confluent/O=PoC Bank/C=TW"
+  openssl x509 -req -in "$n.csr" -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 -sha256 -extfile "$n.ext" -out "$n.crt" 2>/dev/null
+  rm -f "$n.ext" "$n.csr"
+  openssl pkcs12 -export -name "$n" -inkey "$n.key" -in "$n.crt" -certfile ca.crt -passout env:STORE_PASSWORD -out "$n.p12"
+  cat "$n.crt" ca.crt > "$n.chain.pem"
+  echo "issued $n"
+}
+issue kafka-internal serverAuth,clientAuth kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
+issue cp-server serverAuth,clientAuth ops02.poc.lab,ops02,ad01.poc.lab,ad01,lb01.poc.lab,lb01,kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,rest.poc.lab,c3.poc.lab,localhost
+issue app-legacy-billing clientAuth
+issue opmenu-breakglass clientAuth
+openssl genrsa -out mds-token-keypair.pem 2048 2>/dev/null
+chmod 0600 mds-token-keypair.pem
+openssl rsa -in mds-token-keypair.pem -pubout -out mds-public.pem 2>/dev/null
+openssl pkcs8 -topk8 -v2 aes256 -in mds-token-keypair.pem -passout env:MDS_TOKEN_PASSPHRASE -out mds-token-keypair.enc.pem
+chmod 0600 mds-token-keypair.enc.pem
+
+issued kafka-internal
+issued cp-server
+issued app-legacy-billing
+issued opmenu-breakglass
+[rc=0]
+##### 3.4 驗證(ops02)
+
+$ cd /var/lib/cp-installer/pki && set -a && . ../secrets.env && set +a
+openssl x509 -in kafka-internal.crt -noout -subject -ext subjectAltName,extendedKeyUsage
+openssl x509 -in cp-server.crt -noout -ext subjectAltName | tail -n +2 | tr ',' '\n' | wc -l
+openssl x509 -in app-legacy-billing.crt -noout -subject -ext extendedKeyUsage
+openssl pkey -in mds-token-keypair.enc.pem -passin env:MDS_TOKEN_PASSPHRASE -noout && echo ENC_OK
+openssl verify -CAfile ca.pem kafka-internal.crt cp-server.crt app-legacy-billing.crt opmenu-breakglass.crt
+ls -l
+
+subject=CN=kafka-internal, OU=Confluent, O=PoC Bank, C=TW
+X509v3 Extended Key Usage: 
+    TLS Web Server Authentication, TLS Web Client Authentication
+X509v3 Subject Alternative Name: 
+    DNS:kb01, DNS:kb01.poc.lab, DNS:kb02, DNS:kb02.poc.lab, DNS:kb03, DNS:kb03.poc.lab, DNS:kb04, DNS:kb04.poc.lab, DNS:kc01, DNS:kc01.poc.lab, DNS:kc02, DNS:kc02.poc.lab, DNS:kc03, DNS:kc03.poc.lab
+29
+subject=CN=app-legacy-billing, OU=Confluent, O=PoC Bank, C=TW
+X509v3 Extended Key Usage: 
+    TLS Web Client Authentication
+ENC_OK
+kafka-internal.crt: OK
+cp-server.crt: OK
+app-legacy-billing.crt: OK
+opmenu-breakglass.crt: OK
+total 116
+-rw------- 1 cpadmin cpadmin 3338 Oct 16 14:22 app-legacy-billing.chain.pem
+-rw------- 1 cpadmin cpadmin 1675 Oct 16 14:22 app-legacy-billing.crt
+-rw------- 1 cpadmin cpadmin 2484 Oct 16 14:22 app-legacy-billing.key
+-rw------- 1 cpadmin cpadmin 4872 Oct 16 14:22 app-legacy-billing.p12
+-rw------- 1 cpadmin cpadmin 1663 Oct 16 14:22 ca.crt
+-rw------- 1 cpadmin cpadmin 2484 Oct 16 14:22 ca.key
+-rw-r--r-- 1 cpadmin cpadmin 1663 Oct 16 14:22 ca.pem
+-rw------- 1 cpadmin cpadmin   41 Oct 16 14:22 ca.srl
+-rw------- 1 cpadmin cpadmin 3785 Oct 16 14:22 cp-server.chain.pem
+-rw------- 1 cpadmin cpadmin 2122 Oct 16 14:22 cp-server.crt
+-rw------- 1 cpadmin cpadmin 2484 Oct 16 14:22 cp-server.key
+-rw------- 1 cpadmin cpadmin 5174 Oct 16 14:22 cp-server.p12
+-rw------- 1 cpadmin cpadmin 3562 Oct 16 14:22 kafka-internal.chain.pem
+-rw------- 1 cpadmin cpadmin 1899 Oct 16 14:22 kafka-internal.crt
+-rw------- 1 cpadmin cpadmin 2484 Oct 16 14:22 kafka-internal.key
+-rw------- 1 cpadmin cpadmin 5024 Oct 16 14:22 kafka-internal.p12
+-rw------- 1 cpadmin cpadmin  451 Oct 16 14:22 mds-public.pem
+-rw------- 1 cpadmin cpadmin 1886 Oct 16 14:22 mds-token-keypair.enc.pem
+-rw------- 1 cpadmin cpadmin 1704 Oct 16 14:22 mds-token-keypair.pem
+-rw------- 1 cpadmin cpadmin 3338 Oct 16 14:22 opmenu-breakglass.chain.pem
+-rw------- 1 cpadmin cpadmin 1675 Oct 16 14:22 opmenu-breakglass.crt
+-rw------- 1 cpadmin cpadmin 2484 Oct 16 14:22 opmenu-breakglass.key
+-rw------- 1 cpadmin cpadmin 4870 Oct 16 14:22 opmenu-breakglass.p12
+-rw------- 1 cpadmin cpadmin   64 Oct 16 14:22 truststore.bundle.sha256
+-rw------- 1 cpadmin cpadmin 1574 Oct 16 14:22 truststore.p12
+[rc=0]
+##### 3.4.7 派送到 /etc/confluent/ssl(每台只拿自己角色需要的檔案)
+
+$ cd /var/lib/cp-installer/pki
+push() {  # <host> <files...>
+  local h=$1; shift
+  scp -q "$@" $h.poc.lab:/tmp/
+  ssh $h.poc.lab "FILES='$(for f in "$@"; do basename "$f"; done | tr '\n' ' ')' bash -s" <<'EOS'
+set -e
+sudo install -d -o root -g root -m 0755 /etc/confluent
+sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl
+for f in $FILES; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/$f && rm -f /tmp/$f; done
+sudo rm -f /etc/confluent/ssl/mds-token-keypair.pem
+echo "$(hostname): $(sudo ls /etc/confluent/ssl | tr '\n' ' ')"
+EOS
+}
+CTL="ca.pem truststore.p12 kafka-internal.p12 mds-token-keypair.enc.pem mds-public.pem"
+for h in kc01 kc02 kc03; do push $h $CTL; done
+for h in kb01 kb02 kb03 kb04; do push $h $CTL cp-server.p12; done
+for h in rest01 rest02; do push $h ca.pem truststore.p12 cp-server.p12 mds-public.pem; done
+push c3-01 ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key mds-public.pem
+
+kc01: ca.pem kafka-internal.p12 mds-public.pem mds-token-keypair.enc.pem truststore.p12 
+kc02: ca.pem kafka-internal.p12 mds-public.pem mds-token-keypair.enc.pem truststore.p12 
+kc03: ca.pem kafka-internal.p12 mds-public.pem mds-token-keypair.enc.pem truststore.p12 
+kb01: ca.pem cp-server.p12 kafka-internal.p12 mds-public.pem mds-token-keypair.enc.pem truststore.p12 
+kb02: ca.pem cp-server.p12 kafka-internal.p12 mds-public.pem mds-token-keypair.enc.pem truststore.p12 
+kb03: ca.pem cp-server.p12 kafka-internal.p12 mds-public.pem mds-token-keypair.enc.pem truststore.p12 
+kb04: ca.pem cp-server.p12 kafka-internal.p12 mds-public.pem mds-token-keypair.enc.pem truststore.p12 
+rest01: ca.pem cp-server.p12 mds-public.pem truststore.p12 
+rest02: ca.pem cp-server.p12 mds-public.pem truststore.p12 
+c3-01: ca.pem cp-server.crt cp-server.key cp-server.p12 mds-public.pem truststore.p12 
+[rc=0]
+
+$ ssh kb01.poc.lab "sudo ls -l /etc/confluent/ssl; sudo -u cp-kafka test -r /etc/confluent/ssl/kafka-internal.p12 && echo READABLE-by-cp-kafka"
+total 32
+-rw-r----- 1 root confluent 1663 Oct 16 14:22 ca.pem
+-rw-r----- 1 root confluent 5174 Oct 16 14:22 cp-server.p12
+-rw-r----- 1 root confluent 5024 Oct 16 14:22 kafka-internal.p12
+-rw-r----- 1 root confluent  451 Oct 16 14:22 mds-public.pem
+-rw-r----- 1 root confluent 1886 Oct 16 14:22 mds-token-keypair.enc.pem
+-rw-r----- 1 root confluent 1574 Oct 16 14:22 truststore.p12
+READABLE-by-cp-kafka
+[rc=0]
+##### 3.4.8 主機信任內部 CA(OS trust anchor,再 JDK cacerts;順序:先 update-ca-trust 再 keytool)
+
+$ for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  scp -q /var/lib/cp-installer/pki/ca.pem $h.poc.lab:/tmp/cp-internal-ca.pem
+  ssh $h.poc.lab 'bash -s' <<'EOS'
+set -e
+sudo install -o root -g root -m 0644 /tmp/cp-internal-ca.pem /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+rm -f /tmp/cp-internal-ca.pem
+sudo update-ca-trust extract
+JH=/usr/lib/jvm/temurin-21-jdk
+d=$(mktemp -d)
+awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+for f in "$d"/ca-*.pem; do
+  fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f' | cut -c1-16)
+  sudo "$JH/bin/keytool" -list -cacerts -storepass changeit -alias "cp-ca-$fp" >/dev/null 2>&1 || \
+  sudo "$JH/bin/keytool" -importcert -noprompt -cacerts -storepass changeit -alias "cp-ca-$fp" -file "$f" >/dev/null
+done
+rm -rf "$d"
+echo "$(hostname): $(trust list --filter=ca-anchors | grep -c 'PoC Internal CA') OS anchor, JDK $(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -o '^cp-ca-[0-9a-f]*')"
+EOS
+done
+
+Certificate was added to keystore
+ops02: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+kc01: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+kc02: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+kc03: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+kb01: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+kb02: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+kb03: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+kb04: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+rest01: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+rest02: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+c3-01: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+Certificate was added to keystore
+jump01: 1 OS anchor, JDK cp-ca-b1d0465d4d07927b
+[rc=0]
+
+$ ssh kb01.poc.lab "openssl x509 -in /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem -noout -subject -fingerprint -sha256; ls /etc/pki/ca-trust/source/anchors/"
+subject=CN=PoC Internal CA 20261016, OU=Confluent, O=PoC Bank, C=TW
+sha256 Fingerprint=B1:D0:46:5D:4D:07:92:7B:56:E1:64:D7:19:4C:0E:DC:DB:89:19:92:B3:36:9A:5D:97:ED:54:E3:63:DD:14:B2
+cp-internal-ca.pem
+[rc=0]
+##### 4.0 共用變數與管理用 client 設定(ops02,cpadmin)。之後每個區塊開頭都載入 ~/manual.env
+
+$ cat > ~/manual.env <<'EOF'
+export S=/var/lib/cp-installer
+export PKI=$S/pki
+export CB=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
+export BI=kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092
+export ADMIN_CFG=$S/client/internal.properties
+export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+EOF
+cat ~/manual.env
+
+export S=/var/lib/cp-installer
+export PKI=$S/pki
+export CB=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
+export BI=kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092
+export ADMIN_CFG=$S/client/internal.properties
+export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+[rc=0]
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+install -d -m 0700 $S/client && install -m 0600 /dev/null $ADMIN_CFG
+printf '%s\n' security.protocol=SSL ssl.keystore.type=PKCS12 "ssl.keystore.location=$PKI/kafka-internal.p12" "ssl.keystore.password=$STORE_PASSWORD" "ssl.key.password=$STORE_PASSWORD" ssl.truststore.type=PKCS12 "ssl.truststore.location=$PKI/truststore.p12" "ssl.truststore.password=$STORE_PASSWORD" ssl.endpoint.identification.algorithm=https > $ADMIN_CFG
+stat -c '%U:%G %a %n' $ADMIN_CFG; sed 's/password=.*/password=<store-password>/' $ADMIN_CFG
+
+cpadmin:cpadmin 600 /var/lib/cp-installer/client/internal.properties
+security.protocol=SSL
+ssl.keystore.type=PKCS12
+ssl.keystore.location=/var/lib/cp-installer/pki/kafka-internal.p12
+ssl.keystore.password=<store-password>
+ssl.key.password=<store-password>
+ssl.truststore.type=PKCS12
+ssl.truststore.location=/var/lib/cp-installer/pki/truststore.p12
+ssl.truststore.password=<store-password>
+ssl.endpoint.identification.algorithm=https
+[rc=0]
+##### 4.1.1 AD 的 LDAPS 憑證(僅 PoC):換成內部 CA 簽的 cp-server
+
+$ . ~/manual.env
+scp -q $PKI/cp-server.key $PKI/cp-server.crt $PKI/ca.pem ad01.poc.lab:/tmp/
+ssh ad01.poc.lab "sudo install -o root -g root -m 0600 /tmp/cp-server.key /var/lib/samba/private/tls/key.pem && sudo install -o root -g root -m 0644 /tmp/cp-server.crt /var/lib/samba/private/tls/cert.pem && sudo install -o root -g root -m 0644 /tmp/ca.pem /var/lib/samba/private/tls/ca.pem && sudo rm -f /tmp/cp-server.key /tmp/cp-server.crt /tmp/ca.pem"
+ssh ad01.poc.lab "sudo pkill -x samba || true"; sleep 8
+ssh ad01.poc.lab "grep -E 'tls (enabled|keyfile|certfile|cafile)' /etc/samba/smb.conf"
+
+	tls cafile = tls/ca.pem
+	tls certfile = tls/cert.pem
+	tls enabled = Yes
+	tls keyfile = tls/key.pem
+[rc=0]
+
+$ . ~/manual.env
+for i in $(seq 1 24); do LDAPTLS_CACERT=$PKI/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H ldaps://ad01.poc.lab:636 -s base -b "" namingContexts >/tmp/rootdse 2>&1 && break; sleep 5; done; head -3 /tmp/rootdse
+openssl s_client -connect ad01.poc.lab:636 -CAfile $PKI/ca.pem -verify_return_error </dev/null 2>/dev/null | grep -E "subject=|Verify return code"
+
+dn:
+namingContexts: DC=corp,DC=poc,DC=lab
+namingContexts: CN=Configuration,DC=corp,DC=poc,DC=lab
+subject=CN=cp-server, OU=Confluent, O=PoC Bank, C=TW
+Verify return code: 0 (ok)
+[rc=0]
+##### 4.1.2 OU、群組(ad01,root)
+
+$ ssh ad01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+LDB=/var/lib/samba/private/sam.ldb
+for ou in "OU=Confluent" "OU=Users,OU=Confluent" "OU=Groups,OU=Confluent" "OU=Service,OU=Confluent"; do
+  ldbsearch -H $LDB -b "$ou,DC=corp,DC=poc,DC=lab" -s base dn 2>/dev/null | grep -q '^dn:' && echo "ok  $ou" || samba-tool ou create "$ou"
+done
+for g in kafka-admins kafka-operators kafka-devs; do
+  ldbsearch -H $LDB "(&(objectClass=group)(sAMAccountName=$g))" dn | grep -q '^dn:' && echo "ok  $g" || samba-tool group add "$g" --groupou="OU=Groups,OU=Confluent"
+done
+EOF
+
+Added ou "OU=Confluent,DC=corp,DC=poc,DC=lab"
+Added ou "OU=Users,OU=Confluent,DC=corp,DC=poc,DC=lab"
+Added ou "OU=Groups,OU=Confluent,DC=corp,DC=poc,DC=lab"
+Added ou "OU=Service,OU=Confluent,DC=corp,DC=poc,DC=lab"
+Added group kafka-admins
+Added group kafka-operators
+Added group kafka-devs
+[rc=0]
+##### 4.1.2 服務帳號與測試使用者:密碼從 ops02 的 0600 密碼檔經 stdin 送給 samba-tool(不在指令列、不在 ps;samba-tool 非終端機時從 stdin 讀密碼)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+mkuser() {  # <user> <ou> <password> [group]
+  if ssh ad01.poc.lab "sudo ldbsearch -H /var/lib/samba/private/sam.ldb '(&(objectClass=user)(sAMAccountName=$1))' dn" | grep -q '^dn:'; then echo "ok  $1"; else
+    printf '%s\n%s\n' "$3" "$3" | ssh ad01.poc.lab "sudo samba-tool user create $1 --userou='$2' 2>&1 | tail -1"
+    ssh ad01.poc.lab "sudo samba-tool user setexpiry $1 --noexpiry >/dev/null"
+  fi
+  [ -n "${4:-}" ] && ssh ad01.poc.lab "sudo samba-tool group addmembers $4 $1 2>&1 | tail -1" || true
+}
+mkuser svc-mds-bind "OU=Service,OU=Confluent" "$LDAP_BIND_PASSWORD"
+mkuser svc-rest "OU=Service,OU=Confluent" "$SVC_REST_PASSWORD"
+mkuser svc-c3 "OU=Service,OU=Confluent" "$SVC_C3_PASSWORD"
+mkuser svc-cpctl "OU=Service,OU=Confluent" "$SVC_CPCTL_PASSWORD"
+mkuser alice "OU=Users,OU=Confluent" "$HUMAN_DEFAULT_PASSWORD" kafka-admins
+mkuser bob "OU=Users,OU=Confluent" "$HUMAN_DEFAULT_PASSWORD" kafka-operators
+mkuser carol "OU=Users,OU=Confluent" "$HUMAN_DEFAULT_PASSWORD" kafka-devs
+
+User 'svc-mds-bind' added successfully
+User 'svc-rest' added successfully
+User 'svc-c3' added successfully
+User 'svc-cpctl' added successfully
+User 'alice' added successfully
+Added members to group kafka-admins
+User 'bob' added successfully
+Added members to group kafka-operators
+User 'carol' added successfully
+Added members to group kafka-devs
+[rc=0]
+##### 4.1 驗證:以 svc-mds-bind 經 LDAPS bind(與 MDS 做的事相同);密碼放 0600 檔案用 -y,不用 -w
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+ssh ad01.poc.lab "sudo samba-tool ou list; for g in kafka-admins kafka-operators kafka-devs; do echo \"\$g: \$(sudo samba-tool group listmembers \$g | tr '\n' ' ')\"; done"
+install -m 0600 /dev/null ~/.bindpw && printf '%s' "$LDAP_BIND_PASSWORD" > ~/.bindpw
+LDAPTLS_CACERT=$PKI/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H ldaps://ad01.poc.lab:636 -D "CN=svc-mds-bind,OU=Service,OU=Confluent,DC=corp,DC=poc,DC=lab" -y ~/.bindpw -b "OU=Confluent,DC=corp,DC=poc,DC=lab" "(objectClass=user)" sAMAccountName | grep sAMAccountName
+LDAPTLS_CACERT=$PKI/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H ldaps://ad01.poc.lab:636 -D "CN=svc-mds-bind,OU=Service,OU=Confluent,DC=corp,DC=poc,DC=lab" -y ~/.bindpw -b "OU=Groups,OU=Confluent,DC=corp,DC=poc,DC=lab" "(cn=kafka-admins)" member
+rm -f ~/.bindpw
+
+OU=Users,OU=Confluent
+OU=Groups,OU=Confluent
+OU=Service,OU=Confluent
+OU=Confluent
+OU=Domain Controllers
+kafka-admins: alice 
+kafka-operators: bob 
+kafka-devs: carol 
+sAMAccountName: svc-mds-bind
+sAMAccountName: carol
+sAMAccountName: svc-rest
+sAMAccountName: alice
+sAMAccountName: svc-cpctl
+sAMAccountName: bob
+sAMAccountName: svc-c3
+dn: CN=kafka-admins,OU=Groups,OU=Confluent,DC=corp,DC=poc,DC=lab
+member: CN=alice,OU=Users,OU=Confluent,DC=corp,DC=poc,DC=lab
+
+[rc=0]
+##### 4.2.1 Secret Protection master key(ops02,只做一次;passphrase 從 stdin 給,不放指令列)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+install -d -m 0700 $S/secret-protection $S/cli-home
+if test -s $S/secret-protection/master.key; then echo "已存在,不要重新產生"; else
+  printf '%s' "$SECRET_MASTER_PASSPHRASE" | HOME=$S/cli-home confluent secret master-key generate --local-secrets-file $S/secret-protection/master.secrets --passphrase=- -o json | jq -r .master_key > $S/secret-protection/master.key
+fi
+chmod 0600 $S/secret-protection/master.key $S/secret-protection/master.secrets
+ls -l $S/secret-protection/master.key $S/secret-protection/master.secrets; grep -o '^[^=]*' $S/secret-protection/master.secrets
+
+Save the master key. It cannot be retrieved later.
+-rw------- 1 cpadmin cpadmin  45 Oct 16 14:26 /var/lib/cp-installer/secret-protection/master.key
+-rw------- 1 cpadmin cpadmin 169 Oct 16 14:26 /var/lib/cp-installer/secret-protection/master.secrets
+_metadata.master_key.0.salt 
+_metadata.symmetric_key.0.created_at 
+[rc=0]
+##### 4.2.3 明文 server.properties(照手冊 4.2.3.1–4.2.3.8 逐段寫;只在 ops02 的 0700 目錄)
+
+$ cat /var/lib/cp-installer/manual/gen-server-properties.sh | head -12
+#!/usr/bin/env bash
+# Manual walkthrough: write the PLAINTEXT server.properties for one host exactly as listed in manual 4.2.3.1–4.2.3.8.
+# usage: gen-server-properties.sh <host> <controller|broker> <node.id> [rack]
+# Passwords come from $S/secrets.env (0600) at run time; output: $S/secret-protection/<host>/server.properties (0600)
+set -euo pipefail
+h=$1 role=$2 id=$3 rack=${4:-}
+S=/var/lib/cp-installer
+set -a; . $S/secrets.env; set +a
+D=$S/secret-protection/$h
+install -d -m 0700 $D
+umask 077
+F=$D/server.properties
+[rc=0]
+
+$ G=/var/lib/cp-installer/manual/gen-server-properties.sh
+bash $G kc01 controller 1; bash $G kc02 controller 2; bash $G kc03 controller 3
+bash $G kb01 broker 101 rack-a; bash $G kb02 broker 102 rack-a; bash $G kb03 broker 103 rack-b; bash $G kb04 broker 104 rack-b
+
+/var/lib/cp-installer/secret-protection/kc01/server.properties: 97 lines
+/var/lib/cp-installer/secret-protection/kc02/server.properties: 97 lines
+/var/lib/cp-installer/secret-protection/kc03/server.properties: 97 lines
+/var/lib/cp-installer/secret-protection/kb01/server.properties: 141 lines
+/var/lib/cp-installer/secret-protection/kb02/server.properties: 141 lines
+/var/lib/cp-installer/secret-protection/kb03/server.properties: 141 lines
+/var/lib/cp-installer/secret-protection/kb04/server.properties: 141 lines
+[rc=0]
+##### 4.2.4 加密(每台一次;要加密的 key 用手冊的 awk 算出)
+
+$ . ~/manual.env
+for H in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  D=$S/secret-protection/$H
+  KEYS=$(awk -F= '
+    /^[[:space:]]*#/ || !/=/ { next }
+    { k=$1; gsub(/[[:space:]]/,"",k); v=substr($0,index($0,"=")+1)
+      if (v ~ /^[[:space:]]*$/ || v ~ /\$\{securepass:/) next
+      if (k ~ /(password|credentials|passphrase|basic\.auth\.user\.info)$/) { print k; next }
+      if (k ~ /sasl\.jaas\.config$/ && v ~ /password=/) { split(v,w,/[[:space:]]+/); m=(w[1]==""?w[2]:w[1]); print k "/" m "/password" } }' \
+    $D/server.properties | paste -sd, -)
+  sha256sum $D/server.properties | awk '{print $1}' > $D/server.properties.plain.sha256
+  install -m 0600 $S/secret-protection/master.secrets $D/kafka.security.properties
+  CONFLUENT_SECURITY_MASTER_KEY=$(cat $S/secret-protection/master.key) HOME=$S/cli-home confluent secret file encrypt \
+    --config-file $D/server.properties --local-secrets-file $D/kafka.security.properties \
+    --remote-secrets-file /etc/confluent/kafka/security.properties --config "$KEYS"
+  echo "$H: keys=$(tr , '\n' <<<"$KEYS" | wc -l) securepass=$(grep -c securepass $D/server.properties) plaintext-passwords=$(grep -ciE '(password|passphrase|credentials) *= *[^$ ]' $D/server.properties)"
+done
+
+kc01: keys=14 securepass=16 plaintext-passwords=0
+kc02: keys=14 securepass=16 plaintext-passwords=0
+kc03: keys=14 securepass=16 plaintext-passwords=0
+kb01: keys=20 securepass=22 plaintext-passwords=0
+kb02: keys=20 securepass=22 plaintext-passwords=0
+kb03: keys=20 securepass=22 plaintext-passwords=0
+kb04: keys=20 securepass=22 plaintext-passwords=0
+[rc=0]
+
+$ grep -E '^(config.providers|ssl.keystore.password|confluent.security.event.logger.exporter.kafka.sasl.jaas.config)' /var/lib/cp-installer/secret-protection/kb01/server.properties
+ssl.keystore.password = ${securepass:/etc/confluent/kafka/security.properties:server.properties/ssl.keystore.password}
+confluent.security.event.logger.exporter.kafka.sasl.jaas.config = org.apache.kafka.common.security.scram.ScramLoginModule required username="confluent-audit" password=${securepass:/etc/confluent/kafka/security.properties:server.properties/confluent.security.event.logger.exporter.kafka.sasl.jaas.config/org.apache.kafka.common.security.scram.ScramLoginModule/password};
+config.providers = securepass
+config.providers.securepass.class = io.confluent.kafka.security.config.provider.SecurePassConfigProvider
+[rc=0]
+##### 4.2.4 派送(server.properties / security.properties:root:confluent 0640;service.env:root:root 0600)
+
+$ . ~/manual.env
+for H in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  D=$S/secret-protection/$H
+  install -m 0600 /dev/null /tmp/service.env.$H && printf 'CONFLUENT_SECURITY_MASTER_KEY=%s\n' "$(cat $S/secret-protection/master.key)" > /tmp/service.env.$H
+  ssh $H.poc.lab "mkdir -p /tmp/cpcfg && chmod 0700 /tmp/cpcfg"
+  scp -q $D/server.properties $D/kafka.security.properties $H.poc.lab:/tmp/cpcfg/
+  scp -q /tmp/service.env.$H $H.poc.lab:/tmp/cpcfg/service.env && rm -f /tmp/service.env.$H
+  ssh $H.poc.lab "sudo install -d -o root -g confluent -m 0750 /etc/confluent/kafka && \
+    sudo install -o root -g confluent -m 0640 /tmp/cpcfg/server.properties /etc/confluent/kafka/server.properties && \
+    sudo install -o root -g confluent -m 0640 /tmp/cpcfg/kafka.security.properties /etc/confluent/kafka/security.properties && \
+    sudo install -o root -g root -m 0600 /tmp/cpcfg/service.env /etc/confluent/kafka/service.env && \
+    sudo rm -rf /tmp/cpcfg && echo \"\$(hostname): \$(sudo stat -c '%U:%G %a %n' /etc/confluent/kafka/* | tr '\n' ' ')\""
+done
+
+stat: cannot statx '/etc/confluent/kafka/*': No such file or directory
+kc01: 
+stat: cannot statx '/etc/confluent/kafka/*': No such file or directory
+kc02: 
+stat: cannot statx '/etc/confluent/kafka/*': No such file or directory
+kc03: 
+stat: cannot statx '/etc/confluent/kafka/*': No such file or directory
+kb01: 
+stat: cannot statx '/etc/confluent/kafka/*': No such file or directory
+kb02: 
+stat: cannot statx '/etc/confluent/kafka/*': No such file or directory
+kb03: 
+stat: cannot statx '/etc/confluent/kafka/*': No such file or directory
+kb04: 
+[rc=0]
+
+$ ssh kb01.poc.lab "sudo grep -ciE '(password|passphrase|credentials) *= *[^\$ ]' /etc/confluent/kafka/server.properties; sudo grep -c securepass /etc/confluent/kafka/server.properties; sudo grep -c '^server.properties/' /etc/confluent/kafka/security.properties"
+0
+22
+20
+[rc=0]
+##### 4.2.5 JMX exporter(設定只放加鹽 SHA-256;controller 用 kafka-internal.p12,broker 用 cp-server.p12)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+JAR=jmx_prometheus_javaagent-1.0.1.jar
+ls -l /srv/repo/raw/tools/$JAR
+test -s $S/jmx-exporter.salt || (umask 077; openssl rand -hex 16 > $S/jmx-exporter.salt)
+SALT=$(cat $S/jmx-exporter.salt)
+HASH=$(printf '%s:%s' "$SALT" "$JMX_EXPORTER_PASSWORD" | sha256sum | awk '{print $1}')
+for H in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  case $H in kc*) KS=kafka-internal ;; *) KS=cp-server ;; esac
+  Y=$S/secret-protection/$H/jmx-exporter.yml
+  ( umask 077
+    printf 'httpServer:\n  ssl:\n    keyStore:\n      filename: /etc/confluent/ssl/%s.p12\n      password: %s\n      type: PKCS12\n    certificate:\n      alias: %s\n  authentication:\n    basic:\n      username: prometheus\n      passwordHash: %s\n      algorithm: SHA-256\n      salt: %s\nlowercaseOutputName: true\nlowercaseOutputLabelNames: true\n' "$KS" "$STORE_PASSWORD" "$KS" "$HASH" "$SALT" > $Y
+    cat $S/manual/ref/rules-kafka.yml >> $Y )
+  scp -q /srv/repo/raw/tools/$JAR $Y $H.poc.lab:/tmp/
+  ssh $H.poc.lab "sudo install -d -o root -g root -m 0755 /opt/jmx-exporter && sudo install -o root -g root -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-exporter.yml /etc/confluent/kafka/jmx-exporter.yml && sudo rm -f /tmp/$JAR /tmp/jmx-exporter.yml && echo \"\$(hostname): jmx ok ($KS)\""
+done
+
+-rw-r--r-- 1 repoadmin repoadmin 2886599 Oct 16 13:59 /srv/repo/raw/tools/jmx_prometheus_javaagent-1.0.1.jar
+kc01: jmx ok (kafka-internal)
+kc02: jmx ok (kafka-internal)
+kc03: jmx ok (kafka-internal)
+kb01: jmx ok (cp-server)
+kb02: jmx ok (cp-server)
+kb03: jmx ok (cp-server)
+kb04: jmx ok (cp-server)
+[rc=0]
+##### 4.2.6 systemd drop-in(controller heap 384m,broker 512m)+ 4.2.7 資料目錄
+
+$ for H in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  case $H in kc*) HEAP=384m ;; *) HEAP=512m ;; esac
+  cat > /tmp/10-cpctl.conf.$H <<EOF
+# Managed by hand (manual 4.2.6) - drop-in for the RPM-provided confluent-server.service
+[Service]
+ExecStart=
+ExecStart=/usr/bin/kafka-server-start /etc/confluent/kafka/server.properties
+Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"
+Environment="KAFKA_HEAP_OPTS=-Xms$HEAP -Xmx$HEAP"
+Environment="KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile=/etc/kafka/log4j2.yaml"
+Environment="LOG_DIR=/var/log/kafka"
+Environment="KAFKA_OPTS=-javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar=7071:/etc/confluent/kafka/jmx-exporter.yml"
+EnvironmentFile=-/etc/confluent/kafka/service.env
+LimitNOFILE=128000
+TimeoutStopSec=180
+Restart=on-failure
+RestartSec=10
+EOF
+  scp -q /tmp/10-cpctl.conf.$H $H.poc.lab:/tmp/10-cpctl.conf && rm -f /tmp/10-cpctl.conf.$H
+  ssh $H.poc.lab "sudo install -d -o root -g root -m 0755 /etc/systemd/system/confluent-server.service.d && sudo install -o root -g root -m 0644 /tmp/10-cpctl.conf /etc/systemd/system/confluent-server.service.d/10-cpctl.conf && sudo rm -f /tmp/10-cpctl.conf && sudo systemctl daemon-reload && sudo install -d -o cp-kafka -g confluent -m 0750 /var/lib/kafka/data && echo \"\$(hostname): dropin + data dir ok\""
+done
+
+kc01: dropin + data dir ok
+kc02: dropin + data dir ok
+kc03: dropin + data dir ok
+kb01: dropin + data dir ok
+kb02: dropin + data dir ok
+kb03: dropin + data dir ok
+kb04: dropin + data dir ok
+[rc=0]
+
+$ ssh kb01.poc.lab "systemctl cat confluent-server | grep -E '^# /|ExecStart=/|EnvironmentFile|HEAP'; sudo stat -c '%U:%G %a %n' /var/lib/kafka /var/lib/kafka/data"
+# /usr/lib/systemd/system/confluent-server.service
+ExecStart=/usr/bin/kafka-server-start /etc/kafka/server.properties
+# /etc/systemd/system/confluent-server.service.d/10-cpctl.conf
+ExecStart=/usr/bin/kafka-server-start /etc/confluent/kafka/server.properties
+Environment="KAFKA_HEAP_OPTS=-Xms512m -Xmx512m"
+EnvironmentFile=-/etc/confluent/kafka/service.env
+cp-kafka:confluent 750 /var/lib/kafka
+cp-kafka:confluent 750 /var/lib/kafka/data
+[rc=0]
+
+$ ssh kc01.poc.lab "systemctl show confluent-server -p Environment | tr ' ' '\n' | grep HEAP"
+"KAFKA_HEAP_OPTS=-Xms384m
+[rc=0]
+##### 4.2.9 整體驗證
+
+$ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab "sudo test -s /etc/confluent/kafka/server.properties && sudo test -s /etc/confluent/kafka/jmx-exporter.yml && echo $h ok"; done
+kc01 ok
+kc02 ok
+kc03 ok
+kb01 ok
+kb02 ok
+kb03 ok
+kb04 ok
+[rc=0]
+##### 4.3.1 cluster id 與 directory id(ops02,只做一次)
+
+$ . ~/manual.env
+test -f $S/kraft.env && echo "已存在,沿用" || {
+  install -m 0600 /dev/null $S/kraft.env
+  echo "CLUSTER_ID=$(kafka-storage random-uuid)" >> $S/kraft.env
+  for h in kc01 kc02 kc03; do echo "DIR_ID_$h=$(kafka-storage random-uuid)" >> $S/kraft.env; done
+}
+. $S/kraft.env
+INITIAL="1@kc01.poc.lab:9093:$DIR_ID_kc01,2@kc02.poc.lab:9093:$DIR_ID_kc02,3@kc03.poc.lab:9093:$DIR_ID_kc03"
+echo "$CLUSTER_ID  $INITIAL"
+
+nP3d3GwtQxSdCi-P9PlZgg  1@kc01.poc.lab:9093:ZgQozwsVTRiOMSCA30KHiA,2@kc02.poc.lab:9093:YzwGEaLHQM2_isM4t_nW7Q,3@kc03.poc.lab:9093:DvpRPHuHScalqiRPBEBZrQ
+[rc=0]
+##### 4.3.2 格式化 controller(以 cp-kafka 執行;master key 由 root 讀 service.env 後 --preserve-env 傳給 cp-kafka;SCRAM 密碼來自 ops02 密碼檔)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; . $S/kraft.env; set +a
+INITIAL="1@kc01.poc.lab:9093:$DIR_ID_kc01,2@kc02.poc.lab:9093:$DIR_ID_kc02,3@kc03.poc.lab:9093:$DIR_ID_kc03"
+for h in kc01 kc02 kc03; do
+  echo "== $h: $(ssh $h.poc.lab 'sudo cat /var/lib/kafka/data/meta.properties 2>/dev/null || echo NOT-FORMATTED' | tail -1)"
+  ssh $h.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+    /usr/bin/kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties \
+      --initial-controllers '$INITIAL' \
+      --add-scram 'SCRAM-SHA-512=[name=kafka-admin,password=$KAFKA_ADMIN_PASSWORD]' \
+      --add-scram 'SCRAM-SHA-512=[name=confluent-audit,password=$AUDIT_PASSWORD]' \
+    | grep -vi scram | tail -1\""
+done
+
+== kc01: NOT-FORMATTED
+Formatting dynamic metadata voter directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+== kc02: NOT-FORMATTED
+Formatting dynamic metadata voter directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+== kc03: NOT-FORMATTED
+Formatting dynamic metadata voter directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+[rc=0]
+##### 4.3.3 格式化 broker(observer)
+
+$ . ~/manual.env; set -a; . $S/kraft.env; set +a
+for h in kb01 kb02 kb03 kb04; do
+  ssh $h.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+    /usr/bin/kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers | tail -1\""
+done
+
+[2026-10-16 14:27:55,202] WARN num.partitions is defined in the broker role. This configuration will be ignored in 5.0. Please set num.partitions in the controller role instead. (kafka.server.KafkaConfig)
+[2026-10-16 14:27:55,205] WARN default.replication.factor is defined in the broker role. This configuration will be ignored in 5.0. Please set default.replication.factor in the controller role instead. (kafka.server.KafkaConfig)
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+[2026-10-16 14:27:58,911] WARN num.partitions is defined in the broker role. This configuration will be ignored in 5.0. Please set num.partitions in the controller role instead. (kafka.server.KafkaConfig)
+[2026-10-16 14:27:58,914] WARN default.replication.factor is defined in the broker role. This configuration will be ignored in 5.0. Please set default.replication.factor in the controller role instead. (kafka.server.KafkaConfig)
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+[2026-10-16 14:28:02,639] WARN num.partitions is defined in the broker role. This configuration will be ignored in 5.0. Please set num.partitions in the controller role instead. (kafka.server.KafkaConfig)
+[2026-10-16 14:28:02,642] WARN default.replication.factor is defined in the broker role. This configuration will be ignored in 5.0. Please set default.replication.factor in the controller role instead. (kafka.server.KafkaConfig)
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+[2026-10-16 14:28:06,233] WARN num.partitions is defined in the broker role. This configuration will be ignored in 5.0. Please set num.partitions in the controller role instead. (kafka.server.KafkaConfig)
+[2026-10-16 14:28:06,237] WARN default.replication.factor is defined in the broker role. This configuration will be ignored in 5.0. Please set default.replication.factor in the controller role instead. (kafka.server.KafkaConfig)
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+[rc=0]
+##### 4.3.4 驗證
+
+$ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  printf '%s ' $h; ssh $h.poc.lab "sudo sed -n 's/^\(cluster.id\|node.id\|directory.id\)=//p' /var/lib/kafka/data/meta.properties | paste -sd' '; sudo stat -c '%U' /var/lib/kafka/data/meta.properties"
+done | paste - -
+grep DIR_ID /var/lib/cp-installer/kraft.env
+
+kc01 nP3d3GwtQxSdCi-P9PlZgg ZgQozwsVTRiOMSCA30KHiA 1	cp-kafka
+kc02 nP3d3GwtQxSdCi-P9PlZgg YzwGEaLHQM2_isM4t_nW7Q 2	cp-kafka
+kc03 nP3d3GwtQxSdCi-P9PlZgg DvpRPHuHScalqiRPBEBZrQ 3	cp-kafka
+kb01 nP3d3GwtQxSdCi-P9PlZgg Ka26uEsRjlmEqVPCTpCbOQ 101	cp-kafka
+kb02 nP3d3GwtQxSdCi-P9PlZgg 7bAsuxbURfFcmflJUF3Xdg 102	cp-kafka
+kb03 nP3d3GwtQxSdCi-P9PlZgg 59vJv7RKPjPfS4lXqBVOhw 103	cp-kafka
+kb04 nP3d3GwtQxSdCi-P9PlZgg IWNVEbHBIphH0EHVxnAggA 104	cp-kafka
+DIR_ID_kc01=ZgQozwsVTRiOMSCA30KHiA
+DIR_ID_kc02=YzwGEaLHQM2_isM4t_nW7Q
+DIR_ID_kc03=DvpRPHuHScalqiRPBEBZrQ
+[rc=0]
+# 冪等:對已格式化的目錄再跑一次 → 預期 "already formatted",不要加 --ignore-formatted
+
+$ . ~/manual.env; set -a; . $S/kraft.env; set +a
+ssh kb01.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml /usr/bin/kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1\""
+
+Log directory /var/lib/kafka/data is already formatted. Use --ignore-formatted to ignore this directory and format the others.
+[rc=0]
+##### 4.4.1 啟動 controller(三台同時)
+
+$ for h in kc01 kc02 kc03; do ssh $h.poc.lab "sudo systemctl enable -q confluent-server && sudo systemctl start confluent-server" & done; wait; echo started
+started
+[rc=0]
+##### 4.4.2 controller 健康檢查
+
+$ for h in kc01 kc02 kc03; do for i in $(seq 1 60); do timeout 3 bash -c "exec 3<>/dev/tcp/$h.poc.lab/9093" 2>/dev/null && { echo "$h 9093 open (${i}x3s)"; break; }; sleep 3; done; done
+
+kc01 9093 open (3x3s)
+kc02 9093 open (1x3s)
+kc03 9093 open (1x3s)
+[rc=0]
+
+$ . ~/manual.env
+for i in $(seq 1 40); do kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --status > /tmp/q 2>&1 && grep -q '^LeaderId' /tmp/q && break; sleep 3; done; cat /tmp/q
+
+ClusterId:              nP3d3GwtQxSdCi-P9PlZgg
+LeaderId:               1
+LeaderEpoch:            1
+HighWatermark:          21
+MaxFollowerLag:         0
+MaxFollowerLagTimeMs:   0
+CurrentVoters:          [{"id": 1, "directoryId": "ZgQozwsVTRiOMSCA30KHiA", "endpoints": ["CONTROLLER://kc01.poc.lab:9093"]}, {"id": 2, "directoryId": "YzwGEaLHQM2_isM4t_nW7Q", "endpoints": ["CONTROLLER://kc02.poc.lab:9093"]}, {"id": 3, "directoryId": "DvpRPHuHScalqiRPBEBZrQ", "endpoints": ["CONTROLLER://kc03.poc.lab:9093"]}]
+CurrentObservers:       []
+[rc=0]
+##### 4.4.3 每個 voter 都跟上(lag 0)
+
+$ . ~/manual.env
+kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication
+for id in 1 2 3; do kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {print id, (ok?"caught-up":"NOT-READY")}'; done
+kafka-features --bootstrap-controller $CB --command-config $ADMIN_CFG describe | grep kraft.version
+
+NodeId	DirectoryId           	LogEndOffset	Lag	LastFetchTimestamp	LastCaughtUpTimestamp	Status  	
+1     	ZgQozwsVTRiOMSCA30KHiA	25          	0  	1792132127026     	1792132127026        	Leader  	
+2     	YzwGEaLHQM2_isM4t_nW7Q	25          	0  	1792132126836     	1792132126836        	Follower	
+3     	DvpRPHuHScalqiRPBEBZrQ	25          	0  	1792132126834     	1792132126834        	Follower	
+1 caught-up
+2 caught-up
+3 caught-up
+Feature: kraft.version                             SupportedMinVersion: 0                SupportedMaxVersion: 1                FinalizedVersionLevel: 1                Epoch: 13
+[rc=0]
+##### 4.4.4 啟動 broker
+
+$ for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab "sudo systemctl enable -q confluent-server && sudo systemctl start confluent-server" & done; wait; echo started
+started
+[rc=0]
+##### 4.4.5 broker 健康檢查
+
+$ for h in kb01 kb02 kb03 kb04; do for p in 9092 8090; do for i in $(seq 1 80); do timeout 3 bash -c "exec 3<>/dev/tcp/$h.poc.lab/$p" 2>/dev/null && { echo "$h $p open"; break; }; sleep 3; done; done; done
+
+kb01 9092 open
+kb01 8090 open
+kb02 9092 open
+kb02 8090 open
+kb03 9092 open
+kb03 8090 open
+kb04 9092 open
+kb04 8090 open
+[rc=0]
+
+$ . ~/manual.env
+kafka-broker-api-versions --bootstrap-server $BI --command-config $ADMIN_CFG 2>/dev/null | grep '(id:'
+for i in $(seq 1 30); do out=$(kafka-topics --bootstrap-server $BI --command-config $ADMIN_CFG --describe --under-replicated-partitions 2>&1); [ -z "$out" ] && break; sleep 5; done; echo "under-replicated: [${out}]"
+kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk '$NF=="Observer"'
+
+kb01.poc.lab:9092 (id: 101 rack: rack-a isFenced: false) -> (
+kb02.poc.lab:9092 (id: 102 rack: rack-a isFenced: false) -> (
+kb04.poc.lab:9092 (id: 104 rack: rack-b isFenced: false) -> (
+kb03.poc.lab:9092 (id: 103 rack: rack-b isFenced: false) -> (
+under-replicated: []
+101   	Ka26uEsRjlmEqVPCTpCbOQ	205         	0  	1792132170023     	1792132170023        	Observer	
+102   	7bAsuxbURfFcmflJUF3Xdg	205         	0  	1792132170025     	1792132170025        	Observer	
+104   	IWNVEbHBIphH0EHVxnAggA	205         	0  	1792132170028     	1792132170028        	Observer	
+103   	59vJv7RKPjPfS4lXqBVOhw	205         	0  	1792132170024     	1792132170024        	Observer	
+[rc=0]
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+curl -s --cacert $PKI/ca.pem https://kb01.poc.lab:8090/v1/metadata/id; echo
+curl -s -o /dev/null -w 'activenodes without credentials: %{http_code}\n' --cacert $PKI/ca.pem https://kb01.poc.lab:8090/security/1.0/activenodes/https
+install -m 0600 /dev/null ~/.netrc-alice && printf 'machine kb01.poc.lab login alice password %s\n' "$HUMAN_DEFAULT_PASSWORD" > ~/.netrc-alice
+curl -s -w '  (http %{http_code})\n' --cacert $PKI/ca.pem --netrc-file ~/.netrc-alice https://kb01.poc.lab:8090/security/1.0/activenodes/https
+rm -f ~/.netrc-alice
+
+{"id":"nP3d3GwtQxSdCi-P9PlZgg","scope":{"path":[],"clusters":{"kafka-cluster":"nP3d3GwtQxSdCi-P9PlZgg"}}}
+activenodes without credentials: 401
+["https://kb01.poc.lab:8090","https://kb02.poc.lab:8090","https://kb03.poc.lab:8090","https://kb04.poc.lab:8090"]  (http 200)
+[rc=0]
+
+$ for h in kc01 kb01; do ssh $h.poc.lab "systemctl is-active confluent-server; sudo grep -m1 -E 'Kafka Server started|KafkaRaftServer.*started|Transitioning from' /var/log/kafka/server.log | cut -c1-160"; done
+active
+[2026-10-16 14:29:16,153] INFO [KafkaRaftServer nodeId=1] Kafka Server started (kafka.server.KafkaRaftServer)
+active
+[2026-10-16 14:29:04,182] INFO [BrokerLifecycleManager id=101] The broker has caught up. Transitioning from STARTING to RECOVERY. (org.apache.kafka.server.Broke
+[rc=0]
+##### 5.1 步驟 08:安全初始化(ops02,cpadmin)
+
+$ cat >> ~/manual.env <<'EOF'
+export B=$BI CFG=$ADMIN_CFG MDS=https://kb01.poc.lab:8090
+export CID=$(sed -n 's/^CLUSTER_ID=//p' /var/lib/cp-installer/kraft.env)
+EOF
+. ~/manual.env; echo "CID=$CID"
+
+CID=nP3d3GwtQxSdCi-P9PlZgg
+[rc=0]
+##### 5.1.1 SCRAM 使用者:用 --add-config-file(0600 暫存檔)讓密碼不出現在 ps
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --describe --entity-type users
+scram() {  # <user> <password>
+  local f; f=$(mktemp); chmod 0600 "$f"
+  printf 'SCRAM-SHA-512=[iterations=8192,password=%s]\n' "$2" > "$f"
+  kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter --entity-type users --entity-name "$1" --add-config-file "$f"
+  rm -f "$f"
+}
+scram app-orders "$APP_APP_ORDERS_PASSWORD"
+scram app-payments "$APP_APP_PAYMENTS_PASSWORD"
+scram confluent-audit "$AUDIT_PASSWORD"
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --describe --entity-type users
+
+SCRAM credential configs for user-principal 'kafka-admin' are SCRAM-SHA-512=iterations=4096
+SCRAM credential configs for user-principal 'confluent-audit' are SCRAM-SHA-512=iterations=4096
+Invalid credential property SCRAM_SHA_512=[iterations=8192,password=<REDACTED>]
+Invalid credential property SCRAM_SHA_512=[iterations=8192,password=<REDACTED>]
+Invalid credential property SCRAM_SHA_512=[iterations=8192,password=<REDACTED>]
+SCRAM credential configs for user-principal 'kafka-admin' are SCRAM-SHA-512=iterations=4096
+SCRAM credential configs for user-principal 'confluent-audit' are SCRAM-SHA-512=iterations=4096
+[rc=0]
+##### 5.1.2 MDS 登入(svc-cpctl;帳密放環境變數,不放指令列)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+install -d -m 0700 $S/cli-home
+HOME=$S/cli-home CONFLUENT_PLATFORM_USERNAME=svc-cpctl CONFLUENT_PLATFORM_PASSWORD="$SVC_CPCTL_PASSWORD" confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path $PKI/ca.pem
+
+[rc=0]
+##### 5.1.3 RBAC 角色綁定(手冊完整清單,一行一筆)
+
+$ . ~/manual.env
+cfl() { HOME=$S/cli-home confluent "$@"; }
+rb() { cfl iam rbac role-binding create --kafka-cluster $CID "$@" -o json >/dev/null && echo "ok  $*" || echo "FAIL $*"; }
+rb --principal User:confluent-audit --role DeveloperWrite  --resource Topic:confluent-audit-log-events --prefix
+rb --principal User:confluent-audit --role DeveloperManage --resource Topic:confluent-audit-log-events --prefix
+rb --principal User:svc-c3 --role SystemAdmin
+rb --principal User:svc-rest --role DeveloperRead --resource Topic:_confluent-license
+rb --principal User:svc-rest --role DeveloperRead --resource Topic:_confluent-command
+rb --principal User:svc-rest --role DeveloperRead --resource Topic:__internal_confluent_only_broker_info
+rb --principal Group:kafka-admins    --role SystemAdmin
+rb --principal Group:kafka-operators --role Operator
+rb --principal Group:kafka-devs --role DeveloperRead --resource Topic:orders. --prefix
+rb --principal Group:kafka-devs --role DeveloperRead --resource Group:dev- --prefix
+rb --principal User:app-orders --role DeveloperWrite  --resource Topic:orders. --prefix
+rb --principal User:app-orders --role DeveloperRead   --resource Topic:orders. --prefix
+rb --principal User:app-orders --role DeveloperRead   --resource Group:orders- --prefix
+rb --principal User:app-orders --role DeveloperManage --resource Topic:orders. --prefix
+rb --principal User:app-payments --role DeveloperWrite --resource Topic:payments. --prefix
+rb --principal User:app-payments --role DeveloperRead  --resource Topic:payments. --prefix
+rb --principal User:app-legacy-billing --role DeveloperWrite --resource Topic:billing. --prefix
+rb --principal User:app-legacy-billing --role DeveloperRead  --resource Topic:billing. --prefix
+rb --principal User:app-legacy-billing --role DeveloperRead  --resource Group:billing- --prefix
+
+ok  --principal User:confluent-audit --role DeveloperWrite --resource Topic:confluent-audit-log-events --prefix
+ok  --principal User:confluent-audit --role DeveloperManage --resource Topic:confluent-audit-log-events --prefix
+ok  --principal User:svc-c3 --role SystemAdmin
+ok  --principal User:svc-rest --role DeveloperRead --resource Topic:_confluent-license
+ok  --principal User:svc-rest --role DeveloperRead --resource Topic:_confluent-command
+ok  --principal User:svc-rest --role DeveloperRead --resource Topic:__internal_confluent_only_broker_info
+ok  --principal Group:kafka-admins --role SystemAdmin
+ok  --principal Group:kafka-operators --role Operator
+ok  --principal Group:kafka-devs --role DeveloperRead --resource Topic:orders. --prefix
+ok  --principal Group:kafka-devs --role DeveloperRead --resource Group:dev- --prefix
+ok  --principal User:app-orders --role DeveloperWrite --resource Topic:orders. --prefix
+ok  --principal User:app-orders --role DeveloperRead --resource Topic:orders. --prefix
+ok  --principal User:app-orders --role DeveloperRead --resource Group:orders- --prefix
+ok  --principal User:app-orders --role DeveloperManage --resource Topic:orders. --prefix
+ok  --principal User:app-payments --role DeveloperWrite --resource Topic:payments. --prefix
+ok  --principal User:app-payments --role DeveloperRead --resource Topic:payments. --prefix
+ok  --principal User:app-legacy-billing --role DeveloperWrite --resource Topic:billing. --prefix
+ok  --principal User:app-legacy-billing --role DeveloperRead --resource Topic:billing. --prefix
+ok  --principal User:app-legacy-billing --role DeveloperRead --resource Group:billing- --prefix
+[rc=0]
+##### 5.1.3 驗證(MDS lookup;svc-cpctl 帳密放 0600 netrc)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+install -m 0600 /dev/null ~/.netrc-mds && printf 'machine kb01.poc.lab login svc-cpctl password %s\n' "$SVC_CPCTL_PASSWORD" > ~/.netrc-mds
+for p in User:app-orders Group:kafka-admins User:svc-rest User:confluent-audit User:svc-c3 User:app-legacy-billing; do
+  curl -s --cacert $PKI/ca.pem --netrc-file ~/.netrc-mds -H 'Content-Type: application/json' -X POST -d "{\"clusters\":{\"kafka-cluster\":\"$CID\"}}" "$MDS/security/1.0/lookup/principal/$p/resources"; echo
+done
+rm -f ~/.netrc-mds
+
+{"User:app-orders":{"DeveloperWrite":[{"resourceType":"Topic","name":"orders.","patternType":"PREFIXED"}],"DeveloperRead":[{"resourceType":"Group","name":"orders-","patternType":"PREFIXED"},{"resourceType":"Topic","name":"orders.","patternType":"PREFIXED"}],"DeveloperManage":[{"resourceType":"Topic","name":"orders.","patternType":"PREFIXED"}]}}
+{"Group:kafka-admins":{"SystemAdmin":[]}}
+{"User:svc-rest":{"DeveloperRead":[{"resourceType":"Topic","name":"__internal_confluent_only_broker_info","patternType":"LITERAL"},{"resourceType":"Topic","name":"_confluent-command","patternType":"LITERAL"},{"resourceType":"Topic","name":"_confluent-license","patternType":"LITERAL"}]}}
+{"User:confluent-audit":{"DeveloperWrite":[{"resourceType":"Topic","name":"confluent-audit-log-events","patternType":"PREFIXED"}],"DeveloperManage":[{"resourceType":"Topic","name":"confluent-audit-log-events","patternType":"PREFIXED"}]}}
+{"User:svc-c3":{"SystemAdmin":[]}}
+{"User:app-legacy-billing":{"DeveloperWrite":[{"resourceType":"Topic","name":"billing.","patternType":"PREFIXED"}],"DeveloperRead":[{"resourceType":"Group","name":"billing-","patternType":"PREFIXED"},{"resourceType":"Topic","name":"billing.","patternType":"PREFIXED"}]}}
+[rc=0]
+##### 5.1.6 範例 topic
+
+$ . ~/manual.env
+for t in orders.events:6 payments.events:6 billing.events:3; do
+  kafka-topics --bootstrap-server "$B" --command-config "$CFG" --create --if-not-exists --topic "${t%%:*}" --partitions "${t#*:}" --replication-factor 3 --config min.insync.replicas=2
+done
+kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe --topic orders.events | head -4
+
+WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+Created topic orders.events.
+WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+Created topic payments.events.
+WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.
+Created topic billing.events.
+Topic: orders.events	TopicId: Pq1vEanlRRCCSCbfGOsiEA	PartitionCount: 6	ReplicationFactor: 3	Configs: min.insync.replicas=2,unclean.leader.election.enable=false
+	Topic: orders.events	Partition: 0	Leader: 103	Replicas: 103,101,104	Isr: 103,101,104	Offline: 	Elr: 	LastKnownElr: 
+	Topic: orders.events	Partition: 1	Leader: 102	Replicas: 102,104,101	Isr: 102,104,101	Offline: 	Elr: 	LastKnownElr: 
+	Topic: orders.events	Partition: 2	Leader: 103	Replicas: 103,101,104	Isr: 103,101,104	Offline: 	Elr: 	LastKnownElr: 
+[rc=0]
+##### 5.1.4 / 5.1.5 驗證:impersonation 設定、audit topic(第一次有授權事件後才會建立)
+
+$ ssh kb01.poc.lab "sudo grep impersonation /etc/confluent/kafka/server.properties"
+confluent.metadata.server.impersonation.super.users = User:svc-rest
+confluent.metadata.server.impersonation.protected.users = User:kafka-internal;User:kafka-admin;User:svc-cpctl;User:svc-mds-bind;User:svc-rest;User:svc-c3;User:confluent-audit;User:opmenu-breakglass
+[rc=0]
+
+$ . ~/manual.env
+sleep 20; kafka-topics --bootstrap-server "$B" --command-config "$CFG" --list | grep -E 'audit|^_confluent' ; kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe --topic confluent-audit-log-events 2>&1 | head -2
+
+_confluent-command
+_confluent-metadata-auth
+_confluent-telemetry-metrics
+confluent-audit-log-events
+confluent-audit-log-events_sensitive
+Topic: confluent-audit-log-events	TopicId: CKs2nBfFSa2IHPUa0oU95Q	PartitionCount: 12	ReplicationFactor: 3	Configs: min.insync.replicas=1,message.timestamp.type=CreateTime,retention.ms=7776000000,unclean.leader.election.enable=false,retention.bytes=-1,segment.ms=14400000
+	Topic: confluent-audit-log-events	Partition: 0	Leader: 103	Replicas: 103,101,104	Isr: 103,101,104	Offline: 	Elr: 	LastKnownElr: 
+[rc=0]
+##### (事故處理) kafka-configs --add-config-file 不支援 SCRAM 憑證,錯誤訊息把密碼原文印出 → 已遮蔽紀錄;三組密碼全部換新
+
+$ cd /var/lib/cp-installer && umask 077
+for k in APP_APP_ORDERS_PASSWORD APP_APP_PAYMENTS_PASSWORD AUDIT_PASSWORD; do sed -i "s/^$k=.*/$k=$(openssl rand -hex 12)Aa1-/" secrets.env; done
+stat -c '%U:%G %a %n' secrets.env; grep -E '^(APP_APP_ORDERS|APP_APP_PAYMENTS|AUDIT)_PASSWORD=' secrets.env | sed 's/=.*/=<rotated>/'
+
+cpadmin:cpadmin 600 secrets.env
+AUDIT_PASSWORD=<rotated>
+APP_APP_ORDERS_PASSWORD=<rotated>
+APP_APP_PAYMENTS_PASSWORD=<rotated>
+[rc=0]
+##### 5.1.1(改正)SCRAM 使用者:--add-config 放在指令列(指令開頭加空白避免進 history;ps 短暫可見,見手冊注意事項)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+ kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter --entity-type users --entity-name app-orders --add-config "SCRAM-SHA-512=[iterations=8192,password=$APP_APP_ORDERS_PASSWORD]" 2>&1 | sed -E 's/password=[^],]*/password=<hidden>/g'
+ kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter --entity-type users --entity-name app-payments --add-config "SCRAM-SHA-512=[iterations=8192,password=$APP_APP_PAYMENTS_PASSWORD]" 2>&1 | sed -E 's/password=[^],]*/password=<hidden>/g'
+ kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter --entity-type users --entity-name confluent-audit --add-config "SCRAM-SHA-512=[iterations=8192,password=$AUDIT_PASSWORD]" 2>&1 | sed -E 's/password=[^],]*/password=<hidden>/g'
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --describe --entity-type users
+
+Completed updating config for user app-orders.
+Completed updating config for user app-payments.
+Completed updating config for user confluent-audit.
+SCRAM credential configs for user-principal 'kafka-admin' are SCRAM-SHA-512=iterations=4096
+SCRAM credential configs for user-principal 'app-payments' are SCRAM-SHA-512=iterations=8192
+SCRAM credential configs for user-principal 'confluent-audit' are SCRAM-SHA-512=iterations=8192
+SCRAM credential configs for user-principal 'app-orders' are SCRAM-SHA-512=iterations=8192
+[rc=0]
+##### 改了 confluent-audit 密碼 → controller/broker 設定要重新產生、加密、派送,再逐台滾動重啟(手冊 4.2.3、4.2.4、4.2.8)
+
+$ . ~/manual.env
+G=/var/lib/cp-installer/manual/gen-server-properties.sh
+bash $G kc01 controller 1; bash $G kc02 controller 2; bash $G kc03 controller 3
+bash $G kb01 broker 101 rack-a; bash $G kb02 broker 102 rack-a; bash $G kb03 broker 103 rack-b; bash $G kb04 broker 104 rack-b
+for H in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  D=$S/secret-protection/$H
+  KEYS=$(awk -F= '
+    /^[[:space:]]*#/ || !/=/ { next }
+    { k=$1; gsub(/[[:space:]]/,"",k); v=substr($0,index($0,"=")+1)
+      if (v ~ /^[[:space:]]*$/ || v ~ /\$\{securepass:/) next
+      if (k ~ /(password|credentials|passphrase|basic\.auth\.user\.info)$/) { print k; next }
+      if (k ~ /sasl\.jaas\.config$/ && v ~ /password=/) { split(v,w,/[[:space:]]+/); m=(w[1]==""?w[2]:w[1]); print k "/" m "/password" } }' \
+    $D/server.properties | paste -sd, -)
+  sha256sum $D/server.properties | awk '{print $1}' > $D/server.properties.plain.sha256
+  install -m 0600 $S/secret-protection/master.secrets $D/kafka.security.properties
+  CONFLUENT_SECURITY_MASTER_KEY=$(cat $S/secret-protection/master.key) HOME=$S/cli-home confluent secret file encrypt --config-file $D/server.properties --local-secrets-file $D/kafka.security.properties --remote-secrets-file /etc/confluent/kafka/security.properties --config "$KEYS"
+  ssh $H.poc.lab "mkdir -p /tmp/cpcfg && chmod 0700 /tmp/cpcfg"
+  scp -q $D/server.properties $D/kafka.security.properties $H.poc.lab:/tmp/cpcfg/
+  ssh $H.poc.lab "sudo install -o root -g confluent -m 0640 /tmp/cpcfg/server.properties /etc/confluent/kafka/server.properties && sudo install -o root -g confluent -m 0640 /tmp/cpcfg/kafka.security.properties /etc/confluent/kafka/security.properties && sudo rm -rf /tmp/cpcfg && echo \"\$(hostname): config updated\""
+done
+
+/var/lib/cp-installer/secret-protection/kc01/server.properties: 97 lines
+/var/lib/cp-installer/secret-protection/kc02/server.properties: 97 lines
+/var/lib/cp-installer/secret-protection/kc03/server.properties: 97 lines
+/var/lib/cp-installer/secret-protection/kb01/server.properties: 141 lines
+/var/lib/cp-installer/secret-protection/kb02/server.properties: 141 lines
+/var/lib/cp-installer/secret-protection/kb03/server.properties: 141 lines
+/var/lib/cp-installer/secret-protection/kb04/server.properties: 141 lines
+kc01: config updated
+kc02: config updated
+kc03: config updated
+kb01: config updated
+kb02: config updated
+kb03: config updated
+kb04: config updated
+[rc=0]
+##### 4.2.8 滾動重啟:一次一台,controller → broker;每台等健康(controller:voter lag 0;broker:未 fence 且 under-replicated 為空)
+
+$ . ~/manual.env
+for h in kc01 kc02 kc03; do
+  id=${h#kc0}; ssh $h.poc.lab "sudo systemctl restart confluent-server"
+  for i in $(seq 1 60); do kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}' && break; sleep 5; done
+  echo "$h restarted, voter $id caught up after ~$((i*5))s"
+done
+for h in kb01 kb02 kb03 kb04; do
+  id=$((100 + ${h#kb0})); ssh $h.poc.lab "sudo systemctl restart confluent-server"
+  for i in $(seq 1 60); do sleep 5; kafka-broker-api-versions --bootstrap-server $B --command-config $CFG 2>/dev/null | grep -q "(id: $id rack: [a-z-]* isFenced: false)" || continue; [ -z "$(kafka-topics --bootstrap-server $B --command-config $CFG --describe --under-replicated-partitions 2>/dev/null)" ] && break; done
+  echo "$h restarted, broker $id healthy after ~$((i*5))s"
+done
+
+kc01 restarted, voter 1 caught up after ~10s
+kc02 restarted, voter 2 caught up after ~10s
+kc03 restarted, voter 3 caught up after ~10s
+kb01 restarted, broker 101 healthy after ~10s
+kb02 restarted, broker 102 healthy after ~10s
+kb03 restarted, broker 103 healthy after ~10s
+kb04 restarted, broker 104 healthy after ~5s
+[rc=0]
+
+$ for h in kb01 kc01; do ssh $h.poc.lab "sudo grep -c -iE 'SaslAuthenticationException|Authentication failed' /var/log/kafka/server.log | tail -1; sudo journalctl -u confluent-server --since '-3min' --no-pager | grep -ciE 'audit.*(auth|fail)'"; done
+33
+22
+0
+2
+[rc=0]
+##### 5.2 步驟 09:REST Proxy、Control Center、LB(ops02,cpadmin)
+
+$ cp /var/lib/cp-installer/manual/gen-edge-properties.sh /tmp/ 2>/dev/null; ls -l /var/lib/cp-installer/manual/gen-edge-properties.sh
+-rwxr-xr-x 1 cpadmin root 5831 Oct 16 14:37 /var/lib/cp-installer/manual/gen-edge-properties.sh
+[rc=0]
+
+$ cat > ~/encrypt.sh <<'EOF'
+# encrypt <dir> <plaintext file> <remote secrets path>   (manual 4.2.4 rule for which keys to protect)
+encrypt() {
+  local D=$1 F=$2 R=$3 KEYS
+  KEYS=$(awk -F= '
+    /^[[:space:]]*#/ || !/=/ { next }
+    { k=$1; gsub(/[[:space:]]/,"",k); v=substr($0,index($0,"=")+1)
+      if (v ~ /^[[:space:]]*$/ || v ~ /\$\{securepass:/) next
+      if (k ~ /(password|credentials|passphrase|basic\.auth\.user\.info)$/) { print k; next }
+      if (k ~ /sasl\.jaas\.config$/ && v ~ /password=/) { split(v,w,/[[:space:]]+/); m=(w[1]==""?w[2]:w[1]); print k "/" m "/password" } }' "$F" | paste -sd, -)
+  install -m 0600 $S/secret-protection/master.secrets $D/$(basename $F .properties).security.properties
+  CONFLUENT_SECURITY_MASTER_KEY=$(cat $S/secret-protection/master.key) HOME=$S/cli-home confluent secret file encrypt --config-file "$F" --local-secrets-file $D/$(basename $F .properties).security.properties --remote-secrets-file "$R" --config "$KEYS"
+  echo "$(basename $D)/$(basename $F): keys=$(tr , '\n' <<<"$KEYS" | wc -l) securepass=$(grep -c securepass $F) plaintext-passwords=$(grep -ciE '(password|passphrase|credentials|user.info) *= *[^$ ]' $F)"
+}
+EOF
+echo encrypt-helper-ready
+
+encrypt-helper-ready
+[rc=0]
+##### 5.2.1 REST Proxy:設定(完整版)→ 加密 → 派送 → JMX exporter → drop-in → 啟動
+
+$ . ~/manual.env; . ~/encrypt.sh; set -a; . $S/secrets.env; set +a
+G=/var/lib/cp-installer/manual/gen-edge-properties.sh
+bash $G rest rest01 rest-01; bash $G rest rest02 rest-02
+SALT=$(cat $S/jmx-exporter.salt); HASH=$(printf '%s:%s' "$SALT" "$JMX_EXPORTER_PASSWORD" | sha256sum | awk '{print $1}')
+for H in rest01 rest02; do
+  D=$S/secret-protection/$H
+  encrypt $D $D/kafka-rest.properties /etc/confluent/kafka-rest/security.properties
+  ( umask 077; printf 'CONFLUENT_SECURITY_MASTER_KEY=%s\n' "$(cat $S/secret-protection/master.key)" > $D/service.env
+    printf 'httpServer:\n  ssl:\n    keyStore:\n      filename: /etc/confluent/ssl/cp-server.p12\n      password: %s\n      type: PKCS12\n    certificate:\n      alias: cp-server\n  authentication:\n    basic:\n      username: prometheus\n      passwordHash: %s\n      algorithm: SHA-256\n      salt: %s\nlowercaseOutputName: true\nlowercaseOutputLabelNames: true\n' "$STORE_PASSWORD" "$HASH" "$SALT" > $D/jmx-exporter.yml
+    cat $S/manual/ref/rules-rest.yml >> $D/jmx-exporter.yml
+    printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=/usr/bin/kafka-rest-start /etc/confluent/kafka-rest/kafka-rest.properties' 'Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"' 'Environment="KAFKAREST_HEAP_OPTS=-Xms512m -Xmx512m"' 'Environment="KAFKAREST_OPTS=-javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar=7071:/etc/confluent/kafka-rest/jmx-exporter.yml"' 'EnvironmentFile=-/etc/confluent/kafka-rest/service.env' 'LimitNOFILE=65536' 'Restart=on-failure' 'RestartSec=10' > $D/rest-dropin.conf )
+  ssh $H.poc.lab "mkdir -p /tmp/cpcfg && chmod 0700 /tmp/cpcfg"
+  scp -q $D/kafka-rest.properties $D/kafka-rest.security.properties $D/service.env $D/jmx-exporter.yml $D/rest-dropin.conf /srv/repo/raw/tools/jmx_prometheus_javaagent-1.0.1.jar $H.poc.lab:/tmp/cpcfg/
+  ssh $H.poc.lab 'set -e; C=/tmp/cpcfg
+    sudo install -d -o root -g confluent -m 0750 /etc/confluent/kafka-rest
+    sudo install -o root -g confluent -m 0640 $C/kafka-rest.properties /etc/confluent/kafka-rest/kafka-rest.properties
+    sudo install -o root -g confluent -m 0640 $C/kafka-rest.security.properties /etc/confluent/kafka-rest/security.properties
+    sudo install -o root -g root -m 0600 $C/service.env /etc/confluent/kafka-rest/service.env
+    sudo install -o root -g confluent -m 0640 $C/jmx-exporter.yml /etc/confluent/kafka-rest/jmx-exporter.yml
+    sudo install -d -o root -g root -m 0755 /opt/jmx-exporter /etc/systemd/system/confluent-kafka-rest.service.d
+    sudo install -o root -g root -m 0644 $C/jmx_prometheus_javaagent-1.0.1.jar /opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar
+    sudo install -o root -g root -m 0644 $C/rest-dropin.conf /etc/systemd/system/confluent-kafka-rest.service.d/10-cpctl.conf
+    sudo rm -rf $C; sudo systemctl daemon-reload; sudo systemctl enable -q confluent-kafka-rest; sudo systemctl start confluent-kafka-rest
+    echo "$(hostname): started"'
+done
+
+/var/lib/cp-installer/secret-protection/rest01/kafka-rest.properties: 36 lines
+/var/lib/cp-installer/secret-protection/rest02/kafka-rest.properties: 36 lines
+rest01/kafka-rest.properties: keys=7 securepass=9 plaintext-passwords=0
+rest01: started
+rest02/kafka-rest.properties: keys=7 securepass=9 plaintext-passwords=0
+rest02: started
+[rc=0]
+
+$ . ~/manual.env
+for h in rest01 rest02; do for i in $(seq 1 36); do c=$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://$h.poc.lab:8082/v3/clusters); [ "$c" = 200 ] && break; sleep 5; done; echo "$h legacy-app cert: $c (after ~$((i*5))s)"; done
+curl -s -o /dev/null -w 'rest01 cp-server cert (not in legacy list): %{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/cp-server.crt --key $PKI/cp-server.key https://rest01.poc.lab:8082/v3/clusters
+curl -s -o /dev/null -w 'rest01 no client cert: %{http_code} exit=%{exitcode}\n' --cacert $PKI/ca.pem https://rest01.poc.lab:8082/v3/clusters
+
+rest01 legacy-app cert: 200 (after ~20s)
+rest02 legacy-app cert: 200 (after ~5s)
+rest01 cp-server cert (not in legacy list): 401
+rest01 no client cert: 000 exit=56
+[rc=56]
+##### 5.2.2 Control Center:web-config(mTLS)、prometheus-generated.yml、drop-ins、control-center.properties(完整版)
+
+$ . ~/manual.env; . ~/encrypt.sh
+D=$S/secret-protection/c3-01
+bash /var/lib/cp-installer/manual/gen-edge-properties.sh c3 c3-01
+encrypt $D $D/control-center.properties /etc/confluent/control-center/security.properties
+( umask 077
+  printf 'CONFLUENT_SECURITY_MASTER_KEY=%s\n' "$(cat $S/secret-protection/master.key)" > $D/service.env
+  printf '%s\n' 'tls_server_config:' '  cert_file: /etc/confluent/ssl/cp-server.crt' '  key_file: /etc/confluent/ssl/cp-server.key' '  client_ca_file: /etc/confluent/ssl/ca.pem' '  client_auth_type: RequireAndVerifyClientCert' '  min_version: TLS12' > $D/web-config.yml
+  printf '%s\n' 'global:' '  scrape_interval: 60s' '  evaluation_interval: 60s' 'alerting:' '  alertmanagers:' '    - scheme: https' '      tls_config:' '        ca_file: /etc/confluent/ssl/ca.pem' '        cert_file: /etc/confluent/ssl/cp-server.crt' '        key_file: /etc/confluent/ssl/cp-server.key' '      static_configs:' '        - targets:' '            - c3-01.poc.lab:9093' 'rule_files:' "  - 'recording_rules-generated.yml'" "  - 'trigger_rules-generated.yml'" 'scrape_configs:' > $D/prometheus-generated.yml
+  printf '%s\n' '[Service]' 'Environment="METRICS_RETENTION_DAYS=2d"' 'Environment="PROMETHEUS_HOST=0.0.0.0"' 'Environment="PROMETHEUS_PORT=9090"' > $D/prometheus-dropin.conf
+  printf '%s\n' '[Service]' "ExecStartPre=/bin/sh -c 'for i in \$\$(seq 1 60); do for u in \$\$(echo \"https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090\" | tr , \" \"); do curl -fs --max-time 5 --cacert /etc/confluent/ssl/ca.pem -o /dev/null \"\$\$u/v1/metadata/id\" && exit 0; done; sleep 5; done; echo \"MDS not reachable after 5 min - starting anyway\"; exit 0'" 'TimeoutStartSec=420' 'ExecStart=' 'ExecStart=/usr/bin/control-center-start /etc/confluent/control-center/control-center.properties' 'Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"' 'Environment="CONTROL_CENTER_HEAP_OPTS=-Xms1536m -Xmx1536m"' 'EnvironmentFile=-/etc/confluent/control-center/service.env' 'LimitNOFILE=65536' 'Restart=on-failure' 'RestartSec=10' > $D/c3-dropin.conf )
+cat $D/c3-dropin.conf | head -3
+ssh c3-01.poc.lab "mkdir -p /tmp/cpcfg && chmod 0700 /tmp/cpcfg"
+scp -q $D/control-center.properties $D/control-center.security.properties $D/service.env $D/web-config.yml $D/prometheus-generated.yml $D/prometheus-dropin.conf $D/c3-dropin.conf c3-01.poc.lab:/tmp/cpcfg/
+ssh c3-01.poc.lab 'set -e; C=/tmp/cpcfg; E=/etc/confluent-control-center
+  sudo install -o root -g confluent -m 0640 $C/web-config.yml $E/web-config-prom.yml
+  sudo install -o root -g confluent -m 0640 $C/web-config.yml $E/web-config-am.yml
+  sudo install -o root -g confluent -m 0640 $C/prometheus-generated.yml $E/prometheus-generated.yml
+  sudo install -d -o root -g confluent -m 0750 /etc/confluent/control-center
+  sudo install -o root -g confluent -m 0640 $C/control-center.properties /etc/confluent/control-center/control-center.properties
+  sudo install -o root -g confluent -m 0640 $C/control-center.security.properties /etc/confluent/control-center/security.properties
+  sudo install -o root -g root -m 0600 $C/service.env /etc/confluent/control-center/service.env
+  sudo install -d -o root -g root -m 0755 /etc/systemd/system/prometheus.service.d /etc/systemd/system/confluent-control-center.service.d
+  sudo install -o root -g root -m 0644 $C/prometheus-dropin.conf /etc/systemd/system/prometheus.service.d/10-cpctl.conf
+  sudo install -o root -g root -m 0644 $C/c3-dropin.conf /etc/systemd/system/confluent-control-center.service.d/10-cpctl.conf
+  sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/confluent/control-center
+  sudo rm -rf $C; sudo systemctl daemon-reload
+  for u in prometheus alertmanager confluent-control-center; do sudo systemctl enable -q $u; sudo systemctl start --no-block $u; done
+  ls $E; echo "$(hostname): units started"'
+
+/var/lib/cp-installer/secret-protection/c3-01/control-center.properties: 47 lines
+c3-01/control-center.properties: keys=13 securepass=15 plaintext-passwords=0
+[Service]
+ExecStartPre=/bin/sh -c 'for i in $$(seq 1 60); do for u in $$(echo "https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090" | tr , " "); do curl -fs --max-time 5 --cacert /etc/confluent/ssl/ca.pem -o /dev/null "$$u/v1/metadata/id" && exit 0; done; sleep 5; done; echo "MDS not reachable after 5 min - starting anyway"; exit 0'
+TimeoutStartSec=420
+alertmanager-generated.yml
+control-center-dev.properties
+control-center-local.properties
+control-center-management.properties
+control-center-minimal.properties
+control-center-production.properties
+control-center.properties
+kafka-api.properties
+ldap.conf
+log4j-rolling.properties
+log4j-silent.properties
+log4j.properties
+log4j2-rolling.yaml
+log4j2-silent.yaml
+log4j2.yaml
+prometheus-generated-local.yml
+prometheus-generated.yml
+propertyfile.conf
+recording_rules-generated.yml
+trigger_rules-generated.yml
+user-agreement-notice.xml
+web-config-am.yml
+web-config-prom.yml
+c3-01: units started
+[rc=0]
+
+$ . ~/manual.env
+for i in $(seq 1 24); do r=$(curl -s --cacert $PKI/ca.pem --cert $PKI/cp-server.crt --key $PKI/cp-server.key https://c3-01.poc.lab:9090/-/ready); [ -n "$r" ] && break; sleep 5; done; echo "prometheus with client cert: $r"
+curl -s -o /dev/null -w 'prometheus without client cert: %{http_code}\n' --cacert $PKI/ca.pem https://c3-01.poc.lab:9090/-/ready
+ssh c3-01.poc.lab "curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/cp-server.crt --key /etc/confluent/ssl/cp-server.key https://c3-01.poc.lab:9093/-/ready; echo"
+for i in $(seq 1 84); do c=$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem https://c3-01.poc.lab:9021/); [ "$c" = 200 ] && break; sleep 5; done; echo "C3 UI: $c (after ~$((i*5))s)"
+ssh c3-01.poc.lab "systemctl is-active prometheus alertmanager confluent-control-center | paste -sd' '"
+
+prometheus with client cert: Prometheus Server is Ready.
+prometheus without client cert: 000
+
+C3 UI: 200 (after ~50s)
+active active active
+[rc=0]
+##### 5.2.3 Nginx stream(lb01):只管 /etc/nginx/stream.d/cp.conf;nginx -t 通過才 reload
+
+$ printf '%s\n' 'upstream cp_rest {' '    hash $remote_addr consistent;' '    server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s;' '    server rest02.poc.lab:8082 max_fails=2 fail_timeout=10s;' '}' 'upstream cp_c3 {' '    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;' '}' 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }' 'server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }' > /tmp/cp.conf.new
+scp -q /tmp/cp.conf.new lb01.poc.lab:/tmp/cp.conf.new && rm -f /tmp/cp.conf.new
+ssh lb01.poc.lab 'grep -n -A2 "^stream" /etc/nginx/nginx.conf; sudo install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf && rm -f /tmp/cp.conf.new && sudo nginx -t -q && sudo nginx -s reload && sleep 1 && ss -ltn | grep -E ":8082|:9021"'
+
+34:stream {
+35-    include /etc/nginx/stream.d/*.conf;
+36-}
+2026/10/16 14:39:19 [notice] 64#64: signal process started
+bash: line 1: ss: command not found
+[rc=1]
+
+$ . ~/manual.env
+curl -s -o /dev/null -w 'via LB rest.poc.lab (legacy cert): %{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters
+curl -s -o /dev/null -w 'via LB c3.poc.lab: %{http_code}\n' --cacert $PKI/ca.pem https://c3.poc.lab:9021/
+
+via LB rest.poc.lab (legacy cert): 200
+via LB c3.poc.lab: 200
+[rc=0]
+# (補) 5.2.2 Alertmanager 驗證要 sudo:cpadmin 讀不到 0640 的 cp-server.key(curl exit 58)
+
+$ ssh c3-01.poc.lab 'sudo curl -s -w " (http %{http_code})\n" --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/cp-server.crt --key /etc/confluent/ssl/cp-server.key https://c3-01.poc.lab:9093/-/ready'
+OK (http 200)
+[rc=0]
+# (補) 5.2.3 lb01(Debian 版 nginx image)沒有 ss;改看 nginx 設定與 /proc/net/tcp(1F92=8082、233D=9021,狀態 0A=LISTEN)
+
+$ ssh lb01.poc.lab 'sudo nginx -T 2>/dev/null | grep -E "listen|server .*:"; awk "NR>1 && \==\"0A\" {print \}" /proc/net/tcp | sort -u'
+    server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s;
+    server rest02.poc.lab:8082 max_fails=2 fail_timeout=10s;
+    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;
+server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }
+server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }
+awk: 1: unexpected character '\'
+awk: line 1: syntax error at or near ==
+[rc=0]
+##### 5.3 步驟 10:端對端驗收(ops02,cpadmin)— 測試用 client 設定(0600)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+CD=$S/client; umask 077
+TS="ssl.truststore.type=PKCS12
+ssl.truststore.location=$PKI/truststore.p12
+ssl.truststore.password=$STORE_PASSWORD"
+printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="%s";\n%s\n' "$APP_APP_ORDERS_PASSWORD" "$TS" > $CD/app-orders-scram.properties
+printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="wrong-password";\n%s\n' "$TS" > $CD/app-orders-wrongpw.properties
+for u in alice carol; do printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="%s" password="%s";\n%s\n' "$u" "$HUMAN_DEFAULT_PASSWORD" "$TS" > $CD/$u-ldap.properties; done
+printf 'security.protocol=SSL\n%s\n' "$TS" > $CD/nocert.properties
+ls -l $CD
+
+total 24
+-rw------- 1 cpadmin cpadmin 333 Oct 16 14:40 alice-ldap.properties
+-rw------- 1 cpadmin cpadmin 346 Oct 16 14:40 app-orders-scram.properties
+-rw------- 1 cpadmin cpadmin 332 Oct 16 14:40 app-orders-wrongpw.properties
+-rw------- 1 cpadmin cpadmin 333 Oct 16 14:40 carol-ldap.properties
+-rw------- 1 cpadmin cpadmin 400 Oct 16 14:24 internal.properties
+-rw------- 1 cpadmin cpadmin 167 Oct 16 14:40 nocert.properties
+[rc=0]
+
+$ cat >> ~/manual.env <<'EOF'
+export CD=$S/client BC=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095 BL=kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096
+P() { printf '%s\n' "$4" | kafka-console-producer --bootstrap-server "$1" --producer.config "$2" --topic "$3" --producer-property acks=all --producer-property max.block.ms=20000 --producer-property delivery.timeout.ms=30000 --producer-property request.timeout.ms=15000 2>&1 | grep -oE '[A-Za-z]+(Authorization|Authentication)Exception|ERROR.*' | head -1; }
+EOF
+echo ok
+
+ok
+[rc=0]
+##### #1–#5 KRaft 與 broker
+
+$ . ~/manual.env
+kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --status | grep -E 'LeaderId|CurrentVoters' | sed -E 's/"endpoints[^]]*\]//g'
+kafka-features --bootstrap-controller "$CB" --command-config "$CFG" describe | grep -oE 'kraft.version.*FinalizedVersionLevel: [0-9]+' | tr -s ' '
+kafka-features --bootstrap-server "$B" --command-config "$CFG" describe | grep -oE 'confluent.metadata.version.*FinalizedVersionLevel: [0-9]+' | tr -s ' '
+kafka-broker-api-versions --bootstrap-server "$B" --command-config "$CFG" 2>/dev/null | grep -o '(id:[^)]*)'
+
+LeaderId:               1
+CurrentVoters:          [{"id": 1, "directoryId": "ZgQozwsVTRiOMSCA30KHiA", }, {"id": 2, "directoryId": "YzwGEaLHQM2_isM4t_nW7Q", }, {"id": 3, "directoryId": "DvpRPHuHScalqiRPBEBZrQ", }]
+kraft.version SupportedMinVersion: 0 SupportedMaxVersion: 1 FinalizedVersionLevel: 1
+(id: 101 rack: rack-a isFenced: false)
+(id: 102 rack: rack-a isFenced: false)
+(id: 104 rack: rack-b isFenced: false)
+(id: 103 rack: rack-b isFenced: false)
+[rc=0]
+##### #6–#7 內部 mTLS
+
+$ . ~/manual.env
+timeout 40 kafka-metadata-quorum --bootstrap-controller "$CB" --command-config $CD/nocert.properties describe --status >/dev/null 2>&1 && echo "#6 FAIL: accepted without cert" || echo "#6 PASS: rejected without client cert"
+kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --status >/dev/null && echo "#7 PASS: kafka-internal accepted"
+
+#6 PASS: rejected without client cert
+#7 PASS: kafka-internal accepted
+[rc=0]
+##### #8–#11 App over SCRAM + RBAC
+
+$ . ~/manual.env
+M=manual-$(date +%s); echo "message: $M"
+r=$(P "$BC" $CD/app-orders-scram.properties orders.events "$M"); echo "#8  produce orders.events: ${r:-OK}"
+kafka-console-consumer --bootstrap-server "$BC" --consumer.config $CD/app-orders-scram.properties --topic orders.events --group orders-verify --from-beginning --timeout-ms 45000 2>/dev/null | grep -cF "$M" | sed 's/^/#9  consumed back: /'
+r=$(P "$BC" $CD/app-orders-scram.properties payments.events "$M"); echo "#10 produce payments.events (expect denied): ${r:-OK}"
+r=$(P "$BC" $CD/app-orders-wrongpw.properties orders.events "$M"); echo "#11 wrong password (expect denied): ${r:-OK}"
+
+message: manual-1792132860
+#8  produce orders.events: OK
+#9  consumed back: 1
+#10 produce payments.events (expect denied): ERROR [Producer clientId=console-producer] Topic authorization failed for topics [payments.events] (org.apache.kafka.clients.Metadata)
+#11 wrong password (expect denied): ERROR [Producer clientId=console-producer] Connection to node -3 (kb03.poc.lab/172.32.0.33:9095) failed authentication due to: Authentication failed during authentication due to invalid credentials with SASL mechanism SCRAM-SHA-512 (org.apache.kafka.clients.NetworkClient)
+[rc=0]
+##### #12–#15 人員 LDAP + MDS
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+M=manual-$(date +%s)
+r=$(P "$BL" $CD/alice-ldap.properties payments.events "$M-alice"); echo "#12 alice (kafka-admins) produce payments.events: ${r:-OK}"
+r=$(P "$BL" $CD/carol-ldap.properties orders.events "$M-carol"); echo "#13 carol (kafka-devs, read-only) produce orders.events (expect denied): ${r:-OK}"
+install -m 0600 /dev/null ~/.netrc-a && printf 'machine kb01.poc.lab login alice password %s\n' "$HUMAN_DEFAULT_PASSWORD" > ~/.netrc-a
+curl -s -o /dev/null -w '#14 MDS authenticate alice: %{http_code}\n' --cacert $PKI/ca.pem --netrc-file ~/.netrc-a https://kb01.poc.lab:8090/security/1.0/authenticate
+printf 'machine kb01.poc.lab login alice password wrong\n' > ~/.netrc-a
+curl -s -o /dev/null -w '#15 MDS authenticate wrong password: %{http_code}\n' --cacert $PKI/ca.pem --netrc-file ~/.netrc-a https://kb01.poc.lab:8090/security/1.0/authenticate
+rm -f ~/.netrc-a
+
+#12 alice (kafka-admins) produce payments.events: OK
+#13 carol (kafka-devs, read-only) produce orders.events (expect denied): ERROR [Producer clientId=console-producer] Aborting producer batches due to fatal error (org.apache.kafka.clients.producer.internals.Sender)
+#14 MDS authenticate alice: 200
+#15 MDS authenticate wrong password: 401
+[rc=0]
+##### #16–#22 REST Proxy 經 LB
+
+$ . ~/manual.env
+BASE=https://rest.poc.lab:8082/v3/clusters
+C="--cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key"
+curl -s -o /dev/null -w '#16 legacy cert GET /v3/clusters: %{http_code}\n' $C $BASE
+curl -s -o /dev/null -w '#17 no client cert: %{http_code}\n' --cacert $PKI/ca.pem $BASE
+for t in billing.events orders.events; do echo "#18/#19 produce $t: $(curl -s $C -X POST -H 'Content-Type: application/json' -d '{"value":{"type":"JSON","data":{"source":"manual"}}}' "$BASE/$CID/topics/$t/records" | grep -o '"error_code":[0-9]*' | head -1)"; done
+for c in cp-server kafka-internal; do curl -s -o /dev/null -w "#20/#21 $c cert: %{http_code}\n" --cacert $PKI/ca.pem --cert $PKI/$c.crt --key $PKI/$c.key "$BASE/$CID/topics"; done
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --describe --entity-type users --entity-name app-legacy-billing | grep -c SCRAM | sed 's/^/#22 SCRAM credentials for app-legacy-billing: /'
+
+#16 legacy cert GET /v3/clusters: 200
+#17 no client cert: 000
+#18/#19 produce billing.events: "error_code":200
+#18/#19 produce orders.events: "error_code":40301
+#20/#21 cp-server cert: 401
+#20/#21 kafka-internal cert: 401
+#22 SCRAM credentials for app-legacy-billing: 0
+[rc=0]
+##### #23–#25 C3 與 Prometheus
+
+$ . ~/manual.env
+curl -s -o /dev/null -w '#23 C3 UI via LB: %{http_code}\n' --cacert $PKI/ca.pem https://c3.poc.lab:9021/
+curl -s -o /dev/null -w '#24 Prometheus without client cert: %{http_code}\n' --cacert $PKI/ca.pem https://c3-01.poc.lab:9090/-/ready
+for i in $(seq 1 30); do n=$(curl -s --cacert $PKI/ca.pem --cert $PKI/cp-server.crt --key $PKI/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'io_confluent_kafka_server[a-z_]*' | sort -u | wc -l); [ "$n" -gt 0 ] && break; sleep 10; done; echo "#25 kafka server metric names in Prometheus: $n"
+
+#23 C3 UI via LB: 200
+#24 Prometheus without client cert: 000
+#25 kafka server metric names in Prometheus: 121
+[rc=0]
+##### #26–#29 Audit
+
+$ . ~/manual.env
+kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe --topic confluent-audit-log-events | head -1 | cut -c1-90
+kafka-console-consumer --bootstrap-server "$B" --consumer.config "$CFG" --topic confluent-audit-log-events_sensitive --from-beginning --timeout-ms 30000 2>/dev/null > /tmp/sens.json
+echo "#27 alice allowed kafka.Produce: $(jq -R -n '[inputs|fromjson?|select(.data.authenticationInfo.principal=="User:alice" and .data.authorizationInfo.granted==true and (.data.methodName|test("^kafka.Produce$")))]|length' /tmp/sens.json)"
+echo "#28 app-orders denied: $(jq -R -n '[inputs|fromjson?|select(.data.authenticationInfo.principal=="User:app-orders" and .data.authorizationInfo.granted==false)]|length' /tmp/sens.json)"
+rm -f /tmp/sens.json
+ssh kb01.poc.lab 'sudo grep "^super.users" /etc/confluent/kafka/server.properties'
+
+Topic: confluent-audit-log-events	TopicId: CKs2nBfFSa2IHPUa0oU95Q	PartitionCount: 12	Repli
+#27 alice allowed kafka.Produce: 1
+#28 app-orders denied: 1
+super.users = User:kafka-internal;User:kafka-admin;User:svc-cpctl
+[rc=0]
+##### #30–#35 離線、套件
+
+$ for h in kb01 rest01 c3-01; do ssh $h.poc.lab 'curl -s -m 5 -o /dev/null https://packages.confluent.io; echo "$(hostname) internet rc=$?"'; done
+curl -s -m 5 -o /dev/null https://packages.confluent.io; echo "ops02 internet rc=$?"
+ssh kb01.poc.lab 'sudo dnf -q versionlock list | grep confluent-server'
+ssh c3-01.poc.lab 'rpm -q confluent-server confluent-common; test -e /opt/confluent/current; echo "/opt/confluent/current exists rc=$?"'
+
+kb01 internet rc=0
+rest01 internet rc=0
+c3-01 internet rc=0
+ops02 internet rc=6
+confluent-server-1:8.3.2-1.*
+package confluent-server is not installed
+package confluent-common is not installed
+/opt/confluent/current exists rc=1
+[rc=0]
+##### #36 JMX exporter(HTTPS;匿名 401;帶帳密有指標)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+install -m 0600 /dev/null ~/.netrc-j
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do printf 'machine %s.poc.lab login prometheus password %s\n' $h "$JMX_EXPORTER_PASSWORD" >> ~/.netrc-j; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do
+  a=$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem https://$h.poc.lab:7071/metrics)
+  n=$(curl -s --cacert $PKI/ca.pem --netrc-file ~/.netrc-j https://$h.poc.lab:7071/metrics | grep -c '^[a-z]')
+  echo "$h anonymous=$a metrics=$n"
+done
+rm -f ~/.netrc-j
+
+kc01 anonymous=401 metrics=704
+kc02 anonymous=401 metrics=689
+kc03 anonymous=401 metrics=687
+kb01 anonymous=401 metrics=1075
+kb02 anonymous=401 metrics=1072
+kb03 anonymous=401 metrics=1060
+kb04 anonymous=401 metrics=1054
+rest01 anonymous=401 metrics=932
+rest02 anonymous=401 metrics=932
+[rc=0]
+##### #48 憑證:kb01:8090 實際出示的序號 = PKI 的 cp-server 序號
+
+$ . ~/manual.env
+echo "served: $(openssl s_client -connect kb01.poc.lab:8090 -CAfile $PKI/ca.pem </dev/null 2>/dev/null | openssl x509 -noout -serial)"
+echo "pki:    $(openssl x509 -in $PKI/cp-server.crt -noout -serial)"
+
+served: serial=03AFEB34F345BF22591D178FFD20E2AB1F8B75EB
+pki:    serial=03AFEB34F345BF22591D178FFD20E2AB1F8B75EB
+[rc=0]
+# (重測) #30–#33:上一輪 echo "$(hostname) ... rc=$?" 的 $? 被 $(hostname) 覆蓋成 0;改成先存 curl 的結束碼
+
+$ for h in kb01 rest01 c3-01; do ssh $h.poc.lab 'curl -s -m 5 -o /dev/null https://packages.confluent.io; rc=$?; echo "$(hostname) internet rc=$rc"'; done; curl -s -m 5 -o /dev/null https://packages.confluent.io; echo "ops02 internet rc=$?"
+kb01 internet rc=6
+rest01 internet rc=6
+c3-01 internet rc=6
+ops02 internet rc=6
+[rc=0]
+##### 6 步驟 11:堡壘機 OP menu(ops02,cpadmin → jump01 / 各節點,sudo)
+##### 6.1 固定帳號(jump01)
+
+$ ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+getent group opmenu || groupadd opmenu
+if id opuser >/dev/null 2>&1; then usermod -s /opt/opmenu/opmenu.sh -aG opmenu opuser
+else useradd -m -G opmenu -s /opt/opmenu/opmenu.sh opuser; fi
+id opbootstrap >/dev/null 2>&1 || useradd -r -m -d /etc/opmenu/bootstrap -s /sbin/nologin opbootstrap
+getent passwd opuser opbootstrap; getent group opmenu
+EOF
+
+useradd: Warning: missing or non-executable shell '/opt/opmenu/opmenu.sh'
+opuser:x:1001:1002::/home/opuser:/opt/opmenu/opmenu.sh
+opbootstrap:x:991:991::/etc/opmenu/bootstrap:/sbin/nologin
+opmenu:x:1001:opuser
+[rc=0]
+##### 6.2 安裝 opmenu 套件(從內部 repo;版本目錄並存 + symlink)
+
+$ V=20261016.591e6d9a
+test -f /srv/repo/raw/tools/opmenu-$V.tar.gz && scp -q /srv/repo/raw/tools/opmenu-$V.tar.gz jump01.poc.lab:/tmp/
+ssh jump01.poc.lab "V=$V sudo -E bash -s" <<'EOF'
+set -e
+install -d -o root -g root -m 0755 /var/cache/cp-installer
+install -o root -g root -m 0644 /tmp/opmenu-$V.tar.gz /var/cache/cp-installer/opmenu-$V.tar.gz && rm -f /tmp/opmenu-$V.tar.gz
+if [ ! -x /opt/opmenu-$V/opmenu.sh ]; then
+  t=$(mktemp -d); tar -xzf /var/cache/cp-installer/opmenu-$V.tar.gz -C "$t"
+  test -x "$t/opmenu/opmenu.sh" || { echo "package has no opmenu/opmenu.sh"; exit 1; }
+  chown -R root:root "$t/opmenu"; chmod -R go-w "$t/opmenu"
+  mv "$t/opmenu" /opt/opmenu-$V; rm -rf "$t"
+fi
+ln -sfn /opt/opmenu-$V /opt/opmenu
+ls -l /opt | grep opmenu; test -x /opt/opmenu/opmenu.sh && echo ok
+EOF
+
+lrwxrwxrwx 1 root root   29 Oct 16 14:44 opmenu -> /opt/opmenu-20261016.591e6d9a
+drwxr-xr-x 3 root root 4096 Jan  1  2026 opmenu-20261016.591e6d9a
+ok
+[rc=0]
+##### 6.3 /etc/opmenu:選單自己的 truststore(獨立密碼)與 opmenu.conf(不含密碼)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+cd $PKI
+d=$(mktemp -d); awk -v d="$d" '/BEGIN CERT/{n++} {print > (d "/ca-" n ".pem")}' ca.pem
+rm -f opmenu-truststore.p12; i=0
+for f in "$d"/ca-*.pem; do i=$((i+1)); /usr/lib/jvm/temurin-21-jdk/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore opmenu-truststore.p12 -storetype PKCS12 -storepass:env OPMENU_TRUSTSTORE_PASSWORD; done; rm -rf "$d"
+W=$S/manual/jump01; install -d -m 0700 $W; umask 077
+printf '%s' "$OPMENU_TRUSTSTORE_PASSWORD" > $W/truststore_creds
+cat > $W/opmenu.conf <<EOF
+OPMENU_BACKEND=vm
+OPMENU_ENV_LABEL=POC
+OPMENU_LOG=/var/log/opmenu/opmenu.log
+OPMENU_OUT_DIR=/var/log/opmenu
+OPMENU_SYSLOG=1
+OPMENU_ALLOW_ENV_OVERRIDE=0
+OPMENU_BOOTSTRAP='kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096'
+OPMENU_MDS_URL='https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090'
+OPMENU_KAFKA_CLUSTER_ID='$CID'
+OPMENU_CERT_DIR=/etc/opmenu/certs
+OPMENU_BROKER_SERVICES='kb01.poc.lab:confluent-server kb02.poc.lab:confluent-server kb03.poc.lab:confluent-server kb04.poc.lab:confluent-server'
+OPMENU_AUX_SERVICES='rest01.poc.lab:confluent-kafka-rest rest02.poc.lab:confluent-kafka-rest c3-01.poc.lab:confluent-control-center'
+OPMENU_CONTROLLER_HOSTS='kc01.poc.lab kc02.poc.lab kc03.poc.lab'
+OPMENU_DATA_DIR=/var/lib/kafka/data
+OPMENU_USER_FROM_OS=0
+OPMENU_SSH_USER=kafkaops
+OPMENU_SSH_AUTH=key
+OPMENU_HOST_ACTION_AUTHZ='Topic:__opmenu-host-ops:Describe'
+OPMENU_TICKET_MODE=required
+OPMENU_TICKET_CHECK=format
+OPMENU_CHANGE_WINDOW=''
+OPMENU_IDLE_TIMEOUT=900
+OPMENU_AUDIT_TOPIC=confluent-audit-log-events
+OPMENU_BREAKGLASS_BOOTSTRAP='kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092'
+export PATH="/usr/bin:\$PATH" JAVA_HOME="/usr/lib/jvm/temurin-21-jdk"
+EOF
+scp -q $PKI/opmenu-truststore.p12 $PKI/ca.pem $PKI/cp-server.crt $PKI/kafka-internal.crt $W/truststore_creds $W/opmenu.conf jump01.poc.lab:/tmp/
+ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+install -d -o root -g root   -m 0755 /etc/opmenu
+install -d -o root -g opmenu -m 0750 /etc/opmenu/certs
+install -o root -g opmenu -m 0640 /tmp/opmenu-truststore.p12 /etc/opmenu/certs/truststore.p12
+install -o root -g opmenu -m 0640 /tmp/truststore_creds /etc/opmenu/certs/truststore_creds
+install -o root -g opmenu -m 0644 /tmp/ca.pem /etc/opmenu/certs/ca.pem
+install -o root -g opmenu -m 0644 /tmp/cp-server.crt /etc/opmenu/certs/cp-server.pem
+install -o root -g opmenu -m 0644 /tmp/kafka-internal.crt /etc/opmenu/certs/kafka-internal.pem
+install -o root -g root   -m 0644 /tmp/opmenu.conf /etc/opmenu/opmenu.conf
+install -d -o root -g opmenu -m 2775 /var/log/opmenu
+printf '. /etc/opmenu/opmenu.conf\nOPMENU_ALLOW_ENV_OVERRIDE=1\n' > /etc/opmenu/opmenu-test.conf
+chown root:opmenu /etc/opmenu/opmenu-test.conf; chmod 0640 /etc/opmenu/opmenu-test.conf
+rm -f /tmp/opmenu-truststore.p12 /tmp/truststore_creds /tmp/cp-server.crt /tmp/kafka-internal.crt /tmp/opmenu.conf
+ls -la /etc/opmenu /etc/opmenu/certs
+EOF
+
+Certificate was added to keystore
+/etc/opmenu:
+total 28
+drwxr-xr-x 4 root        root        4096 Oct 16 14:44 .
+drwxr-xr-x 1 root        root        4096 Oct 16 14:44 ..
+drwx------ 2 opbootstrap opbootstrap 4096 Oct 16 14:44 bootstrap
+drwxr-x--- 2 root        opmenu      4096 Oct 16 14:44 certs
+-rw-r----- 1 root        opmenu        54 Oct 16 14:44 opmenu-test.conf
+-rw-r--r-- 1 root        root        1273 Oct 16 14:44 opmenu.conf
+
+/etc/opmenu/certs:
+total 28
+drwxr-x--- 2 root opmenu 4096 Oct 16 14:44 .
+drwxr-xr-x 4 root root   4096 Oct 16 14:44 ..
+-rw-r--r-- 1 root opmenu 1663 Oct 16 14:44 ca.pem
+-rw-r--r-- 1 root opmenu 2122 Oct 16 14:44 cp-server.pem
+-rw-r--r-- 1 root opmenu 1899 Oct 16 14:44 kafka-internal.pem
+-rw-r----- 1 root opmenu 1574 Oct 16 14:44 truststore.p12
+-rw-r----- 1 root opmenu   28 Oct 16 14:44 truststore_creds
+[rc=0]
+##### 6.4 Break-glass(opbootstrap 專用;操作員看不到憑證)
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+cd $PKI; umask 077
+openssl pkcs12 -export -name opmenu-breakglass -inkey opmenu-breakglass.key -in opmenu-breakglass.crt -certfile ca.crt -passout env:OPMENU_BREAKGLASS_STORE_PASSWORD -out opmenu-breakglass.bg.p12
+W=$S/manual/jump01
+printf '%s\n' security.protocol=SSL ssl.keystore.type=PKCS12 ssl.keystore.location=/etc/opmenu/bootstrap/breakglass.p12 "ssl.keystore.password=$OPMENU_BREAKGLASS_STORE_PASSWORD" "ssl.key.password=$OPMENU_BREAKGLASS_STORE_PASSWORD" ssl.truststore.type=PKCS12 ssl.truststore.location=/etc/opmenu/bootstrap/truststore.p12 "ssl.truststore.password=$OPMENU_TRUSTSTORE_PASSWORD" ssl.endpoint.identification.algorithm=https > $W/breakglass.properties
+scp -q opmenu-breakglass.bg.p12 opmenu-breakglass.crt opmenu-breakglass.key opmenu-truststore.p12 ca.pem $W/breakglass.properties $S/manual/ref/opmenu-bootstrap jump01.poc.lab:/tmp/
+ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+install -d -o opbootstrap -g opbootstrap -m 0700 /etc/opmenu/bootstrap
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.bg.p12 /etc/opmenu/bootstrap/breakglass.p12
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.crt    /etc/opmenu/bootstrap/breakglass.pem
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.key    /etc/opmenu/bootstrap/breakglass.key
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-truststore.p12    /etc/opmenu/bootstrap/truststore.p12
+install -o opbootstrap -g opbootstrap -m 0644 /tmp/ca.pem                   /etc/opmenu/bootstrap/ca.pem
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/breakglass.properties    /etc/opmenu/bootstrap/breakglass.properties
+install -o root -g root -m 0755 /tmp/opmenu-bootstrap /usr/local/sbin/opmenu-bootstrap
+shred -u /tmp/opmenu-breakglass.key /tmp/opmenu-breakglass.bg.p12 2>/dev/null; rm -f /tmp/opmenu-breakglass.crt /tmp/opmenu-truststore.p12 /tmp/ca.pem /tmp/breakglass.properties /tmp/opmenu-bootstrap
+ls -la /etc/opmenu/bootstrap | grep -v skel
+EOF
+rm -f $S/manual/jump01/breakglass.properties
+
+total 48
+drwx------ 2 opbootstrap opbootstrap 4096 Oct 16 14:44 .
+drwxr-xr-x 4 root        root        4096 Oct 16 14:44 ..
+-rw-r--r-- 1 opbootstrap opbootstrap   18 Apr 30  2024 .bash_logout
+-rw-r--r-- 1 opbootstrap opbootstrap  141 Apr 30  2024 .bash_profile
+-rw-r--r-- 1 opbootstrap opbootstrap  492 Apr 30  2024 .bashrc
+-rw------- 1 opbootstrap opbootstrap 2484 Oct 16 14:44 breakglass.key
+-rw------- 1 opbootstrap opbootstrap 4870 Oct 16 14:44 breakglass.p12
+-rw------- 1 opbootstrap opbootstrap 1675 Oct 16 14:44 breakglass.pem
+-rw------- 1 opbootstrap opbootstrap  388 Oct 16 14:44 breakglass.properties
+-rw-r--r-- 1 opbootstrap opbootstrap 1663 Oct 16 14:44 ca.pem
+-rw------- 1 opbootstrap opbootstrap 1574 Oct 16 14:44 truststore.p12
+[rc=0]
+##### 6.5 sudoers(先 visudo 驗證)
+
+$ printf '# OP menu bastion\nopuser ALL=(opbootstrap) NOPASSWD: /usr/local/sbin/opmenu-bootstrap\n' > /tmp/opmenu.sudoers
+/usr/sbin/visudo -cqf /tmp/opmenu.sudoers && echo valid
+scp -q /tmp/opmenu.sudoers jump01.poc.lab:/tmp/ && rm -f /tmp/opmenu.sudoers
+ssh jump01.poc.lab 'sudo install -o root -g root -m 0440 /tmp/opmenu.sudoers /etc/sudoers.d/opmenu && rm -f /tmp/opmenu.sudoers && sudo visudo -c | tail -1 && sudo sudo -l -U opuser | tail -2'
+
+valid
+/etc/sudoers.d/opmenu: parsed OK
+User opuser may run the following commands on jump01:
+    (opbootstrap) NOPASSWD: /usr/local/sbin/opmenu-bootstrap
+[rc=0]
+##### 6.6 sshd Match 區塊(附加在 sshd_config 最後;sshd -t 通過才換)
+
+$ ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+printf '%s\n' 'PermitUserEnvironment no' 'Match Group opmenu' '  ForceCommand /opt/opmenu/opmenu.sh' '  AllowTcpForwarding no' '  AllowAgentForwarding no' '  X11Forwarding no' '  PermitTunnel no' '  PermitTTY yes' > /etc/ssh/cpctl-opmenu.block
+cfg=/etc/ssh/sshd_config; t=$(mktemp)
+sed '/^# BEGIN cpctl opmenu$/,/^# END cpctl opmenu$/d' "$cfg" > "$t"
+{ echo '# BEGIN cpctl opmenu'; cat /etc/ssh/cpctl-opmenu.block; echo '# END cpctl opmenu'; } >> "$t"
+sshd -t -f "$t" || { echo "sshd -t rejected"; rm -f "$t"; exit 1; }
+cp -p "$cfg" "$cfg.bak.$(date +%Y%m%d%H%M%S)"
+cat "$t" > "$cfg"; rm -f "$t"
+systemctl reload sshd
+tail -10 $cfg; sshd -T -C user=opuser,host=x,addr=127.0.0.1 | grep -i forcecommand
+EOF
+ssh jump01.poc.lab 'echo "cpadmin can still log in to $(hostname)"'
+
+# BEGIN cpctl opmenu
+PermitUserEnvironment no
+Match Group opmenu
+  ForceCommand /opt/opmenu/opmenu.sh
+  AllowTcpForwarding no
+  AllowAgentForwarding no
+  X11Forwarding no
+  PermitTunnel no
+  PermitTTY yes
+# END cpctl opmenu
+forcecommand /opt/opmenu/opmenu.sh
+ssh: connect to host jump01.poc.lab port 22: Connection refused
+[rc=255]
+##### 6.7 opuser 金鑰與全域 known_hosts
+
+$ ssh jump01.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+h=$(getent passwd opuser | cut -d: -f6)
+if [ ! -s $h/.ssh/id_ed25519 ]; then
+  install -d -o opuser -g opuser -m 0700 $h/.ssh
+  sudo -u opuser ssh-keygen -q -t ed25519 -N '' -C "opuser@$(hostname -s)" -f $h/.ssh/id_ed25519
+fi
+N="kc01.poc.lab kc02.poc.lab kc03.poc.lab kb01.poc.lab kb02.poc.lab kb03.poc.lab kb04.poc.lab rest01.poc.lab rest02.poc.lab c3-01.poc.lab"
+t=$(mktemp)
+{ echo '# node host keys for the OP menu'; ssh-keyscan -T 5 -t ed25519 $N 2>/dev/null | sort; } > "$t"
+[ "$(grep -vc '^#' "$t")" -eq 10 ] || { echo "keyscan incomplete"; exit 1; }
+install -o root -g root -m 0644 "$t" /etc/ssh/ssh_known_hosts; rm -f "$t"
+echo "known hosts: $(grep -vc '^#' /etc/ssh/ssh_known_hosts)"; ls -la $h/.ssh
+EOF
+
+known hosts: 10
+total 16
+drwx------ 2 opuser opuser 4096 Oct 16 14:44 .
+drwx------ 3 opuser opuser 4096 Oct 16 14:44 ..
+-rw------- 1 opuser opuser  399 Oct 16 14:44 id_ed25519
+-rw-r--r-- 1 opuser opuser   95 Oct 16 14:44 id_ed25519.pub
+[rc=0]
+##### 6.8 各節點 kafkaops 帳號(來源 IP 綁定的金鑰;sudo 只到本機 unit)
+
+$ IP=$(getent hosts jump01.poc.lab | awk '{print $1; exit}')
+PUB=$(ssh jump01.poc.lab 'sudo -n cat ~opuser/.ssh/id_ed25519.pub')
+printf 'from="%s",no-port-forwarding,no-agent-forwarding,no-X11-forwarding %s\n' "$IP" "$PUB" > /tmp/kafkaops.authorized_keys
+cut -c1-90 /tmp/kafkaops.authorized_keys
+for H in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  case $H in kc*|kb*) UNIT=confluent-server ;; rest*) UNIT=confluent-kafka-rest ;; c3*) UNIT=confluent-control-center ;; esac
+  printf '%s\n' '# fixed node account of the OP menu: only these commands, only these units' 'Defaults:kafkaops !requiretty' "kafkaops ALL=(root) NOPASSWD: /usr/bin/systemctl restart $UNIT" "kafkaops ALL=(root) NOPASSWD: NOEXEC: /usr/bin/journalctl -u $UNIT -n * --no-pager" 'kafkaops ALL=(root) NOPASSWD: NOEXEC: /usr/bin/journalctl -u confluent-\* -n 500 --no-pager' 'kafkaops ALL=(root) NOPASSWD: /usr/local/sbin/opmenu-clean-logs' > /tmp/opmenu-kafkaops.sudoers
+  /usr/sbin/visudo -cqf /tmp/opmenu-kafkaops.sudoers || { echo "$H sudoers invalid"; break; }
+  scp -q /tmp/kafkaops.authorized_keys /tmp/opmenu-kafkaops.sudoers /var/lib/cp-installer/manual/ref/opmenu-clean-logs $H.poc.lab:/tmp/
+  ssh $H.poc.lab 'sudo bash -s' <<'EOF'
+set -e
+id kafkaops >/dev/null 2>&1 || { useradd -m -s /bin/bash kafkaops; passwd -l kafkaops >/dev/null; }
+h=$(getent passwd kafkaops | cut -d: -f6)
+install -d -o root -g kafkaops -m 0750 $h/.ssh
+install -o root -g kafkaops -m 0640 /tmp/kafkaops.authorized_keys $h/.ssh/authorized_keys
+install -o root -g root -m 0755 /tmp/opmenu-clean-logs /usr/local/sbin/opmenu-clean-logs
+install -o root -g root -m 0440 /tmp/opmenu-kafkaops.sudoers /etc/sudoers.d/opmenu-kafkaops
+rm -f /tmp/kafkaops.authorized_keys /tmp/opmenu-kafkaops.sudoers /tmp/opmenu-clean-logs
+visudo -c >/dev/null && echo "$(hostname): kafkaops ok ($(passwd -S kafkaops | awk '{print $2}'))"
+EOF
+done
+rm -f /tmp/kafkaops.authorized_keys /tmp/opmenu-kafkaops.sudoers
+
+from="172.32.0.13",no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AA
+kc01: kafkaops ok (LK)
+kc02: kafkaops ok (LK)
+kc03: kafkaops ok (LK)
+kb01: kafkaops ok (LK)
+kb02: kafkaops ok (LK)
+kb03: kafkaops ok (LK)
+kb04: kafkaops ok (LK)
+rest01: kafkaops ok (LK)
+rest02: kafkaops ok (LK)
+c3-01: kafkaops ok (LK)
+[rc=0]
+
+$ ssh kb01.poc.lab "sudo sudo -l -U kafkaops | tail -5; sudo ls -la ~kafkaops/.ssh 2>/dev/null || sudo ls -la /home/kafkaops/.ssh"
+User kafkaops may run the following commands on kb01:
+    (root) NOPASSWD: /usr/bin/systemctl restart confluent-server
+    (root) NOEXEC: NOPASSWD: /usr/bin/journalctl -u confluent-server -n * --no-pager
+    (root) NOEXEC: NOPASSWD: /usr/bin/journalctl -u confluent-\* -n 500 --no-pager
+    (root) NOPASSWD: /usr/local/sbin/opmenu-clean-logs
+total 12
+drwxr-x--- 2 root     kafkaops 4096 Oct 16 14:44 .
+drwx------ 3 kafkaops kafkaops 4096 Oct 16 14:44 ..
+-rw-r----- 1 root     kafkaops  171 Oct 16 14:44 authorized_keys
+[rc=0]
+##### 6.9 break-glass 的 RBAC 綁定
+
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+HOME=$S/cli-home confluent iam rbac role-binding create --principal User:opmenu-breakglass --role SystemAdmin --kafka-cluster $CID -o json >/dev/null && echo bound
+install -m 0600 /dev/null ~/.netrc-mds && printf 'machine kb01.poc.lab login svc-cpctl password %s\n' "$SVC_CPCTL_PASSWORD" > ~/.netrc-mds
+curl -s --cacert $PKI/ca.pem --netrc-file ~/.netrc-mds -H 'Content-Type: application/json' -X POST -d "{\"clusters\":{\"kafka-cluster\":\"$CID\"}}" "$MDS/security/1.0/lookup/principal/User:opmenu-breakglass/resources"; echo
+rm -f ~/.netrc-mds
+
+bound
+{"User:opmenu-breakglass":{"SystemAdmin":[]}}
+[rc=0]
+##### 6.10 / 6.4 驗證
+
+$ ssh jump01.poc.lab 'test -x /opt/opmenu/opmenu.sh && sudo -n -u opuser /opt/opmenu/opmenu.sh --list | head -12 && echo ok'
+10	值班查看	n	n	查看 leader 與 partition 分布(balance report)
+11	值班查看	n	n	cluster 與身分鏈健康檢查
+12	值班查看	n	n	列出 topic 與 partition 狀態
+13	值班查看	n	n	查看 consumer lag
+14	值班查看	n	n	查看某個 topic 的設定
+15	值班查看	n	n	查看 application 連線狀況
+16	值班查看	n	n	查看磁碟與 data directory 用量
+17	值班查看	n	n	查看 certificate 到期日
+18	值班查看	n	n	收集 diagnostics
+19	值班查看	n	n	查看生效中的設定(effective configuration)
+21	服務操作	y	y	重啟單一 broker
+22	服務操作	y	y	重啟 REST Proxy 或 C3
+ok
+[rc=0]
+
+$ ssh jump01.poc.lab 'sudo -u opbootstrap /usr/local/sbin/opmenu-bootstrap kafka kafka-topics --list 2>/dev/null | grep -E "events$"'
+billing.events
+confluent-audit-log-events
+orders.events
+payments.events
+[rc=0]
+
+$ ssh jump01.poc.lab 'sudo -n -u opuser cat /etc/opmenu/bootstrap/breakglass.key 2>&1 | head -1'
+cat: /etc/opmenu/bootstrap/breakglass.key: Permission denied
+[rc=0]
+
+$ ssh jump01.poc.lab 'sudo -u opuser ssh -o BatchMode=yes kafkaops@kb01.poc.lab sudo -n /usr/bin/journalctl -u confluent-server -n 2 --no-pager | cut -c1-120'
+Oct 16 14:44:48 kb01 kafka-server-start[3500]: [2026-10-16 14:44:48,701] INFO [Partition confluent-audit-log-events-5 br
+Oct 16 14:44:48 kb01 kafka-server-start[3500]: [2026-10-16 14:44:48,704] INFO [Partition confluent-audit-log-events-5 br
+[rc=0]
+
+$ ssh jump01.poc.lab 'sudo -u opuser ssh -o BatchMode=yes kafkaops@kb01.poc.lab sudo -n /usr/bin/systemctl restart confluent-kafka-rest 2>&1 | head -1'
+sudo: a password is required
+[rc=0]
+##### 5.3.9 OP 選單 #37–#47(jump01 上以 opuser 非互動執行;只限 PROFILE=poc 的 opmenu-test.conf)
+
+$ cat > ~/opmenu-test.sh <<'EOF'
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+R() { local u=$1 p=$2; shift 2; ssh jump01.poc.lab "sudo -n -u opuser env OPMENU_CONF=${CONF:-/etc/opmenu/opmenu-test.conf} OPMENU_USER=$u OPMENU_PASS='$p' OPMENU_TICKET=CHG-2026-0001 OPMENU_YES=1 OPMENU_REASON=verify /opt/opmenu/opmenu.sh --run $* </dev/null 2>&1; echo \"@@LOG@@ \$(sudo -n tail -1 /var/log/opmenu/opmenu.log)\""; }
+L() { grep '@@LOG@@' | awk -F' [|] ' '{print "user=" $3 " result=" $7}'; }
+EOF
+echo ready
+
+ready
+[rc=0]
+
+$ . ~/opmenu-test.sh
+echo "#37/#38 alice item 12: $(R alice "$HUMAN_DEFAULT_PASSWORD" 12 | L)"
+echo "#39 alice wrong password: $(R alice wrong-password 12 | L)"
+echo "#40 bob item 23 (broker log via kafkaops): $(R bob "$HUMAN_DEFAULT_PASSWORD" 23 kb01.poc.lab:confluent-server 20 | L)"
+echo "#41 carol item 23: $(R carol "$HUMAN_DEFAULT_PASSWORD" 23 kb01.poc.lab:confluent-server 20 | L)"
+echo "#42 carol item 22 restart REST: $(R carol "$HUMAN_DEFAULT_PASSWORD" 22 rest01.poc.lab:confluent-kafka-rest | L)"
+
+#37/#38 alice item 12: user=alice result=OK
+#39 alice wrong password: user=alice result=AUTH_FAIL
+#40 bob item 23 (broker log via kafkaops): user=bob result=OK
+#41 carol item 23: user=carol result=DENIED
+#42 carol item 22 restart REST: user=carol result=DENIED
+[rc=0]
+##### #43 fail closed:先建立故障設定並確認生效,才執行 item 21(重啟 broker)
+
+$ . ~/opmenu-test.sh
+ssh jump01.poc.lab "printf '. /etc/opmenu/opmenu-test.conf\nOPMENU_BOOTSTRAP=nowhere.invalid:9096\n' | sudo -n tee /tmp/opmenu-broken.conf >/dev/null; sudo -n chmod 0644 /tmp/opmenu-broken.conf; sudo -n -u opuser bash -c '. /tmp/opmenu-broken.conf; echo effective OPMENU_BOOTSTRAP=\$OPMENU_BOOTSTRAP'"
+before=$(ssh kb01.poc.lab "systemctl show confluent-server -p ActiveEnterTimestamp --value")
+out=$(CONF=/tmp/opmenu-broken.conf R alice "$HUMAN_DEFAULT_PASSWORD" 21 kb01.poc.lab:confluent-server)
+echo "$out" | grep -E '無法檢查|已重啟' | head -2
+after=$(ssh kb01.poc.lab "systemctl show confluent-server -p ActiveEnterTimestamp --value")
+echo "#43 kb01 start time before=[$before] after=[$after] $( [ "$before" = "$after" ] && echo 'NOT restarted (fail closed)' || echo 'RESTARTED!')"
+ssh jump01.poc.lab 'sudo -n rm -f /tmp/opmenu-broken.conf'
+
+effective OPMENU_BOOTSTRAP=nowhere.invalid:9096
+無法檢查 under-replicated partition(權限不足或連不上叢集,rc=1),拒絕重啟
+#43 kb01 start time before=[Fri 2026-10-16 14:32:56 CST] after=[Fri 2026-10-16 14:32:56 CST] NOT restarted (fail closed)
+[rc=0]
+
+$ . ~/opmenu-test.sh
+echo "#44 item 91 break-glass kafka-topics --list: $(R alice "$HUMAN_DEFAULT_PASSWORD" 91 kafka-topics --list | grep -c 'orders.events') match(es) for orders.events"
+ssh jump01.poc.lab "sudo -n grep -q '| alice | 91 bootstrap .*| EMERGENCY |' /var/log/opmenu/opmenu.log && echo '#45 EMERGENCY entry logged: ok'"
+echo "#46 su - opuser: $(ssh jump01.poc.lab 'sudo -n su - opuser -c id </dev/null 2>&1' | grep -c 'uid=') line(s) with uid="
+echo "#47 opuser reads break-glass key: $(ssh jump01.poc.lab 'sudo -n -u opuser cat /etc/opmenu/bootstrap/breakglass.key 2>&1 | head -1')"
+
+#44 item 91 break-glass kafka-topics --list: 1 match(es) for orders.events
+#45 EMERGENCY entry logged: ok
+#46 su - opuser: 0 line(s) with uid=
+#47 opuser reads break-glass key: cat: /etc/opmenu/bootstrap/breakglass.key: Permission denied
+[rc=0]

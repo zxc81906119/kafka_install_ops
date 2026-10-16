@@ -1,0 +1,104 @@
+##### 5.2 步驟 09:REST Proxy、Control Center、LB(ops02,cpadmin)
+cp /var/lib/cp-installer/manual/gen-edge-properties.sh /tmp/ 2>/dev/null; ls -l /var/lib/cp-installer/manual/gen-edge-properties.sh
+{{
+cat > ~/encrypt.sh <<'EOF'
+# encrypt <dir> <plaintext file> <remote secrets path>   (manual 4.2.4 rule for which keys to protect)
+encrypt() {
+  local D=$1 F=$2 R=$3 KEYS
+  KEYS=$(awk -F= '
+    /^[[:space:]]*#/ || !/=/ { next }
+    { k=$1; gsub(/[[:space:]]/,"",k); v=substr($0,index($0,"=")+1)
+      if (v ~ /^[[:space:]]*$/ || v ~ /\$\{securepass:/) next
+      if (k ~ /(password|credentials|passphrase|basic\.auth\.user\.info)$/) { print k; next }
+      if (k ~ /sasl\.jaas\.config$/ && v ~ /password=/) { split(v,w,/[[:space:]]+/); m=(w[1]==""?w[2]:w[1]); print k "/" m "/password" } }' "$F" | paste -sd, -)
+  install -m 0600 $S/secret-protection/master.secrets $D/$(basename $F .properties).security.properties
+  CONFLUENT_SECURITY_MASTER_KEY=$(cat $S/secret-protection/master.key) HOME=$S/cli-home confluent secret file encrypt --config-file "$F" --local-secrets-file $D/$(basename $F .properties).security.properties --remote-secrets-file "$R" --config "$KEYS"
+  echo "$(basename $D)/$(basename $F): keys=$(tr , '\n' <<<"$KEYS" | wc -l) securepass=$(grep -c securepass $F) plaintext-passwords=$(grep -ciE '(password|passphrase|credentials|user.info) *= *[^$ ]' $F)"
+}
+EOF
+echo encrypt-helper-ready
+}}
+##### 5.2.1 REST Proxy:設定(完整版)→ 加密 → 派送 → JMX exporter → drop-in → 啟動
+{{
+. ~/manual.env; . ~/encrypt.sh; set -a; . $S/secrets.env; set +a
+G=/var/lib/cp-installer/manual/gen-edge-properties.sh
+bash $G rest rest01 rest-01; bash $G rest rest02 rest-02
+SALT=$(cat $S/jmx-exporter.salt); HASH=$(printf '%s:%s' "$SALT" "$JMX_EXPORTER_PASSWORD" | sha256sum | awk '{print $1}')
+for H in rest01 rest02; do
+  D=$S/secret-protection/$H
+  encrypt $D $D/kafka-rest.properties /etc/confluent/kafka-rest/security.properties
+  ( umask 077; printf 'CONFLUENT_SECURITY_MASTER_KEY=%s\n' "$(cat $S/secret-protection/master.key)" > $D/service.env
+    printf 'httpServer:\n  ssl:\n    keyStore:\n      filename: /etc/confluent/ssl/cp-server.p12\n      password: %s\n      type: PKCS12\n    certificate:\n      alias: cp-server\n  authentication:\n    basic:\n      username: prometheus\n      passwordHash: %s\n      algorithm: SHA-256\n      salt: %s\nlowercaseOutputName: true\nlowercaseOutputLabelNames: true\n' "$STORE_PASSWORD" "$HASH" "$SALT" > $D/jmx-exporter.yml
+    cat $S/manual/ref/rules-rest.yml >> $D/jmx-exporter.yml
+    printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=/usr/bin/kafka-rest-start /etc/confluent/kafka-rest/kafka-rest.properties' 'Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"' 'Environment="KAFKAREST_HEAP_OPTS=-Xms512m -Xmx512m"' 'Environment="KAFKAREST_OPTS=-javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar=7071:/etc/confluent/kafka-rest/jmx-exporter.yml"' 'EnvironmentFile=-/etc/confluent/kafka-rest/service.env' 'LimitNOFILE=65536' 'Restart=on-failure' 'RestartSec=10' > $D/rest-dropin.conf )
+  ssh $H.poc.lab "mkdir -p /tmp/cpcfg && chmod 0700 /tmp/cpcfg"
+  scp -q $D/kafka-rest.properties $D/kafka-rest.security.properties $D/service.env $D/jmx-exporter.yml $D/rest-dropin.conf /srv/repo/raw/tools/jmx_prometheus_javaagent-1.0.1.jar $H.poc.lab:/tmp/cpcfg/
+  ssh $H.poc.lab 'set -e; C=/tmp/cpcfg
+    sudo install -d -o root -g confluent -m 0750 /etc/confluent/kafka-rest
+    sudo install -o root -g confluent -m 0640 $C/kafka-rest.properties /etc/confluent/kafka-rest/kafka-rest.properties
+    sudo install -o root -g confluent -m 0640 $C/kafka-rest.security.properties /etc/confluent/kafka-rest/security.properties
+    sudo install -o root -g root -m 0600 $C/service.env /etc/confluent/kafka-rest/service.env
+    sudo install -o root -g confluent -m 0640 $C/jmx-exporter.yml /etc/confluent/kafka-rest/jmx-exporter.yml
+    sudo install -d -o root -g root -m 0755 /opt/jmx-exporter /etc/systemd/system/confluent-kafka-rest.service.d
+    sudo install -o root -g root -m 0644 $C/jmx_prometheus_javaagent-1.0.1.jar /opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar
+    sudo install -o root -g root -m 0644 $C/rest-dropin.conf /etc/systemd/system/confluent-kafka-rest.service.d/10-cpctl.conf
+    sudo rm -rf $C; sudo systemctl daemon-reload; sudo systemctl enable -q confluent-kafka-rest; sudo systemctl start confluent-kafka-rest
+    echo "$(hostname): started"'
+done
+}}
+{{
+. ~/manual.env
+for h in rest01 rest02; do for i in $(seq 1 36); do c=$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://$h.poc.lab:8082/v3/clusters); [ "$c" = 200 ] && break; sleep 5; done; echo "$h legacy-app cert: $c (after ~$((i*5))s)"; done
+curl -s -o /dev/null -w 'rest01 cp-server cert (not in legacy list): %{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/cp-server.crt --key $PKI/cp-server.key https://rest01.poc.lab:8082/v3/clusters
+curl -s -o /dev/null -w 'rest01 no client cert: %{http_code} exit=%{exitcode}\n' --cacert $PKI/ca.pem https://rest01.poc.lab:8082/v3/clusters
+}}
+##### 5.2.2 Control Center:web-config(mTLS)、prometheus-generated.yml、drop-ins、control-center.properties(完整版)
+{{
+. ~/manual.env; . ~/encrypt.sh
+D=$S/secret-protection/c3-01
+bash /var/lib/cp-installer/manual/gen-edge-properties.sh c3 c3-01
+encrypt $D $D/control-center.properties /etc/confluent/control-center/security.properties
+( umask 077
+  printf 'CONFLUENT_SECURITY_MASTER_KEY=%s\n' "$(cat $S/secret-protection/master.key)" > $D/service.env
+  printf '%s\n' 'tls_server_config:' '  cert_file: /etc/confluent/ssl/cp-server.crt' '  key_file: /etc/confluent/ssl/cp-server.key' '  client_ca_file: /etc/confluent/ssl/ca.pem' '  client_auth_type: RequireAndVerifyClientCert' '  min_version: TLS12' > $D/web-config.yml
+  printf '%s\n' 'global:' '  scrape_interval: 60s' '  evaluation_interval: 60s' 'alerting:' '  alertmanagers:' '    - scheme: https' '      tls_config:' '        ca_file: /etc/confluent/ssl/ca.pem' '        cert_file: /etc/confluent/ssl/cp-server.crt' '        key_file: /etc/confluent/ssl/cp-server.key' '      static_configs:' '        - targets:' '            - c3-01.poc.lab:9093' 'rule_files:' "  - 'recording_rules-generated.yml'" "  - 'trigger_rules-generated.yml'" 'scrape_configs:' > $D/prometheus-generated.yml
+  printf '%s\n' '[Service]' 'Environment="METRICS_RETENTION_DAYS=2d"' 'Environment="PROMETHEUS_HOST=0.0.0.0"' 'Environment="PROMETHEUS_PORT=9090"' > $D/prometheus-dropin.conf
+  printf '%s\n' '[Service]' "ExecStartPre=/bin/sh -c 'for i in \$\$(seq 1 60); do for u in \$\$(echo \"https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090\" | tr , \" \"); do curl -fs --max-time 5 --cacert /etc/confluent/ssl/ca.pem -o /dev/null \"\$\$u/v1/metadata/id\" && exit 0; done; sleep 5; done; echo \"MDS not reachable after 5 min - starting anyway\"; exit 0'" 'TimeoutStartSec=420' 'ExecStart=' 'ExecStart=/usr/bin/control-center-start /etc/confluent/control-center/control-center.properties' 'Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"' 'Environment="CONTROL_CENTER_HEAP_OPTS=-Xms1536m -Xmx1536m"' 'EnvironmentFile=-/etc/confluent/control-center/service.env' 'LimitNOFILE=65536' 'Restart=on-failure' 'RestartSec=10' > $D/c3-dropin.conf )
+cat $D/c3-dropin.conf | head -3
+ssh c3-01.poc.lab "mkdir -p /tmp/cpcfg && chmod 0700 /tmp/cpcfg"
+scp -q $D/control-center.properties $D/control-center.security.properties $D/service.env $D/web-config.yml $D/prometheus-generated.yml $D/prometheus-dropin.conf $D/c3-dropin.conf c3-01.poc.lab:/tmp/cpcfg/
+ssh c3-01.poc.lab 'set -e; C=/tmp/cpcfg; E=/etc/confluent-control-center
+  sudo install -o root -g confluent -m 0640 $C/web-config.yml $E/web-config-prom.yml
+  sudo install -o root -g confluent -m 0640 $C/web-config.yml $E/web-config-am.yml
+  sudo install -o root -g confluent -m 0640 $C/prometheus-generated.yml $E/prometheus-generated.yml
+  sudo install -d -o root -g confluent -m 0750 /etc/confluent/control-center
+  sudo install -o root -g confluent -m 0640 $C/control-center.properties /etc/confluent/control-center/control-center.properties
+  sudo install -o root -g confluent -m 0640 $C/control-center.security.properties /etc/confluent/control-center/security.properties
+  sudo install -o root -g root -m 0600 $C/service.env /etc/confluent/control-center/service.env
+  sudo install -d -o root -g root -m 0755 /etc/systemd/system/prometheus.service.d /etc/systemd/system/confluent-control-center.service.d
+  sudo install -o root -g root -m 0644 $C/prometheus-dropin.conf /etc/systemd/system/prometheus.service.d/10-cpctl.conf
+  sudo install -o root -g root -m 0644 $C/c3-dropin.conf /etc/systemd/system/confluent-control-center.service.d/10-cpctl.conf
+  sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/confluent/control-center
+  sudo rm -rf $C; sudo systemctl daemon-reload
+  for u in prometheus alertmanager confluent-control-center; do sudo systemctl enable -q $u; sudo systemctl start --no-block $u; done
+  ls $E; echo "$(hostname): units started"'
+}}
+{{
+. ~/manual.env
+for i in $(seq 1 24); do r=$(curl -s --cacert $PKI/ca.pem --cert $PKI/cp-server.crt --key $PKI/cp-server.key https://c3-01.poc.lab:9090/-/ready); [ -n "$r" ] && break; sleep 5; done; echo "prometheus with client cert: $r"
+curl -s -o /dev/null -w 'prometheus without client cert: %{http_code}\n' --cacert $PKI/ca.pem https://c3-01.poc.lab:9090/-/ready
+ssh c3-01.poc.lab "curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/cp-server.crt --key /etc/confluent/ssl/cp-server.key https://c3-01.poc.lab:9093/-/ready; echo"
+for i in $(seq 1 84); do c=$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem https://c3-01.poc.lab:9021/); [ "$c" = 200 ] && break; sleep 5; done; echo "C3 UI: $c (after ~$((i*5))s)"
+ssh c3-01.poc.lab "systemctl is-active prometheus alertmanager confluent-control-center | paste -sd' '"
+}}
+##### 5.2.3 Nginx stream(lb01):只管 /etc/nginx/stream.d/cp.conf;nginx -t 通過才 reload
+{{
+printf '%s\n' 'upstream cp_rest {' '    hash $remote_addr consistent;' '    server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s;' '    server rest02.poc.lab:8082 max_fails=2 fail_timeout=10s;' '}' 'upstream cp_c3 {' '    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;' '}' 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }' 'server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }' > /tmp/cp.conf.new
+scp -q /tmp/cp.conf.new lb01.poc.lab:/tmp/cp.conf.new && rm -f /tmp/cp.conf.new
+ssh lb01.poc.lab 'grep -n -A2 "^stream" /etc/nginx/nginx.conf; sudo install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf && rm -f /tmp/cp.conf.new && sudo nginx -t -q && sudo nginx -s reload && sleep 1 && ss -ltn | grep -E ":8082|:9021"'
+}}
+{{
+. ~/manual.env
+curl -s -o /dev/null -w 'via LB rest.poc.lab (legacy cert): %{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters
+curl -s -o /dev/null -w 'via LB c3.poc.lab: %{http_code}\n' --cacert $PKI/ca.pem https://c3.poc.lab:9021/
+}}

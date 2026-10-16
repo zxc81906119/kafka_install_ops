@@ -24,6 +24,7 @@ step_apply() {
   for h in $(inv::hosts ops) $(inv::hosts controller) $(inv::hosts broker) $(inv::hosts rest) $(inv::hosts c3) $(inv::hosts jump); do
     remote::put "$h" "$PKI_DIR/ca.pem" /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem root root 0644
     if [[ $REMOTE_CHANGED == 1 ]] && step::mutating; then remote::exec "$h" "sudo -n update-ca-trust extract"; fi
+    remote::apply "$h" ensure::anchor_backups_moved
     remote::apply "$h" java_node::trust_ca "$(install::java_home)" /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
   done
 }
