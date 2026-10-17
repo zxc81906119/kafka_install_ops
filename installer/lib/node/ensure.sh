@@ -64,10 +64,24 @@ ensure::file() {
 readonly ENSURE_BACKUP_DIR=/var/backups/cp-installer
 ensure::_consumes_all() { [[ $1 == /etc/pki/ca-trust/source/anchors/* ]]; }
 
-# ensure::_backup <file>  -> <file>.bak.<ts>, or under $ENSURE_BACKUP_DIR for consume-all directories
+# Private keys / keystores on the nodes: never keep an old copy. A rotated key must disappear from the
+# node; the operator host archives every key it replaces (pki/archive), so no backup is needed here.
+readonly ENSURE_KEY_DIRS="/etc/confluent/ssl /etc/opmenu/bootstrap"
+ensure::_is_key_material() {
+  local f=$1 d
+  for d in $ENSURE_KEY_DIRS; do
+    [[ $f == "$d"/* ]] || continue
+    case ${f##*/} in *.p12 | *.key | *keypair*.pem) return 0 ;; esac
+  done
+  return 1
+}
+
+# ensure::_backup <file>  -> <file>.bak.<ts>, under $ENSURE_BACKUP_DIR for consume-all directories,
+# or nothing for key material
 ensure::_backup() {
   local f=$1 ts
   ts=$(date +%Y%m%d%H%M%S)
+  ensure::_is_key_material "$f" && return 0
   if ensure::_consumes_all "$f"; then
     install -d -m 0700 "$ENSURE_BACKUP_DIR$(dirname "$f")"
     cp -p "$f" "$ENSURE_BACKUP_DIR$f.bak.$ts"
@@ -88,6 +102,22 @@ ensure::anchor_backups_moved() {
     moved=1
   done
   if [[ $moved == 1 ]]; then update-ca-trust extract; else _mark ok "no backups in the trust anchors"; fi
+}
+
+# ensure::key_backups_removed -> delete backups of keys/keystores left by older versions (old private keys)
+ensure::key_backups_removed() {
+  local d f n=0
+  for d in $ENSURE_KEY_DIRS; do
+    [[ -d $d ]] || continue
+    for f in "$d"/*.bak.*; do
+      [[ -e $f ]] || continue
+      ensure::_is_key_material "${f%.bak.*}" || continue
+      _mark changed "remove old key backup: $f"
+      _checking || rm -f "$f"
+      n=$((n + 1))
+    done
+  done
+  [[ $n -gt 0 ]] || _mark ok "no old key backups on this node"
 }
 
 # ensure::symlink <target> <link>

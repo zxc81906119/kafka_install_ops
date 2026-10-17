@@ -47,17 +47,25 @@ repo::_verify_landing() {
 
 repo::import() {
   repo::_verify_landing
-  local rel sum dest changed_dirs=() added=0 kept=0
+  local rel sum dest changed_dirs=() added=0 kept=0 conflicts=0
   declare -A dirty=()
+  # All-or-nothing: find every conflict first, so a bad file late in the list never leaves
+  # earlier files published without their repodata.
+  while read -r sum rel; do
+    rel=${rel#\*}
+    dest=$(repo::_dest "$rel") || continue
+    if [[ -f $dest && $(core::sha256 "$dest") != "$sum" ]]; then
+      log::error "published file has different content: $rel"
+      conflicts=$((conflicts + 1))
+    fi
+  done <"$REPO_LANDING/SHA256SUMS"
+  [[ $conflicts -eq 0 ]] || core::die "$E_PRECHECK" "refusing to overwrite $conflicts published file(s) - nothing was published"
   while read -r sum rel; do
     rel=${rel#\*}
     dest=$(repo::_dest "$rel") || continue
     if [[ -f $dest ]]; then
-      if [[ $(core::sha256 "$dest") == "$sum" ]]; then
-        kept=$((kept + 1))
-        continue
-      fi
-      core::die "$E_PRECHECK" "refusing to overwrite published file with different content: $rel"
+      kept=$((kept + 1))
+      continue
     fi
     if core::is_check_mode; then
       log::changed "would publish $rel"

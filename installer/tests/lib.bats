@@ -95,6 +95,33 @@ setup() { setup_cpctl; setup_node; }
   [[ $ENSURE_BACKUP_DIR == /var/* ]]
 }
 
+@test "no backup is ever kept for private keys / keystores on the nodes" {
+  ensure::_is_key_material /etc/confluent/ssl/kafka-internal.p12
+  ensure::_is_key_material /etc/confluent/ssl/cp-server.key
+  ensure::_is_key_material /etc/confluent/ssl/mds-token-keypair.enc.pem
+  ensure::_is_key_material /etc/opmenu/bootstrap/breakglass.p12
+  run ensure::_is_key_material /etc/confluent/ssl/ca.pem; [ "$status" -ne 0 ]
+  run ensure::_is_key_material /etc/confluent/kafka/server.properties; [ "$status" -ne 0 ]
+  run ensure::_is_key_material /tmp/x.p12; [ "$status" -ne 0 ]
+}
+
+@test "repo import is all-or-nothing: one conflicting file -> nothing is published" {
+  local land="$BATS_TEST_TMPDIR/land" repo="$BATS_TEST_TMPDIR/repo"
+  mkdir -p "$land/tools" "$repo/raw/tools"
+  echo a >"$land/tools/a.jar"; echo b-new >"$land/tools/b.jar"; echo b-old >"$repo/raw/tools/b.jar"
+  (cd "$land" && sha256sum tools/a.jar tools/b.jar >SHA256SUMS)
+  run bash -c '
+    REPO_LANDING=$1 REPO_LOCAL_ROOT=$2
+    source "$CPCTL_HOME/lib/core.sh"; source "$CPCTL_HOME/lib/log.sh"; source "$CPCTL_HOME/lib/repo/local.sh"
+    trap - ERR; set +e
+    repo::_verify_landing() { :; }
+    repo::_as_owner() { "$@"; }
+    repo::import' _ "$land" "$repo"
+  [ "$status" -ne 0 ]
+  [[ $output == *"nothing was published"* ]]
+  [ ! -e "$repo/raw/tools/a.jar" ]
+}
+
 @test "ensure::dir and ensure::symlink converge and then report ok" {
   d="$BATS_TEST_TMPDIR/s"
   run ensure::dir "$d" "$ME" "$MYGROUP" 0750; [[ "$output" == *"::changed::"* ]]

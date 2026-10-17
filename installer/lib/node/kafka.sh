@@ -20,11 +20,12 @@ kafka_node::format() {
   _mark changed "kafka-storage format (cluster.id=$cid)"
   [[ ${CPCTL_CHECK:-0} == 1 ]] && return 0
   install -d -o cp-kafka -g confluent -m 0750 "$KAFKA_DATA"
-  # Secret Protection: the config holds ${securepass:...} references -> the tool needs the master key too
+  # Secret Protection: the config holds ${securepass:...} references -> the tool needs the master key too.
+  # Passed through the environment (--preserve-env), never as an argument: arguments are visible in ps.
   local mk=""
   [[ -f /etc/confluent/kafka/service.env ]] && mk=$(sed -n 's/^CONFLUENT_SECURITY_MASTER_KEY=//p' /etc/confluent/kafka/service.env)
-  sudo -u cp-kafka env JAVA_HOME="$jh" KAFKA_HEAP_OPTS=-Xmx256m ${mk:+CONFLUENT_SECURITY_MASTER_KEY="$mk"} \
-    KAFKA_OPTS="-Dlog4j2.configurationFile=$etc/tools-log4j2.yaml" \
+  CONFLUENT_SECURITY_MASTER_KEY=$mk sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY \
+    env JAVA_HOME="$jh" KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS="-Dlog4j2.configurationFile=$etc/tools-log4j2.yaml" \
     "$bindir/kafka-storage" format --cluster-id "$cid" --config "$cfg" "$@" | grep -v -i scram || true
   [[ -f $KAFKA_DATA/meta.properties ]] || { _mark warn "format did not create meta.properties"; return 1; }
 }

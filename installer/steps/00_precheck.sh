@@ -20,7 +20,7 @@ precheck::inventory() {
 }
 
 precheck::host() {
-  local h=$1 facts os tmpfree tmpnx skew
+  local h=$1 facts os tmpfree tmpnx skew rc=0
   if ! remote::reachable "$h"; then log::error "[$h] SSH as $SSH_USER failed"; return 1; fi
   facts=$(remote::run "$h" node::facts) || { log::error "[$h] cannot collect facts (sudo?)"; return 1; }
   os=$(sed -n 's/^os=//p' <<<"$facts")
@@ -31,15 +31,17 @@ precheck::host() {
     lb | ad) log::ok "[$h] reachable (appliance: $os)" ; return 0 ;;
   esac
   [[ $os =~ ^(rhel|rocky|almalinux|ol)-9 ]] && log::ok "[$h] OS $os" || log::warn "[$h] OS $os is not a RHEL 9 family release"
-  [[ $tmpnx == no ]] && log::ok "[$h] /tmp is exec" || log::error "[$h] /tmp is mounted noexec (Confluent requires exec)"
+  # blocking: Confluent cannot run with noexec /tmp, and TLS / MDS tokens fail with clock skew
+  if [[ $tmpnx == no ]]; then log::ok "[$h] /tmp is exec"; else log::error "[$h] /tmp is mounted noexec (Confluent requires exec)"; rc=1; fi
   ((tmpfree >= 2000)) && log::ok "[$h] /tmp free ${tmpfree}MB" || log::warn "[$h] /tmp free ${tmpfree}MB < 2GB"
-  ((${skew#-} <= 2)) && log::ok "[$h] clock skew ${skew}s" || log::error "[$h] clock skew ${skew}s (TLS/MDS tokens need < 2s)"
+  if ((${skew#-} <= 2)); then log::ok "[$h] clock skew ${skew}s"; else log::error "[$h] clock skew ${skew}s (TLS/MDS tokens need < 2s)"; rc=1; fi
   local other fq
   for other in $(inv::all_hosts); do
     fq=$(inv::fqdn "$other")
     remote::exec "$h" "getent hosts $fq >/dev/null" || { log::error "[$h] cannot resolve $fq"; return 1; }
   done
   log::ok "[$h] resolves all cluster FQDNs; facts: $(grep -E '^(cpus|mem_mb|container|systemd)=' <<<"$facts" | paste -sd' ' -)"
+  return "$rc"
 }
 
 step_apply() {

@@ -22,13 +22,14 @@ const PAGE_W = 11906, MARGIN = 1134, CONTENT_W = PAGE_W - 2 * MARGIN; // A4, 2 c
 // ---- inline: `code` and **bold**
 function runs(text, base = {}) {
   const out = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  // bold may contain `code` and lone "*" (e.g. **... `confluent-*` ...**): match up to the next "**"
+  const re = /(`[^`]+`|\*\*(?:(?!\*\*).)+?\*\*)/g;
   let last = 0, m;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(new TextRun({ text: text.slice(last, m.index), ...base }));
     const t = m[0];
     if (t.startsWith('`')) out.push(new TextRun({ text: t.slice(1, -1), font: MONO, size: 18, color: '9D174D', ...base, bold: base.bold }));
-    else out.push(new TextRun({ text: t.slice(2, -2), ...base, bold: true }));
+    else out.push(...runs(t.slice(2, -2), { ...base, bold: true }));
     last = m.index + t.length;
   }
   if (last < text.length) out.push(new TextRun({ text: text.slice(last), ...base }));

@@ -14,7 +14,9 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 - 離線軟體引進與內部 repo(第 2 章)
 - 安裝步驟 00–11(第 3–6 章),每一步都對應到 cpctl 的同名 step
 - tar.gz 安裝方式(第 7 章),也就是不用 RPM 的替代做法
-- 實測紀錄(附錄 A):在一套全新的模擬環境中,從外網下載開始、完全照本手冊手動裝完整套叢集並驗收;另外在備用節點上以 rpm 與 tar.gz 各做一次單節點安裝。實測中發現的問題都已修進手冊
+- 版本升級(第 8 章):滾動升級、回滾、finalize
+- 憑證輪替與 CA 輪替(第 9 章):不停機換憑證、三階段換 CA
+- 實測紀錄(附錄 A):在一套全新的模擬環境中,從外網下載開始、完全照本手冊手動裝完整套叢集並驗收,再於持續負載下演練升級與憑證/CA 輪替(全部 0 遺失);另外在備用節點上以 rpm 與 tar.gz 各做一次單節點安裝。實測中發現的問題都已修進手冊
 - 手冊引用的檔案完整內容(附錄 D),手動安裝時不需要 cpctl 專案
 
 > 手冊中的主機名稱、IP、版本號都取自 PoC 的 `installer/conf/*.env`。搬到正式環境時,把這些值換成正式環境的值即可,指令本身不變。
@@ -101,6 +103,8 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 | 09_start_edge | REST Proxy、C3、Nginx | rest、c3、lb | 5.2 |
 | 10_verify | 整體驗收(48 項) | ops01 | 5.3 |
 | 11_opmenu | 堡壘機 OP menu | jump01、各節點 | 第 6 章 |
+| (維運)升級 | 新版本引進、滾動升級、回滾、finalize | 全部 | 第 8 章 |
+| (維運)憑證 / CA 輪替 | 重簽憑證;CA 三階段 add → switch → retire | 全部 | 第 9 章 |
 
 ## 1.7 rpm 與 tar.gz 兩種安裝方式
 
@@ -665,7 +669,7 @@ stat -c '%U:%G %a %n' /srv/repo/raw/tar/* /srv/repo/gpg-keys/*
 
 **注意事項／陷阱**：
 - **同名不同 sha256 一律拒絕**（`refusing to overwrite published file with different content: <rel>`）。要更新內容必須換檔名（換版本）；opmenu 以內容雜湊命名正是為此。
-- cpctl 的檢查與發佈是**同一個迴圈逐檔進行**，遇到衝突時在它之前的新檔**已經發佈**、repodata 尚未重建；因此手動流程建議先跑預檢迴圈。若真的遇到，修正落地區後重跑即可（已發佈的相同檔會被略過）。
+- 一定要先跑完預檢迴圈、確定沒有任何 `CONFLICT:` 才發佈,否則清單後段的衝突會讓前段的新檔已經發佈、repodata 卻還沒重建。cpctl 也是先整批檢查、有任何衝突就全部不發佈(2026-10-16 修正;舊版是逐檔邊查邊發佈)。
 - 不會刪除任何已發佈檔；舊版（如 CP 8.2.4、舊 opmenu）會一直保留，清理需另立變更。
 - cpctl 本身以 umask 027 執行，所以一定要經 `repoadmin` + `umask 022` 寫入，否則 httpd 讀不到（403）。
 
@@ -964,7 +968,7 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
 **對應 cpctl**：`cpctl step 00_precheck`（或 `cpctl install` 的第一步）；函式 `precheck::inventory`、`precheck::host`、`step_apply`、`step_verify`（= `repo::verify`）。遠端 facts 由 `node::facts`（`lib/node/ensure.sh`）以 `ssh cpadmin@<fqdn> "sudo -n -u root bash -s"` 送入執行。
 
 **注意事項／陷阱**：
-- **/tmp noexec 與時鐘誤差只記 ERROR、不會讓該主機回傳失敗**，步驟本身仍可能「通過」，只在最後 RECAP 的 `failed=` 計數看得到。人工執行時應視為**阻擋項目**。
+- /tmp noexec 與時鐘誤差都是**阻擋項目**:有任何一台不合格就不要往下做。cpctl 會讓該主機預檢失敗(2026-10-16 修正;舊版只記 ERROR、步驟仍可能通過)。
 - 步驟戳記（stamp）：`/var/lib/cp-installer/stamps/00_precheck` = 步驟檔 + `inventory.env` + `apps.env` + 所有 lib/roles 程式碼的雜湊。內容未變且 repo verify 通過時，再跑 cpctl 會顯示 `skipped`；**主機狀態變了（例如時鐘飄移）cpctl 不會重檢**，需 `cpctl --force step 00_precheck`。手動流程每次都完整執行即可。
 - 第一次 SSH 使用 `StrictHostKeyChecking=accept-new`，會自動信任新主機金鑰；正式環境建議事先佈署 `known_hosts`。
 - 時鐘誤差是以「ops01 時間」為基準，ops01 本身時鐘錯誤時全部主機都會被判失敗。
@@ -1414,10 +1418,11 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
   # 2) 安裝
   sudo dnf -y -q --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False \
        install temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2
-  # 3) 鎖版本（只鎖直接指定的套件，與 cpctl 相同）
+  # 3) 鎖版本:直接指定的套件,加上一起被拉進來的 confluent-* 相依套件(與 cpctl 相同)
   for p in temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2; do
     sudo dnf versionlock add "$p"
   done
+  for p in $(rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 'confluent-*'); do sudo dnf versionlock add "$p"; done
   ```
   c3-01：
   ```bash
@@ -1444,7 +1449,7 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
 - **對應 cpctl**：`distribute::host` → `install::prepare` + `install::ensure` → `rpm_node::ensure install <name=ver>...`；`step_verify` → `install::version`。
 - **注意事項**：
   - 需要 `python3-dnf-plugin-versionlock`（PoC image 已預裝；RHEL 最小安裝要先從 os-deps 裝）。
-  - `confluent-server-8.3.2` 會拉入相依（confluent-common、rest-utils、ce-kafka-http-server、kafka-rest、server-rest、metadata-service、telemetry），相依套件**沒有**被 versionlock；它們版本由 confluent-server 的相依約束住。
+  - `confluent-server-8.3.2` 會拉入相依（confluent-common、rest-utils、ce-kafka-http-server、kafka-rest、server-rest、metadata-service、telemetry），這些相依套件也要鎖(上面第 3 步的第二個迴圈),否則 OS 修補時可能被單獨升級。升級時先 `dnf versionlock delete` 所有 confluent-* 再安裝新版、再重新鎖定。cpctl 自 2026-10-16 起也會鎖定相依套件(`rpm_node::lock_deps`)。
   - RPM 的 JDK `cacerts` 是 symlink → `/etc/pki/ca-trust/extracted/java/cacerts`（由 `update-ca-trust` 產生），與 3.8 有關。
   - 已安裝不同版本時 cpctl（install 模式）回傳錯誤並拒絕變更，需走 `cpctl upgrade`；手動同理，不要直接 `dnf install` 覆蓋。
 
@@ -1884,7 +1889,7 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
   sudo openssl pkcs12 -in /etc/confluent/ssl/cp-server.p12 -nokeys -passin env:STORE_PASSWORD | openssl x509 -noout -subject
   ```
 - **對應 cpctl**：`role::push_ssl`（`roles/_role.sh`），呼叫端 `kafka::_configure`、`rest`、`c3` 角色；`ensure::absent /etc/confluent/ssl/mds-token-keypair.pem`。
-- **注意事項**：cpctl 的 `ensure::file` 每次內容變動會留 `<file>.bak.<時間戳>`（kb01 已累積多份 `*.p12.bak.*`），舊私鑰因此留在節點上；手動時建議不要留備份或定期清除（清除時注意 glob 要由 root 展開：`sudo find /etc/confluent/ssl -name '*.bak.*' -delete`）。
+- **注意事項**：私鑰與 keystore(`*.p12`、`*.key`、`*keypair*.pem`)換新時**不要在節點上留舊檔備份**,舊私鑰應從節點上消失;操作機的 PKI 目錄已有歸檔。清除舊備份時 glob 要由 root 展開:`sudo find /etc/confluent/ssl -name '*.bak.*' -delete`。cpctl 自 2026-10-16 起不再為這類檔案留備份,03 步驟也會刪掉舊版留下的備份。
 
 ### 3.4.8 主機信任內部 CA（OS trust anchors + JDK cacerts）
 
@@ -2874,7 +2879,7 @@ version=1
 
 **注意事項**:
 - `kafka-storage` 必須以 **cp-kafka** 執行;以 root 執行會讓 `meta.properties` 與 bootstrap checkpoint 變成 root 擁有,broker 啟動時寫不進去。
-- 設定檔含 `${securepass:...}`,`kafka-storage` 也要解密,所以要帶 `CONFLUENT_SECURITY_MASTER_KEY`。上面的寫法由 root 讀 `service.env` 後,用 `--preserve-env` 傳給 cp-kafka,master key 不會出現在指令列。(cpctl 本身是以 `env CONFLUENT_SECURITY_MASTER_KEY=...` 帶入,執行瞬間會出現在 `ps`。)
+- 設定檔含 `${securepass:...}`,`kafka-storage` 也要解密,所以要帶 `CONFLUENT_SECURITY_MASTER_KEY`。上面的寫法由 root 讀 `service.env` 後,用 `--preserve-env` 傳給 cp-kafka,master key 不會出現在指令列。(cpctl 也是這樣做;2026-10-16 之前的版本是以 `env CONFLUENT_SECURITY_MASTER_KEY=...` 帶入,執行瞬間會出現在 `ps`。)
 - `--add-scram` 的密碼會出現在指令列與 `ps`;指令前加空白避免進 history,並在 PoC 以外改用專用的一次性 shell。cpctl 會用 `grep -vi scram` 把含 SCRAM 的輸出行濾掉。
 - `--add-scram` 只在 controller 格式化時有意義(寫進 bootstrap metadata);叢集起來後再新增 SCRAM 帳號要用 `kafka-configs --alter --add-config SCRAM-SHA-512=...`(步驟 08)。
 - 使用 `--initial-controllers` 格式化後 `kraft.version` 為 1(動態 quorum),**不能降回 0**(靜態 `controller.quorum.voters`)。所有 controller 的 `--initial-controllers` 字串必須完全一致。
@@ -3208,6 +3213,7 @@ SCRAM credential configs for user-principal 'app-orders' are SCRAM-SHA-512=itera
   - `kafka-admin`（iterations=4096）與新叢集上的 `confluent-audit` 是在 06 `kafka-storage format --add-scram` 時寫入的；08 只是補齊。
   - `--add-config` 的密碼會短暫出現在 `ps` 輸出中,所以指令開頭加空白(不進 history),並在只有安裝人員能登入的操作機上執行;密碼從密碼檔讀成變數帶入(`password=$APP_APP_ORDERS_PASSWORD`),不要手打。
   - **不要改用 `--add-config-file`**:全程實測證實它不支援 SCRAM 憑證,而且錯誤訊息 `Invalid credential property SCRAM_SHA_512=[iterations=8192,password=...]` 會**把密碼原文印在畫面與紀錄裡**。實測時因此外洩了 3 組密碼,處理方式是遮蔽紀錄並全部換新(見下一點)。
+  - **叢集還沒就緒時不要執行**:`kafka-configs` 連不上(例如 `Timed out waiting for a node assignment`)時,錯誤訊息 `Error while executing config command with args '...'` 會把**整串參數,包括 `--add-config` 裡的密碼**印出來。先確認 broker 都已註冊(4.4.5)再建 SCRAM 帳號;要存檔的輸出先經過遮蔽(例如 `sed -E 's/password=[^],]*/password=<hidden>/g'`)。實測重置叢集時因此又外洩 2 組,已遮蔽並換新(附錄 A.3)。
   - 改密碼 = 再次 `--alter --add-config`(覆蓋);舊連線不會斷,新連線才生效。
   - **改 `confluent-audit` 的密碼**時,controller 與 broker 的 `server.properties` 也寫著這組密碼(4.2.3.7),要重新產生、加密、派送(4.2.3–4.2.4),再一台一台滾動重啟(4.2.8)。改完 SCRAM 到該節點重啟之前,這台的稽核寫入會認證失敗(broker log 出現 `Failed authentication`),全部重啟完就停止。實測 7 台滾動重啟後,30 秒內不再新增任何失敗。
 
@@ -4391,6 +4397,428 @@ Added controller 3 with directory id Oh37yuEAl48M83WgLnaOHA and endpoints: CONTR
 
 對應 cpctl:`cpctl upgrade stage|rolling|rollback`(`tar_node::switch upgrade`)。
 
+# 8. 版本升級(rpm)
+
+本章以 Confluent Platform 8.2.4 → 8.3.2 為例,說明不停機的滾動升級。順序依 CP 8.3 官方升級指引:**broker 逐台 → controller 逐台(leader 最後)→ REST Proxy(先從 LB 摘除)**;全部完成並觀察一段時間後,才執行不可逆的 **finalize**。Control Center 2.6 與 CP 版本獨立,只要相容表支援目標版本就不必一起升。
+
+整章在 2026-10-16/17 的全程實測環境(附錄 A.3)中照做過一次:持續送收訊息,**0 筆遺失、REST 0 次失敗**,中途也演練了一次回滾。
+
+> 實測環境的 controller 是 kc01–kc03、操作機是 ops02;本手冊其他章節用 cpctl PoC 的 kc01、kc02、kc04 與 ops01。指令裡的主機清單請依實際環境替換。
+
+## 8.0 共用變數與健康檢查函式(ops01,cpadmin)
+
+```bash
+$ cat >> ~/manual.env <<'EOF'
+export FROM=8.2.4 TO=8.3.2 TO_RELEASE=4.3
+BROKERS="kb01 kb02 kb03 kb04" CONTROLLERS="kc01 kc02 kc04" RESTS="rest01 rest02"
+# broker 健康:已註冊且未 fence、沒有 under-replicated partition、MDS 有回應
+broker_ok() { local id=$((100 + ${1#kb0})); kafka-broker-api-versions --bootstrap-server $B --command-config $CFG 2>/dev/null | grep -q "(id: $id rack: [a-z-]* isFenced: false)" && [ -z "$(kafka-topics --bootstrap-server $B --command-config $CFG --describe --under-replicated-partitions 2>/dev/null)" ] && curl -sf -o /dev/null --cacert $PKI/ca.pem https://$1.poc.lab:8090/v1/metadata/id; }
+# controller 健康:是 voter 且 lag 0
+ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
+# 最多等 300 秒;取樣一次不算數(寫入瞬間 lag 可能短暫不是 0)
+wait_for() { local i; for i in $(seq 1 60); do "$@" && { echo "  healthy after ~$((i*5))s"; return 0; }; sleep 5; done; echo "  NOT HEALTHY after 300s - stop here"; return 1; }
+EOF
+$ . ~/manual.env
+```
+
+`$B`、`$CB`、`$CFG`、`$PKI`、`$CID`、`$MDS` 見 4.0 與 5.0。
+
+## 8.1 引進新版本
+
+升級要用的套件和第一次安裝走同一條路:外網下載 → 驗證閘門 → 落地區 → 內網匯入(第 2 章)。只需要在 2.2 多下載一組新版本:
+
+```bash
+# 外網下載機:上游 repo 加上新版本的 baseurl(例如 https://packages.confluent.io/rpm/8.3),然後
+dnf -q download --resolve --arch x86_64 --arch noarch --destdir /tmp/stage \
+  confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2
+```
+
+接著照 2.2 的方式分類、照 2.6–2.7 重新產生 SHA256SUMS 並跑驗證閘門,再照 2.10–2.14 在內網匯入。
+
+**驗證**:重新匯入時,已發佈的檔案會被略過,只有新版本被發佈。實測結果是 `published 10 files`,confluent repo 從 11 個套件變成 21 個(新舊版本並存)。舊版本**一定要留在 repo**,回滾(8.6)要用。
+
+>! 節點上的 dnf 會快取 repo metadata。新版本匯入後,節點端的安裝指令一定要加 `--refresh`,否則會出現 `Unable to find a match: confluent-server-8.3.2`(實測時就因此第一次安裝失敗)。
+
+## 8.2 升級前檢查(不改任何東西)
+
+任何一項不通過就**停在這裡**,處理完再重來。
+
+```bash
+$ . ~/manual.env
+# 1) 目前版本
+$ for h in $BROKERS $CONTROLLERS; do echo "$h $(ssh $h.poc.lab "rpm -q --qf '%{VERSION}' confluent-server")"; done
+$ for h in $RESTS; do echo "$h $(ssh $h.poc.lab "rpm -q --qf '%{VERSION}' confluent-kafka-rest")"; done
+# 2) 目標版本已在內部 repo(從任一節點看)
+$ ssh kb01.poc.lab "sudo dnf -q --refresh --disablerepo='*' --enablerepo=cp-internal-confluent list --showduplicates confluent-server"
+confluent-server.noarch    1:8.2.4-1    cp-internal-confluent
+confluent-server.noarch    1:8.3.2-1    cp-internal-confluent
+# 3) 8.3 已移除的靜態設定不可出現(每台都要是 0)
+$ for h in $BROKERS $CONTROLLERS; do echo "$h $(ssh $h.poc.lab "sudo grep -cE '^(message.format.version|message.downconversion.enable|message.timestamp.difference.max.ms)' /etc/confluent/kafka/server.properties")"; done
+# 4) 叢集健康(用 wait_for 重試,不只取樣一次)
+$ for h in $BROKERS; do wait_for broker_ok $h || break; done; for h in $CONTROLLERS; do wait_for ctl_ok $h || break; done
+# 5) 憑證剩餘天數(升級期間不要碰到到期)
+$ for n in cp-server kafka-internal; do echo "$n $(( ($(date -d "$(openssl x509 -enddate -noout -in $PKI/$n.crt | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )) days"; done
+# 6) 目前 finalize 的 metadata 版本(之後 finalize 會用到)
+$ kafka-features --bootstrap-server $B --command-config $CFG describe | grep -E 'confluent.metadata.version|kraft.version'
+Feature: confluent.metadata.version  SupportedMinVersion: CP-7.3-IV3  SupportedMaxVersion: CP-8.2-IV1A  FinalizedVersionLevel: CP-8.2-IV1A
+```
+
+7) 相容性(查官方相容表):Control Center 2.6.x 支援 CP 7.5–8.3;CP 8.3 支援 JDK 17、21、25;8.2 → 8.3 可直接升級。
+
+**對應 cpctl**:`cpctl upgrade plan --to 8.3.2`(`upgrade::plan`)。
+
+>! 實測時第一次的前置檢查有一台 controller 顯示不健康,但腳本只印出結果、沒有停下,升級就接著開始了。事後確認只是取樣當下 lag 短暫不是 0。前置檢查要**有任何一項失敗就停**,健康檢查要重試數次再下結論。
+
+## 8.3 備份
+
+```bash
+$ . ~/manual.env; set -a; . $S/secrets.env; set +a
+$ BK=$S/upgrade/backup-$(date +%Y%m%d-%H%M%S); install -d -m 0700 $BK
+# 每台的 /etc/confluent 與 systemd drop-in
+$ for h in $CONTROLLERS $BROKERS $RESTS c3-01; do ssh $h.poc.lab "sudo tar -czf - -C / etc/confluent etc/systemd/system 2>/dev/null" > $BK/$h-etc.tgz; done
+# 叢集層級的狀態
+$ kafka-topics   --bootstrap-server $B --command-config $CFG --describe > $BK/topics.txt
+$ kafka-configs  --bootstrap-server $B --command-config $CFG --describe --entity-type users > $BK/scram-users.txt
+$ kafka-features --bootstrap-server $B --command-config $CFG describe > $BK/features.txt
+$ kafka-acls     --bootstrap-server $B --command-config $CFG --list > $BK/acls.txt
+# RBAC 綁定(每個 principal 一份 JSON;svc-cpctl 帳密放 0600 netrc)
+$ install -m 0600 /dev/null ~/.netrc-mds && printf 'machine kb01.poc.lab login svc-cpctl password %s\n' "$SVC_CPCTL_PASSWORD" > ~/.netrc-mds
+$ for p in User:svc-c3 User:svc-rest User:confluent-audit User:opmenu-breakglass Group:kafka-admins Group:kafka-operators Group:kafka-devs User:app-orders User:app-payments User:app-legacy-billing; do
+    curl -s --cacert $PKI/ca.pem --netrc-file ~/.netrc-mds -H 'Content-Type: application/json' -X POST \
+      -d "{\"clusters\":{\"kafka-cluster\":\"$CID\"}}" "$MDS/security/1.0/lookup/principal/$p/resources" > "$BK/rbac-${p/:/_}.json"
+  done; rm -f ~/.netrc-mds
+$ cp $S/kraft.env $BK/; echo "$TO" > $BK/target; ln -sfn $BK $S/upgrade/last-backup
+```
+
+**驗證**:`ls -la $BK` 有 10 台主機的 `*-etc.tgz`(各 12–23 KB)、`topics.txt`、`scram-users.txt`、`features.txt`、10 份 `rbac-*.json`、`kraft.env`、`target`。`target` 是 finalize 前的檢查依據(8.8)。
+
+**對應 cpctl**:`cpctl upgrade backup --to 8.3.2`。
+
+## 8.4 持續負載(建議)
+
+升級期間讓一個 producer 持續送帶序號的訊息(acks=all),另一路每秒經 LB 打一次 REST v3,結束後比對有沒有遺失。工具內容見附錄 D.6,放在 ops01 的 `/var/lib/cp-installer/manual/load.sh`:
+
+```bash
+$ bash load.sh start </dev/null >/var/lib/cp-installer/load/start.out 2>&1; cat /var/lib/cp-installer/load/start.out
+load started (topic orders.load)
+```
+
+>! 啟動背景工作時,一定要把輸出導到檔案(如上)。實測時直接在一個有管線的指令裡啟動,背景的 producer 一直佔著管線,讓那條指令永遠不會結束。
+
+## 8.5 broker 逐台升級
+
+每台:**停服務 → 解除所有 confluent-* 的版本鎖 → 裝新版(相依套件一起升) → 重新鎖定 → `daemon-reload` → 啟動 → 健康才換下一台**。
+
+```bash
+$ . ~/manual.env
+$ for h in $BROKERS; do
+    echo "== $h -> $TO ($(date +%T))"
+    ssh $h.poc.lab "TO=$TO bash -s" <<'EOS'
+set -e
+sudo systemctl stop confluent-server
+sudo dnf versionlock delete $(rpm -qa --qf '%{NAME}\n' 'confluent-*') >/dev/null 2>&1
+sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False \
+     install confluent-server-$TO confluent-security-$TO
+for p in $(rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 'confluent-*'); do sudo dnf -q versionlock add "$p"; done
+sudo systemctl daemon-reload
+sudo systemctl start confluent-server
+rpm -q confluent-server confluent-common
+EOS
+    wait_for broker_ok $h || break
+  done
+```
+
+實測輸出(每台):
+
+```
+== kb01 -> 8.3.2 (09:17:58)
+confluent-server-8.3.2-1.noarch confluent-common-8.3.2-1.noarch
+  healthy after ~10s
+```
+
+**注意事項**:
+- `sudo systemctl daemon-reload` 是必要的:RPM 升級會換掉 `/usr/lib/systemd/system/confluent-server.service`,沒有 reload 時每次啟動都會警告「unit file changed on disk」。實測第一輪漏了這步,事後在每台補做,警告才消失。
+- 設定檔在 `/etc/confluent`,RPM 升級不會動到;drop-in 也不受影響。8.2 → 8.3 沒有必改的設定。
+- 一次只動一台;`wait_for` 回傳失敗就停下來處理,或回滾(8.6)。
+
+**對應 cpctl**:`cpctl upgrade rolling --to 8.3.2 --role broker`(`upgrade::host`)。
+
+## 8.6 回滾(finalize 之前才可以)
+
+finalize 之前,metadata 版本還停在舊版(實測 `CP-8.2-IV1A`),所以任何一台都能退回舊版。做法和升級相同,只是裝回舊版;`dnf install` 遇到較舊版本時改用 `downgrade`:
+
+```bash
+$ ssh kb04.poc.lab "V=$FROM bash -s" <<'EOS'
+set -e
+sudo systemctl stop confluent-server
+sudo dnf versionlock delete $(rpm -qa --qf '%{NAME}\n' 'confluent-*') >/dev/null 2>&1
+D=(sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False)
+"${D[@]}" install confluent-server-$V confluent-security-$V 2>/dev/null || "${D[@]}" downgrade $(rpm -qa --qf '%{NAME}\n' 'confluent-*' | sed "s/\$/-$V/")
+for p in $(rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 'confluent-*'); do sudo dnf -q versionlock add "$p"; done
+sudo systemctl daemon-reload && sudo systemctl start confluent-server
+EOS
+$ wait_for broker_ok kb04
+```
+
+實測:kb04 退回 8.2.4(健康 ~10 秒),再升回 8.3.2(健康 ~10 秒),期間負載沒有遺失。
+
+全部回滾的順序與升級**相反**:REST → controller → broker。
+
+>! finalize(8.8)之後就**不能**回滾了;要回到舊版只能從備份重建叢集。
+
+**對應 cpctl**:`cpctl upgrade rollback --to 8.2.4`。
+
+## 8.7 controller 逐台升級(follower 先、leader 最後)
+
+```bash
+$ L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --status | awk '/LeaderId:/ {print $2}')
+$ ORDER="$(for h in $CONTROLLERS; do [ "${h#kc0}" != "$L" ] && echo $h; done) kc0$L"; echo "leader $L; order: $ORDER"
+$ for h in $ORDER; do
+    ssh $h.poc.lab "TO=$TO bash -s" <<'EOS'
+set -e
+sudo systemctl stop confluent-server
+sudo dnf versionlock delete $(rpm -qa --qf '%{NAME}\n' 'confluent-*') >/dev/null 2>&1
+sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False install confluent-server-$TO confluent-security-$TO
+for p in $(rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 'confluent-*'); do sudo dnf -q versionlock add "$p"; done
+sudo systemctl daemon-reload && sudo systemctl start confluent-server
+EOS
+    wait_for ctl_ok $h || break
+  done
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --status | grep -E 'LeaderId|MaxFollowerLag'
+```
+
+實測:leader 是 node 2,順序為 kc01 → kc03 → kc02,每台約 10 秒恢復;最後一台(原 leader)重啟時 leadership 自動移到 node 3,`MaxFollowerLag: 0`。
+
+**對應 cpctl**:`upgrade::_controller_order`、`cpctl upgrade rolling --role controller`。
+
+## 8.8 REST Proxy 逐台(先從 LB 摘除)
+
+開源版 Nginx 沒有 runtime API,摘除的做法是在 upstream 把那台標成 `down`、`nginx -t` 通過後 `reload`;升級完成再拿掉 `down`。`lbconf <要摘除的主機>` 依 5.2.3 的內容產生 `cp.conf`(要摘除的那台行尾加 ` down`),派送到 lb01 並 reload;`lbconf ""` 表示全部放回:
+
+```bash
+$ lbconf() {
+    { echo 'upstream cp_rest {'; echo '    hash $remote_addr consistent;'
+      for r in $RESTS; do printf '    server %s.poc.lab:8082 max_fails=2 fail_timeout=10s%s;\n' $r "$([ "$r" = "$1" ] && echo ' down')"; done
+      echo '}'; echo 'upstream cp_c3 {'; echo '    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;'; echo '}'
+      echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'
+      echo 'server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }'; } > $S/manual/cp.conf.new
+    scp -q $S/manual/cp.conf.new lb01.poc.lab:/tmp/cp.conf.new
+    ssh lb01.poc.lab 'sudo install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf && rm -f /tmp/cp.conf.new && sudo nginx -t -q && sudo nginx -s reload'
+  }
+$ for h in $RESTS; do
+    lbconf $h; sleep 5                                   # 摘除,等既有連線結束
+    ssh $h.poc.lab "TO=$TO bash -s" <<'EOS'
+set -e
+sudo systemctl stop confluent-kafka-rest
+sudo dnf versionlock delete $(rpm -qa --qf '%{NAME}\n' 'confluent-*') >/dev/null 2>&1
+sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False install confluent-kafka-rest-$TO confluent-security-$TO
+for p in $(rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 'confluent-*'); do sudo dnf -q versionlock add "$p"; done
+sudo systemctl daemon-reload && sudo systemctl start confluent-kafka-rest
+EOS
+    rest_ok() { [ "$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://$h.poc.lab:8082/v3/clusters)" = 200 ]; }
+    wait_for rest_ok || break
+    lbconf ""                                            # 放回
+  done
+```
+
+實測:每台摘除後升級,約 15 秒恢復;經 LB 的 REST 呼叫 0 次失敗。
+
+**對應 cpctl**:`lb::drain`、`lb::undrain`、`cpctl upgrade rolling --role rest`。
+
+## 8.9 確認零遺失
+
+```bash
+$ bash load.sh stop && bash load.sh report
+SCRAM producer : 7144 produced, 7238 consumed, 0 missing
+REST v3 via LB : 91 ok, 0 failed
+```
+
+判斷依據是 `0 missing` 與 `0 failed`。consumed 可能比 produced 多(topic 裡有更早以前跑過的訊息,報告取聯集),不影響判斷。
+
+## 8.10 finalize(不可逆)
+
+全部 broker、controller 都是新版,也已經觀察過一段時間(正式環境建議至少數天,期間仍可回滾)、確認備份目標就是這個版本後,才把 metadata 版本升上去:
+
+```bash
+# 前提
+$ for h in $BROKERS $CONTROLLERS; do [ "$(ssh $h.poc.lab "rpm -q --qf '%{VERSION}' confluent-server")" = "$TO" ] || echo "$h NOT at $TO"; done
+$ cat $S/upgrade/last-backup/target                      # 必須是 8.3.2
+# 先看這個 release 會把各 feature 升到哪裡
+$ kafka-features --bootstrap-server $B --command-config $CFG version-mapping --release-version $TO_RELEASE
+confluent.metadata.version=137 (4.3)
+kraft.version=1
+transaction.version=2
+...
+# 執行
+$ kafka-features --bootstrap-server $B --command-config $CFG upgrade --release-version $TO_RELEASE
+confluent.metadata.version was upgraded to 137.
+...
+$ kafka-features --bootstrap-server $B --command-config $CFG describe | grep confluent.metadata.version
+Feature: confluent.metadata.version  SupportedMinVersion: CP-7.3-IV3  SupportedMaxVersion: CP-8.3-IV0B  FinalizedVersionLevel: CP-8.3-IV0B
+```
+
+`release-version` 是 Kafka 的版本號:CP 8.3 → `4.3`、CP 8.2 → `4.2`。Confluent Server 使用自己的 `confluent.metadata.version`(實測 `CP-8.2-IV1A` → `CP-8.3-IV0B`);`metadata.version` 欄位顯示 `UNKNOWN` 是正常的。
+
+**對應 cpctl**:`cpctl upgrade finalize --to 8.3.2`(會要求輸入 cluster id 確認)。
+
+## 8.11 收尾
+
+- 操作機與跳板機上的 Kafka 工具、Confluent CLI 也升到新版(同 8.5 的安裝步驟,不需要重啟任何服務)。
+- 跑一次第 5.3 的驗收。
+- 正式環境:舊版本的套件留在內部 repo,直到確定不再需要回滾。
+
+# 9. 憑證輪替與 CA 輪替
+
+憑證效期 1 年(`PKI_CERT_DAYS=365`)、內部 CA 10 年。本章說明兩種換法:
+
+| 情境 | 做什麼 | 輪數 |
+|---|---|---|
+| 9.2 憑證輪替 | 同一張 CA 重簽 `kafka-internal`、`cp-server`(到期前,或懷疑私鑰外洩) | 1 輪滾動重啟 |
+| 9.3 CA 輪替 | 換掉內部 CA 本身 | 3 輪滾動重啟(add → switch → retire) |
+
+兩者都在 2026-10-17 的全程實測環境中,於持續負載下做過(附錄 A.3):每一輪都是 **0 筆遺失、REST 0 次失敗**,且 16 個 TLS 端點都確認換成新憑證。
+
+**為什麼不停機**:所有連線兩端都信任同一份 CA bundle。憑證輪替時 CA 沒變,新舊憑證都能互通;CA 輪替則先讓所有人同時信任新舊兩張 CA(add),再換憑證(switch),最後才移除舊 CA(retire),任何時刻連線兩端都至少有一張共同信任的 CA。
+
+## 9.1 共用函式(ops01,cpadmin)
+
+每一輪都由下列動作組成。函式的完整內容見附錄 D.7,存成 `~/rotate-lib.sh`,用法是 `. ~/rotate-lib.sh` 後呼叫:
+
+| 函式 | 做什麼 | 對應章節 |
+|---|---|---|
+| `issue <名稱> <EKU> [SAN]` | 先把舊檔歸檔到 `$PKI/archive/<時間>-<名稱>/`,再用目前的 `ca.crt` 簽新憑證、產生 p12 | 3.4.3 |
+| `truststores` | 依 `ca.pem`(可能含 2 張 CA)重建 `truststore.p12` 與選單用的 `opmenu-truststore.p12` | 3.4.2、6.3 |
+| `push_all_ssl` | 依角色把 `ca.pem`、`truststore.p12`、keystore 派送到 10 台的 `/etc/confluent/ssl` | 3.4.7 |
+| `trust_all` | 12 台主機的 OS trust anchor 換成 `ca.pem`;JDK cacerts 只保留 bundle 裡的 CA(多的刪掉) | 3.4.8 |
+| `push_ad` | ad01 的 LDAPS 憑證與 CA,重啟 samba,等 LDAPS 恢復 | 4.1.1 |
+| `push_jump` | 跳板機的 opmenu truststore、顯示用的憑證、break-glass 憑證 | 6.3、6.4 |
+| `restart_all` | 逐台重啟並等健康:controller(leader 最後)→ broker → REST(先從 LB 摘除)→ C3 | 4.2.8、8.8 |
+| `served` | 列出 16 個 TLS 端點**實際出示**的憑證序號與簽發 CA | — |
+
+`served` 檢查的端點:controller 9093、broker 9092/8090(MDS)/9095、REST 8082、C3 9021、Prometheus 9090、AD 636、JMX exporter 7071。
+
+>! keystore / truststore 是服務啟動時載入記憶體的,**檔案換了不代表服務在用新的**。每一輪都要滾動重啟,最後一定用 `served` 確認端點出示的是新憑證。
+
+## 9.2 憑證輪替(同一張 CA)
+
+```bash
+$ bash load.sh start </dev/null >/var/lib/cp-installer/load/start.out 2>&1      # 建議:持續負載(附錄 D.6)
+$ . ~/rotate-lib.sh
+$ served                                                   # 換之前,記下目前的序號
+$ issue kafka-internal serverAuth,clientAuth $SANS_INTERNAL
+$ issue cp-server serverAuth,clientAuth $SANS_SERVER
+$ openssl verify -CAfile $PKI/ca.pem $PKI/kafka-internal.crt $PKI/cp-server.crt
+$ push_all_ssl
+$ push_ad
+$ push_jump
+$ restart_all
+$ served                                                   # 每個端點的序號都要變成新的
+$ bash load.sh stop && bash load.sh report
+```
+
+實測結果(節錄):
+
+```
+issued kafka-internal serial=...75EE issuer=PoC Internal CA 20261016
+issued cp-server serial=...75EF issuer=PoC Internal CA 20261016
+kc01:9093      ...75EE PoC Internal CA 20261016          ← 原本 ...75EA
+kb01:8090      ...75EF PoC Internal CA 20261016          ← 原本 ...75EB
+...(16 個端點全部換新)
+SCRAM producer : 1210 produced, ..., 0 missing
+REST v3 via LB : 214 ok, 0 failed
+```
+
+**注意事項**:
+- `$SANS_INTERNAL`、`$SANS_SERVER` 必須和第一次簽發時相同(3.4.4、3.4.5);主機有增減時就是更新 SAN 的時機。
+- legacy app 的 client 憑證(`app-legacy-billing`)要另外簽,新的 `.p12` 交給應用程式團隊;舊憑證在到期前仍可使用。
+- 操作機上的管理設定(`$CFG`)直接引用 `$PKI` 的檔案,自動用到新憑證。
+
+**對應 cpctl**:`cpctl certs rotate`(`--cert` 可指定其他憑證)。
+
+## 9.3 CA 輪替(三個階段)
+
+每個階段結束都要確認結果,才能進入下一階段。建議每個階段之間留觀察時間;**應用程式在 add 之後、switch 之前,要換上新的 truststore(含兩張 CA)**,否則 switch 之後它們不認得新憑證。
+
+### 9.3.1 第 1 階段 add:建立新 CA,所有人同時信任新舊兩張
+
+```bash
+$ . ~/rotate-lib.sh
+$ cd $PKI && umask 077
+$ openssl genrsa -out ca-next.key 3072
+$ openssl req -x509 -new -key ca-next.key -sha256 -days 3650 -out ca-next.crt \
+    -subj "/CN=PoC Internal CA $(date +%Y%m%d%H%M)/OU=Confluent/O=PoC Bank/C=TW" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+$ cat ca.crt ca-next.crt > ca.pem && chmod 0644 ca.pem     # bundle:舊 + 新
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump
+$ restart_all
+```
+
+**驗證**:
+
+```bash
+$ for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab "sudo /usr/lib/jvm/temurin-21-jdk/bin/keytool -list -keystore /etc/confluent/ssl/truststore.p12 -storepass <store-password> | grep -c trustedCertEntry"; done
+2   (每台)
+# trust_all 的輸出:每台 "OS anchors=2 JDK=2"
+$ served          # 仍是舊 CA 簽的憑證(這個階段不換憑證)
+```
+
+實測:12 台主機 OS 與 JDK 都是 2 張 CA,負載 0 遺失、REST 0 失敗。
+
+### 9.3.2 第 2 階段 switch:新 CA 開始簽章,所有憑證重簽
+
+```bash
+$ cd $PKI && umask 077
+$ arch=archive/ca-$(date +%Y%m%d-%H%M%S); install -d -m 0700 $arch && cp -p ca.crt ca.key ca.srl $arch/
+$ mv ca.crt ca-old.crt && rm -f ca.key ca.srl              # 舊 CA 不再簽章(私鑰只留在 archive)
+$ mv ca-next.crt ca.crt && mv ca-next.key ca.key
+$ cat ca.crt ca-old.crt > ca.pem && chmod 0644 ca.pem      # bundle:新 + 舊
+$ issue kafka-internal serverAuth,clientAuth $SANS_INTERNAL
+$ issue cp-server serverAuth,clientAuth $SANS_SERVER
+$ issue app-legacy-billing clientAuth
+$ issue opmenu-breakglass clientAuth
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump
+$ restart_all
+$ served          # 簽發者應全部是新 CA
+```
+
+實測:4 張憑證都由新 CA(`PoC Internal CA 202610170944`)簽發,16 個端點全部出示新 CA 的憑證;負載 0 遺失、REST 0 失敗。
+
+`app-legacy-billing.p12` 這時要交給應用程式團隊;舊憑證(舊 CA 簽的)在 retire 之前仍然有效,給對方切換的時間。
+
+### 9.3.3 第 3 階段 retire:移除舊 CA
+
+**前提**(任何一項不成立就不要做):
+
+```bash
+$ for n in kafka-internal cp-server app-legacy-billing opmenu-breakglass; do openssl verify -CAfile $PKI/ca.crt $PKI/$n.crt; done   # 全部 OK
+$ served | grep -vc "<新 CA 的名稱>"                       # 必須是 0
+# 所有使用 client 憑證的應用程式都已換上新憑證
+```
+
+```bash
+$ cd $PKI && arch=archive/ca-old-$(date +%Y%m%d-%H%M%S); install -d -m 0700 $arch && mv ca-old.crt $arch/
+$ cat ca.crt > ca.pem && chmod 0644 ca.pem                 # bundle:只剩新 CA
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump
+$ restart_all
+```
+
+**驗證**:舊 CA 不再被信任,舊 CA 簽的憑證會被拒:
+
+```
+kb01 OS-anchors JDK-aliases: 1 1
+REST with the OLD-CA app certificate: 000 exit=56     ← TLS 層拒絕
+REST with the NEW app certificate:    200
+```
+
+實測:12 台都只剩 1 張 CA;負載 0 遺失、REST 0 失敗。
+
+**對應 cpctl**:`cpctl certs rotate-ca --phase add|switch|retire`。
+
+**注意事項**:
+- `trust_all` 會把 JDK cacerts 裡**不在 bundle 中**的 `cp-ca-*` 別名刪掉,retire 時舊 CA 才會真正從 JDK 消失。OS trust anchor 目錄不可留舊檔的備份(3.4.8)。
+- 舊 CA 的私鑰只留在操作機的 `archive/`,正式環境應離線保存或銷毀。
+- 跳板機的 break-glass 憑證在 switch 時一起重簽,`push_jump` 會重新匯出並派送。
+
 # 附錄 A. 手動驗證紀錄
 
 這份手冊做過兩次實測,都完全不呼叫 cpctl:
@@ -4399,6 +4827,7 @@ Added controller 3 with directory id Oh37yuEAl48M83WgLnaOHA and endpoints: CONTR
 |---|---|---|
 | A.1 全程從零(2026-10-16) | 第 2–6 章全部:從外網下載、建 repo,到 15 台主機的整套叢集、驗收、OP menu | 獨立的一套模擬主機(`docker/manual/compose.yml`,專案 `cp-man`),操作機 ops02 從裸機開始 |
 | A.2 單節點(2026-10-16) | 一台 controller 從裸機到加入既有叢集:rpm 一次、tar.gz 一次 | 備用節點 kc03,接到 cpctl 建好的叢集 |
+| A.3 升級與輪替(2026-10-16/17) | 第 8、9 章:8.2.4 → 8.3.2 升級(含回滾、finalize)、憑證輪替、CA 三階段輪替,全程持續負載 | 同 A.1 的環境 |
 
 ## A.1 全程從零實測
 
@@ -4497,6 +4926,41 @@ ssh kc03.poc.lab "sudo rm -rf /opt/confluent /opt/java /opt/jmx-exporter /var/ca
 
 >! `remove-controller` 一定要帶 `--controller-directory-id`,而且要先移出 quorum 再停服務。順序反過來時,quorum 會暫時少一個 voter,剩下的 voter 再掛一台就無法過半。
 
+## A.3 升級與輪替實測(2026-10-16/17)
+
+### A.3.1 做法
+
+在 A.1 的全程實測環境(cp-man)上:
+
+1. 照第 2 章引進 CP 8.2.4(下載、驗證閘門、內網匯入)。重新匯入時只發佈新增的 10 個 RPM,已發佈的 81 個檔案全部略過。
+2. 演練準備(不是手冊步驟):把叢集重置成 8.2.4,重建 RBAC 綁定與範例 topic。
+3. 照第 8 章升級到 8.3.2:中途回滾一台,最後 finalize。
+4. 照第 9 章依序做憑證輪替、CA 輪替的 add、switch、retire。
+
+每一段都在持續負載下進行:SCRAM producer 帶序號、acks=all;REST v3 每秒一次經 LB。紀錄在 `02-ops02.log`(接在 A.1 之後)與 `03-download-8.2.4.log`,指令檔是 `cmd-8.*.txt`、`cmd-9.*.txt`。
+
+### A.3.2 結果
+
+| 演練 | 重點 | 負載結果 |
+|---|---|---|
+| 8 升級 8.2.4 → 8.3.2 | broker 4 台、controller 3 台(leader 最後)、REST 2 台(先從 LB 摘除);kb04 回滾到 8.2.4 再升回;finalize `CP-8.2-IV1A` → `CP-8.3-IV0B` | 7,144 筆 0 遺失;REST 91 次 0 失敗 |
+| 9.2 憑證輪替 | 16 個端點序號全部換新 | 1,210 筆 0 遺失;REST 214 次 0 失敗 |
+| 9.3.1 CA add | 12 台 OS 與 JDK 都信任 2 張 CA,各服務 truststore 2 張 | 1,484 筆 0 遺失;REST 263 次 0 失敗 |
+| 9.3.2 CA switch | 4 張憑證改由新 CA 簽發,16 個端點都出示新 CA 的憑證 | 1,528 筆 0 遺失;REST 268 次 0 失敗 |
+| 9.3.3 CA retire | 12 台都只剩新 CA;舊 CA 簽的 app 憑證被 TLS 拒絕(exit 56),新憑證 200 | 1,476 筆 0 遺失;REST 263 次 0 失敗 |
+
+### A.3.3 發現並已修進手冊的問題
+
+| # | 現象 | 原因 | 修正 |
+|---|---|---|---|
+| 1 | 節點安裝新版本時 `Unable to find a match: confluent-server-8.2.4` | 節點的 dnf metadata 還是匯入前的快取 | 8.1:新版本匯入後,節點端安裝一律加 `--refresh` |
+| 2 | 每次重啟都警告 `unit file ... changed on disk` | RPM 換版會換掉 unit 檔,但沒有 `daemon-reload` | 8.5–8.8:裝完新版、啟動前先 `systemctl daemon-reload` |
+| 3 | 重置時資料沒有清掉,8.2.4 讀到 8.3.2 的資料而起不來 | `[ -d /var/lib/kafka/data ]` 由 cpadmin 判斷,進不了 0750 的目錄,結果被當成不存在而跳過 | 附錄 C:用 sudo 做事之前的檢查也要 `sudo test -d` |
+| 4 | 前置檢查顯示一台 controller 不健康,但升級照樣開始 | 檢查只取樣一次(寫入瞬間 lag 短暫不是 0),而且腳本沒有在失敗時停下 | 8.0、8.2:健康檢查一律重試;前置檢查任一項失敗就停 |
+| 5 | 啟動持續負載的那條指令永遠不結束 | 背景 producer 佔住了指令的輸出管線 | 8.4:背景工作的輸出導到檔案 |
+| 6 | 重置後 C3 顯示 active 卻不開 9021(`LoginException ... retrieving token`) | C3 啟動時 MDS 還不能發 token,之後不會自己重試 | 重啟 C3 即可(5.2.2 注意事項已有) |
+| 7 | **`kafka-configs` 執行失敗時,錯誤訊息把整串參數(含 `--add-config` 的密碼)印出** | 叢集還沒就緒時建 SCRAM 帳號 | 5.1.1:建 SCRAM 前先確認叢集已就緒;輸出經過遮蔽再記錄。實測當下已遮蔽紀錄、兩組密碼換新 |
+
 # 附錄 B. 只在實體主機才會生效的項目
 
 PoC 用容器模擬主機,有些設定屬於整台機器的 kernel 或開機流程,容器內無法設定。cpctl 在容器內會把這些項目標示為 `skipped(container)`,只做檢查;正式機要實際套用。
@@ -4532,6 +4996,12 @@ PoC 用容器模擬主機,有些設定屬於整台機器的 kernel 或開機流�
 | 行尾註解 | `.properties` 與 systemd unit 都沒有行尾註解,`key=value  # 說明` 的 `#` 之後會變成值;註解要獨立一行 |
 | 密碼不進指令列 | 從 0600 密碼檔讀成變數;`samba-tool` 從 stdin 讀、`confluent secret master-key generate --passphrase=-`、`curl --netrc-file`、`keytool -storepass:env` |
 | 讀 0640 的憑證 | `/etc/confluent/ssl/*` 為 root:confluent 0640,cpadmin 讀不到;節點上的驗證指令要加 `sudo`(或改用 OS trust store) |
+| sudo 之前的檢查 | `[ -d /var/lib/kafka/data ]` 由 cpadmin 判斷時,進不了 0750 的目錄就會當成不存在;判斷也要用 `sudo test -d` |
+| 新版本匯入後 | 節點的 dnf metadata 有快取,安裝新版本要加 `--refresh`,否則找不到套件 |
+| RPM 換版後 | unit 檔可能被換掉,啟動前先 `systemctl daemon-reload` |
+| 健康檢查 | 取樣一次不算數(例如 controller lag 在寫入瞬間可能不是 0);重試數次再下結論,前置檢查失敗就停 |
+| 工具錯誤訊息 | `kafka-configs` 失敗時會把整串參數印出來(含 `--add-config` 的密碼);在叢集就緒後再執行,輸出經遮蔽再存檔 |
+| 背景工作 | 在有管線的指令裡啟動背景程式,它會佔住管線讓指令不結束;輸出導到檔案 |
 
 
 # 附錄 D. 手冊引用的檔案完整內容
@@ -4654,4 +5124,230 @@ for d in /var/log/kafka /var/log/confluent; do
   n=$((n + c))
 done
 echo "deleted $n rolled log files older than $days days ($(hostname))"
+```
+
+## D.6 演練用持續負載 load.sh(8.4、9.2;放在操作機 /var/lib/cp-installer/manual/load.sh)
+
+一個 producer 以 SCRAM 每 0.2 秒送一筆帶序號的訊息(acks=all、idempotent),另一路每秒經 LB 呼叫一次 REST v3;`report` 比對送出與讀回的序號。使用前要有 3.4 的 `truststore.p12` 與 5.3 的 `app-orders-scram.properties`。
+
+```bash
+#!/usr/bin/env bash
+# Continuous traffic for upgrade / failover drills (run on the ops host as cpadmin).
+#   tools/load.sh start   background producers: SCRAM (numbered, acks=all) + REST v3 via the LB
+#   tools/load.sh stop
+#   tools/load.sh report  produced vs. consumed (gaps = lost messages), REST success / failure counts
+set -Eeuo pipefail
+STATE=/var/lib/cp-installer
+DIR=$STATE/load
+PKI=$STATE/pki
+TOPIC=orders.load
+BOOT=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095
+CFG=$STATE/client/app-orders-scram.properties
+# Kafka tools from whichever install strategy is present on the ops host (tar first, then RPM)
+if [[ -x /opt/confluent/current/bin/kafka-topics ]]; then
+  export PATH=/opt/confluent/current/bin:$PATH JAVA_HOME=/opt/java/current
+  KAFKA_ETC=/opt/confluent/current/etc/kafka
+else
+  KAFKA_ETC=/etc/kafka
+fi
+export KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=$KAFKA_ETC/tools-log4j2.yaml
+mkdir -p "$DIR"
+
+start() {
+  [[ -f $CFG ]] || { echo "run 'cpctl verify' once first (creates $CFG)"; exit 1; }
+  kafka-topics --bootstrap-server "${BOOT%%,*}" --command-config "$CFG" --create --if-not-exists \
+    --topic "$TOPIC" --partitions 6 --replication-factor 3 --config min.insync.replicas=2 >/dev/null 2>&1 || true
+  : >"$DIR/produced.seq"
+  : >"$DIR/rest.log"   # per run: the report must not count earlier runs (or a torn write from an unclean shutdown)
+  (
+    i=0
+    while [[ -f $DIR/running ]]; do
+      i=$((i + 1)); printf '%s\n' "$i"; printf '%s\n' "$i" >>"$DIR/produced.seq"; sleep 0.2
+    done | kafka-console-producer --bootstrap-server "$BOOT" --producer.config "$CFG" --topic "$TOPIC" \
+      --producer-property acks=all --producer-property enable.idempotence=true \
+      --producer-property delivery.timeout.ms=300000 --producer-property retries=2147483647 \
+      >"$DIR/producer.log" 2>&1
+  ) &
+  echo $! >"$DIR/producer.pid"
+  (
+    . "$STATE/kraft.env"
+    while [[ -f $DIR/running ]]; do
+      code=$(curl -s -m 10 --cacert "$PKI/ca.pem" --cert "$PKI/app-legacy-billing.crt" --key "$PKI/app-legacy-billing.key" \
+        -X POST -H 'Content-Type: application/json' -d '{"value":{"type":"JSON","data":{"src":"rest-load"}}}' \
+        "https://rest.poc.lab:8082/v3/clusters/$CLUSTER_ID/topics/billing.events/records" | grep -o '"error_code":[0-9]*' | cut -d: -f2)
+      printf '%s %s\n' "$(date +%T)" "${code:-noresponse}" >>"$DIR/rest.log"
+      sleep 1
+    done
+  ) &
+  echo $! >"$DIR/rest.pid"
+  echo "load started (topic $TOPIC)"
+}
+
+stop() {
+  rm -f "$DIR/running"
+  sleep 3
+  local p
+  for p in producer rest; do [[ -f $DIR/$p.pid ]] && kill "$(cat "$DIR/$p.pid")" 2>/dev/null || true; done
+  echo "load stopped"
+}
+
+report() {
+  local produced consumed missing
+  produced=$(wc -l <"$DIR/produced.seq")
+  kafka-console-consumer --bootstrap-server "$BOOT" --consumer.config "$CFG" --topic "$TOPIC" \
+    --group "orders-load-report-$$" --from-beginning --timeout-ms 30000 2>/dev/null | grep -E '^[0-9]+$' | sort -n -u >"$DIR/consumed.seq" || true
+  consumed=$(wc -l <"$DIR/consumed.seq")
+  missing=$(comm -23 <(sort -u "$DIR/produced.seq") <(sort -u "$DIR/consumed.seq") | wc -l)
+  printf 'SCRAM producer : %s produced, %s consumed, %s missing\n' "$produced" "$consumed" "$missing"
+  printf 'REST v3 via LB : %s ok, %s failed\n' "$(grep -c ' 200$' "$DIR/rest.log" || true)" "$(grep -vc ' 200$' "$DIR/rest.log" || true)"
+  grep -v ' 200$' "$DIR/rest.log" | head -5 || true
+}
+
+case ${1:-} in
+  start) touch "$DIR/running"; start ;;
+  stop) stop ;;
+  report) report ;;
+  *) echo "usage: $0 start|stop|report"; exit 2 ;;
+esac
+```
+
+## D.7 輪替用共用函式 rotate-lib.sh(第 9 章;存成 ~/rotate-lib.sh)
+
+這是全程實測環境的版本(操作機 ops02、controller kc01–kc03)。用在其他環境時,請替換 `SANS_INTERNAL`、`SANS_SERVER` 與各函式裡的主機清單。
+
+```bash
+# Manual walkthrough helpers for certificate / CA rotation (ops02, cpadmin). Source after ~/manual.env.
+# Every function is a plain sequence of the commands in manual chapter 9; nothing here is cpctl.
+. ~/manual.env
+set -a; . $S/secrets.env; set +a
+
+# issue <name> <EKU> [SANs]  (same as 3.4.3; archives the previous files first)
+issue() {
+  local n=$1 eku=$2 sans=${3:-} arch
+  ( cd $PKI && umask 077
+    if [ -f $n.crt ]; then arch=archive/$(date +%Y%m%d-%H%M%S)-$n; install -d -m 0700 $arch; cp -p $n.* $arch/; fi
+    { printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n'
+      printf 'extendedKeyUsage=%s\n' "$eku"
+      [ -n "$sans" ] && printf 'subjectAltName=%s\n' "$(tr ',' '\n' <<<"$sans" | sort -u | sed 's/^/DNS:/' | paste -sd, -)"
+    } > $n.ext
+    openssl genrsa -out $n.key 3072 2>/dev/null
+    openssl req -new -key $n.key -out $n.csr -subj "/CN=$n/OU=Confluent/O=PoC Bank/C=TW"
+    openssl x509 -req -in $n.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 -sha256 -extfile $n.ext -out $n.crt 2>/dev/null
+    rm -f $n.ext $n.csr
+    openssl pkcs12 -export -name $n -inkey $n.key -in $n.crt -certfile ca.crt -passout env:STORE_PASSWORD -out $n.p12
+    cat $n.crt ca.crt > $n.chain.pem
+    echo "issued $n serial=$(openssl x509 -in $n.crt -noout -serial | cut -d= -f2) issuer=$(openssl x509 -in $n.crt -noout -issuer | sed 's/.*CN=\([^,]*\).*/\1/')" )
+}
+SANS_INTERNAL=kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
+SANS_SERVER=ops02.poc.lab,ops02,ad01.poc.lab,ad01,lb01.poc.lab,lb01,kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,rest.poc.lab,c3.poc.lab,localhost
+
+# truststores from the bundle ca.pem (3.4.2 and 6.3): truststore.p12 (STORE_PASSWORD), opmenu-truststore.p12 (own password)
+truststores() {
+  ( cd $PKI && umask 077
+    d=$(mktemp -d); awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' ca.pem
+    rm -f truststore.p12 opmenu-truststore.p12; i=0
+    for f in "$d"/ca-*.pem; do i=$((i+1))
+      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore truststore.p12 -storetype PKCS12 -storepass:env STORE_PASSWORD >/dev/null
+      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore opmenu-truststore.p12 -storetype PKCS12 -storepass:env OPMENU_TRUSTSTORE_PASSWORD >/dev/null
+    done; rm -rf "$d"
+    echo "truststores rebuilt with $i CA(s): $(grep -c 'BEGIN CERT' ca.pem) in ca.pem" )
+}
+
+# push_ssl <host> <files...>  -> /etc/confluent/ssl (root:confluent 0640), as in 3.4.7
+push_ssl() {
+  local h=$1; shift
+  ( cd $PKI && scp -q "$@" $h.poc.lab:/tmp/ )
+  ssh $h.poc.lab "for f in $*; do sudo install -o root -g confluent -m 0640 /tmp/\$f /etc/confluent/ssl/\$f && rm -f /tmp/\$f; done"
+}
+push_all_ssl() {  # role-specific file sets (3.4.7)
+  local h
+  for h in kc01 kc02 kc03; do push_ssl $h ca.pem truststore.p12 kafka-internal.p12; done
+  for h in kb01 kb02 kb03 kb04; do push_ssl $h ca.pem truststore.p12 kafka-internal.p12 cp-server.p12; done
+  for h in rest01 rest02; do push_ssl $h ca.pem truststore.p12 cp-server.p12; done
+  push_ssl c3-01 ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key
+  echo "pushed /etc/confluent/ssl to 10 hosts"
+}
+
+# trust_all -> OS trust anchor = bundle, JDK cacerts = exactly the bundle's CAs (3.4.8)
+trust_all() {
+  local h
+  for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+    scp -q $PKI/ca.pem $h.poc.lab:/tmp/cp-internal-ca.pem
+    ssh $h.poc.lab 'bash -s' <<'EOS'
+set -e
+sudo install -o root -g root -m 0644 /tmp/cp-internal-ca.pem /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem; rm -f /tmp/cp-internal-ca.pem
+sudo update-ca-trust extract
+JH=/usr/lib/jvm/temurin-21-jdk; d=$(mktemp -d); want=""
+awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+for f in "$d"/ca-*.pem; do
+  fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f' | cut -c1-16); want="$want cp-ca-$fp"
+  sudo $JH/bin/keytool -list -cacerts -storepass changeit -alias cp-ca-$fp >/dev/null 2>&1 || sudo $JH/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias cp-ca-$fp -file "$f" >/dev/null
+done; rm -rf "$d"
+for a in $(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -oE '^cp-ca-[0-9a-f]+'); do case " $want " in *" $a "*) ;; *) sudo $JH/bin/keytool -delete -cacerts -storepass changeit -alias $a ;; esac; done
+echo "$(hostname): OS anchors=$(trust list --filter=ca-anchors | grep -c 'label: PoC Internal CA') JDK=$(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -c '^cp-ca-')"
+EOS
+  done
+}
+
+# ad01 LDAPS (4.1.1) and jump01 (6.3 / 6.4) trust material
+push_ad() {
+  scp -q $PKI/cp-server.key $PKI/cp-server.crt $PKI/ca.pem ad01.poc.lab:/tmp/
+  ssh ad01.poc.lab "sudo install -o root -g root -m 0600 /tmp/cp-server.key /var/lib/samba/private/tls/key.pem && sudo install -o root -g root -m 0644 /tmp/cp-server.crt /var/lib/samba/private/tls/cert.pem && sudo install -o root -g root -m 0644 /tmp/ca.pem /var/lib/samba/private/tls/ca.pem && sudo rm -f /tmp/cp-server.key /tmp/cp-server.crt /tmp/ca.pem && sudo pkill -x samba || true"
+  local i; for i in $(seq 1 24); do sleep 5; LDAPTLS_CACERT=$PKI/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H ldaps://ad01.poc.lab:636 -s base -b "" namingContexts >/dev/null 2>&1 && { echo "ad01 LDAPS back after ~$((i*5))s"; return 0; }; done; echo "ad01 LDAPS NOT back"
+}
+push_jump() {
+  ( cd $PKI && umask 077 && openssl pkcs12 -export -name opmenu-breakglass -inkey opmenu-breakglass.key -in opmenu-breakglass.crt -certfile ca.crt -passout env:OPMENU_BREAKGLASS_STORE_PASSWORD -out opmenu-breakglass.bg.p12 )
+  ( cd $PKI && scp -q opmenu-truststore.p12 ca.pem cp-server.crt kafka-internal.crt opmenu-breakglass.bg.p12 opmenu-breakglass.crt opmenu-breakglass.key jump01.poc.lab:/tmp/ )
+  ssh jump01.poc.lab 'sudo bash -s' <<'EOS'
+set -e
+install -o root -g opmenu -m 0640 /tmp/opmenu-truststore.p12 /etc/opmenu/certs/truststore.p12
+install -o root -g opmenu -m 0644 /tmp/ca.pem /etc/opmenu/certs/ca.pem
+install -o root -g opmenu -m 0644 /tmp/cp-server.crt /etc/opmenu/certs/cp-server.pem
+install -o root -g opmenu -m 0644 /tmp/kafka-internal.crt /etc/opmenu/certs/kafka-internal.pem
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-truststore.p12 /etc/opmenu/bootstrap/truststore.p12
+install -o opbootstrap -g opbootstrap -m 0644 /tmp/ca.pem /etc/opmenu/bootstrap/ca.pem
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.bg.p12 /etc/opmenu/bootstrap/breakglass.p12
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.crt /etc/opmenu/bootstrap/breakglass.pem
+install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.key /etc/opmenu/bootstrap/breakglass.key
+shred -u /tmp/opmenu-breakglass.key /tmp/opmenu-breakglass.bg.p12 2>/dev/null; rm -f /tmp/opmenu-truststore.p12 /tmp/ca.pem /tmp/cp-server.crt /tmp/kafka-internal.crt /tmp/opmenu-breakglass.crt
+echo "jump01: opmenu trust material and break-glass updated"
+EOS
+}
+
+# rolling restart of everything that holds keystores/truststores in memory: controllers -> brokers -> REST (drained) -> C3
+broker_ok() { local id=$((100 + ${1#kb0})); kafka-broker-api-versions --bootstrap-server $B --command-config $CFG 2>/dev/null | grep -q "(id: $id rack: [a-z-]* isFenced: false)" && [ -z "$(kafka-topics --bootstrap-server $B --command-config $CFG --describe --under-replicated-partitions 2>/dev/null)" ]; }
+ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
+wait_for() { local i; for i in $(seq 1 60); do "$@" && { echo "  healthy after ~$((i*5))s"; return 0; }; sleep 5; done; echo "  NOT HEALTHY - stop here"; return 1; }
+lbconf() {
+  { echo 'upstream cp_rest {'; echo '    hash $remote_addr consistent;'
+    for r in rest01 rest02; do printf '    server %s.poc.lab:8082 max_fails=2 fail_timeout=10s%s;\n' $r "$([ "$r" = "$1" ] && echo ' down')"; done
+    echo '}'; echo 'upstream cp_c3 {'; echo '    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;'; echo '}'
+    echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'
+    echo 'server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }'; } > $S/manual/cp.conf.new
+  scp -q $S/manual/cp.conf.new lb01.poc.lab:/tmp/cp.conf.new
+  ssh lb01.poc.lab 'sudo install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf && rm -f /tmp/cp.conf.new && sudo nginx -t -q && sudo nginx -s reload 2>/dev/null'
+}
+restart_all() {
+  local h L
+  L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --status | awk '/LeaderId:/ {print $2}')
+  for h in $(for c in kc01 kc02 kc03; do [ "${c#kc0}" != "$L" ] && echo $c; done) kc0$L; do echo "restart $h ($(date +%T))"; ssh $h.poc.lab 'sudo systemctl restart confluent-server'; wait_for ctl_ok $h || return 1; done
+  for h in kb01 kb02 kb03 kb04; do echo "restart $h ($(date +%T))"; ssh $h.poc.lab 'sudo systemctl restart confluent-server'; sleep 10; wait_for broker_ok $h || return 1; done
+  for h in rest01 rest02; do
+    echo "restart $h (drained, $(date +%T))"; lbconf $h; sleep 5; ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'
+    rok() { [ "$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://$h.poc.lab:8082/v3/clusters)" = 200 ]; }
+    wait_for rok || return 1; lbconf ""
+  done
+  echo "restart c3-01 ($(date +%T))"; ssh c3-01.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'
+  c3ok() { [ "$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem https://c3-01.poc.lab:9021/)" = 200 ]; }
+  wait_for c3ok
+}
+
+# served -> serial and issuer each TLS endpoint presents right now
+served() {
+  local ep s
+  for ep in kc01:9093 kc02:9093 kc03:9093 kb01:9092 kb01:8090 kb02:8090 kb03:8090 kb04:8090 kb04:9095 rest01:8082 rest02:8082 c3-01:9021 c3-01:9090 ad01:636 kb01:7071 kc01:7071; do
+    s=$(openssl s_client -connect ${ep%:*}.poc.lab:${ep#*:} -CAfile $PKI/ca.pem -cert $PKI/kafka-internal.crt -key $PKI/kafka-internal.key </dev/null 2>/dev/null | openssl x509 -noout -serial -issuer 2>/dev/null | sed 's/serial=//; s/issuer=.*CN=\([^,]*\).*/\1/' | paste -sd' ')
+    printf '%-14s %s\n' $ep "${s:-no certificate}"
+  done
+}
 ```

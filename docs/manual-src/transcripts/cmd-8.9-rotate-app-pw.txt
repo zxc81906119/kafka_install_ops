@@ -1,0 +1,16 @@
+##### (事故處理)重置時 kafka-configs 失敗(叢集尚未就緒),錯誤訊息 "Error while executing config command with args ..." 把 --add-config 的密碼原文印出 → 已遮蔽紀錄;app-orders、app-payments 密碼換新
+{{
+cd /var/lib/cp-installer && umask 077
+for k in APP_APP_ORDERS_PASSWORD APP_APP_PAYMENTS_PASSWORD; do sed -i "s/^$k=.*/$k=$(openssl rand -hex 12)Aa1-/" secrets.env; done
+grep -E '^APP_APP_(ORDERS|PAYMENTS)_PASSWORD=' secrets.env | sed 's/=.*/=<rotated>/'
+}}
+{{
+. ~/manual.env; set -a; . $S/secrets.env; set +a
+ kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter --entity-type users --entity-name app-orders --add-config "SCRAM-SHA-512=[iterations=8192,password=$APP_APP_ORDERS_PASSWORD]" 2>&1 | sed -E 's/password=[^],]*/password=<hidden>/g'
+ kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter --entity-type users --entity-name app-payments --add-config "SCRAM-SHA-512=[iterations=8192,password=$APP_APP_PAYMENTS_PASSWORD]" 2>&1 | sed -E 's/password=[^],]*/password=<hidden>/g'
+TS="ssl.truststore.type=PKCS12
+ssl.truststore.location=$PKI/truststore.p12
+ssl.truststore.password=$STORE_PASSWORD"
+umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="%s";\n%s\n' "$APP_APP_ORDERS_PASSWORD" "$TS" > $CD/app-orders-scram.properties
+printf 'manual-%s\n' "$(date +%s)" | kafka-console-producer --bootstrap-server $BC --producer.config $CD/app-orders-scram.properties --topic orders.events 2>&1 | grep -cE 'Exception|ERROR' | sed 's/^/errors with the new app-orders password: /'
+}}
