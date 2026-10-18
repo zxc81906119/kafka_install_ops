@@ -31,8 +31,16 @@ handler::flush() {
         log::changed "[$host] would restart $role"
       else
         log::info "[$host] restarting $role (configuration changed)"
+        # REST behind the LB: drain first (OSS Nginx only has passive checks - requests would fail until it notices)
+        local drained=0
+        if [[ $role == rest ]] && declare -F lb::drain >/dev/null && [[ -n $(inv::hosts lb) ]] &&
+          (($(inv::hosts rest | wc -l) > 1)); then
+          lb::drain "$host"
+          drained=1
+        fi
         role::call "$role" restart "$host"
         role::call "$role" health "$host" || core::die "$E_GATE" "[$host] $role failed its health gate after restart"
+        if ((drained)); then lb::undrain; fi
       fi
       sed -i "\|^$role $host\$|d" "$f"
     done < <(inv::hosts "$role")

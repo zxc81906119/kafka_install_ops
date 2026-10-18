@@ -26,3 +26,6 @@ node_modules/
 # Full manual (no cpctl) run: separate landing zone and secrets
 packages-manual/
 docker/manual/secrets.env
+
+# Simulated bank PKI (windows/bank-ca.sh): CA private keys
+bank-ca/

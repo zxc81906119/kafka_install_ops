@@ -114,7 +114,7 @@ const OPMENU_ROWS = NUM.opmenuRows || [["(待驗證)", "—"]];
   const k = [
     ["12 步", "一個指令完成安裝", "cpctl install\n執行步驟 00–11\n失敗可從中斷處續跑"],
     [VERIFY_TOTAL + " / " + VERIFY_TOTAL, "端到端驗證通過", "quorum、mTLS、SCRAM、RBAC\nAD、REST、C3、稽核\n監控、憑證、OP menu"],
-    ["0 筆", "演練遺失訊息", "升級、回滾\ncontroller 替換\n憑證與 CA 輪替\n全在持續流量下進行"],
+    ["0 筆", "演練遺失訊息", "升級、回滾\n憑證與 CA 輪替\n遷移到銀行 CA\n依 producer 逐筆核對"],
     [idem, "重跑零變更", "在已安裝環境再跑一次\ninstall --force"],
   ];
   const w = (W - 2 * M - 0.3 * 3) / 4;
@@ -353,7 +353,7 @@ section("04", "自動化安裝", "cpctl：單一入口、冪等、可續跑、�
     { t: "加入 voter", d: "add-controller\n確認成為 voter", hi: true },
   ], 2.1, 0.9, { size: 16, dsize: 14 });
   s.addShape(pptx.ShapeType.roundRect, { x: M, y: 4.6, w: W - 2 * M, h: 1.6, rectRadius: 0.08, fill: { color: C.tealSoft }, line: { color: C.tealSoft } });
-  s.addText("實測：持續流量下把 kc03 替換為 kc04，0 筆遺失。\n一次只變動一個 voter，每步都等 lag 歸零，全程維持多數決。擴充 3 → 5 台也走同一流程。", { x: M + 0.3, y: 4.6, w: W - 2 * M - 0.6, h: 1.6, fontFace: F, fontSize: 16, color: C.teal, valign: "middle" });
+  s.addText("實測：持續流量下把 kc03 替換為 kc04（目前 quorum 為 kc01、kc02、kc04）。\n一次只變動一個 voter，每步都等 lag 歸零，全程維持多數決。擴充 3 → 5 台也走同一流程。", { x: M + 0.3, y: 4.6, w: W - 2 * M - 0.6, h: 1.6, fontFace: F, fontSize: 16, color: C.teal, valign: "middle" });
   s.addNotes("新叢集直接用 kraft.version=1（動態 quorum），所以不用靜態 voters 清單。cpctl controller replace 把這四步包成一個指令。");
 }
 
@@ -449,7 +449,7 @@ section("05", "營運強化", "對照官方文件自檢後補齊的正式營運�
     ["防火牆", "firewalld 依角色只開必要 port + ssh；關閉 cockpit 等預設服務", "相同（只影響容器自己的網路）", "未列 port 被擋、ssh 正常；全部驗證通過"],
     ["SELinux", "檢查 enforcing，自訂路徑 restorecon", "容器沒有 SELinux", "回報 skipped"],
   ], { colW: [1.6, 3.8, 4.0, 2.73], fontSize: 13, rowH: 0.85 });
-  s.addText("chrony、firewalld 由內部 os-deps repo 安裝；先在備用節點 kc03 演練，再於持續流量下套用到整個叢集（0 遺失）。", { x: M, y: 6.25, w: W - 2 * M, h: 0.5, fontFace: F, fontSize: 14, color: C.teal, bold: true });
+  s.addText("chrony、firewalld 由內部 os-deps repo 安裝；先在備用節點 kc03 演練，再於持續流量下套用到整個叢集。", { x: M, y: 6.25, w: W - 2 * M, h: 0.5, fontFace: F, fontSize: 14, color: C.teal, bold: true });
   s.addNotes("防火牆是最容易造成中斷的變更，所以先在不在 quorum 內的備用節點試，確認 ssh 與允許清單正確後才全面套用。");
 }
 
@@ -526,17 +526,17 @@ section("07", "驗證與演練", "用持續流量證明：安裝、升級、回�
 
 {
   const s = base("07 驗證與演練");
-  title(s, "所有變更演練都在持續流量下進行，訊息遺失皆為 0", "流量工具以 acks=all 寫入有序號的訊息並經 LB 呼叫 REST，最後比對序號找缺口");
+  title(s, "變更演練都在持續流量下進行，逐筆核對的訊息遺失為 0", "流量工具以 acks=all 寫入有序號的訊息並經 LB 呼叫 REST；事後依 producer ID 逐筆比對序號");
   table(s, [
-    ["演練", "內容", "流量（SCRAM 寫入）", "遺失", "REST 失敗"],
-    ["版本升級", "8.2.4 → 8.3.2 → 回滾 → 8.3.2 → finalize", "9,417 筆", "0", "0"],
-    ["tar 策略升級", "同上流程；回滾約 3.5 分鐘", "5,320 筆", "0", "0"],
-    ["controller 替換", "kc03 → kc04（動態 quorum）", "持續寫入", "0", "—"],
-    ["leaf 憑證輪替", "kafka-internal、cp-server 重簽與滾動重啟", "3,388 筆", "0", "0"],
-    ["CA 輪替", "add → switch → retire 三階段", "每階段約 2,000 筆", "0", "0"],
-    ["營運設定上線", "稽核、JMX exporter、OS 防火牆滾動套用", "每次 1,100–1,300 筆", "0", "0"],
-  ], { colW: [2.2, 4.8, 2.4, 1.2, 1.53], fontSize: 14, rowH: 0.62 });
-  s.addNotes("流量工具同時用 SCRAM 寫入有序號的訊息（acks=all）與經 LB 的 REST 呼叫，最後比對序號找缺口。每次演練都 0 遺失。");
+    ["演練", "內容", "流量（SCRAM 寫入）", "遺失", "REST（成功 / 失敗）"],
+    ["版本升級", "8.2.4 → 8.3.2，回滾一台後再升回，finalize", "3,572 + 4,161 筆（兩個 producer）", "0", "未量到*"],
+    ["leaf 憑證輪替", "kafka-internal、cp-server 重簽與滾動重啟", "1,210 筆", "0", "214 / 0"],
+    ["CA 輪替", "add（同時信任新舊）→ retire（移除舊 CA）", "1,484 / 1,476 筆", "0", "263 / 0"],
+    ["銀行 CA：信任新 root", "cpctl certs trust add", "2,171 筆", "0", "387 / 0"],
+    ["銀行 CA：換簽發、移除舊 root", "CSR → 銀行簽 → 檢查後匯入；trust remove", "4,530 筆", "0", "817 / 0"],
+  ], { colW: [2.6, 4.3, 2.7, 0.9, 1.63], fontSize: 14, rowH: 0.62 });
+  s.addText("* 升級那次的 REST 量測工具在第一次失敗時就停止計數（已修正），不能據此宣稱 REST 0 失敗。", { x: M, y: 6.35, w: W - 2 * M, h: 0.4, fontFace: F, fontSize: 12, color: C.mute });
+  s.addNotes("只列出事後能逐筆核對的演練（手冊附錄 A.3、A.4）：在 broker 上讀出每筆訊息的 producer ID，逐次比對序號是否連續。舊版量測工具無法區分各次執行，tar 升級、controller 替換、營運設定上線等早期演練的數字不再引用；內部 CA switch 那一段的 SCRAM 量測無效，由銀行 root 輪替的 switch（4,530 筆）佐證。");
 }
 
 {

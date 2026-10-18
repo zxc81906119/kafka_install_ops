@@ -229,3 +229,96 @@ EOF
   source "$CPCTL_HOME/steps/01_os_baseline.sh"
   [ -z "$(os::fw_ports jump)" ]
 }
+
+# ---------- PKI external CA (bank): request -> answer -> checks before import
+# bank_setup: root + issuing CA in $B; trust/ holds the root only (what the bank hands over)
+bank_setup() {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/pki.sh"
+  export PKI_MODE=external PKI_KEY_BITS=2048 PKI_CERT_DAYS=365 PKI_RENEW_BEFORE_DAYS=30 CPCTL_RUN_ID=t
+  B=$BATS_TEST_TMPDIR/bank
+  mkdir -p "$B" "$PKI_DIR/trust"
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$B/root.key" -subj "/CN=Test Bank Root" -days 30 -out "$B/root.crt" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" 2>/dev/null
+  openssl req -newkey rsa:2048 -nodes -keyout "$B/int.key" -subj "/CN=Test Bank Issuing" -out "$B/int.csr" 2>/dev/null
+  printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign\n' >"$B/int.ext"
+  openssl x509 -req -in "$B/int.csr" -CA "$B/root.crt" -CAkey "$B/root.key" -CAcreateserial -days 3000 \
+    -extfile "$B/int.ext" -out "$B/int.crt" 2>/dev/null
+  cp "$B/root.crt" "$PKI_DIR/trust/bank-root.pem"
+}
+# bank_sign <name> <eku> [SAN ext value] -> leaf only in $B/<name>.leaf
+bank_sign() {
+  { printf 'basicConstraints=CA:FALSE\nextendedKeyUsage=%s\n' "$2"; [ -n "${3:-}" ] && printf 'subjectAltName=%s\n' "$3"; } >"$B/$1.ext"
+  openssl x509 -req -in "$PKI_DIR/requests/$1.csr" -CA "$B/int.crt" -CAkey "$B/int.key" -CAcreateserial -days 365 \
+    -extfile "$B/$1.ext" -out "$B/$1.leaf" 2>/dev/null
+}
+check() { pki::check_signed "$1" "$2" "$3" "$4" "$PKI_DIR/pending/$1.key"; }
+
+@test "external CA: request has key, CSR with SAN + both EKUs, and a request sheet" {
+  bank_setup
+  pki::request kafka-internal "kb01,kb01.test.lab" serverAuth,clientAuth
+  [ -f "$PKI_DIR/pending/kafka-internal.key" ]
+  [ "$(stat -c %a "$PKI_DIR/pending/kafka-internal.key")" = 600 ]
+  t=$(openssl req -in "$PKI_DIR/requests/kafka-internal.csr" -noout -text)
+  [[ $t == *"DNS:kb01, DNS:kb01.test.lab"* ]]
+  [[ $t == *"TLS Web Server Authentication, TLS Web Client Authentication"* ]]
+  grep -q "BOTH are required" "$PKI_DIR/requests/kafka-internal.req.txt"
+  [ "$(pki::pending)" = kafka-internal ]
+}
+
+@test "external CA: a correct answer (any order, root included) passes; chain = leaf then intermediate" {
+  bank_setup
+  pki::request cp-server "a.test.lab,b.test.lab" serverAuth,clientAuth
+  bank_sign cp-server serverAuth,clientAuth "DNS:b.test.lab,DNS:a.test.lab"
+  cat "$B/root.crt" "$B/int.crt" "$B/cp-server.leaf" >"$B/answer.pem"
+  run check cp-server "a.test.lab,b.test.lab" serverAuth,clientAuth "$B/answer.pem"
+  [ "$status" -eq 0 ]
+  chain=${output#* }
+  [ "$(grep -c 'BEGIN CERTIFICATE' "$chain")" = 2 ]
+  [ "$(openssl x509 -in "$chain" -noout -subject)" = "subject=CN=cp-server, OU=Confluent, O=PoC Bank, C=TW" ]
+  [ "$(sed -n '/END/,$p' "$chain" | sed 1d | openssl x509 -noout -subject)" = "subject=CN=Test Bank Issuing" ]
+}
+
+@test "external CA: rejected without the intermediate, without clientAuth, with other SANs or another key" {
+  bank_setup
+  pki::request kafka-internal "kb01" serverAuth,clientAuth
+  bank_sign kafka-internal serverAuth,clientAuth "DNS:kb01"
+  run check kafka-internal kb01 serverAuth,clientAuth "$B/kafka-internal.leaf"
+  [ "$status" -eq "$E_GATE" ]; [[ $output == *"does not chain to a bank root"* ]]
+  bank_sign kafka-internal serverAuth "DNS:kb01"
+  cat "$B/kafka-internal.leaf" "$B/int.crt" >"$B/a.pem"
+  run check kafka-internal kb01 serverAuth,clientAuth "$B/a.pem"
+  [ "$status" -eq "$E_GATE" ]; [[ $output == *"lacks clientAuth"* ]]
+  bank_sign kafka-internal serverAuth,clientAuth "DNS:kb02"
+  cat "$B/kafka-internal.leaf" "$B/int.crt" >"$B/a.pem"
+  run check kafka-internal kb01 serverAuth,clientAuth "$B/a.pem"
+  [ "$status" -eq "$E_GATE" ]; [[ $output == *"SAN differs"* ]]
+  pki::request cp-server "" clientAuth
+  bank_sign cp-server clientAuth
+  cat "$B/cp-server.leaf" "$B/int.crt" >"$B/a.pem"
+  run check kafka-internal kb01 serverAuth,clientAuth "$B/a.pem"
+  [ "$status" -eq "$E_GATE" ]; [[ $output == *"matches the pending private key"* ]]
+}
+
+@test "external CA: a dedicated intermediate can be the only trust anchor" {
+  bank_setup
+  cp "$B/int.crt" "$PKI_DIR/trust/bank-root.pem"
+  pki::request app-x "" clientAuth
+  bank_sign app-x clientAuth
+  run check app-x "" clientAuth "$B/app-x.leaf"
+  [ "$status" -eq 0 ]
+  pki::verify_current "$B/app-x.leaf"
+}
+
+@test "truststore is rebuilt beside the target and renamed into place (never missing / partial)" {
+  bank_setup
+  [ -x /usr/lib/jvm/temurin-21-jdk/bin/keytool ] || skip "no JDK"
+  install::java_home() { echo /usr/lib/jvm/temurin-21-jdk; }
+  cat "$PKI_DIR/trust/bank-root.pem" "$B/int.crt" >"$PKI_DIR/ca.pem"
+  echo old >"$PKI_DIR/t.p12"
+  ino=$(stat -c %i "$PKI_DIR/t.p12")
+  pki::_build_truststore "$PKI_DIR/t.p12" changeit
+  [ "$(stat -c %i "$PKI_DIR/t.p12")" != "$ino" ]               # a new file, not rewritten in place
+  [ "$(ls "$PKI_DIR" | grep -c '\.new\.')" = 0 ]
+  [ "$(pki::keytool -list -keystore "$PKI_DIR/t.p12" -storepass changeit | grep -c trustedCertEntry)" = 2 ]
+}

@@ -1,7 +1,12 @@
 # shellcheck shell=bash
-STEP_DESC="internal PKI: CA, shared internal cert, shared server cert, app client certs, MDS token keys"
+STEP_DESC="PKI: trust bundle, shared internal cert, shared server cert, app client certs, MDS token keys"
 
-step_inputs() { pki::sans_internal; pki::sans_server; printf '%s\n' "$APPS" "$PKI_KEY_BITS" "$PKI_CERT_DAYS"; date +%Y-%m; }
+step_inputs() {
+  pki::sans_internal; pki::sans_server; printf '%s\n' "$APPS" "$PKI_KEY_BITS" "$PKI_CERT_DAYS" "${PKI_MODE:-internal}"; date +%Y-%m
+  # external CA: a new request, an answer from the bank or a new trust anchor must re-run the step
+  ls -l "$PKI_DIR"/pending "$PKI_DIR"/incoming 2>/dev/null || true
+  cat "$PKI_DIR"/trust/*.pem 2>/dev/null || true
+}
 
 step_apply() {
   pki::ca
@@ -15,11 +20,13 @@ step_apply() {
   for app in $(inv::apps rest); do pki::issue "$app" "" clientAuth; done
   # OP menu break-glass identity (menu item 91; RBAC SystemAdmin, key held by opbootstrap on the bastion)
   if [[ ${OPMENU:-off} == on ]]; then pki::issue "$OPMENU_BREAKGLASS" "" clientAuth; fi
+  # external CA: stop here while a needed certificate is still with the bank
+  if pki::external && step::mutating; then pki::pending_gate; fi
   pki::prune
   pki::mds_keypair
   [[ -f $PKI_DIR/ca.pem ]] || return 0   # check mode on a fresh host
 
-  # every Java host trusts the internal CA (OS store + JDK default store)
+  # every Java host trusts the bundle (OS store + JDK default store)
   local h
   for h in $(inv::hosts ops) $(inv::hosts controller) $(inv::hosts broker) $(inv::hosts rest) $(inv::hosts c3) $(inv::hosts jump); do
     remote::put "$h" "$PKI_DIR/ca.pem" /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem root root 0644
@@ -31,5 +38,5 @@ step_apply() {
 }
 
 step_verify() {
-  openssl verify -CAfile "$PKI_DIR/ca.pem" "$PKI_DIR/kafka-internal.crt" "$PKI_DIR/cp-server.crt" >/dev/null
+  pki::verify_trusted "$PKI_DIR/kafka-internal.crt" && pki::verify_trusted "$PKI_DIR/cp-server.crt"
 }

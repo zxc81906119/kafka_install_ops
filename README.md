@@ -125,6 +125,7 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 | `cpctl certs status` | 憑證到期日，以及各服務**目前實際出示**的憑證序號 |
 | `cpctl certs rotate [--cert a,b\|all]` | 重簽 leaf 憑證（預設 kafka-internal、cp-server），滾動重啟 |
 | `cpctl certs rotate-ca --phase add\|switch\|retire` | 不停機的 CA 輪替（分三次執行） |
+| `cpctl certs trust list\|add <root.pem>\|remove <名稱>\|internal` | 銀行 CA 的信任錨點（`PKI_MODE=external`）；`remove internal` 移除自建 CA |
 | `cpctl license status` | 生效中的 license（檔案或試用）、到期日、剩餘天數 |
 | `cpctl monitoring export\|check` | 產生給行內 Prometheus 的 scrape 設定與告警規則 / 檢查所有 exporter |
 | `cpctl uninstall --yes-really` | 移除套件、設定與資料；保留內部 repo、PKI、AD 帳號 |
@@ -144,7 +145,8 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 |---|---|---|
 | Secret Protection | 所有 `.properties` 的密碼（含 JAAS 內的 password）以 `confluent secret file encrypt` 加密成 `${securepass:...}`；master key 只存在操作機（0600）與各節點 root-only 的 `service.env` | 全節點掃描 0 筆明文密碼；重跑 changed=0 |
 | MDS token 私鑰 | 節點只拿到 PKCS#8 AES-256 加密版，passphrase 本身也經 Secret Protection | 舊的明文私鑰會被自動移除 |
-| 憑證輪替 | leaf：`certs rotate`；CA：三階段（add → switch → retire），過程中所有節點同時信任新舊 CA；JDK / OS trust store 依 bundle 指紋同步 | 持續流量下 leaf 與 CA 三階段輪替全程 **0 遺失、REST 0 失敗** |
+| 憑證輪替 | leaf：`certs rotate`；CA：三階段（add → switch → retire），過程中所有節點同時信任新舊 CA；JDK / OS trust store 依 bundle 指紋同步 | 2026-10-17 以修正後的負載工具量測：銀行 root 三階段輪替（cpctl）**4,530 筆 0 遺失、REST 817 次 0 失敗**；手動程序的結果與重新核對見手冊附錄 A.3、A.4（舊版負載報告無法區分各次執行，早先的數字不再引用） |
+| 銀行 CA | `PKI_MODE=external`：CSR 交銀行簽、回覆經檢查才匯入（缺 clientAuth、缺中繼、SAN 不符、私鑰不符都拒絕且什麼都不換）；`.crt` / `.p12` 帶中繼 CA；信任錨點 `cpctl certs trust` | cp-poc 自建 CA → 銀行 CA 三階段遷移；銀行換 root（G1 → G2）三階段：4,530 筆 0 遺失、REST 817 次 0 失敗；舊 CA 簽的憑證被拒（exit 56） |
 | License 監控 | 從 `conf/license.txt` 或 `_confluent-command` 讀 JWT 解出到期日；30 天內警告、過期即 verify 失敗 | `cpctl license status` |
 | Log 保留 | log4j2 只輪替不刪除 → `systemd-tmpfiles` 每日刪除 `LOG_RETENTION_DAYS`（預設 14 天）前的檔案；journald 上限 1G | step 01 |
 | LDAP 韌性 | 多台 AD（`AD_LDAP_HOSTS`）、連線逾時 3 秒、群組快取 60 秒更新，AD 中斷時沿用快取最長 24 小時 | 憑證輪替時 Samba 重啟，登入不中斷 |
@@ -195,7 +197,7 @@ cpctl upgrade finalize --to 8.3.2   # kafka-features upgrade --release-version�
 |---|---|---|
 | sudo | cpadmin 擁有完整 NOPASSWD sudo | 依 `conf/sudoers.d/cpadmin.restricted` 由資安審核後收斂 |
 | AD | Samba 模擬，由 cpctl 建立帳號 | `PROFILE=prod`：由 AD 團隊依申請單建立，cpctl 只檢查 |
-| 憑證 | 自建 CA（RSA 3072，效期 1 年） | 改用行內 CA 簽發，放進 `state/pki` |
+| 憑證 | `PKI_MODE=external`：模擬銀行 CA（`windows/bank-ca.sh`，root + 中繼）簽發；cp-poc 已由自建 CA 不停機遷移過來 | 同一流程，銀行實際簽發：cpctl 產生私鑰 + CSR + 申請單（`pki/requests/`），銀行回覆放 `pki/incoming/`，檢查 key、CN、SAN、EKU、效期、憑證鏈後才換上；truststore 只放銀行 root（手冊 3.4.9、9.4、9.5） |
 | heap / retention | `PROFILE=poc` 數值 | `PROFILE=prod`（官方建議值） |
 | 核心參數 | vm.* 等只能在 WSL2 主機設定（腳本會警告）；容器重開後 net.* 會回到預設值，下一次 cpctl 會偵測並修正（2026-10-16 實測：4 台 broker 各 2 項） | 腳本直接寫入 `/etc/sysctl.d`，開機自動套用 |
 | THP / SELinux | 容器共用 WSL2 核心：THP 只回報、SELinux 不存在 → `skipped` | `disable-thp.service` 生效；SELinux enforcing＋restorecon |

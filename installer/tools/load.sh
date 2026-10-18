@@ -25,6 +25,7 @@ start() {
   kafka-topics --bootstrap-server "${BOOT%%,*}" --command-config "$CFG" --create --if-not-exists \
     --topic "$TOPIC" --partitions 6 --replication-factor 3 --config min.insync.replicas=2 >/dev/null 2>&1 || true
   : >"$DIR/produced.seq"
+  date +%s%3N >"$DIR/start.ms"   # the report only counts messages written after this
   : >"$DIR/rest.log"   # per run: the report must not count earlier runs (or a torn write from an unclean shutdown)
   (
     i=0
@@ -39,9 +40,10 @@ start() {
   (
     . "$STATE/kraft.env"
     while [[ -f $DIR/running ]]; do
+      # "|| true": a failed call (no JSON -> grep finds nothing) must be counted, not end the loop (set -e + pipefail)
       code=$(curl -s -m 10 --cacert "$PKI/ca.pem" --cert "$PKI/app-legacy-billing.crt" --key "$PKI/app-legacy-billing.key" \
         -X POST -H 'Content-Type: application/json' -d '{"value":{"type":"JSON","data":{"src":"rest-load"}}}' \
-        "https://rest.poc.lab:8082/v3/clusters/$CLUSTER_ID/topics/billing.events/records" | grep -o '"error_code":[0-9]*' | cut -d: -f2)
+        "https://rest.poc.lab:8082/v3/clusters/$CLUSTER_ID/topics/billing.events/records" | grep -o '"error_code":[0-9]*' | cut -d: -f2 || true)
       printf '%s %s\n' "$(date +%T)" "${code:-noresponse}" >>"$DIR/rest.log"
       sleep 1
     done
@@ -59,13 +61,20 @@ stop() {
 }
 
 report() {
-  local produced consumed missing
+  local produced consumed missing since
+  [[ -f $DIR/running ]] && { echo "stop the load first (the report reads until the topic is idle for 30 s)"; exit 1; }
   produced=$(wc -l <"$DIR/produced.seq")
+  # sequence numbers restart at 1 on every start and the topic keeps earlier runs: count only messages
+  # written since this run started (record timestamp), otherwise old messages would hide lost ones
+  since=$(cat "$DIR/start.ms" 2>/dev/null || echo 0)
   kafka-console-consumer --bootstrap-server "$BOOT" --consumer.config "$CFG" --topic "$TOPIC" \
-    --group "orders-load-report-$$" --from-beginning --timeout-ms 30000 2>/dev/null | grep -E '^[0-9]+$' | sort -n -u >"$DIR/consumed.seq" || true
+    --group "orders-load-report-$$" --from-beginning --timeout-ms 30000 --property print.timestamp=true 2>/dev/null |
+    awk -F'\t' -v s="$since" '{t=$1; sub(/^CreateTime:/, "", t)} t >= s && $2 ~ /^[0-9]+$/ {print $2}' |
+    sort -n -u >"$DIR/consumed.seq" || true
   consumed=$(wc -l <"$DIR/consumed.seq")
   missing=$(comm -23 <(sort -u "$DIR/produced.seq") <(sort -u "$DIR/consumed.seq") | wc -l)
-  printf 'SCRAM producer : %s produced, %s consumed, %s missing\n' "$produced" "$consumed" "$missing"
+  printf 'SCRAM producer : %s produced, %s consumed (written since %s), %s missing\n' "$produced" "$consumed" \
+    "$(date -d "@$((since / 1000))" +%T)" "$missing"
   printf 'REST v3 via LB : %s ok, %s failed\n' "$(grep -c ' 200$' "$DIR/rest.log" || true)" "$(grep -vc ' 200$' "$DIR/rest.log" || true)"
   grep -v ' 200$' "$DIR/rest.log" | head -5 || true
 }

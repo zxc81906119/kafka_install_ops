@@ -125,7 +125,7 @@ function parse(md) {
       out.push(new Paragraph({
         heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][lvl - 1],
         pageBreakBefore: lvl === 1 && out.length > 0,
-        children: [new TextRun(m[2])],
+        children: [new TextRun(m[2].replace(/`/g, ''))],   // headings keep the heading style: drop code backticks
       }));
       numbered = 0; i++; continue;
     }

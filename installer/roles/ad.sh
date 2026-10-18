@@ -23,7 +23,7 @@ role::ad::configure() {
   [[ $REMOTE_CHANGED == 1 ]] && changed=1
   if [[ $changed == 1 ]] && step::mutating; then
     remote::exec "$host" "sudo -n pkill -x samba || true"
-    log::changed "[$host] samba restarted with the internal-CA certificate"
+    log::changed "[$host] samba restarted with the new certificate / trust bundle"
     sleep 5
   fi
 }

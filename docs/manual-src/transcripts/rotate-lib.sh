@@ -27,11 +27,13 @@ SANS_SERVER=ops02.poc.lab,ops02,ad01.poc.lab,ad01,lb01.poc.lab,lb01,kc01.poc.lab
 truststores() {
   ( cd $PKI && umask 077
     d=$(mktemp -d); awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' ca.pem
-    rm -f truststore.p12 opmenu-truststore.p12; i=0
+    # build beside the target, then rename: a client starting meanwhile must not load a missing / partial truststore
+    rm -f truststore.p12.new opmenu-truststore.p12.new; i=0
     for f in "$d"/ca-*.pem; do i=$((i+1))
-      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore truststore.p12 -storetype PKCS12 -storepass:env STORE_PASSWORD >/dev/null
-      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore opmenu-truststore.p12 -storetype PKCS12 -storepass:env OPMENU_TRUSTSTORE_PASSWORD >/dev/null
+      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore truststore.p12.new -storetype PKCS12 -storepass:env STORE_PASSWORD >/dev/null
+      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore opmenu-truststore.p12.new -storetype PKCS12 -storepass:env OPMENU_TRUSTSTORE_PASSWORD >/dev/null
     done; rm -rf "$d"
+    mv -f truststore.p12.new truststore.p12 && mv -f opmenu-truststore.p12.new opmenu-truststore.p12
     echo "truststores rebuilt with $i CA(s): $(grep -c 'BEGIN CERT' ca.pem) in ca.pem" )
 }
 

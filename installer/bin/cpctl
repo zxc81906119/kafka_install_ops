@@ -10,7 +10,9 @@
 #   license status                     effective license (file or trial), expiry, days left
 #   certs status                       certificate expiry + what the running services present
 #   certs rotate [--cert a,b|all]      re-issue leaf certs (default kafka-internal,cp-server), rolling restart
-#   certs rotate-ca --phase add|switch|retire   zero-downtime CA rotation (three runs)
+#                                      PKI_MODE=external: pass 1 writes CSRs for the bank, pass 2 imports
+#   certs rotate-ca --phase add|switch|retire   zero-downtime rotation of the internal CA (three runs)
+#   certs trust list|add <root.pem>|remove <name>|internal   trust anchors from the bank (PKI_MODE=external)
 #   monitoring export|check            scrape config + alert rules for the bank Prometheus; probe exporters
 #   upgrade plan|backup|stage|rolling|finalize|rollback --to <version>
 #   controller add|remove|replace --host <kcNN> [--old <kcNN>]
@@ -138,7 +140,19 @@ case $cmd in
     [[ ${1:-} == status ]] || lock::acquire
     # shellcheck source=../upgrade/certs.sh
     source "$CPCTL_HOME/upgrade/certs.sh"
-    certs::main "$@" && rc=0 || rc=$?
+    # NOT "certs::main && rc=0 || rc=$?": inside an &&/|| list bash disables errexit for the whole function,
+    # so a failed step (e.g. a rejected bank certificate) would not stop the rollout behind it
+    # (the subshell keeps errexit + the ERR trap; outside, both are off just long enough to print the recap)
+    trap - ERR
+    set +e
+    (
+      trap core::on_error ERR
+      set -e
+      certs::main "$@"
+    )
+    rc=$?
+    set -e
+    trap core::on_error ERR
     log::recap
     exit "$rc"
     ;;

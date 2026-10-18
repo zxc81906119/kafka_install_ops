@@ -1695,7 +1695,7 @@ WantedBy=multi-user.target
 ## 3.4 步驟 03:內部 PKI（`03_pki.sh` + `lib/pki.sh`）
 
 - **主機 / 帳號**：3.4.1–3.4.6 在 **ops01 以 cpadmin（不加 sudo）** 執行，工作目錄 `PKI_DIR=/var/lib/cp-installer/pki`；3.4.7（派送）與 3.4.8（信任）在各節點 cpadmin + sudo。
-- **參數**（`inventory.env`）：`PKI_KEY_BITS=3072`、`PKI_CA_DAYS=3650`、`PKI_CERT_DAYS=365`、`PKI_RENEW_BEFORE_DAYS=30`；subject 後綴 `/OU=Confluent/O=PoC Bank/C=TW`；密碼 `STORE_PASSWORD`、`MDS_TOKEN_PASSPHRASE`（`conf/secrets.env`，Secret Protection 管理）。
+- **參數**（`inventory.env`）：`PKI_MODE=internal|external`（誰簽發，external = 銀行 CA，見 3.4.9）、`PKI_KEY_BITS=3072`、`PKI_CA_DAYS=3650`、`PKI_CERT_DAYS=365`、`PKI_RENEW_BEFORE_DAYS=30`；subject 後綴 `/OU=Confluent/O=PoC Bank/C=TW`；密碼 `STORE_PASSWORD`、`MDS_TOKEN_PASSPHRASE`（`conf/secrets.env`，Secret Protection 管理）。
 - **keytool**：`/usr/lib/jvm/temurin-21-jdk/bin/keytool`（RPM）或 `/opt/java/current/bin/keytool`（tar）——所以 ops01 必須先完成 step 02。
 
 準備（ops01，cpadmin）：
@@ -1742,12 +1742,13 @@ read -rsp 'MDS_TOKEN_PASSPHRASE: ' MDS_TOKEN_PASSPHRASE; echo; export MDS_TOKEN_
   ```bash
   d=$(mktemp -d)
   awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' ca.pem
-  rm -f truststore.p12
+  rm -f truststore.p12.new                 # 先建在旁邊，最後改名：啟動中的 client 不會讀到缺檔 / 只有部分 CA 的 truststore
   i=0; for f in "$d"/ca-*.pem; do i=$((i+1))
     "$KT" -importcert -noprompt -alias "internal-ca-$i" -file "$f" \
-      -keystore truststore.p12 -storetype PKCS12 -storepass:env STORE_PASSWORD
+      -keystore truststore.p12.new -storetype PKCS12 -storepass:env STORE_PASSWORD
   done
   rm -rf "$d"
+  mv -f truststore.p12.new truststore.p12
   sha256sum ca.pem | awk '{printf "%s",$1}' > truststore.bundle.sha256
   ```
 - **驗證**：`"$KT" -list -keystore truststore.p12 -storepass:env STORE_PASSWORD` → `internal-ca-1, ..., trustedCertEntry`。
@@ -1931,6 +1932,130 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
   - tar 版 JDK 的 cacerts 是 JDK 目錄內實體檔，不受 update-ca-trust 影響，但 JDK 版本切換後要重做。
   - **不要在 `/etc/pki/ca-trust/source/anchors/` 留備份檔**：p11-kit 會讀取 anchors 內的**所有檔案**(不只 `.pem`),留在這裡的 `cp-internal-ca.pem.bak.<ts>` 會讓已退役的 CA 繼續被信任。撰寫本手冊時在 kb01 發現這個問題(`trust list` 同時列出現行 CA 與已退役的 `PoC Internal CA`),cpctl 已修正:anchors 的備份改放 `/var/backups/cp-installer/`,03 步驟也會把舊版本留下的備份移出並重跑 `update-ca-trust extract`。手動輪替 CA 時,備份請放在 anchors 目錄以外。
   - CA 輪替期間 `ca.pem` 是多張 CA 的 bundle，上述 awk 切檔即為此設計。
+
+### 3.4.9 銀行 CA 簽發（PKI_MODE=external）
+
+正式環境的憑證由銀行的 PKI 簽發：銀行有 root CA 與簽發用的中繼 CA（intermediate），**我們手上沒有任何 CA 私鑰**，只拿到 root 憑證。憑證的結構不變（`kafka-internal`、`cp-server`、app 與 break-glass 的 client 憑證，用途與 SAN 同 3.4.4–3.4.6），只有「誰簽」改變：
+
+| | 內部 CA（3.4.1–3.4.6） | 銀行 CA（本節） |
+|---|---|---|
+| 誰簽 | ops01 上的 `ca.key` | 銀行；ops01 只產生私鑰與 CSR |
+| 信任 bundle `ca.pem` | `ca.crt` | `trust/*.pem`（銀行 root，只有 root） |
+| `<name>.crt` 內容 | leaf | **leaf + 中繼 CA**（伺服器必須送出完整鏈，對方只信任 root） |
+| `<name>.p12` | key + leaf + 內部 CA | key + leaf + 中繼 CA |
+| 一張憑證要幾次執行 | 1 次 | 2 次：先產生申請，銀行簽回後再匯入 |
+
+PoC 用 `windows/bank-ca.sh` 模擬銀行（root `PoC Bank Root CA G1` → 中繼 `PoC Bank Issuing CA G1-01`，`pathlen:0`），CA 私鑰在 Windows 端的 `bank-ca/`，ops01 碰不到。
+
+**檔案位置**（ops01，`/var/lib/cp-installer/pki`）：
+
+| 路徑 | 內容 | 誰用 |
+|---|---|---|
+| `trust/<name>.pem` | 銀行 root（`cpctl certs trust add` 放入） | 信任 bundle |
+| `pending/<name>.key` | 新私鑰（0600，**永遠不離開 ops01**） | 匯入時配對 |
+| `requests/<name>.csr`、`<name>.req.txt` | CSR 與申請單 | **交給銀行** |
+| `incoming/<name>.crt` | 銀行的回覆（leaf + 中繼，順序不拘，可含 root） | 匯入 |
+
+### 3.4.9.1 取得銀行 root
+
+- **手動指令**（ops01，cpadmin）：
+  ```bash
+  install -d -m 0750 trust
+  openssl x509 -in ~/bank-root-g1.pem -noout -subject -fingerprint -sha256 -ext basicConstraints
+  # subject=CN=PoC Bank Root CA G1, O=PoC Bank, C=TW
+  # sha256 Fingerprint=B4:F5:04:CA:...      ← 一定要和銀行用「另一個管道」公布的指紋比對
+  # X509v3 Basic Constraints: critical  CA:TRUE
+  openssl x509 -in ~/bank-root-g1.pem -out trust/bank-root-g1.pem && chmod 0644 trust/bank-root-g1.pem
+  ```
+- **對應 cpctl**：`cpctl certs trust add ~/bank-root-g1.pem --name bank-root-g1`（檢查是 CA、只有一張、一年內不到期，印出指紋）。首次安裝加 `--no-rollout`，之後 `cpctl install` 會帶入。
+- **注意事項**：銀行若提供**專用的中繼 CA** 給 Kafka 使用，可以把中繼 CA 當成信任錨點放進 `trust/`（而不是 root），這樣只有這張中繼簽的憑證才會被信任；cpctl 的檢查用 `-partial_chain`，Java 本來就接受任何信任錨點。
+
+### 3.4.9.2 產生私鑰、CSR 與申請單
+
+- **手動指令**（以 kafka-internal 為例；SAN 與 EKU 同 3.4.4）：
+  ```bash
+  install -d -m 0700 pending && install -d -m 0750 requests incoming
+  n=kafka-internal
+  openssl genrsa -out pending/$n.key 3072 && chmod 0600 pending/$n.key
+  openssl req -new -key pending/$n.key -sha256 -subj "/CN=$n/OU=Confluent/O=PoC Bank/C=TW" \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth,clientAuth" \
+    -addext "subjectAltName=DNS:kb01,DNS:kb01.poc.lab,...,DNS:kc04.poc.lab" \
+    -out requests/$n.csr
+  ```
+  申請單 `requests/<name>.req.txt`（cpctl 產生的實際內容）：
+  ```
+  Certificate request kafka-internal  (cpctl, 2026-10-17 ...)
+
+  Subject            : CN = kafka-internal, OU = Confluent, O = PoC Bank, C = TW
+  Key                : RSA 3072 (the private key stays on the ops host)
+  Validity requested : 365 days
+  Key usage          : digitalSignature, keyEncipherment
+  Extended key usage : serverAuth, clientAuth
+                       BOTH are required: the service presents this certificate as server and as client
+  SAN (DNS)          : kb01,kb01.poc.lab,...,kc04,kc04.poc.lab
+  Used by            : controllers + brokers: CONTROLLER / INTERNAL listeners (server AND client ...)
+  Return format      : PEM - the certificate followed by the issuing intermediate CA(s); the root is optional
+  CSR SHA-256        : ...
+  ```
+- **驗證**：
+  ```bash
+  openssl req -in requests/$n.csr -noout -verify -text | grep -A1 -E 'Alternative|Extended Key'
+  # verify OK / DNS:kb01, ... / TLS Web Server Authentication, TLS Web Client Authentication
+  ```
+- **對應 cpctl**：`pki::request`（由 `pki::_issue_external` 在需要時呼叫：沒有憑證、即將到期、SAN 不符、不是銀行簽的，或 `cpctl certs rotate`）。
+- **注意事項**：把 `.csr` 與 `.req.txt` 交給銀行（行內檔案交換流程），**私鑰不交出去**。`kafka-internal` 與 `cp-server` 一定要同時有 serverAuth 與 clientAuth（理由見 3.4.4、3.4.5），這是銀行最常漏掉的地方，申請單特別註明。
+
+### 3.4.9.3 匯入銀行的回覆（先檢查，全部通過才換上）
+
+- **手動指令**（`incoming/$n.crt` 是銀行的回覆）：
+  ```bash
+  n=kafka-internal; in=incoming/$n.crt; w=$(mktemp -d)
+  awk -v d="$w" '/BEGIN CERTIFICATE/ {k++} {print > (d "/c-" k ".pem")}' "$in"
+  # 1) 哪一張是 leaf：公鑰和 pending 私鑰一致的那張
+  kp=$(openssl pkey -in pending/$n.key -pubout)
+  for f in "$w"/c-*.pem; do [ "$(openssl x509 -in $f -noout -pubkey)" = "$kp" ] && leaf=$f; done; echo "leaf=$leaf"
+  # 2) CN、不是 CA、SAN、EKU、效期
+  openssl x509 -in "$leaf" -noout -subject -ext basicConstraints,subjectAltName,extendedKeyUsage -dates
+  # 3) 憑證鏈：leaf + 中繼（自簽的 root 不放進去）→ 銀行 root
+  cat "$leaf" > $w/chain.pem
+  for f in "$w"/c-*.pem; do
+    [ "$f" = "$leaf" ] && continue
+    [ "$(openssl x509 -in $f -noout -subject_hash)" = "$(openssl x509 -in $f -noout -issuer_hash)" ] && continue
+    cat "$f" >> $w/chain.pem
+  done
+  openssl verify -partial_chain -CAfile <(cat trust/*.pem) -untrusted $w/chain.pem $w/chain.pem    # OK
+  # 4) 全部通過才換上（舊檔先歸檔，同 3.4.3）
+  install -m 0600 pending/$n.key $n.key
+  install -m 0640 $w/chain.pem $n.crt && cp $n.crt $n.chain.pem
+  openssl pkcs12 -export -name $n -inkey $n.key -in $n.crt -passout env:STORE_PASSWORD -out $n.p12
+  rm -f pending/$n.key; rm -rf "$w"     # incoming / requests 移到 archive/
+  ```
+  （手動版第 3 步假設回覆只有一張中繼；cpctl 依 issuer 逐層排出正確順序，多層中繼也可以。）
+- **檢查項目與拒絕訊息**（cpctl `pki::check_signed`，任何一項不過就**完全不換**，原有憑證繼續使用）：
+
+| 檢查 | 不通過時 |
+|---|---|
+| 有一張憑證的公鑰與 pending 私鑰相同 | `no certificate in the file matches the pending private key` |
+| CN = 申請的名稱（CN 就是 Kafka / RBAC principal） | `subject CN is '...', requested '...'` |
+| 不是 CA 憑證 | `it is a CA certificate` |
+| SAN 與申請完全相同 | `SAN differs - requested [...], received [...]` |
+| EKU 含申請的每一項 | `extended key usage lacks clientAuth` |
+| 已生效、`PKI_RENEW_BEFORE_DAYS` 內不到期 | `not valid before ...` / `expires ...` |
+| 鏈到 `trust/` 的銀行 root（檔案內要有中繼） | `does not chain to a bank root in trust/ ...` |
+
+- **驗證**：
+  ```bash
+  grep -c 'BEGIN CERTIFICATE' kafka-internal.crt                                  # 2（leaf + 中繼）
+  openssl verify -partial_chain -CAfile ca.pem -untrusted kafka-internal.crt kafka-internal.crt   # OK
+  openssl pkcs12 -in kafka-internal.p12 -nokeys -passin env:STORE_PASSWORD | grep -c 'BEGIN CERT' # 2
+  ```
+- **對應 cpctl**：`pki::import`、`pki::check_signed`；`cpctl install` 遇到「還在等銀行、且沒有可用舊憑證」的申請會停在 03（`waiting for the bank: ...`），可用的舊憑證則繼續使用、只發警告。
+- **注意事項**：
+  - 伺服器端一定要送出中繼 CA：Java 用 p12 裡的整條鏈；Prometheus（`cert_file`）、Samba LDAPS（`cert.pem`）、curl `--cert` 都直接讀 `<name>.crt`，所以 `.crt` 本身就是 leaf + 中繼。實測時 Prometheus 9090 與 LDAPS 636 原本只送 1 張（內部 CA 模式不需要），換成銀行憑證後送 2 張。
+  - **信任銀行 root = 信任銀行簽的每一張憑證**。principal 取自 CN（`RULE:.*CN=(...)`），若銀行替別的系統簽了 `CN=kafka-internal`，對方就是 super user。要求銀行：Kafka 的 CN 由 RA 管控不重複，或提供專用中繼 CA（3.4.9.1 注意事項）；Prometheus / Alertmanager 的 mTLS 不檢查 CN，任何銀行憑證都能連上。
+  - 銀行沒有提供 CRL / OCSP 時，Kafka 不會檢查撤銷；懷疑私鑰外洩時要立即輪替（9.2）並請銀行撤銷。
 
 # 4. 叢集核心:AD、設定檔、格式化、啟動(步驟 04–07)
 
@@ -4629,11 +4754,13 @@ EOS
 
 ```bash
 $ bash load.sh stop && bash load.sh report
-SCRAM producer : 7144 produced, 7238 consumed, 0 missing
-REST v3 via LB : 91 ok, 0 failed
+SCRAM producer : 3572 produced, 3572 consumed (written since 09:17:40), 0 missing
+REST v3 via LB : 91 ok, 0 failed      ← 實測時的數字;91 次遠少於演練時間應有的次數,見附錄 A.3.2 註
 ```
 
-判斷依據是 `0 missing` 與 `0 failed`。consumed 可能比 produced 多(topic 裡有更早以前跑過的訊息,報告取聯集),不影響判斷。
+判斷依據是 `0 missing` 與 `0 failed`,而且 `consumed` 必須等於 `produced`、REST 的次數要和演練時間相符(約每 1.1 秒一次;明顯偏少表示 REST 迴圈中途停了)。報告只算本次 `start` 之後寫入的訊息:每次 `start` 序號都從 1 開始,topic 又保留之前的訊息,若從頭全部算,舊訊息會把新的遺失蓋掉(實測時的舊版報告就有這個問題,附錄 A.3.2 註)。上面的數字是依 broker 上的資料重新核對的結果。
+
+>! 負載要先 `stop` 才能 `report`:報告讀到 topic 30 秒沒有新訊息才結束,負載還在跑就永遠不會結束。
 
 ## 8.10 finalize(不可逆)
 
@@ -4675,8 +4802,10 @@ Feature: confluent.metadata.version  SupportedMinVersion: CP-7.3-IV3  SupportedM
 |---|---|---|
 | 9.2 憑證輪替 | 同一張 CA 重簽 `kafka-internal`、`cp-server`(到期前,或懷疑私鑰外洩) | 1 輪滾動重啟 |
 | 9.3 CA 輪替 | 換掉內部 CA 本身 | 3 輪滾動重啟(add → switch → retire) |
+| 9.4 遷移到銀行 CA | 內部 CA 換成銀行 PKI(`PKI_MODE=external`,3.4.9) | 3 輪(同 9.3 的三階段) |
+| 9.5 銀行 CA 下的輪替 | 憑證到期重簽、銀行換 root | 1 輪 / 3 輪 |
 
-兩者都在 2026-10-17 的全程實測環境中,於持續負載下做過(附錄 A.3):每一輪都是 **0 筆遺失、REST 0 次失敗**,且 16 個 TLS 端點都確認換成新憑證。
+9.2、9.3 在 2026-10-17 的全程實測環境中,於持續負載下做過(附錄 A.3);9.4 在 cp-poc 用 cpctl 做過(附錄 A.4)。每一輪 16 個 TLS 端點都確認換成新憑證,REST 都是 0 次失敗;SCRAM 直連的負載除了 9.3.2 switch 之外都是 0 筆遺失(9.3.2 那一段的負載量測無效,見附錄 A.3.2 註;銀行 root 輪替的 switch 在 A.4 以 4,530 筆 0 遺失通過)。
 
 **為什麼不停機**:所有連線兩端都信任同一份 CA bundle。憑證輪替時 CA 沒變,新舊憑證都能互通;CA 輪替則先讓所有人同時信任新舊兩張 CA(add),再換憑證(switch),最後才移除舊 CA(retire),任何時刻連線兩端都至少有一張共同信任的 CA。
 
@@ -4781,7 +4910,7 @@ $ restart_all
 $ served          # 簽發者應全部是新 CA
 ```
 
-實測:4 張憑證都由新 CA(`PoC Internal CA 202610170944`)簽發,16 個端點全部出示新 CA 的憑證;負載 0 遺失、REST 0 失敗。
+實測:4 張憑證都由新 CA(`PoC Internal CA 202610170944`)簽發,16 個端點全部出示新 CA 的憑證;REST 0 失敗。SCRAM 負載這一段沒有量到(producer 未寫入任何訊息,附錄 A.3.2 註)。
 
 `app-legacy-billing.p12` 這時要交給應用程式團隊;舊憑證(舊 CA 簽的)在 retire 之前仍然有效,給對方切換的時間。
 
@@ -4819,6 +4948,94 @@ REST with the NEW app certificate:    200
 - 舊 CA 的私鑰只留在操作機的 `archive/`,正式環境應離線保存或銷毀。
 - 跳板機的 break-glass 憑證在 switch 時一起重簽,`push_jump` 會重新匯出並派送。
 
+## 9.4 從內部 CA 遷移到銀行 CA(不停機)
+
+和 9.3 一樣分三個階段,差別是新 CA 由銀行持有:我們只拿到 root,新憑證要經過「申請 → 銀行簽 → 匯入」(3.4.9)。以下是 cpctl 的做法(實測紀錄見附錄 A.4);手動時每一步對應 3.4.9 的指令加上 9.1 的 `truststores`、`push_all_ssl`、`trust_all`、`push_ad`、`push_jump`、`restart_all`。
+
+| 階段 | 指令 | 結果 | 滾動重啟 |
+|---|---|---|---|
+| 1 add | `cpctl certs trust add bank-root-g1.pem` | bundle = 內部 CA + 銀行 root,所有節點同時信任兩者 | 是 |
+| 2 switch | `PKI_MODE=external`;`cpctl certs rotate --cert all` 兩次 | 4 張憑證換成銀行簽的(leaf + 中繼) | 是(第 2 次) |
+| 3 retire | `cpctl certs trust remove internal` | bundle 只剩銀行 root;內部 CA 私鑰移到 `archive/` | 是 |
+
+### 9.4.1 第 1 階段 add:信任銀行 root
+
+```bash
+# 銀行交付 root(PoC:Windows 端 bash windows/bank-ca.sh deliver-root)
+$ openssl x509 -in ~/bank-root-g1.pem -noout -fingerprint -sha256     # 與銀行另行公布的指紋比對
+$ cpctl certs trust add ~/bank-root-g1.pem --name bank-root-g1
+```
+
+**驗證**:每台 OS trust anchor 與 JDK cacerts 都是 2 張 CA;端點仍出示內部 CA 簽的憑證。
+
+```
+ops01   OS-anchors=2 JDK-cp-ca=2
+kc01    OS-anchors=2 JDK-cp-ca=2      (kb01、rest01、c3-01、jump01 相同)
+```
+
+>! **應用程式要在第 2 階段之前換上含銀行 root 的 truststore**(直連 Kafka 的 SCRAM app、REST 的 legacy app 都一樣),否則換憑證之後它們不認得伺服器。
+
+### 9.4.2 第 2 階段 switch:改由銀行簽發
+
+```bash
+$ sed -i 's/^PKI_MODE=internal$/PKI_MODE=external/' /opt/cp-installer/conf/inventory.env
+$ cpctl certs rotate --cert all          # 第 1 次:產生 4 份申請,服務不受影響
+WARN requests for the bank: app-legacy-billing cp-server kafka-internal opmenu-breakglass
+WARN hand over .../requests/<name>.csr + <name>.req.txt; put each answer into .../incoming/<name>.crt
+# 把 requests/ 交給銀行;銀行的回覆放進 incoming/(PoC:bash windows/bank-ca.sh exchange)
+$ cpctl certs rotate --cert all          # 第 2 次:檢查、匯入、派送、滾動重啟、確認端點
+imported kafka-internal: serial 677D...5AF0, issuer CN = PoC Bank Issuing CA G1-01, ..., until 2027-10-17
+imported cp-server: serial 677D...5AEF, ...
+```
+
+**拒絕的例子**(實測時故意讓銀行只簽 serverAuth):
+
+```
+[ERROR] certificate kafka-internal REJECTED: extended key usage lacks clientAuth (received: TLS Web Server
+Authentication) - nothing was installed; ask the bank for a corrected certificate (request sheet: requests/kafka-internal.req.txt)
+rc=4
+```
+
+這時什麼都沒換:服務繼續用原本的憑證,申請也還開著。銀行重新簽發、覆蓋 `incoming/` 後再跑一次即可。
+
+**驗證**:16 個端點都出示銀行簽的憑證,而且都送出 2 張(leaf + 中繼):
+
+```
+endpoint     serial                                     issuer                      chain
+kc01:9093    677D50D9C8267D199AB1F4CAA532A49D09E65AF0   PoC Bank Issuing CA G1-01   2
+kb01:8090    677D50D9C8267D199AB1F4CAA532A49D09E65AEF   PoC Bank Issuing CA G1-01   2
+c3-01:9090   677D50D9C8267D199AB1F4CAA532A49D09E65AEF   PoC Bank Issuing CA G1-01   2    ← 原本 1
+ad01:636     677D50D9C8267D199AB1F4CAA532A49D09E65AEF   PoC Bank Issuing CA G1-01   2    ← 原本 1
+...(16 個端點)
+```
+
+`app-legacy-billing.p12` 要交給應用程式團隊;舊憑證(內部 CA 簽的)在第 3 階段之前仍可使用。
+
+### 9.4.3 第 3 階段 retire:移除內部 CA
+
+```bash
+$ cpctl certs trust remove internal
+```
+
+cpctl 先確認:每張受管憑證都鏈到剩下的信任錨點、沒有未完成的申請、各服務出示的是 ops01 上的現行憑證;任何一項不成立就停止。通過後內部 CA(`ca.crt`、`ca.key`)移到 `archive/`,bundle 只剩銀行 root,再滾動重啟一次。
+
+**驗證**:見附錄 A.4.2(每台只剩 1 張 CA;內部 CA 簽的舊 app 憑證被 TLS 拒絕,銀行簽的 200)。
+
+>! `ca.key` 這時只在 `archive/`。遷移完成、觀察期過後,依銀行規定離線保存或銷毀。
+
+## 9.5 銀行 CA 下的輪替
+
+| 情境 | 做法 |
+|---|---|
+| 憑證到期(每年) | `cpctl certs rotate`(預設 kafka-internal、cp-server)跑兩次:第 1 次產生申請,銀行簽回後第 2 次匯入並滾動重啟。`cpctl certs status` 會在到期前 `PKI_RENEW_BEFORE_DAYS` 天開始警告 |
+| SAN 改變(增減主機) | 同上;cpctl 比對 SAN 不符時會自動產生申請 |
+| 銀行中繼 CA 換新、root 不變 | 只需重簽 leaf(`rotate --cert all`),信任錨點不變 |
+| 銀行換 root | 三階段:`certs trust add <新 root>` → `certs rotate --cert all` 兩次 → `certs trust remove <舊 root>` |
+
+- 銀行 CA 模式下 `cpctl certs rotate-ca` 不能用(我們沒有 CA 私鑰),會提示改用上表的指令。
+- 申請開著的期間,`cpctl install` 照常可跑:有可用的舊憑證就繼續用、只發警告;只有「沒有可用憑證」(首次安裝、已過期)才會停在 03。
+- PoC 模擬銀行換 root:`bash windows/bank-ca.sh new-generation G2`、`deliver-root G2`,之後的 `exchange` 都由 G2 簽發。
+
 # 附錄 A. 手動驗證紀錄
 
 這份手冊做過兩次實測,都完全不呼叫 cpctl:
@@ -4828,6 +5045,7 @@ REST with the NEW app certificate:    200
 | A.1 全程從零(2026-10-16) | 第 2–6 章全部:從外網下載、建 repo,到 15 台主機的整套叢集、驗收、OP menu | 獨立的一套模擬主機(`docker/manual/compose.yml`,專案 `cp-man`),操作機 ops02 從裸機開始 |
 | A.2 單節點(2026-10-16) | 一台 controller 從裸機到加入既有叢集:rpm 一次、tar.gz 一次 | 備用節點 kc03,接到 cpctl 建好的叢集 |
 | A.3 升級與輪替(2026-10-16/17) | 第 8、9 章:8.2.4 → 8.3.2 升級(含回滾、finalize)、憑證輪替、CA 三階段輪替,全程持續負載 | 同 A.1 的環境 |
+| A.4 銀行 CA(2026-10-17) | 3.4.9、9.4、9.5:內部 CA 遷移到模擬銀行 CA、銀行換 root(G1 → G2),持續負載 | cp-poc,**用 cpctl** 執行(驗證 cpctl 的外部 CA 模式) |
 
 ## A.1 全程從零實測
 
@@ -4943,11 +5161,24 @@ ssh kc03.poc.lab "sudo rm -rf /opt/confluent /opt/java /opt/jmx-exporter /var/ca
 
 | 演練 | 重點 | 負載結果 |
 |---|---|---|
-| 8 升級 8.2.4 → 8.3.2 | broker 4 台、controller 3 台(leader 最後)、REST 2 台(先從 LB 摘除);kb04 回滾到 8.2.4 再升回;finalize `CP-8.2-IV1A` → `CP-8.3-IV0B` | 7,144 筆 0 遺失;REST 91 次 0 失敗 |
-| 9.2 憑證輪替 | 16 個端點序號全部換新 | 1,210 筆 0 遺失;REST 214 次 0 失敗 |
-| 9.3.1 CA add | 12 台 OS 與 JDK 都信任 2 張 CA,各服務 truststore 2 張 | 1,484 筆 0 遺失;REST 263 次 0 失敗 |
-| 9.3.2 CA switch | 4 張憑證改由新 CA 簽發,16 個端點都出示新 CA 的憑證 | 1,528 筆 0 遺失;REST 268 次 0 失敗 |
-| 9.3.3 CA retire | 12 台都只剩新 CA;舊 CA 簽的 app 憑證被 TLS 拒絕(exit 56),新憑證 200 | 1,476 筆 0 遺失;REST 263 次 0 失敗 |
+| 8 升級 8.2.4 → 8.3.2 | broker 4 台、controller 3 台(leader 最後)、REST 2 台(先從 LB 摘除);kb04 回滾到 8.2.4 再升回;finalize `CP-8.2-IV1A` → `CP-8.3-IV0B` | 0 遺失(兩個 producer:3,572 筆 + 4,161 筆,見下方註);REST 只記到 91 次(見下方註) |
+| 9.2 憑證輪替 | 16 個端點序號全部換新 | 1,210 筆 0 遺失 ✓;REST 214 次 0 失敗 |
+| 9.3.1 CA add | 12 台 OS 與 JDK 都信任 2 張 CA,各服務 truststore 2 張 | 1,484 筆 0 遺失 ✓;REST 263 次 0 失敗 |
+| 9.3.2 CA switch | 4 張憑證改由新 CA 簽發,16 個端點都出示新 CA 的憑證 | **SCRAM 負載無效**(producer 一筆都沒有寫入,見下方註);REST 268 次 0 失敗 |
+| 9.3.3 CA retire | 12 台都只剩新 CA;舊 CA 簽的 app 憑證被 TLS 拒絕(exit 56),新憑證 200 | 1,476 筆 0 遺失 ✓;REST 263 次 0 失敗 |
+
+**註(2026-10-17 重新核對)**:當時 load.sh 的報告有缺陷(A.4.3 #4):每次 `start` 序號從 1 開始,報告卻從頭讀整個 topic,舊訊息會蓋掉新的遺失(上表各段的 `consumed` 都是同一個數字 7,238)。事後在 broker 上以 `kafka-dump-log` 讀出每筆訊息的 producer ID,逐次核對:
+
+| 演練 | producer | 結果 |
+|---|---|---|
+| 升級 | 本次啟動的 producer | 1–3,572 連續,0 遺失 |
+| 升級 | 8.2.3 第一次啟動(卡住的那次,見 A.3.3 #5)其實一直在背景執行 | 升級期間 3,078–7,238 連續,0 遺失;它另有 15 個缺號,全部在主機休眠 / 喚醒的時間點(10-16 17:00、10-17 05:38、08:07,每次 5 筆),與升級無關 |
+| 9.2、9.3.1、9.3.3 | 各一個 | 1,210、1,484、1,476 筆,序號都連續,**確認 0 遺失** |
+| 9.3.2 CA switch | **沒有** | 這段時間 topic 裡沒有任何訊息:producer 一筆都沒寫入。log 已被下一段覆蓋,無法確定原因;最可能是 producer 啟動時,操作機上的 `truststore.p12` 正在原地重建(先 `rm` 再匯入),JVM 讀到缺檔或只有部分 CA 的 truststore。truststore 的重建已改成建在旁邊再改名(3.4.2、D.7、cpctl 同步修正) |
+
+所以 9.3.2 這一段只證明了 REST(268 次 0 失敗),SCRAM 直連的不中斷沒有被證明。以同樣三階段做的銀行 root 輪替(A.4,switch + retire 4,530 筆 0 遺失)可作為佐證,但那是 cpctl 而不是本章的手動程序。
+
+**REST 計數**:各段 REST 約每 1.1 秒呼叫一次,次數應與演練時間相符。9.2、9.3.1–9.3.3 都相符(4–5 分鐘、214–268 次);升級約 12 分鐘卻只有 91 次,表示 REST 迴圈中途就結束了 —— 舊版 load.sh 在第一次失敗的呼叫時會直接結束(A.4.3 #3),所以升級期間「REST 0 失敗」沒有被證明,很可能至少有一次失敗。
 
 ### A.3.3 發現並已修進手冊的問題
 
@@ -4960,6 +5191,40 @@ ssh kc03.poc.lab "sudo rm -rf /opt/confluent /opt/java /opt/jmx-exporter /var/ca
 | 5 | 啟動持續負載的那條指令永遠不結束 | 背景 producer 佔住了指令的輸出管線 | 8.4:背景工作的輸出導到檔案 |
 | 6 | 重置後 C3 顯示 active 卻不開 9021(`LoginException ... retrieving token`) | C3 啟動時 MDS 還不能發 token,之後不會自己重試 | 重啟 C3 即可(5.2.2 注意事項已有) |
 | 7 | **`kafka-configs` 執行失敗時,錯誤訊息把整串參數(含 `--add-config` 的密碼)印出** | 叢集還沒就緒時建 SCRAM 帳號 | 5.1.1:建 SCRAM 前先確認叢集已就緒;輸出經過遮蔽再記錄。實測當下已遮蔽紀錄、兩組密碼換新 |
+
+## A.4 銀行 CA 實測(2026-10-17,cp-poc,cpctl)
+
+### A.4.1 做法
+
+1. Windows 端以 `windows/bank-ca.sh` 建立模擬銀行 PKI:`PoC Bank Root CA G1` → `PoC Bank Issuing CA G1-01`(CA 私鑰只在 Windows 端,ops01 拿不到)。
+2. 照 9.4 三個階段,把 cp-poc 從內部 CA 遷移到銀行 CA;中間故意讓銀行只簽 serverAuth 一次,確認會被拒。
+3. 照 9.5 模擬銀行換 root:建立 G2(`Root CA G2` → `Issuing CA G2-01`),再走一次三階段(trust add G2 → 憑證改由 G2 簽 → trust remove G1)。
+
+每段都在持續負載下(附錄 D.6 的 load.sh);另以 `bursts.sh`(依時間把 topic 切成一次次的負載,檢查每次的序號是否連續)獨立比對。
+
+### A.4.2 結果
+
+| 演練 | 重點 | 負載結果 |
+|---|---|---|
+| 9.4 遷移(add → switch → retire) | add 後抽查 6 台(ops01、kc01、kb01、rest01、c3-01、jump01),OS 與 JDK 都是 2 張 CA;switch 後 16 個端點都出示銀行簽的憑證、都送出 2 張(Prometheus 9090、LDAPS 636 原本只送 1 張);retire 後同 6 台只剩 1 張,內部 CA 簽的 app 憑證與 cp-server 被 REST、Prometheus 拒絕(exit 56),銀行簽的 200 | REST 前 291 次 0 失敗;SCRAM producer 見下方說明 |
+| 拒絕測試 | 銀行只簽 serverAuth → `kafka-internal REJECTED: extended key usage lacks clientAuth`,rc=4,什麼都沒換 | — |
+| 9.5 換 root:add G2 | trust bundle 與 truststore 為 G1 + G2,滾動重啟 failed=0 | 2,171 筆 0 遺失;REST 387 次 0 失敗 |
+| 9.5 換 root:switch + retire G1 | 16 個端點都改出示 G2-01 簽的憑證(鏈 2 張);G1 簽的 app 憑證被拒(exit 56) | 4,530 筆 0 遺失;REST 817 次 0 失敗 |
+| 收尾 | `cpctl verify` failed=0;`cpctl install` 連跑兩次,第二次 changed=0 | — |
+
+**遷移那一段的 producer**:負載在 add **之前**就啟動,它的 JVM 一直用啟動時載入、只含內部 CA 的 truststore。switch 後 broker 重啟、改出示銀行憑證,它就連不上(`PKIX path building failed`),序號 6154–9352 沒有送出(3,199 筆;叢集沒有遺失任何已確認寫入的訊息,是用戶端送不進來)。這正是 9.4.1 警告的情況:**應用程式要在 add 之後、switch 之前換上新的 truststore(並重啟)**。換 root 那一輪照這個順序做(add 之後重啟負載),全程 0 遺失。
+
+### A.4.3 發現並已修正的問題
+
+| # | 現象 | 原因 | 修正 |
+|---|---|---|---|
+| 1 | 銀行憑證被拒(ERROR)之後,`cpctl certs rotate` 還是繼續派送、重啟,最後 rc=0 | `cpctl` 以 `certs::main && rc=0 \|\| rc=$?` 呼叫;bash 在 `&&`/`\|\|` 裡會關掉整個函式的 errexit,失敗的步驟不會中止 | `certs` 改在開啟 errexit 的子 shell 執行;實測拒絕時停在 03,rc=4 |
+| 2 | 設定 / 憑證變更造成的 REST 重啟沒有先從 LB 摘除 | 只有 `upgrade rolling` 會摘除;handler 直接重啟(開源 Nginx 只有被動檢查,會有請求失敗) | handler 重啟 REST 前先 `lb::drain`,健康後 `lb::undrain` |
+| 3 | 負載工具的 REST 計數停在 291 | 第一次失敗的呼叫沒有 JSON,`grep` 找不到 → `pipefail` + `set -e` 讓迴圈結束 | load.sh 的 REST 迴圈改為記錄失敗、繼續執行 |
+| 4 | **報告的「0 遺失」不可靠** | 每次 `start` 序號從 1 開始,topic 保留之前的訊息;報告從頭讀整個 topic,舊的訊息會蓋掉新的遺失(`consumed` 在多次演練都是同一個數字) | 報告只計算本次 `start` 之後寫入的訊息(記錄時間戳);A.3 的數字另行重新核對(A.3.2 註) |
+| 5 | Prometheus 9090、LDAPS 636 只送 leaf | 這兩個服務直接讀 `.crt`;內部 CA 模式下對方本來就信任簽發者 | 銀行 CA 模式下 `.crt` = leaf + 中繼(3.4.9.3) |
+| 6 | 同一環境第二次 `cpctl certs rotate` 不會重簽 | 「本次已重簽」的標記檔留在 `$STATE_DIR/run`,從未清除 | 標記檔加上 run id |
+| 7 | 報告用的 consumer 被拒(`GroupAuthorizationException`) | app-orders 的 RBAC 只允許 `orders-*` 的 consumer group | 核對用的 consumer 一律用 `orders-load-report-*` |
 
 # 附錄 B. 只在實體主機才會生效的項目
 
@@ -5172,9 +5437,10 @@ start() {
   (
     . "$STATE/kraft.env"
     while [[ -f $DIR/running ]]; do
+      # "|| true": a failed call (no JSON -> grep finds nothing) must be counted, not end the loop (set -e + pipefail)
       code=$(curl -s -m 10 --cacert "$PKI/ca.pem" --cert "$PKI/app-legacy-billing.crt" --key "$PKI/app-legacy-billing.key" \
         -X POST -H 'Content-Type: application/json' -d '{"value":{"type":"JSON","data":{"src":"rest-load"}}}' \
-        "https://rest.poc.lab:8082/v3/clusters/$CLUSTER_ID/topics/billing.events/records" | grep -o '"error_code":[0-9]*' | cut -d: -f2)
+        "https://rest.poc.lab:8082/v3/clusters/$CLUSTER_ID/topics/billing.events/records" | grep -o '"error_code":[0-9]*' | cut -d: -f2 || true)
       printf '%s %s\n' "$(date +%T)" "${code:-noresponse}" >>"$DIR/rest.log"
       sleep 1
     done
@@ -5245,11 +5511,13 @@ SANS_SERVER=ops02.poc.lab,ops02,ad01.poc.lab,ad01,lb01.poc.lab,lb01,kc01.poc.lab
 truststores() {
   ( cd $PKI && umask 077
     d=$(mktemp -d); awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' ca.pem
-    rm -f truststore.p12 opmenu-truststore.p12; i=0
+    # build beside the target, then rename: a client starting meanwhile must not load a missing / partial truststore
+    rm -f truststore.p12.new opmenu-truststore.p12.new; i=0
     for f in "$d"/ca-*.pem; do i=$((i+1))
-      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore truststore.p12 -storetype PKCS12 -storepass:env STORE_PASSWORD >/dev/null
-      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore opmenu-truststore.p12 -storetype PKCS12 -storepass:env OPMENU_TRUSTSTORE_PASSWORD >/dev/null
+      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore truststore.p12.new -storetype PKCS12 -storepass:env STORE_PASSWORD >/dev/null
+      $JAVA_HOME/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" -keystore opmenu-truststore.p12.new -storetype PKCS12 -storepass:env OPMENU_TRUSTSTORE_PASSWORD >/dev/null
     done; rm -rf "$d"
+    mv -f truststore.p12.new truststore.p12 && mv -f opmenu-truststore.p12.new opmenu-truststore.p12
     echo "truststores rebuilt with $i CA(s): $(grep -c 'BEGIN CERT' ca.pem) in ca.pem" )
 }
 

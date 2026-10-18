@@ -88,8 +88,7 @@ role::jump::configure() {
   # break-glass identity: re-exported with its own password, readable by opbootstrap only
   remote::apply "$host" ensure::dir /etc/opmenu/bootstrap opbootstrap opbootstrap 0700
   if [[ ! -f $PKI_DIR/$OPMENU_BREAKGLASS.bg.p12 || $PKI_DIR/$OPMENU_BREAKGLASS.crt -nt $PKI_DIR/$OPMENU_BREAKGLASS.bg.p12 ]] && step::mutating; then
-    openssl pkcs12 -export -name "$OPMENU_BREAKGLASS" -inkey "$PKI_DIR/$OPMENU_BREAKGLASS.key" -in "$PKI_DIR/$OPMENU_BREAKGLASS.crt" \
-      -certfile "$PKI_DIR/ca.crt" -passout "pass:$OPMENU_BREAKGLASS_STORE_PASSWORD" -out "$PKI_DIR/$OPMENU_BREAKGLASS.bg.p12"
+    pki::export_p12 "$OPMENU_BREAKGLASS" "$OPMENU_BREAKGLASS_STORE_PASSWORD" "$PKI_DIR/$OPMENU_BREAKGLASS.bg.p12"
     chmod 0600 "$PKI_DIR/$OPMENU_BREAKGLASS.bg.p12"
   fi
   remote::put "$host" "$PKI_DIR/$OPMENU_BREAKGLASS.bg.p12" /etc/opmenu/bootstrap/breakglass.p12 opbootstrap opbootstrap 0600

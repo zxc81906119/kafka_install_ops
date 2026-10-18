@@ -17,6 +17,7 @@ node build.js
 - `01-download.log`(外網下載機)、`02-ops02.log`(操作機):每條指令、輸出與結束碼;不含任何密碼值。
 - `cmd-*.txt`:各段實際執行的指令(由 `run.sh` 逐條執行並記錄;`{{ ... }}` 是一個多行指令)。
 - `gen-*.sh`:照手冊 4.2.3、5.2 寫設定檔的腳本(密碼在執行時從操作機的 0600 密碼檔讀入)。
+- `04-bank-ca-cpctl.log`:附錄 A.4,cp-poc 以 cpctl 從自建 CA 遷移到模擬銀行 CA、銀行換 root,以及附錄 A.3 的重新核對(依 producer ID)。
 
 實測環境是另一套模擬主機:`docker compose -f docker/manual/compose.yml up -d`(專案 `cp-man`,操作機 ops02 為裸機)。AD 管理者密碼放在 `docker/manual/secrets.env`(不進版控),落地區是 `packages-manual/`(不進版控)。它和 cpctl 的 `cp-poc` 使用相同主機名稱,16 GB 的電腦上一次只跑一套。
 
