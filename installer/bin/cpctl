@@ -12,6 +12,10 @@
 #   certs rotate [--cert a,b|all]      re-issue leaf certs (default kafka-internal,cp-server), rolling restart
 #                                      PKI_MODE=external: pass 1 writes CSRs for the bank, pass 2 imports
 #   certs rotate-ca --phase add|switch|retire   zero-downtime rotation of the internal CA (three runs)
+#   broker add|remove --host <kbNN>    scale the broker set (Self-Balancing moves the data)
+#   os patch [--role R|--host H] [--reboot] [--yes]   rolling OS patching behind health gates
+#   health                             read-only health check with hints for common failures
+#   agent build|install [--restrict]|status   cpnode agent for restricted sudo (SUDO_MODE=restricted)
 #   certs trust list|add <root.pem>|remove <name>|internal   trust anchors from the bank (PKI_MODE=external)
 #   monitoring export|check            scrape config + alert rules for the bank Prometheus; probe exporters
 #   upgrade plan|backup|stage|rolling|finalize|rollback --to <version>
@@ -28,7 +32,7 @@ export CPCTL_HOME
 
 # shellcheck source=../lib/core.sh
 source "$CPCTL_HOME/lib/core.sh"
-for _f in log inventory remote render handler step health lock pki rbac verify license secretprotect monitoring; do
+for _f in log inventory remote agent render handler step health lock pki rbac verify license secretprotect monitoring; do
   # shellcheck source=/dev/null
   source "$CPCTL_HOME/lib/$_f.sh"
 done
@@ -78,7 +82,14 @@ case $cmd in
     lock::acquire
     case ${1:-} in
       import) repo::import ;;
-      verify) repo::verify ;;
+      verify)
+        repo::verify || core::die "$E_PRECHECK" "internal repo incomplete - run: cpctl repo import"
+        if repo::tls && [[ ! -f $PKI_DIR/cp-server.crt ]]; then
+          log::info "repo over HTTPS: served from step 02 on (no server certificate yet)"
+        else
+          repo::verify_served || core::die "$E_PRECHECK" "internal repo not served at $REPO_YUM_BASEURL"
+        fi
+        ;;
       list) repo::list ;;
       *) usage 2 ;;
     esac
@@ -86,7 +97,7 @@ case $cmd in
     ;;
   install)
     lock::acquire
-    repo::verify >/dev/null || core::die "$E_PRECHECK" "internal repo not served - run: cpctl repo import"
+    repo::verify >/dev/null || core::die "$E_PRECHECK" "internal repo incomplete - run: cpctl repo import"
     step::run_all "$@"
     log::recap
     ;;
@@ -155,6 +166,39 @@ case $cmd in
     trap core::on_error ERR
     log::recap
     exit "$rc"
+    ;;
+  health)
+    # shellcheck source=../upgrade/_upgrade.sh
+    source "$CPCTL_HOME/upgrade/_upgrade.sh"
+    # shellcheck source=../upgrade/certs.sh
+    source "$CPCTL_HOME/upgrade/certs.sh"
+    # shellcheck source=../upgrade/ops.sh
+    source "$CPCTL_HOME/upgrade/ops.sh"
+    # rc 0 healthy / 2 warnings / 1 critical; the recap is printed in every case
+    trap - ERR
+    set +e
+    ops::main health ""
+    rc=$?
+    set -e
+    trap core::on_error ERR
+    log::recap
+    exit "$rc"
+    ;;
+  broker | os)
+    lock::acquire
+    # shellcheck source=../upgrade/_upgrade.sh
+    source "$CPCTL_HOME/upgrade/_upgrade.sh"
+    # shellcheck source=../upgrade/certs.sh
+    source "$CPCTL_HOME/upgrade/certs.sh"
+    # shellcheck source=../upgrade/ops.sh
+    source "$CPCTL_HOME/upgrade/ops.sh"
+    ops::main "$cmd" "$@"
+    log::recap
+    ;;
+  agent)
+    lock::acquire
+    agent::main "$@"
+    log::recap
     ;;
   controller)
     lock::acquire

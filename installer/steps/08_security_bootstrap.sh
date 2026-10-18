@@ -17,6 +17,42 @@ security::scram_user() { # <user> <password>
     --alter --entity-type users --entity-name "$u" --add-config "SCRAM-SHA-512=[iterations=8192,password=$pw]" >/dev/null
 }
 
+readonly QUOTA_KEYS="producer_byte_rate consumer_byte_rate request_percentage controller_mutation_rate"
+
+# security::quota_now <entity args...> -> "key=value" per line, values as integers (describe prints 1.048576E7)
+security::quota_now() {
+  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+    --describe --entity-type users "$@" 2>/dev/null |
+    sed -n 's/.* are //p' | tr ',' '\n' | sed 's/^ *//' |
+    awk -F= 'NF == 2 {printf "%s=%.0f\n", $1, $2}' | sort
+}
+
+# security::quota <label> <wanted "k=v k=v"> <entity args...>   e.g. --entity-name app-orders | --entity-default
+security::quota() {
+  local label=$1 want=$2; shift 2
+  local have wanted k add=() del=()
+  have=$(security::quota_now "$@")
+  wanted=$(tr ' ' '\n' <<<"$want" | sed '/^$/d' | awk -F= '{printf "%s=%.0f\n", $1, $2}' | sort)
+  if [[ $have == "$wanted" ]]; then
+    log::ok "quota $label ${want:-none}"
+    return 0
+  fi
+  for k in $QUOTA_KEYS; do
+    if grep -q "^$k=" <<<"$wanted"; then
+      add+=("$(grep "^$k=" <<<"$wanted")")
+    elif grep -q "^$k=" <<<"$have"; then
+      del+=("$k")
+    fi
+  done
+  log::changed "quota $label: ${have//$'\n'/ } -> ${want:-none}"
+  step::mutating || return 0
+  local args=()
+  ((${#add[@]})) && args+=(--add-config "$(core::join , "${add[@]}")")
+  ((${#del[@]})) && args+=(--delete-config "$(core::join , "${del[@]}")")
+  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+    --alter --entity-type users "$@" "${args[@]}" >/dev/null
+}
+
 security::topic() { # <name> [partitions]
   local t=$1 p=${2:-6} cfg
   cfg=$(kafka::admin_config)
@@ -57,6 +93,13 @@ step_apply() {
     var="APP_BINDINGS_$(core::varname "$app")"
     for spec in ${!var:-}; do rbac::ensure "User:$app" "$spec"; done
   done
+
+  # client quotas (Kafka user quotas; REST apps share the principal through impersonation)
+  for app in $APPS; do
+    var="APP_QUOTA_$(core::varname "$app")"
+    security::quota "User:$app" "${!var:-}" --entity-name "$app"
+  done
+  security::quota "user default" "${QUOTA_USER_DEFAULT:-}" --entity-default
 
   local t
   for t in $TOPICS; do security::topic "${t%%:*}" "${t#*:}"; done

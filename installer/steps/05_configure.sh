@@ -21,6 +21,6 @@ step_apply() {
 step_verify() {
   local h
   for h in $(inv::hosts controller) $(inv::hosts broker); do
-    remote::exec "$h" "sudo -n test -s /etc/confluent/kafka/server.properties" || return 1
+    remote::run "$h" sys_node::nonempty /etc/confluent/kafka/server.properties || return 1
   done
 }

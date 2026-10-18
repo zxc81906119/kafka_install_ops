@@ -23,6 +23,52 @@ issue() {
 SANS_INTERNAL=kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
 SANS_SERVER=ops02.poc.lab,ops02,ad01.poc.lab,ad01,lb01.poc.lab,lb01,kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,rest.poc.lab,c3.poc.lab,localhost
 
+# request <name> <EKU> [SANs]  (bank CA, 3.4.9.2): new key in pending/ (never leaves this host), CSR in requests/
+request() {
+  ( cd $PKI && umask 077 && install -d -m 0700 pending && install -d -m 0750 requests incoming
+    n=$1; ext=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$2")
+    [ -n "${3:-}" ] && ext+=(-addext "subjectAltName=$(tr ',' '\n' <<<"$3" | sort -u | sed 's/^/DNS:/' | paste -sd, -)")
+    openssl genrsa -out pending/$n.key 3072 2>/dev/null && chmod 0600 pending/$n.key
+    openssl req -new -key pending/$n.key -sha256 -subj "/CN=$n/OU=Confluent/O=PoC Bank/C=TW" "${ext[@]}" -out requests/$n.csr
+    echo "request $n: EKU=$2 SANs=$(openssl req -in requests/$n.csr -noout -text | grep -o 'DNS:' | wc -l) -> requests/$n.csr" )
+}
+
+# import_signed <name> <EKU> [SANs]  (bank CA, 3.4.9.3): checks incoming/<name>.crt; installs ONLY if every check passes
+import_signed() {
+  ( cd $PKI && umask 077
+    n=$1 eku=$2 want=$(tr ',' '\n' <<<"${3:-}" | sed '/^$/d' | sort -u | paste -sd, -)
+    w=$(mktemp -d); awk -v d="$w" '/BEGIN CERTIFICATE/ {k++} {print > (d "/c-" k ".pem")}' incoming/$n.crt
+    fail() { echo "REJECTED $n: $* - nothing installed"; rm -rf "$w"; exit 1; }
+    kp=$(openssl pkey -in pending/$n.key -pubout); leaf=
+    for f in "$w"/c-*.pem; do [ "$(openssl x509 -in $f -noout -pubkey)" = "$kp" ] && leaf=$f; done
+    [ -n "$leaf" ] || fail "no certificate in the file matches pending/$n.key"
+    cn=$(openssl x509 -in $leaf -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p')
+    [ "$cn" = "$n" ] || fail "CN is '$cn'"
+    [[ $(openssl x509 -in $leaf -noout -ext basicConstraints 2>/dev/null) == *CA:TRUE* ]] && fail "it is a CA certificate"
+    have=$(openssl x509 -in $leaf -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr ',' '\n' | sed 's/^ *DNS://; /^ *$/d' | sort -u | paste -sd, -)
+    [ "$have" = "$want" ] || fail "SAN [$have], requested [$want]"
+    e=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage 2>/dev/null | tail -n +2 | sed 's/^ *//')
+    [[ ,$eku, == *,serverAuth,* && $e != *"Server Authentication"* ]] && fail "extended key usage lacks serverAuth ($e)"
+    [[ ,$eku, == *,clientAuth,* && $e != *"Client Authentication"* ]] && fail "extended key usage lacks clientAuth ($e)"
+    openssl x509 -in $leaf -noout -checkend $((30 * 86400)) >/dev/null || fail "expires within 30 days"
+    cat $leaf > $w/chain.pem
+    for f in "$w"/c-*.pem; do
+      [ $f = $leaf ] && continue
+      [ "$(openssl x509 -in $f -noout -subject_hash)" = "$(openssl x509 -in $f -noout -issuer_hash)" ] && continue
+      cat $f >> $w/chain.pem
+    done
+    cat trust/*.pem > $w/roots.pem
+    openssl verify -partial_chain -CAfile $w/roots.pem -untrusted $w/chain.pem $w/chain.pem >/dev/null || fail "does not chain to a root in trust/ (intermediate missing?)"
+    arch=archive/$(date +%Y%m%d-%H%M%S)-$n; install -d -m 0700 $arch
+    # previous files keep their names; the bank answer and the CSR get their own (an answer named $n.crt would
+    # overwrite the archived previous certificate)
+    cp -p $n.crt $n.key $n.p12 $n.chain.pem $arch/ 2>/dev/null; mv incoming/$n.crt $arch/$n.bank-answer.pem; mv requests/$n.csr $arch/ 2>/dev/null
+    install -m 0600 pending/$n.key $n.key && install -m 0640 $w/chain.pem $n.crt && cp $n.crt $n.chain.pem
+    openssl pkcs12 -export -name $n -inkey $n.key -in $n.crt -passout env:STORE_PASSWORD -out $n.p12
+    rm -f pending/$n.key; rm -rf "$w"
+    echo "imported $n serial=$(openssl x509 -in $n.crt -noout -serial | cut -d= -f2) issuer=$(openssl x509 -in $n.crt -noout -issuer | sed 's/.*CN=\([^,]*\).*/\1/') certs-in-file=$(grep -c BEGIN $n.crt)" )
+}
+
 # truststores from the bundle ca.pem (3.4.2 and 6.3): truststore.p12 (STORE_PASSWORD), opmenu-truststore.p12 (own password)
 truststores() {
   ( cd $PKI && umask 077
@@ -68,7 +114,7 @@ for f in "$d"/ca-*.pem; do
   sudo $JH/bin/keytool -list -cacerts -storepass changeit -alias cp-ca-$fp >/dev/null 2>&1 || sudo $JH/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias cp-ca-$fp -file "$f" >/dev/null
 done; rm -rf "$d"
 for a in $(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -oE '^cp-ca-[0-9a-f]+'); do case " $want " in *" $a "*) ;; *) sudo $JH/bin/keytool -delete -cacerts -storepass changeit -alias $a ;; esac; done
-echo "$(hostname): OS anchors=$(trust list --filter=ca-anchors | grep -c 'label: PoC Internal CA') JDK=$(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -c '^cp-ca-')"
+echo "$(hostname): OS anchors=$(trust list --filter=ca-anchors | grep -c -E 'label: PoC (Internal CA|Bank Root)') JDK=$(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -c '^cp-ca-')"
 EOS
   done
 }
@@ -80,7 +126,7 @@ push_ad() {
   local i; for i in $(seq 1 24); do sleep 5; LDAPTLS_CACERT=$PKI/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H ldaps://ad01.poc.lab:636 -s base -b "" namingContexts >/dev/null 2>&1 && { echo "ad01 LDAPS back after ~$((i*5))s"; return 0; }; done; echo "ad01 LDAPS NOT back"
 }
 push_jump() {
-  ( cd $PKI && umask 077 && openssl pkcs12 -export -name opmenu-breakglass -inkey opmenu-breakglass.key -in opmenu-breakglass.crt -certfile ca.crt -passout env:OPMENU_BREAKGLASS_STORE_PASSWORD -out opmenu-breakglass.bg.p12 )
+  ( cd $PKI && umask 077 && openssl pkcs12 -export -name opmenu-breakglass -inkey opmenu-breakglass.key -in opmenu-breakglass.crt $([ -f ca.crt ] && echo "-certfile ca.crt") -passout env:OPMENU_BREAKGLASS_STORE_PASSWORD -out opmenu-breakglass.bg.p12 )
   ( cd $PKI && scp -q opmenu-truststore.p12 ca.pem cp-server.crt kafka-internal.crt opmenu-breakglass.bg.p12 opmenu-breakglass.crt opmenu-breakglass.key jump01.poc.lab:/tmp/ )
   ssh jump01.poc.lab 'sudo bash -s' <<'EOS'
 set -e
@@ -96,6 +142,19 @@ install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.key /etc/op
 shred -u /tmp/opmenu-breakglass.key /tmp/opmenu-breakglass.bg.p12 2>/dev/null; rm -f /tmp/opmenu-truststore.p12 /tmp/ca.pem /tmp/cp-server.crt /tmp/kafka-internal.crt /tmp/opmenu-breakglass.crt
 echo "jump01: opmenu trust material and break-glass updated"
 EOS
+}
+
+# push_repo  (3.3.0): the internal repo over HTTPS follows every rotation - repo server certificate = cp-server,
+# every node pins ca.pem as cp-repo-ca.pem; then each node must still download the repo metadata
+push_repo() {
+  ( cd $PKI && sudo install -o root -g root -m 0644 cp-server.crt /etc/pki/tls/certs/cp-repo.crt &&
+    sudo install -o root -g root -m 0600 cp-server.key /etc/pki/tls/private/cp-repo.key &&
+    sudo httpd -t >/dev/null 2>&1 && sudo systemctl restart httpd && echo "repo server: $(openssl x509 -in cp-server.crt -noout -serial)" )
+  local h
+  for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+    scp -q $PKI/ca.pem $h.poc.lab:/tmp/cp-repo-ca.pem
+    ssh $h.poc.lab "sudo install -o root -g root -m 0644 /tmp/cp-repo-ca.pem /etc/pki/tls/certs/cp-repo-ca.pem && rm -f /tmp/cp-repo-ca.pem && sudo dnf -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' makecache >/dev/null 2>&1 && echo \"\$(hostname): repo OK\" || echo \"\$(hostname): REPO FAILED\""
+  done
 }
 
 # rolling restart of everything that holds keystores/truststores in memory: controllers -> brokers -> REST (drained) -> C3

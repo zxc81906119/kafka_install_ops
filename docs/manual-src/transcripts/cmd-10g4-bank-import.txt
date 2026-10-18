@@ -1,0 +1,23 @@
+##### 2026-10-18 手動實測(cp-man):9.4.2 第 2 階段 switch(後半)—— 銀行重簽後檢查、匯入、派送、滾動重啟
+{{
+. ~/rotate-lib.sh
+import_signed kafka-internal serverAuth,clientAuth $SANS_INTERNAL
+import_signed cp-server serverAuth,clientAuth $SANS_SERVER
+import_signed app-legacy-billing clientAuth
+import_signed opmenu-breakglass clientAuth
+ls $PKI/pending $PKI/incoming
+}}
+{{
+. ~/rotate-lib.sh
+push_all_ssl && push_ad && push_jump && push_repo
+}}
+{{
+. ~/rotate-lib.sh
+restart_all
+}}
+{{
+. ~/rotate-lib.sh
+served
+for ep in kc01:9093 kb01:9092 kb01:8090 rest01:8082 c3-01:9021 c3-01:9090 ad01:636 ops02:8443; do
+  printf '%-12s %s\n' $ep "$(openssl s_client -connect ${ep%:*}.poc.lab:${ep#*:} -showcerts </dev/null 2>/dev/null | grep -c 'BEGIN CERTIFICATE')"; done
+}}

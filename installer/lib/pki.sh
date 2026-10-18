@@ -539,3 +539,21 @@ pki::sans_server() {
   out+=("$LB_REST_NAME" "$LB_C3_NAME" localhost)
   core::join , "${out[@]}"
 }
+
+# pki::issue_all -> every managed certificate (step 03; step 02 too when the internal repo is served over HTTPS,
+# because the repo server needs cp-server before any node can install a package). Stops while the bank has
+# not answered a request that has no usable predecessor.
+pki::issue_all() {
+  pki::ca
+  # controllers + brokers: one shared certificate for CONTROLLER / INTERNAL mTLS (principal kafka-internal)
+  pki::issue kafka-internal "$(pki::sans_internal)" serverAuth,clientAuth
+  # all servers: one shared certificate for external listeners, MDS, REST, C3, Prometheus, LDAPS, repo
+  pki::issue cp-server "$(pki::sans_server)" serverAuth,clientAuth
+  # machines: client certificates ONLY for legacy apps that use REST Proxy (principal = CN)
+  local app
+  for app in $(inv::apps rest); do pki::issue "$app" "" clientAuth; done
+  # OP menu break-glass identity (menu item 91; RBAC SystemAdmin, key held by opbootstrap on the bastion)
+  if [[ ${OPMENU:-off} == on ]]; then pki::issue "$OPMENU_BREAKGLASS" "" clientAuth; fi
+  if pki::external && step::mutating; then pki::pending_gate; fi
+  return 0
+}

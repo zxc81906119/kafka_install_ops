@@ -64,6 +64,7 @@ sets=(
   "confluent-control-center-next-gen-$C3_VERSION $PKGS_C3_OS"
   "$JDK_PACKAGE-$JDK_VERSION"
   "$PKGS_OS_BASELINE"
+  "$PKGS_OPS_OS"
 )
 for s in "${sets[@]}"; do
   log "dnf download --resolve: $s"

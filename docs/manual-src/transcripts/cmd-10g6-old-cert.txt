@@ -1,0 +1,13 @@
+##### 2026-10-18 手動實測(cp-man):9.4.3 驗證補正 —— import_signed 的歸檔曾把舊憑證蓋成銀行回覆(已修正);改用內部 CA 輪替時歸檔的舊 app 憑證重測
+{{
+. ~/rotate-lib.sh
+for d in $(ls -dt $PKI/archive/*/); do
+  [ -f $d/app-legacy-billing.crt ] && [ -f $d/app-legacy-billing.key ] || continue
+  openssl x509 -in $d/app-legacy-billing.crt -noout -issuer | grep -q 'Internal CA' || continue
+  [ "$(openssl x509 -in $d/app-legacy-billing.crt -noout -pubkey)" = "$(openssl pkey -in $d/app-legacy-billing.key -pubout)" ] || continue
+  old=$d; break
+done
+echo "old (internal-CA) app certificate: $old ($(openssl x509 -in $old/app-legacy-billing.crt -noout -issuer | sed 's/.*CN=\([^,]*\).*/\1/'))"
+curl -s -o /dev/null -w 'REST with the OLD internal-CA app certificate: %{http_code} exit=' --cacert $PKI/ca.pem --cert $old/app-legacy-billing.crt --key $old/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters; echo $?
+curl -s -o /dev/null -w 'REST with the bank-signed app certificate:     %{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters
+}}

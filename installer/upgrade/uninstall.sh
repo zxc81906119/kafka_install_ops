@@ -29,7 +29,7 @@ uninstall::main() {
   for h in $(inv::hosts controller) $(inv::hosts controller_spare); do
     remote::reachable "$h" && uninstall::host "$h" controller
   done
-  for h in $(inv::hosts lb); do remote::apply "$h" ensure::absent /etc/nginx/stream.d/cp.conf; remote::exec "$h" "sudo -n nginx -s reload" || true; done
+  for h in $(inv::hosts lb); do remote::apply "$h" ensure::absent /etc/nginx/stream.d/cp.conf; remote::apply "$h" sys_node::nginx_reload || true; done
   rm -f "$STATE_DIR/kraft.env" "$STAMP_DIR"/* "$STATE_DIR/client"/*.properties
   rm -rf "$STATE_DIR/cli-home"
   log::info "uninstalled. Kept: internal repo, PKI ($PKI_DIR), AD accounts. Reinstall with: cpctl install"

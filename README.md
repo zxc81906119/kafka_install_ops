@@ -126,6 +126,10 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 | `cpctl certs rotate [--cert a,b\|all]` | 重簽 leaf 憑證（預設 kafka-internal、cp-server），滾動重啟 |
 | `cpctl certs rotate-ca --phase add\|switch\|retire` | 不停機的 CA 輪替（分三次執行） |
 | `cpctl certs trust list\|add <root.pem>\|remove <名稱>\|internal` | 銀行 CA 的信任錨點（`PKI_MODE=external`）；`remove internal` 移除自建 CA |
+| `cpctl health` | 唯讀健康檢查：服務、磁碟、quorum、partition、Self-Balancing、MDS/AD、REST/C3、憑證、license；服務起不來時依 journal 提示常見原因（rc 0 / 2 警告 / 1 嚴重） |
+| `cpctl broker remove --host kbNN --yes` / `cpctl broker add --host kbNN [--wipe]` | broker 縮減 / 擴充：由 Self-Balancing 搬移資料（`kafka-remove-brokers`；空 broker 加入時自動平衡） |
+| `cpctl os patch [--role R\|--host H] [--reboot] --yes` | 滾動 OS 修補（Confluent / JDK 由 versionlock 保護）；不加 `--yes` 只列出可更新套件 |
+| `cpctl agent build\|install [--restrict]\|status` | 受限 sudo：cpadmin 只能執行 cpnode agent（固定函式、寫入路徑允許清單、每次呼叫留紀錄） |
 | `cpctl license status` | 生效中的 license（檔案或試用）、到期日、剩餘天數 |
 | `cpctl monitoring export\|check` | 產生給行內 Prometheus 的 scrape 設定與告警規則 / 檢查所有 exporter |
 | `cpctl uninstall --yes-really` | 移除套件、設定與資料；保留內部 repo、PKI、AD 帳號 |
@@ -150,6 +154,11 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 | License 監控 | 從 `conf/license.txt` 或 `_confluent-command` 讀 JWT 解出到期日；30 天內警告、過期即 verify 失敗 | `cpctl license status` |
 | Log 保留 | log4j2 只輪替不刪除 → `systemd-tmpfiles` 每日刪除 `LOG_RETENTION_DAYS`（預設 14 天）前的檔案；journald 上限 1G | step 01 |
 | LDAP 韌性 | 多台 AD（`AD_LDAP_HOSTS`）、連線逾時 3 秒、群組快取 60 秒更新，AD 中斷時沿用快取最長 24 小時 | 憑證輪替時 Samba 重啟，登入不中斷 |
+| client 配額 | `APP_QUOTA_<app>`（apps.env）→ Kafka user quota（produce / consume byte rate、request %）；REST 的 app 經 impersonation 同樣受限 | 壓測從約 15 MB/s 壓到 4.99 MB/s（= 5 MiB/s 上限），cpctl 與手動結果相同；`cpctl verify` 檢查 |
+| repo HTTPS | ops 主機以 cp-server 憑證提供 8443；節點 `sslcacert` 只信任 bundle；HTTP 回 403 或被防火牆關閉；mod_ssl 走離線引進 | 11 台節點從節點端實際下載 metadata；輪替時 repo 憑證與 CA 檔跟著換（`push_repo` / step 03） |
+| 受限 sudo | cpadmin 只能執行 cpnode agent（stdin 傳參、固定函式、路徑允許清單、禁止 setuid、sudoers 只給選單帳號、每次呼叫留紀錄）；agent 改版由管理員安裝 | cp-poc 受限下完整安裝 changed=0、無拒絕；cp-man 手動組出的 agent 與 cpctl 版本一致，越權呼叫都被拒 |
+| Self-Balancing | controller 設 `inter.broker.listener.name=INTERNAL`（否則 SBC 永遠 STARTING，之前未被發現） | `cpctl verify` 檢查 `Balancer status: ENABLED` |
+| 日常維運 | `cpctl health`、`broker add/remove`、`os patch`（手冊第 10 章為手動版） | broker 擴縮與 OS 修補在持續負載下 0 遺失、REST 0 失敗（手冊附錄 A.5、A.6） |
 | Telemetry | `confluent.telemetry.enabled=false`（不送 Confluent Cloud / Health+）；只保留送往 C3 Prometheus 的 `_c3` exporter | — |
 | **稽核日誌** | 專用低權限 SCRAM 帳號 `confluent-audit`（只有稽核 topic 的 DeveloperWrite/Manage），不使用 broker 身分；`payments.*` 的 produce/consume（允許＋拒絕）與**被拒絕的 describe** 導向 `confluent-audit-log-events_sensitive`（保留 365 天），其餘 90 天；排除 `kafka-internal`、`svc-c3` 的雜訊（`conf/audit.env`） | verify：alice 的允許事件、app-orders 的拒絕事件都已進入敏感稽核 topic |
 | **外部監控** | Prometheus JMX exporter（javaagent，**同樣經離線引進流程**：下載機驗 sha1 → SHA256SUMS → repo import → SSH 派送）；HTTPS（節點憑證）＋ basic auth（加鹽 SHA-256，節點上沒有明文密碼）；`cpctl monitoring export` 產出 scrape 設定、9 條告警規則、CA bundle 給行內 Prometheus | 9 個 exporter 皆需認證、可抓取；以 C3 附的 Prometheus 載入匯出檔實測：9/9 target up、9 條規則全部 ok |
@@ -195,7 +204,7 @@ cpctl upgrade finalize --to 8.3.2   # kafka-features upgrade --release-version�
 
 | 項目 | PoC | 正式環境 |
 |---|---|---|
-| sudo | cpadmin 擁有完整 NOPASSWD sudo | 依 `conf/sudoers.d/cpadmin.restricted` 由資安審核後收斂 |
+| sudo | cpadmin 擁有完整 NOPASSWD sudo（`SUDO_MODE=full`） | `cpctl agent install --restrict` + `SUDO_MODE=restricted`：cpadmin 只能執行 cpnode agent（固定函式、寫入路徑允許清單、每次呼叫留紀錄）；agent 改版由管理員安裝 |
 | AD | Samba 模擬，由 cpctl 建立帳號 | `PROFILE=prod`：由 AD 團隊依申請單建立，cpctl 只檢查 |
 | 憑證 | `PKI_MODE=external`：模擬銀行 CA（`windows/bank-ca.sh`，root + 中繼）簽發；cp-poc 已由自建 CA 不停機遷移過來 | 同一流程，銀行實際簽發：cpctl 產生私鑰 + CSR + 申請單（`pki/requests/`），銀行回覆放 `pki/incoming/`，檢查 key、CN、SAN、EKU、效期、憑證鏈後才換上；truststore 只放銀行 root（手冊 3.4.9、9.4、9.5） |
 | heap / retention | `PROFILE=poc` 數值 | `PROFILE=prod`（官方建議值） |

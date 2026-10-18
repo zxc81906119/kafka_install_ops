@@ -11,9 +11,11 @@
 #   poc.sh exec <host> cmd   run a command as root inside a host
 #   poc.sh logs <host>       container logs
 #   poc.sh cpctl <args>      run cpctl on ops01 as cpadmin
+#   poc.sh agent-push        (administrator) install the agent + policy cpctl built (agent build) on every host, as root
+#   poc.sh sudo-full         (administrator) give cpadmin full sudo again on every running host
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-usage() { sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 gen_pass() { # 20 random alnum chars + fixed complexity suffix (AD password policy)
   local p
@@ -91,6 +93,32 @@ cmd_cpctl() {
   "${tty[@]}" "${envs[@]}" -u cpadmin -w /home/cpadmin "$(container ops01)" /usr/local/bin/cpctl "$@"
 }
 
+
+# The two actions below stand for the bank's system administrator: after "cpctl agent install --restrict" the
+# installer account can neither replace the agent nor widen its own sudo. They act as root through docker exec.
+running_hosts() { docker ps --format '{{.Names}}' | sed -n 's/^cp-poc-\(.*\)-1$/\1/p' | sort; }
+
+cmd_agent_push() {
+  local agent h
+  agent=$(mktemp)
+  docker exec "$(container ops01)" cat /var/lib/cp-installer/agent/cpnode >"$agent" || die "no agent built - run: poc.sh cpctl agent build"
+  log "agent $(sed -n 's/^readonly CPNODE_VERSION=//p' "$agent")"
+  for h in $(running_hosts); do
+    docker exec "$(container ops01)" cat /var/lib/cp-installer/agent/cpnode.conf | docker exec -i "$(container "$h")" sh -c 'install -d -m 0755 /etc/cpctl && cat > /etc/cpctl/cpnode.conf.new && chown root:root /etc/cpctl/cpnode.conf.new && chmod 0644 /etc/cpctl/cpnode.conf.new && mv -f /etc/cpctl/cpnode.conf.new /etc/cpctl/cpnode.conf'
+    docker exec -i "$(container "$h")" sh -c 'install -d -m 0755 /usr/local/libexec/cpctl && cat > /usr/local/libexec/cpctl/cpnode.new && chown root:root /usr/local/libexec/cpctl/cpnode.new && chmod 0755 /usr/local/libexec/cpctl/cpnode.new && mv -f /usr/local/libexec/cpctl/cpnode.new /usr/local/libexec/cpctl/cpnode' <"$agent" &&
+      log "[$h] agent installed"
+  done
+  rm -f "$agent"
+}
+
+cmd_sudo_full() {
+  local h
+  for h in $(running_hosts); do
+    docker exec "$(container "$h")" sh -c 'printf "cpadmin ALL=(ALL) NOPASSWD: ALL\nDefaults:cpadmin !requiretty\n" > /etc/sudoers.d/cpadmin && chmod 0440 /etc/sudoers.d/cpadmin && visudo -cqf /etc/sudoers.d/cpadmin' &&
+      log "[$h] cpadmin: full sudo"
+  done
+}
+
 main() {
   local cmd=${1:-}; shift || true
   case $cmd in
@@ -106,6 +134,8 @@ main() {
     exec) local h=${1:?host}; shift; docker exec -i "$(container "$h")" "$@" ;;
     logs) docker logs --tail "${2:-200}" "$(container "${1:?host}")" ;;
     cpctl) cmd_cpctl "$@" ;;
+    agent-push) cmd_agent_push ;;
+    sudo-full) cmd_sudo_full ;;
     -h | --help | help | "") usage 0 ;;
     *) usage 1 ;;
   esac

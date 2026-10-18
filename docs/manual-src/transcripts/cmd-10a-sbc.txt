@@ -1,0 +1,26 @@
+##### 2026-10-18 手動實測(cp-man):4.2.3.1 補正 —— controller 設 inter.broker.listener.name=INTERNAL,Self-Balancing 才能啟動
+{{
+. ~/manual.env
+echo "== 修正前"; kafka-rebalance-cluster --bootstrap-server $B --command-config $ADMIN_CFG --status 2>&1 | grep -E "^Balancer"
+ssh kc01.poc.lab "sudo grep -h 'listener name ListenerName' /var/log/kafka/data-balancer.log* 2>/dev/null | tail -1 | cut -c1-200"
+}}
+# Secret Protection 加密過的設定檔是 "key = value"(等號兩邊有空白):sed 比對要容許空白
+{{
+for h in kc01 kc02 kc03; do
+  ssh $h.poc.lab "sudo sed -i -E 's/^listener\.security\.protocol\.map *= *CONTROLLER:SSL$/listener.security.protocol.map = CONTROLLER:SSL,INTERNAL:SSL\ninter.broker.listener.name = INTERNAL/' /etc/confluent/kafka/server.properties"
+  ssh $h.poc.lab "sudo grep -E '^(listener\.security\.protocol\.map|inter\.broker\.listener\.name) *=' /etc/confluent/kafka/server.properties" | sed "s/^/$h: /"
+done
+}}
+{{
+. ~/manual.env
+leader=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --status 2>/dev/null | awk '/LeaderId:/ {print $2}')
+order="$(for h in kc01 kc02 kc03; do [ "${h#kc0}" != "$leader" ] && echo $h; done | paste -sd' ') kc0$leader"
+echo "leader=$leader restart order: $order"
+for h in $order; do echo "== restart $h"; ssh $h.poc.lab "sudo systemctl restart confluent-server"; wait_for ctl_ok $h || exit 1; done
+}}
+{{
+. ~/manual.env
+for i in $(seq 1 24); do s=$(kafka-rebalance-cluster --bootstrap-server $B --command-config $ADMIN_CFG --status 2>/dev/null | grep -E "^Balancer status"); [[ $s == *ENABLED* ]] && break; sleep 10; done
+echo "== 修正後: $s"
+for h in kc01 kc02 kc03; do ssh $h.poc.lab "sudo grep -h 'transitioned from STARTING to RUNNING' /var/log/kafka/data-balancer.log 2>/dev/null | tail -1 | cut -c1-160" | sed "s/^/$h: /"; done
+}}

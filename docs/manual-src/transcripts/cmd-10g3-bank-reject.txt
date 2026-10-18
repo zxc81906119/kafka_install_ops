@@ -1,0 +1,6 @@
+##### 2026-10-18 手動實測(cp-man):9.4.2 拒絕的例子 —— 銀行只簽 serverAuth(bank-ca.sh exchange --server-only)
+{{
+. ~/rotate-lib.sh
+import_signed kafka-internal serverAuth,clientAuth $SANS_INTERNAL
+echo "rc=$?"; ls $PKI/pending; openssl x509 -in $PKI/kafka-internal.crt -noout -issuer
+}}

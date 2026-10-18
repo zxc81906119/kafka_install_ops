@@ -12,6 +12,8 @@ _LIB_INSTALL_LOADED=1
 
 readonly TAR_BASE=/opt/confluent
 readonly TAR_RAW=${REPO_RAW_BASEURL%/}/tar
+# the repo server reads its own files from disk (works before its HTTPS listener exists)
+install::_raw_base() { if repo::is_server "$1"; then printf 'file://%s/raw/tar' "$REPO_LOCAL_ROOT"; else printf '%s' "$TAR_RAW"; fi; }
 
 install::bin_dir() { printf '%s/current/bin' "$TAR_BASE"; }
 install::bin() { printf '%s/%s' "$(install::bin_dir)" "$1"; }
@@ -54,7 +56,7 @@ install::_sha() { # <file>  (cached per run: the archives are large)
 # install::_fetch <host> <file> <parent dir>  -> prints the archive top directory
 install::_fetch() {
   local host=$1 file=$2 parent=$3 out rc=0
-  out=$(remote::run "$host" tar_node::fetch_extract "$TAR_RAW/$file" "$(install::_sha "$file")" "$parent" 2>&1) || rc=$?
+  out=$(remote::run "$host" tar_node::fetch_extract "$(install::_raw_base "$host")/$file" "$(install::_sha "$file")" "$parent" 2>&1) || rc=$?
   log::consume "[$host]" < <(grep -v '^TOP=' <<<"$out")
   [[ $rc -eq 0 ]] || { log::error "[$host] fetch/extract $file failed (rc=$rc)"; return "$rc"; }
   sed -n 's/^TOP=//p' <<<"$out" | tail -1
@@ -82,8 +84,12 @@ install::prepare() {
   # OS packages (C3 prerequisites, chrony, firewalld) still come from the internal OS-deps yum repo
   local tmp
   tmp=$(render::tmp)
-  printf '# Managed by cpctl - internal OS dependencies only\n[cp-internal-os-deps]\nname=Internal mirror - OS dependencies\nbaseurl=%s/os-deps\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9\n' \
-    "${REPO_YUM_BASEURL%/}" >"$tmp"
+  repo::trust_push "$host"
+  {
+    printf '# Managed by cpctl - internal OS dependencies only\n[cp-internal-os-deps]\nname=Internal mirror - OS dependencies\n'
+    printf 'baseurl=%s/os-deps\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9\n' "$(repo::base_for "$host")"
+    repo::tls_lines "$host"
+  } >"$tmp"
   remote::put "$host" "$tmp" /etc/yum.repos.d/cp-internal.repo root root 0644
   remote::put "$host" "$REPO_LOCAL_ROOT/gpg-keys/rocky-9.asc" /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9 root root 0644
   remote::apply "$host" rpm_node::import_keys /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
@@ -107,7 +113,7 @@ install::prepare() {
       remote::apply "$host" ensure::dir /var/log/confluent/control-center cp-control-center confluent 0750
       ;;
     ops)
-      remote::run "$host" bash -c 'getent group confluent >/dev/null || groupadd -r confluent' >/dev/null
+      remote::apply "$host" sys_node::group confluent
       ;;
   esac
 }
@@ -125,6 +131,12 @@ install::ensure() {
   # JDK (shared by every Java role)
   top=$(install::_fetch "$host" "$(install::_archive jdk)" /opt/java) || return 1
   [[ -n $top ]] && remote::apply "$host" tar_node::switch upgrade /opt/java/current "$top"
+  # the repo server needs httpd's TLS module to serve the internal repo over HTTPS (OS package, os-deps repo)
+  if repo::is_server "$host" && repo::tls && [[ -n ${PKGS_OPS_OS:-} ]]; then
+    local q qs=()
+    for q in $PKGS_OPS_OS; do qs+=("$q=$(install::os_dep_version "$q")"); done
+    remote::apply "$host" rpm_node::ensure install "${qs[@]}"
+  fi
   if [[ $role == c3 ]]; then
     local p specs=()
     for p in $PKGS_C3_OS; do specs+=("$p=$(install::os_dep_version "$p")"); done

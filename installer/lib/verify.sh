@@ -81,9 +81,8 @@ verify::audit_has() {
 verify::opmenu() {
   local conf=$1 u=$2 pw=$3 j; shift 3
   j=$(inv::hosts jump | head -1)
-  remote::exec "$j" "sudo -n -u $OPMENU_OS_USER env OPMENU_CONF=$conf OPMENU_USER=$u OPMENU_PASS=$(printf %q "$pw") \
-    OPMENU_TICKET=CHG-2026-0001 OPMENU_YES=1 OPMENU_REASON=verify /opt/opmenu/opmenu.sh --run $* </dev/null 2>&1; \
-    echo \"@@LOG@@ \$(sudo -n tail -1 /var/log/opmenu/opmenu.log)\"" 2>/dev/null || true
+  # node function: the password travels with the call (stdin of ssh), never on a command line
+  remote::run "$j" opmenu_test::run "$conf" "$OPMENU_OS_USER" "$u" "$pw" "$@" 2>/dev/null || true
 }
 # verify::opmenu_result <output> -> the RESULT field of the logged line (OK / DENIED / AUTH_FAIL / FAIL ...)
 verify::opmenu_result() { sed -n 's/^@@LOG@@ //p' <<<"$1" | awk -F' [|] ' '{print $7}'; }
@@ -106,20 +105,20 @@ verify::opmenu_section() {
   out=$(verify::opmenu "$t" carol "$pw" 22 "$(inv::fqdn "$(inv::hosts rest | head -1)"):confluent-kafka-rest")
   verify::check "carol cannot restart REST Proxy through the shared node account" test "$(verify::opmenu_result "$out")" = DENIED
   # item 21 must refuse when its safety check cannot run (it used to count a failed check as "0 under-replicated")
-  remote::exec "$j" "printf '. /etc/opmenu/opmenu-test.conf\nOPMENU_BOOTSTRAP=nowhere.invalid:9096\n' | sudo -n tee /tmp/opmenu-broken.conf >/dev/null; sudo -n chmod 0644 /tmp/opmenu-broken.conf"
+  remote::run "$j" opmenu_test::broken_conf on
   out=$(verify::opmenu /tmp/opmenu-broken.conf alice "$pw" 21 "$(inv::fqdn "$(inv::hosts broker | head -1)"):confluent-server")
   verify::check "item 21 refuses to restart when the safety check fails (fail closed)" \
     bash -c '[[ $1 == *"無法檢查"* && $1 != *"已重啟"* ]]' _ "$out"
-  remote::exec "$j" "sudo -n rm -f /tmp/opmenu-broken.conf"
+  remote::run "$j" opmenu_test::broken_conf off
   out=$(verify::opmenu "$t" alice "$pw" 91 kafka-topics --list)
   verify::check "break-glass (item 91) runs as the certificate identity through opbootstrap" \
     bash -c '[[ $1 == *"orders.events"* ]]' _ "$out"
   verify::check "break-glass use is logged as EMERGENCY with the operator's name" \
-    remote::exec "$j" "sudo -n grep -q '| alice | 91 bootstrap .*| EMERGENCY |' /var/log/opmenu/opmenu.log"
-  out=$(remote::exec "$j" "sudo -n su - $OPMENU_OS_USER -c id </dev/null 2>&1" || true)
+    remote::run "$j" opmenu_test::logged '| alice | 91 bootstrap .*| EMERGENCY |'
+  out=$(remote::run "$j" opmenu_test::shell_as "$OPMENU_OS_USER" || true)
   verify::check "the fixed account gets no shell: 'su - $OPMENU_OS_USER -c id' does not run id" bash -c '[[ $1 != *"uid="* ]]' _ "$out"
   verify::check_not "the bastion account cannot read the break-glass key" \
-    remote::exec "$j" "sudo -n -u $OPMENU_OS_USER cat /etc/opmenu/bootstrap/breakglass.key"
+    remote::run "$j" opmenu_test::read_as "$OPMENU_OS_USER" /etc/opmenu/bootstrap/breakglass.key
 }
 
 verify::consume_contains() { # <bootstrap> <config> <topic> <group> <message>
@@ -146,6 +145,24 @@ verify::rest_produce_code() { # <url> <cert>
 verify::has_scram() { # <user>
   grep -q SCRAM-SHA-512 <<<"$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
     --describe --entity-type users --entity-name "$1" 2>/dev/null)"
+}
+
+# verify::sbc_enabled <admin config> -> Self-Balancing runs (on the active controller; it stays STARTING when the
+# controllers lack inter.broker.listener.name)
+verify::sbc_enabled() {
+  [[ $(kafka::admin kafka-rebalance-cluster --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$1" \
+    --status 2>/dev/null) == *"Balancer status: ENABLED"* ]]
+}
+
+# verify::quota_matches <app> -> the user quota in the cluster equals APP_QUOTA_<app> (values compared as numbers)
+verify::quota_matches() {
+  local var have want
+  var="APP_QUOTA_$(core::varname "$1")"
+  want=$(tr ' ' '\n' <<<"${!var:-}" | sed '/^$/d' | awk -F= '{printf "%s=%.0f\n", $1, $2}' | sort)
+  have=$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+    --describe --entity-type users --entity-name "$1" 2>/dev/null | sed -n 's/^Quota configs.* are //p' | tr ',' '\n' |
+    sed 's/^ *//' | awk -F= 'NF == 2 {printf "%s=%.0f\n", $1, $2}' | sort)
+  [[ -n $want && $have == "$want" ]]
 }
 
 
@@ -189,6 +206,7 @@ verify::run_all() {
   local racks
   racks=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" 2>/dev/null | grep -o 'rack: [^)]*' | sort -u | paste -sd' ' -)
   [[ $racks == *rack-a* && $racks == *rack-b* ]] && verify::pass "rack awareness: $racks" || verify::fail "racks: $racks"
+  verify::check "Self-Balancing is running (balancer status ENABLED)" verify::sbc_enabled "$cfg"
 
   log::step "---- Internal mTLS (shared internal certificate)"
   verify::check_not "controller rejects a client without certificate" timeout 40 env KAFKA_HEAP_OPTS=-Xmx128m \
@@ -225,6 +243,11 @@ verify::run_all() {
     verify::check_not "$other certificate cannot use REST Proxy (not a legacy app)" test "$(verify::rest_code "$base/$cid/topics" "$other")" = 200
   done
   verify::check_not "$legacy has no SCRAM credential (REST-only identity)" verify::has_scram "$legacy"
+  local qa var
+  for qa in $APPS; do
+    var="APP_QUOTA_$(core::varname "$qa")"
+    if [[ -n ${!var:-} ]]; then verify::check "client quota of $qa applied (${!var})" verify::quota_matches "$qa"; fi
+  done
 
   log::step "---- Control Center and monitoring"
   local c3
@@ -238,6 +261,18 @@ verify::run_all() {
     verify::fail "no io_confluent_kafka_server metrics in Prometheus yet (first scrape can take ~2 min)"
 
   log::step "---- Audit, packages, offline"
+  if repo::tls; then
+    verify::check "internal repo served over HTTPS; the server certificate chains to the trust bundle" repo::_served_quiet
+    # from a NODE, with the CA file dnf pins: a check on the repo host itself would not see its firewall
+    local node
+    node=$(inv::hosts broker | head -1)
+    verify::check "[$node] reaches the repo over HTTPS with the pinned CA (cp-repo-ca.pem)" \
+      remote::exec "$node" "curl -fsS --max-time 10 --cacert /etc/pki/tls/certs/cp-repo-ca.pem -o /dev/null ${REPO_YUM_BASEURL%/}/confluent/repodata/repomd.xml"
+    local plain
+    plain="http://$(inv::fqdn "$(repo::server)"):8080/rpm/confluent/repodata/repomd.xml"
+    verify::check_not "plain HTTP does not serve the repo ($plain answers 403 or nothing)" \
+      bash -c '[[ $(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$1") == 200 ]]' _ "$plain"
+  fi
   verify::check "audit log topic $AUDIT_TOPIC exists" kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" --describe --topic "$AUDIT_TOPIC"
   # earlier checks: alice produced to payments.events (allowed), app-orders tried (denied) -> routed to the sensitive topic
   verify::check "audit: allowed produce of User:alice on payments.* is in $AUDIT_SENSITIVE_TOPIC" verify::audit_has "$AUDIT_SENSITIVE_TOPIC" User:alice true "^kafka.Produce$"

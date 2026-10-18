@@ -113,8 +113,8 @@ const OPMENU_ROWS = NUM.opmenuRows || [["(待驗證)", "—"]];
   title(s, "結論：離線、全自動、可重跑、可升級的安裝流程已驗證可行", "以 Docker 模擬 14 台銀行主機（含堡壘機），所有安裝都由操作機上的 cpctl 經 SSH 完成");
   const k = [
     ["12 步", "一個指令完成安裝", "cpctl install\n執行步驟 00–11\n失敗可從中斷處續跑"],
-    [VERIFY_TOTAL + " / " + VERIFY_TOTAL, "端到端驗證通過", "quorum、mTLS、SCRAM、RBAC\nAD、REST、C3、稽核\n監控、憑證、OP menu"],
-    ["0 筆", "演練遺失訊息", "升級、回滾\n憑證與 CA 輪替\n遷移到銀行 CA\n依 producer 逐筆核對"],
+    [VERIFY_TOTAL + " / " + VERIFY_TOTAL, "端到端驗證通過", "quorum、mTLS、SCRAM、RBAC\nAD、REST、C3、稽核\n監控、憑證、配額、OP menu"],
+    ["0 筆", "演練遺失訊息", "升級、CA 輪替、銀行 CA\nbroker 擴縮、OS 修補\n全在持續流量下\n逐筆核對"],
     [idem, "重跑零變更", "在已安裝環境再跑一次\ninstall --force"],
   ];
   const w = (W - 2 * M - 0.3 * 3) / 4;
@@ -531,12 +531,14 @@ section("07", "驗證與演練", "用持續流量證明：安裝、升級、回�
     ["演練", "內容", "流量（SCRAM 寫入）", "遺失", "REST（成功 / 失敗）"],
     ["版本升級", "8.2.4 → 8.3.2，回滾一台後再升回，finalize", "3,572 + 4,161 筆（兩個 producer）", "0", "未量到*"],
     ["leaf 憑證輪替", "kafka-internal、cp-server 重簽與滾動重啟", "1,210 筆", "0", "214 / 0"],
-    ["CA 輪替", "add（同時信任新舊）→ retire（移除舊 CA）", "1,484 / 1,476 筆", "0", "263 / 0"],
-    ["銀行 CA：信任新 root", "cpctl certs trust add", "2,171 筆", "0", "387 / 0"],
-    ["銀行 CA：換簽發、移除舊 root", "CSR → 銀行簽 → 檢查後匯入；trust remove", "4,530 筆", "0", "817 / 0"],
-  ], { colW: [2.6, 4.3, 2.7, 0.9, 1.63], fontSize: 14, rowH: 0.62 });
-  s.addText("* 升級那次的 REST 量測工具在第一次失敗時就停止計數（已修正），不能據此宣稱 REST 0 失敗。", { x: M, y: 6.35, w: W - 2 * M, h: 0.4, fontFace: F, fontSize: 12, color: C.mute });
-  s.addNotes("只列出事後能逐筆核對的演練（手冊附錄 A.3、A.4）：在 broker 上讀出每筆訊息的 producer ID，逐次比對序號是否連續。舊版量測工具無法區分各次執行，tar 升級、controller 替換、營運設定上線等早期演練的數字不再引用；內部 CA switch 那一段的 SCRAM 量測無效，由銀行 root 輪替的 switch（4,530 筆）佐證。");
+    ["內部 CA 輪替", "add → switch → retire（照手冊手動）", "1,525 / 1,383 / 1,501 筆", "0", "791 / 0"],
+    ["遷移到銀行 CA", "信任銀行 root → 改由銀行簽發 → 移除內部 CA（手動）", "1,415 + 3,015 筆", "0", "797 / 0"],
+    ["銀行換 root", "G1 → G2 三階段（cpctl）", "2,171 + 4,530 筆", "0", "1,204 / 0"],
+    ["broker 縮減 / 擴充", "kafka-remove-brokers，重新加入由 SBC 搬回（cpctl / 手動）", "6,795 / 9,974 筆", "0", "3,065 / 0"],
+    ["OS 修補滾動", "broker → controller（leader 最後）→ REST（先摘除）→ C3", "1,929 筆", "0", "335 / 0"],
+  ], { colW: [2.4, 4.6, 2.6, 0.8, 1.73], fontSize: 12, rowH: 0.5 });
+  s.addText("* 升級那次的 REST 量測工具在第一次失敗時就停止計數（已修正）；升級的 REST 步驟與輪替時的摘除程序相同，後者手動實測 5 個階段都是 0 失敗。", { x: M, y: 6.35, w: W - 2 * M, h: 0.4, fontFace: F, fontSize: 11, color: C.mute });
+  s.addNotes("只列出事後能逐筆核對的演練（手冊附錄 A.3–A.6）：負載工具只計算本次寫入的訊息，或在 broker 上依 producer ID 逐筆比對。早期以舊版量測工具做的演練（tar 升級、controller 替換、營運設定上線）不再引用。");
 }
 
 {

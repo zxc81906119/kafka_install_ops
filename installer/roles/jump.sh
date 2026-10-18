@@ -122,7 +122,7 @@ jump::authorized_keys() {
   for j in $(inv::hosts jump); do
     ip=$(getent hosts "$(inv::fqdn "$j")" | awk '{print $1; exit}')
     [[ -n $ip ]] || core::die "$E_PRECHECK" "cannot resolve $(inv::fqdn "$j")"
-    pub=$(remote::exec "$j" "sudo -n cat ~$OPMENU_OS_USER/.ssh/id_ed25519.pub") || core::die "[$j] no ssh key for $OPMENU_OS_USER"
+    pub=$(remote::run "$j" opmenu_node::pubkey "$OPMENU_OS_USER") || core::die "[$j] no ssh key for $OPMENU_OS_USER"
     printf 'from="%s",no-port-forwarding,no-agent-forwarding,no-X11-forwarding %s\n' "$ip" "$pub"
   done
 }

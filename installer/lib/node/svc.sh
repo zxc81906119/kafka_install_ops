@@ -38,6 +38,14 @@ svc::stop() {
   [[ ${CPCTL_CHECK:-0} == 1 ]] || systemctl stop "$u"
 }
 
+# svc::disable <unit>  (a removed broker must not come back after a reboot)
+svc::disable() {
+  local u=$1
+  if ! systemctl is-enabled -q "$u" 2>/dev/null; then _mark ok "$u disabled"; return 0; fi
+  _mark changed "disable $u"
+  [[ ${CPCTL_CHECK:-0} == 1 ]] || systemctl disable -q "$u"
+}
+
 svc::is_active() { systemctl is-active -q "$1"; }
 
 svc::status_line() { printf '%s %s\n' "$1" "$(systemctl is-active "$1" 2>/dev/null || true)"; }

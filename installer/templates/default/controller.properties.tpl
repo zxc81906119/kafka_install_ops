@@ -6,7 +6,11 @@ controller.quorum.bootstrap.servers=${CONTROLLER_BOOTSTRAP}
 controller.listener.names=CONTROLLER
 listeners=CONTROLLER://${HOST_FQDN}:${PORT_CONTROLLER}
 advertised.listeners=CONTROLLER://${HOST_FQDN}:${PORT_CONTROLLER}
-listener.security.protocol.map=CONTROLLER:SSL
+# Self-Balancing runs on the active controller and connects to the brokers through the listener named here
+# (default PLAINTEXT does not exist -> SBC never starts: "could not be found with a listener name PLAINTEXT");
+# it uses this file's ssl.* settings (shared internal certificate) for those connections
+listener.security.protocol.map=CONTROLLER:SSL,INTERNAL:SSL
+inter.broker.listener.name=INTERNAL
 log.dirs=/var/lib/kafka/data
 
 ${COMMON_BLOCK}

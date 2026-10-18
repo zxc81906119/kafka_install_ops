@@ -115,7 +115,7 @@ setup() { setup_cpctl; setup_node; }
     source "$CPCTL_HOME/lib/core.sh"; source "$CPCTL_HOME/lib/log.sh"; source "$CPCTL_HOME/lib/repo/local.sh"
     trap - ERR; set +e
     repo::_verify_landing() { :; }
-    repo::_as_owner() { "$@"; }
+    repo::server() { echo ops01; }; remote::run() { echo "unexpected remote::run $*"; return 1; }
     repo::import' _ "$land" "$repo"
   [ "$status" -ne 0 ]
   [[ $output == *"nothing was published"* ]]
@@ -321,4 +321,150 @@ check() { pki::check_signed "$1" "$2" "$3" "$4" "$PKI_DIR/pending/$1.key"; }
   [ "$(stat -c %i "$PKI_DIR/t.p12")" != "$ino" ]               # a new file, not rewritten in place
   [ "$(ls "$PKI_DIR" | grep -c '\.new\.')" = 0 ]
   [ "$(pki::keytool -list -keystore "$PKI_DIR/t.p12" -storepass changeit | grep -c trustedCertEntry)" = 2 ]
+}
+
+# ---------- internal repo over HTTPS
+@test "repo file: the repo server reads from disk, other hosts pin the CA over HTTPS, nothing extra over HTTP" {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/repo/local.sh"
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/install/rpm.sh"
+  export HOSTS_ops=ops01 REPO_PROVIDER=local REPO_YUM_BASEURL=https://ops01.test.lab:8443/rpm
+  install::_repo_file "$BATS_TEST_TMPDIR/ops.repo" ops01
+  install::_repo_file "$BATS_TEST_TMPDIR/kb.repo" kb01
+  grep -q '^baseurl=file:///srv/repo/rpm/confluent$' "$BATS_TEST_TMPDIR/ops.repo"
+  ! grep -q sslcacert "$BATS_TEST_TMPDIR/ops.repo"
+  grep -q '^baseurl=https://ops01.test.lab:8443/rpm/os-deps$' "$BATS_TEST_TMPDIR/kb.repo"
+  [ "$(grep -c '^sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem$' "$BATS_TEST_TMPDIR/kb.repo")" = 3 ]
+  [ "$(repo::tls_port)" = 8443 ]
+  [ "$(repo::clients | paste -sd' ' -)" = "kc01 kc02 kc03 kb01 kb02 c3-01" ]
+  REPO_YUM_BASEURL=http://ops01.test.lab:8080/rpm
+  install::_repo_file "$BATS_TEST_TMPDIR/kb2.repo" kb01
+  ! grep -q sslcacert "$BATS_TEST_TMPDIR/kb2.repo"
+}
+
+@test "repo httpd config: HTTPS vhost serves the repo, plain HTTP is denied, default mod_ssl vhost not used" {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/repo/local.sh"
+  export REPO_YUM_BASEURL=https://ops01.test.lab:8443/rpm
+  repo::_httpd_conf "$BATS_TEST_TMPDIR/c.conf"
+  grep -q '^Listen 8443 https$' "$BATS_TEST_TMPDIR/c.conf"
+  grep -q 'ServerName ops01.test.lab$' "$BATS_TEST_TMPDIR/c.conf"
+  # outside the vhost: denied; inside: granted
+  [ "$(awk '/<VirtualHost/ {v=1} !v && /Require all denied/' "$BATS_TEST_TMPDIR/c.conf" | wc -l)" = 1 ]
+  [ "$(awk '/<VirtualHost/ {v=1} v && /Require all granted/' "$BATS_TEST_TMPDIR/c.conf" | wc -l)" = 1 ]
+}
+
+# ---------- cpnode agent (restricted sudo)
+agent_setup() {
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/remote.sh"
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/agent.sh"
+  A=$BATS_TEST_TMPDIR/a
+  mkdir -p "$A/ok"
+  agent::build >/dev/null
+  # same agent with its policy file and log in the test directory, trusting a policy owned by the test user
+  # (the real agent has fixed paths and trusts only root's file)
+  sed -e "s#^readonly CPNODE_CONF=/etc/cpctl/cpnode.conf CPNODE_LOG=/var/log/cpnode.log#readonly CPNODE_CONF=$A/cpnode.conf CPNODE_LOG=$A/cpnode.log#" \
+    -e "s#=~ ^0\\ \[0-7\]#=~ ^$(id -u)\\ [0-7]#" "$AGENT_DIR/cpnode" >"$A/cpnode"
+  printf 'CPNODE_ENFORCE=on\nCPNODE_WRITE_PATHS="%s/ok %s/ok/* /etc/sudoers.d/opmenu-*"\nCPNODE_SUDOERS_USERS="opuser kafkaops"\nCPNODE_TEST_FUNCTIONS=0\n' "$A" "$A" >"$A/cpnode.conf"
+  chmod 0644 "$A/cpnode.conf"
+  export SUDO_UID SUDO_USER=tester
+  SUDO_UID=$(id -u)
+  ME=$(id -un) MYGROUP=$(id -gn)
+}
+# call <function> [args...] -> run the agent the way remote::run does (NUL-separated on stdin)
+call() { printf '%s\0' 0 0 "$@" | bash "$A/cpnode"; }
+call_real() { printf '%s\0' 0 0 "$@" | bash "$AGENT_DIR/cpnode"; }
+
+@test "cpnode: version, unknown functions, injection attempts, internals and test functions are refused" {
+  agent_setup
+  [ "$(call --version)" = "$(agent::version)" ]
+  run call 'ensure::dir; id'; [ "$status" -eq 126 ]
+  run call bash -c id; [ "$status" -eq 126 ]
+  run call cpnode::main; [ "$status" -eq 126 ]
+  run call ensure::_backup /etc/passwd; [ "$status" -eq 126 ]
+  run call opmenu_test::shell_as root; [ "$status" -eq 126 ]; [[ $output == *"test functions are disabled"* ]]
+}
+
+@test "cpnode: writes only below the allowlist, never setuid, staged files only from the caller's /tmp/cpctl.*" {
+  agent_setup
+  run call ensure::dir "$A/ok/d" "$ME" "$MYGROUP" 0750; [ "$status" -eq 0 ]; [ -d "$A/ok/d" ]
+  run call ensure::dir "$A/evil" "$ME" "$MYGROUP" 0750; [ "$status" -eq 126 ]; [[ $output == *"path not allowed"* ]]; [ ! -e "$A/evil" ]
+  run call ensure::dir "$A/ok/../evil" "$ME" "$MYGROUP" 0750; [ "$status" -eq 126 ]
+  run call ensure::absent /etc/hosts; [ "$status" -eq 126 ]
+  s=$(mktemp /tmp/cpctl.test.XXXXXX); echo x >"$s"
+  run call ensure::file "$s" "$A/ok/f" "$ME" "$MYGROUP" 4755; [ "$status" -eq 126 ]; [[ $output == *"setuid"* ]]
+  run call ensure::file /etc/hostname "$A/ok/f" "$ME" "$MYGROUP" 0644; [ "$status" -eq 126 ]; [[ $output == *"staged file"* ]]
+  run call ensure::file "$s" "$A/ok/f" "$ME" "$MYGROUP" 0644; [ "$status" -eq 0 ]; [ -f "$A/ok/f" ]
+  rm -f "$s"
+}
+
+@test "cpnode: sudoers drop-ins only for the menu accounts; the installer account cannot widen its own sudo" {
+  agent_setup
+  s=$(mktemp /tmp/cpctl.test.XXXXXX)
+  printf 'cpadmin ALL=(ALL) NOPASSWD: ALL\n' >"$s"
+  run call ensure::file "$s" /etc/sudoers.d/opmenu-x root root 0440; [ "$status" -eq 126 ]; [[ $output == *"sudoers line for 'cpadmin'"* ]]
+  printf 'Defaults:cpadmin !authenticate\n' >"$s"
+  run call ensure::file "$s" /etc/sudoers.d/opmenu-x root root 0440; [ "$status" -eq 126 ]
+  run call ensure::file "$s" /etc/sudoers.d/cpadmin root root 0440; [ "$status" -eq 126 ]; [[ $output == *"path not allowed"* ]]
+  rm -f "$s"
+}
+
+@test "cpnode: every call is logged, passwords masked; a policy file not owned by root is ignored (deny all)" {
+  agent_setup
+  call ad::ensure_user svc-x S3cretPw OU=x >/dev/null 2>&1 || true
+  call kafka_node::meta "SCRAM-SHA-512=[name=a,password=Hidden1]" >/dev/null 2>&1 || true
+  ! grep -q 'S3cretPw\|Hidden1' "$A/cpnode.log"
+  grep -q 'ad::ensure_user svc-x <hidden> OU=x' "$A/cpnode.log"
+  grep -q 'password=<hidden>' "$A/cpnode.log"
+  # unpatched agent: its policy /etc/cpctl/cpnode.conf does not exist here -> defaults -> every path denied
+  run call_real ensure::dir "$A/ok/y" "$ME" "$MYGROUP" 0750; [ "$status" -eq 126 ]
+}
+
+# ---------- day-2 operations
+ops_setup() {
+  : >"$CPCTL_CONF_DIR/compat.env"
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/upgrade/_upgrade.sh"
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/upgrade/ops.sh"
+}
+
+@test "health hints: the usual causes are recognised from the journal" {
+  ops_setup
+  [[ $(ops::_hint "java.io.IOException: No space left on device") == "disk full"* ]]
+  [[ $(ops::_hint "Caused by: java.io.IOException: keystore password was incorrect") == "keystore password"* ]]
+  [[ $(ops::_hint "SSLHandshakeException: PKIX path building failed") == "TLS trust"* ]]
+  [[ $(ops::_hint "java.net.BindException: Address already in use") == "port taken"* ]]
+  [[ $(ops::_hint "something else") == "see: journalctl"* ]]
+}
+
+@test "OS patch order: brokers, controllers with the leader last, REST, C3" {
+  ops_setup
+  export HOSTS_rest="rest01 rest02"
+  upgrade::_controller_order() { printf '%s\n' kc02 kc03 kc01; }   # kc01 = leader
+  run ops::_patch_order
+  [ "$(printf '%s\n' "${lines[@]}" | awk '{print $1}' | paste -sd' ' -)" = "kb01 kb02 kc02 kc03 kc01 rest01 rest02 c3-01" ]
+  [ "${lines[5]}" = "rest01 rest" ]
+}
+
+@test "broker removal is done only when the broker's own block says SUCCESS with every sub-task COMPLETED" {
+  ops_setup
+  ops::_admin() {
+    printf '%s\n' "Broker 103 removal status - IN_PROGRESS. Sub-task statuses:" "  Partition Reassignment: IN_PROGRESS" \
+      "Broker 104 removal status - SUCCESS. Sub-task statuses:" "  Broker Replica Exclusion: COMPLETED" \
+      "  Partition Reassignment: COMPLETED" "  Broker Shutdown: COMPLETED" "  Shutdown Scheduled: true"
+  }
+  ops::_removal_done 104
+  run ops::_removal_done 103; [ "$status" -ne 0 ]
+  run ops::_removal_done 105; [ "$status" -ne 0 ]
+}
+
+@test "health exit code: a critical finding is never downgraded by a later warning" {
+  ops_setup
+  HEALTH_RC=0; ops::_warn w >/dev/null; [ "$HEALTH_RC" = 2 ]
+  ops::_crit c >/dev/null; [ "$HEALTH_RC" = 1 ]
+  ops::_warn w >/dev/null; [ "$HEALTH_RC" = 1 ]
 }

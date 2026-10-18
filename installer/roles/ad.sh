@@ -22,7 +22,7 @@ role::ad::configure() {
   remote::put "$host" "$PKI_DIR/ca.pem" /var/lib/samba/private/tls/ca.pem root root 0644
   [[ $REMOTE_CHANGED == 1 ]] && changed=1
   if [[ $changed == 1 ]] && step::mutating; then
-    remote::exec "$host" "sudo -n pkill -x samba || true"
+    remote::apply "$host" sys_node::samba_restart
     log::changed "[$host] samba restarted with the new certificate / trust bundle"
     sleep 5
   fi
@@ -74,7 +74,7 @@ ad::_ldaps_ok() {
 }
 
 role::ad::start() { :; }
-role::ad::restart() { remote::exec "$AD_HOST" "sudo -n pkill -x samba || true"; }
+role::ad::restart() { remote::apply "$AD_HOST" sys_node::samba_restart; }
 role::ad::stop() { :; }
 role::ad::health() {
   health::wait 90 "[$AD_HOST] LDAPS bind as svc-mds-bind (cert chain verified)" ad::_ldaps_ok

@@ -11,9 +11,10 @@ _LIB_INSTALL_LOADED=1
 
 readonly INSTALL_KEYS=(confluent adoptium rocky-9)
 
-install::_repo_file() {
-  local out=$1
-  local base=${REPO_YUM_BASEURL%/}
+install::_repo_file() { # <out> <host>
+  local out=$1 base tls
+  base=$(repo::base_for "$2")
+  tls=$(repo::tls_lines "$2")
   cat >"$out" <<EOF
 # Managed by cpctl - internal mirror only (public repos are not reachable from this network)
 [cp-internal-confluent]
@@ -22,27 +23,29 @@ baseurl=$base/confluent
 enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
-
+$tls
 [cp-internal-adoptium]
 name=Internal mirror - Eclipse Temurin
 baseurl=$base/adoptium
 enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
-
+$tls
 [cp-internal-os-deps]
 name=Internal mirror - OS dependencies
 baseurl=$base/os-deps
 enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+$tls
 EOF
 }
 
 install::prepare() {
   local host=$1 tmp k
+  repo::trust_push "$host"
   tmp=$(render::tmp)
-  install::_repo_file "$tmp"
+  install::_repo_file "$tmp" "$host"
   remote::put "$host" "$tmp" /etc/yum.repos.d/cp-internal.repo root root 0644
   for k in "${INSTALL_KEYS[@]}"; do
     remote::put "$host" "$REPO_LOCAL_ROOT/gpg-keys/$k.asc" "/etc/pki/rpm-gpg/RPM-GPG-KEY-cp-$k" root root 0644
@@ -51,7 +54,6 @@ install::prepare() {
     /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
 }
 
-# install::packages_for <role> -> package names
 install::packages_for() {
   local v="PKGS_${1^^}"
   printf '%s\n' ${!v}
@@ -66,6 +68,10 @@ install::ensure() {
     for p in $PKGS_C3_OS; do specs+=("$p=$(install::os_dep_version "$p")"); done
   else
     for p in $(install::packages_for "$role"); do specs+=("$p=$ver"); done
+  fi
+  # the repo server needs httpd's TLS module to serve the internal repo over HTTPS
+  if repo::is_server "$host" && repo::tls; then
+    for p in ${PKGS_OPS_OS:-}; do specs+=("$p=$(install::os_dep_version "$p")"); done
   fi
   remote::apply "$host" rpm_node::ensure "$mode" "${specs[@]}"
 }
@@ -82,7 +88,7 @@ install::os_dep_version() {
 install::available() { [[ -n $(find "$REPO_LOCAL_ROOT/rpm/confluent" -name "confluent-server-$1-*.rpm") ]]; }
 
 # install::pinned <host>  -> the installed version is protected against accidental OS patching
-install::pinned() { remote::exec "$1" "sudo -n dnf versionlock list 2>/dev/null | grep -q confluent-server"; }
+install::pinned() { remote::run "$1" sys_node::versionlocked confluent-server >/dev/null; }
 
 install::version() { remote::run "$1" rpm_node::installed confluent-server 2>/dev/null || true; }
 install::rest_version() { remote::run "$1" rpm_node::installed confluent-kafka-rest 2>/dev/null || true; }

@@ -46,7 +46,7 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 
 | 主機 | IP | 角色 | 說明 |
 |---|---|---|---|
-| ops01 | 172.30.0.10 | 操作機、內部 repo | 執行所有安裝指令;httpd :8080 提供 yum 與 raw repo;內部 CA 也在這台 |
+| ops01 | 172.30.0.10 | 操作機、內部 repo | 執行所有安裝指令;httpd :8443（HTTPS，3.3.0）提供 yum 與 raw repo;內部 CA 也在這台 |
 | ad01 | 172.30.0.11 | AD(Samba) | LDAPS 636;正式環境是行內 AD |
 | lb01 | 172.30.0.12 | Nginx L4 | REST :8082、C3 :9021 的 TCP passthrough;唯一對外的主機 |
 | jump01 | 172.30.0.13 | 堡壘機 | OP menu(固定帳號 opuser) |
@@ -84,7 +84,8 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 | 9021 | HTTPS | Control Center |
 | 9090 / 9093 | HTTPS(mTLS) | c3-01 上的 Prometheus / Alertmanager |
 | 7071 | HTTPS + basic auth | JMX exporter(各 Java 節點) |
-| 8080 | HTTP | ops01 內部 repo(套件靠 GPG 與 sha256 驗證) |
+| 8443 | HTTPS | ops01 內部 repo(3.3.0 起;憑證 cp-server,節點以 `sslcacert` 固定信任的 CA) |
+| 8080 | HTTP | ops01 內部 repo:只在第 2 章建 repo 時使用;3.3.0 之後一律回 403 |
 
 ## 1.6 步驟一覽
 
@@ -155,7 +156,7 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 └── manifests/<YYYYmmdd-HHMMSS>/  SHA256SUMS, manifest-rpm.json, manifest-tar.json, report/
 ```
 
-對外 URL：`http://ops01.poc.lab:8080/rpm/<repo>`（= `REPO_YUM_BASEURL`）與 `http://ops01.poc.lab:8080/raw`（= `REPO_RAW_BASEURL`）。
+對外 URL：`http://ops01.poc.lab:8080/rpm/<repo>`（= `REPO_YUM_BASEURL`）與 `http://ops01.poc.lab:8080/raw`（= `REPO_RAW_BASEURL`）。 3.3.0 之後改為 `https://ops01.poc.lab:8443/...`（PoC 的 `inventory.env` 已是 https）。
 
 ## 2.1 版本控制：`installer/conf/versions.env`
 
@@ -588,7 +589,7 @@ rpm -q httpd createrepo_c
 
 預期：`Syntax OK`、`active`、httpd 在 `0.0.0.0:8080` LISTEN、`repoadmin:repoadmin 755 /srv/repo`、PUT 回 `405`、`httpd-2.4.62-13.el9_8.6.x86_64`、`createrepo_c-0.20.1-4.el9.x86_64`（PoC 實際版本）。
 
-**對應 cpctl**：無（屬環境建置；防火牆 8080 由 `conf/os-tuning.env` 的 `FIREWALL_EXTRA_ops="8080"` 在 01_os_baseline 處理）。
+**對應 cpctl**：無（屬環境建置；這裡的 HTTP 8080 只在第 2 章使用；3.3.0 起改為 HTTPS 8443，防火牆由 `conf/os-tuning.env` 的 `FIREWALL_EXTRA_ops="8443"` 在 01_os_baseline 處理）。
 
 **注意事項／陷阱**：
 - 正式環境 httpd / createrepo_c 從行內 RHEL repo 或 RHEL 安裝光碟安裝;兩者都沒有時才用落地區的 `bootstrap/`(全程實測即採此方式,18 個 RPM)。
@@ -624,7 +625,7 @@ gpg-pubkey-350d275d-6279464b Rocky Enterprise Software Foundation - Release key 
 
 **注意事項／陷阱**：
 - 簽章驗證用的是 ops01 系統 rpmdb 的公鑰；若從未 `rpm --import`，`rpm -K` 會顯示 `digests SIGNATURES NOT OK`（缺鑰），不是檔案壞掉。
-- 正式版 sudoers（`conf/sudoers.d/cpadmin.restricted`）只允許 `rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-*`，**不含** `/mnt/exchange/gpg-keys/*.asc`，在 ops01 上需另外放行或由 root 執行。
+- 受限 sudo（`SUDO_MODE=restricted`，3.0.3）下，cpadmin 不能直接 `sudo rpm --import`；cpctl 改由 agent 的 `rpm_node::import_keys` 匯入。手動匯入時由管理員以 root 執行。
 
 ## 2.11 內網匯入第 2 步：發佈檔案到 /srv/repo（絕不覆寫）
 
@@ -826,22 +827,47 @@ sudoers：
   cpadmin ALL=(ALL) NOPASSWD: ALL
   Defaults:cpadmin !requiretty
   ```
-- 正式環境基線（給銀行資安審查用，`installer/conf/sudoers.d/cpadmin.restricted` → 放到 `/etc/sudoers.d/cpadmin`，0440，以 `visudo -cf` 檢查）：
+- 正式環境：**受限 sudo**（`SUDO_MODE=restricted`）。cpadmin 唯一能以 root 執行的程式是 cpctl 的 node agent `/usr/local/libexec/cpctl/cpnode`，而且**不能帶參數**：
+  - 要做的動作從 stdin 傳入，以 NUL 分隔：函式名稱與參數。所以 sudo 的紀錄裡不會出現密碼。
+  - agent 只執行它內建、有命名空間的函式（例如 `ensure::file`、`sys_node::nginx_reload`），不接受任何 shell 片段。
+  - 會寫入或刪除的路徑，要符合 `/etc/cpctl/cpnode.conf` 的允許清單（來源 `installer/conf/cpnode.paths`）。
+  - 不會設 setuid / setgid。
+  - 要安裝的檔案必須是 cpadmin 自己放在 `/tmp/cpctl.*` 的檔案。
+  - sudoers drop-in 只能給 OP menu 的固定帳號。cpadmin 改不了自己的 sudoers。
+  - 每次呼叫都記在 `/var/log/cpnode.log`（密碼遮蔽）。
   ```
-  Defaults:cpadmin !requiretty, log_output, logfile=/var/log/sudo-cpadmin.log
-  Cmnd_Alias CP_BUNDLE   = /usr/bin/bash -s
-  Cmnd_Alias CP_PKG      = /usr/bin/dnf -y -q --disablerepo=* --enablerepo=cp-internal-* *, \
-                           /usr/bin/dnf versionlock *, /usr/bin/rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-*
-  Cmnd_Alias CP_SVC      = /usr/bin/systemctl start confluent-*, /usr/bin/systemctl stop confluent-*, \
-                           /usr/bin/systemctl restart confluent-*, /usr/bin/systemctl enable confluent-*, \
-                           /usr/bin/systemctl start prometheus, /usr/bin/systemctl start alertmanager, \
-                           /usr/bin/systemctl daemon-reload
-  Cmnd_Alias CP_TRUST    = /usr/bin/update-ca-trust extract
-  Cmnd_Alias CP_KAFKA    = /usr/bin/kafka-storage format *, /usr/bin/kafka-metadata-quorum *
-  cpadmin ALL=(root) NOPASSWD: CP_BUNDLE, CP_PKG, CP_SVC, CP_TRUST
-  cpadmin ALL=(cp-kafka) NOPASSWD: CP_BUNDLE, CP_KAFKA
+  # /etc/sudoers.d/cpadmin（root:root 0440）
+  Defaults:cpadmin !requiretty
+  Defaults:cpadmin logfile=/var/log/sudo-cpadmin.log
+  cpadmin ALL=(root) NOPASSWD: /usr/local/libexec/cpctl/cpnode ""
   ```
-  > 注意：`CP_BUNDLE = /usr/bin/bash -s` 實質上等於 root 全權；手動安裝若改用受限 sudoers，下面許多指令（`install`、`sysctl`、`firewall-cmd`、`keytool`…）**不在白名單內**，必須由 root 或擁有完整 sudo 的維運人員執行。
+  手動建立（由擁有完整 sudo 的管理員，在每台主機上做一次；agent 檔由 ops01 `cpctl agent build` 產生，或 `cat installer/lib/node/*.sh installer/lib/install/*.node.sh installer/node/cpnode.main` 再加上版本標頭）：
+  ```bash
+  sudo install -d -o root -g root -m 0755 /usr/local/libexec/cpctl /etc/cpctl
+  sudo install -o root -g root -m 0755 /tmp/cpnode /usr/local/libexec/cpctl/cpnode
+  sudo install -o root -g root -m 0644 /tmp/cpnode.conf /etc/cpctl/cpnode.conf      # 允許清單、OP menu 帳號、測試函式開關
+  sudo visudo -cf /tmp/cpadmin.sudoers && sudo install -o root -g root -m 0440 /tmp/cpadmin.sudoers /etc/sudoers.d/cpadmin
+  ```
+  **驗證**：
+  ```bash
+  sudo -n -l                                         # 只列出 /usr/local/libexec/cpctl/cpnode ""
+  sudo -n id                                         # 拒絕（a password is required / not allowed）
+  printf '%s\0' 0 0 --version | sudo -n /usr/local/libexec/cpctl/cpnode            # agent 版本
+  printf '%s\0' 0 0 ensure::absent /etc/hosts | sudo -n /usr/local/libexec/cpctl/cpnode   # DENIED path not allowed
+  sudo tail -3 /var/log/cpnode.log                   # （管理員）每次呼叫一行：誰、哪個函式、參數
+  ```
+  **對應 cpctl**：`cpctl agent install --restrict`（最後一次用完整 sudo 安裝 agent、政策檔與上面的 sudoers），之後 `conf/inventory.env` 設 `SUDO_MODE=restricted`；`cpctl agent status` 查每台的 agent 版本與 sudo 模式。
+  **實測**：cp-man 手動（kb03，附錄 A.6）與 cp-poc 全叢集（cpctl，附錄 A.5：受限後完整安裝 changed=0、無拒絕）。
+
+  > 注意：受限之後 cpadmin **不能自己更新 agent**。cpctl 改版時如果節點端程式碼有變，cpctl 會比對版本並停下，提示由管理員安裝新的 agent（PoC：`windows/poc.sh agent-push`）。這正是受限的目的：root 執行的程式只能經過管理員審核後更換。
+
+  > 注意：安裝程式要管理 systemd unit、套件與設定檔，**本質上仍然接近 root 權限**。例如 systemd drop-in 可以讓服務以 root 執行指令。受限 sudo 能做到的是：
+  > - 沒有互動式 root shell、沒有任意指令。
+  > - root 只執行固定、有版本的程式碼。
+  > - 每個動作都有紀錄。
+  > - 明顯的提權路徑（改自己的 sudoers、setuid、讀任意檔案）被擋下。
+  >
+  > 建議再搭配銀行的帳號管理：cpadmin 平時停用，變更窗口才啟用。
 
 驗證：
 ```bash
@@ -1264,7 +1290,7 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
 
 | 主機 | 開放（tcp 除非註明） |
 |---|---|
-| ops01 | 8080（內部 repo http）、123/udp（NTP server）、ssh |
+| ops01 | 8443（內部 repo HTTPS）、123/udp（NTP server）、ssh |
 | kc01 kc02 kc04 | 9093（CONTROLLER）、7071（JMX exporter）、ssh |
 | kb01–kb04 | 9092（INTERNAL）、9094（TOKEN）、9095（CLIENT）、9096（LDAP）、8090（MDS）、7071、ssh |
 | rest01 rest02 | 8082、7071、ssh |
@@ -1283,7 +1309,7 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
   done
   sudo firewall-cmd -q --reload
   ```
-  其他角色把 `for p in ...` 換成上表的埠；ops01 為 `8080/tcp 123/udp`；jump01 不加埠。
+  其他角色把 `for p in ...` 換成上表的埠；ops01 為 `8443/tcp 123/udp`；jump01 不加埠。
 - **驗證**：
   ```bash
   sudo firewall-cmd --permanent --list-all | grep -E ' services| ports'
@@ -1324,39 +1350,155 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
 - **主機順序**：**ops01 先做**（step 03 的 keytool 需要 JDK），其餘主機（kc01 kc02 kc04、kb01–kb04、rest01–02、c3-01、jump01）可平行。
 - **帳號**：cpadmin + sudo。
 - **策略**：`conf/inventory.env` 的 `INSTALL_METHOD=rpm`（PoC 預設、銀行建議）或 `tar`。兩者擇一，不要混用。
-- **內部 repo**（ops01 httpd，`/srv/repo` → `http://ops01.poc.lab:8080/`）：
+- **內部 repo**（ops01 httpd，`/srv/repo` → `https://ops01.poc.lab:8443/`，3.3.0）：
   - `rpm/confluent/`（CP + C3 RPM）、`rpm/adoptium/`、`rpm/os-deps/`
   - `raw/tar/`（OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz、confluent-8.3.2.tar.gz、confluent-control-center-next-gen-2.6.1.tar.gz、以及升級演練用的 confluent-8.2.4.tar.gz）
   - `gpg-keys/`（confluent.asc、adoptium.asc、rocky-9.asc、confluent-c3.asc）
   - `manifests/<時間戳>/SHA256SUMS`
 
+### 3.3.0 內部 repo 改走 HTTPS（在任何節點安裝之前）
+
+- **目的**：節點從內部 repo 下載套件時走 HTTPS，伺服器身分由憑證證明，傳輸內容也加密。RPM 本身已有 GPG 簽章、tar.gz 有 sha256，但 **repo 的 metadata 沒有簽章**；改走 HTTPS 後，中間人無法把舊版、或藏掉某個版本的 metadata 塞給節點。
+- **做法**：
+  - repo 主機（ops01）用共用伺服器憑證 `cp-server` 提供 `https://ops01.poc.lab:8443/`；它的 SAN 本來就含 `ops01`、`ops01.poc.lab`（3.4.5）。
+  - 節點的 repo 定義檔加上 `sslcacert`，只信任我們的信任 bundle。
+  - 原本的 HTTP 8080 保留設定、但一律回 403，防火牆也不再開放 8080；舊設定的節點會立刻失敗，不會繼續用明文。
+- **順序上的問題與解法**：
+  - 節點要先信任憑證才能裝套件，憑證卻是 3.4 才簽。所以本節先把 3.4 的「簽發」部分提前做，這部分只用 openssl。
+  - ops01 自己改讀磁碟上的 repo（`file://`），不經網路，所以它在 HTTPS 還沒好之前就能裝 JDK 與 mod_ssl。
+- **前提**：`mod_ssl` 已經走第 2 章的離線引進進了 `rpm/os-deps`（`versions.env` 的 `PKGS_OPS_OS="mod_ssl"`）。
+- **主機 / 帳號**：ops01，cpadmin + sudo。
+
+**1) ops01 自己的 repo 定義改為讀磁碟**
+
+```bash
+sudo tee /etc/yum.repos.d/cp-internal.repo >/dev/null <<'EOF'
+# Managed by cpctl - internal mirror only (public repos are not reachable from this network)
+[cp-internal-confluent]
+name=Internal mirror - Confluent Platform and Control Center
+baseurl=file:///srv/repo/rpm/confluent
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+
+[cp-internal-adoptium]
+name=Internal mirror - Eclipse Temurin
+baseurl=file:///srv/repo/rpm/adoptium
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+
+[cp-internal-os-deps]
+name=Internal mirror - OS dependencies
+baseurl=file:///srv/repo/rpm/os-deps
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+EOF
+# GPG 金鑰同 3.3.1.2；ops01 的套件同 3.3.1.3，另加 mod_ssl（版本 = os-deps 裡的版本）
+v=$(rpm -qp --qf '%{VERSION}' /srv/repo/rpm/os-deps/mod_ssl-[0-9]*.rpm | sort -V | tail -1)
+sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' install "mod_ssl-$v"
+rpm -q mod_ssl httpd
+```
+
+**2) 簽發憑證（提前做 3.4 的簽發部分）**
+
+- 內部 CA：照 3.4.1（CA 與 `ca.pem`）、3.4.3–3.4.6 簽出 `cp-server` 等憑證。3.4.2 的 truststore 需要 keytool，留到 3.4 再做。
+- 銀行 CA：照 3.4.9.1–3.4.9.3 取得 root、送出申請、匯入銀行簽回的 `cp-server`。**沒有拿到 cp-server 之前，節點都不能開始裝**。
+
+**3) httpd 改走 HTTPS**
+
+```bash
+cd /var/lib/cp-installer/pki
+sudo install -o root -g root -m 0644 cp-server.crt /etc/pki/tls/certs/cp-repo.crt      # leaf（+ 銀行模式下的中繼）
+sudo install -o root -g root -m 0600 cp-server.key /etc/pki/tls/private/cp-repo.key
+sudo tee /etc/httpd/conf.d/cp-repo.conf >/dev/null <<'EOF'
+# Managed by cpctl - internal repository, HTTPS only (plain HTTP answers 403)
+DocumentRoot "/srv/repo"
+<Directory "/srv/repo">
+    Require all denied
+</Directory>
+
+Listen 8443 https
+<VirtualHost *:8443>
+    ServerName ops01.poc.lab
+    SSLEngine on
+    SSLProtocol -all +TLSv1.2 +TLSv1.3
+    SSLCertificateFile /etc/pki/tls/certs/cp-repo.crt
+    SSLCertificateKeyFile /etc/pki/tls/private/cp-repo.key
+    DocumentRoot "/srv/repo"
+    <Directory "/srv/repo">
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+        <LimitExcept GET HEAD OPTIONS>
+            Require all denied
+        </LimitExcept>
+    </Directory>
+</VirtualHost>
+EOF
+# mod_ssl 自帶的預設 vhost（443、自簽憑證）不要用：內容換成一行註解（RPM 升級不會覆蓋改過的設定檔）
+echo '# Managed by cpctl - default mod_ssl vhost disabled; the internal repo is served by cp-repo.conf' | sudo tee /etc/httpd/conf.d/ssl.conf >/dev/null
+sudo httpd -t && sudo systemctl restart httpd
+sudo firewall-cmd --permanent --add-port=8443/tcp && sudo firewall-cmd --permanent --remove-port=8080/tcp && sudo firewall-cmd --reload
+sudo firewall-cmd --list-ports     # 8443/tcp 在、8080/tcp 不在（新環境 3.2 已只開 8443；照舊版建的環境要補這一步，實測時 cp-man 就缺了）
+```
+
+- **驗證**：
+  ```bash
+  P=/var/lib/cp-installer/pki
+  for r in confluent adoptium os-deps; do
+    curl -fsS --cacert $P/ca.pem -o /dev/null https://ops01.poc.lab:8443/rpm/$r/repodata/repomd.xml && echo "repo $r served over HTTPS"; done
+  curl -s -o /dev/null -w 'HTTP 8080: %{http_code}\n' http://ops01.poc.lab:8080/rpm/confluent/repodata/repomd.xml   # 403
+  # 不帶 --cacert 的結果取決於這台是否已在 3.4.8 把 CA 放進 OS trust store（ops01 已放，所以會是 200）；節點只信任 sslcacert 指定的檔案
+  openssl s_client -connect ops01.poc.lab:8443 -servername ops01.poc.lab </dev/null 2>/dev/null | grep -c 'BEGIN CERTIFICATE'   # 內部 CA 1；銀行 2（leaf + 中繼）
+  sudo ss -ltnp | grep -E ':(443|8443|8080) '    # 只有 8443 與 8080；443 不能出現
+  ```
+- **對應 cpctl**：`REPO_YUM_BASEURL=https://...` 時，step 02 在 ops01 裝完後依序執行 `pki::issue_all`、`repo::tls_configure`、`repo::verify_served`，然後才讓其他主機安裝；step 03 每次也會更新 repo 憑證與節點的 `cp-repo-ca.pem`，所以憑證或 CA 輪替時會跟著換。
+- **注意事項**：
+  - 憑證輪替（第 9 章）之後要重做第 3) 步的兩個 `install` 與 `systemctl restart httpd`，節點的 `cp-repo-ca.pem` 也要換成新的 `ca.pem`；否則 repo 繼續出示舊憑證，舊 CA 退役後節點就裝不了套件。
+  - 第 2 章的 2.14 是在本節之前做的，所以那時用 HTTP 檢查；完成本節後改用上面的 HTTPS 指令。
+
 ### 3.3.1 RPM 策略
 
 ### 3.3.1.1 repo 定義檔
 
+- **先放 repo 的 CA 檔**（HTTPS，3.3.0；ops01 自己不需要，它讀磁碟）：dnf 只信任這個檔裡的 CA。
+  ```bash
+  # ops01（cpadmin）
+  scp /var/lib/cp-installer/pki/ca.pem kb01.poc.lab:/tmp/cp-repo-ca.pem
+  # 目標主機（cpadmin + sudo）
+  sudo install -o root -g root -m 0644 /tmp/cp-repo-ca.pem /etc/pki/tls/certs/cp-repo-ca.pem && rm -f /tmp/cp-repo-ca.pem
+  ```
 - **設定檔** `/etc/yum.repos.d/cp-internal.repo`（root:root 0644）：
   ```
   # Managed by cpctl - internal mirror only (public repos are not reachable from this network)
   [cp-internal-confluent]
   name=Internal mirror - Confluent Platform and Control Center
-  baseurl=http://ops01.poc.lab:8080/rpm/confluent
+  baseurl=https://ops01.poc.lab:8443/rpm/confluent
   enabled=1
   gpgcheck=1
   gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+  sslverify=1
+  sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem
 
   [cp-internal-adoptium]
   name=Internal mirror - Eclipse Temurin
-  baseurl=http://ops01.poc.lab:8080/rpm/adoptium
+  baseurl=https://ops01.poc.lab:8443/rpm/adoptium
   enabled=1
   gpgcheck=1
   gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+  sslverify=1
+  sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem
 
   [cp-internal-os-deps]
   name=Internal mirror - OS dependencies
-  baseurl=http://ops01.poc.lab:8080/rpm/os-deps
+  baseurl=https://ops01.poc.lab:8443/rpm/os-deps
   enabled=1
   gpgcheck=1
   gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+  sslverify=1
+  sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem
   ```
 - **手動指令**（目標主機）：
   ```bash
@@ -1365,7 +1507,14 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
   EOF
   sudo chmod 0644 /etc/yum.repos.d/cp-internal.repo
   ```
-- **注意**：C3 RPM 也放在 `rpm/confluent`，與 CP 共用 Confluent 金鑰（confluent-c3.asc 與 confluent.asc 大小相同，PoC 中為同一把）。公有 repo 在 image 中已全部 `enabled=0`。
+- **驗證**（一定要從節點做，而且要實際下載 metadata：`dnf repolist` 只列出設定、不連線，不能當驗證）：
+  ```bash
+  sudo dnf -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' makecache; echo rc=$?      # rc=0、沒有錯誤
+  curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 http://ops01.poc.lab:8080/rpm/confluent/repodata/repomd.xml   # 000（防火牆已關）或 403
+  ```
+  實測（cp-man）：11 台節點 makecache 全部 rc=0。換成不存在的 CA 檔就失敗（`Curl error (77)`），證明 `sslcacert` 生效。另外，ops 主機防火牆沒開 8443 時節點會得到 `No route to host`。
+- **對應 cpctl**：`install::_repo_file`、`repo::trust_push`（`REPO_YUM_BASEURL` 是 `https://` 才加 `sslcacert`；repo 主機本身用 `file://`）。
+- **注意**：C3 RPM 也放在 `rpm/confluent`，與 CP 共用 Confluent 金鑰（confluent-c3.asc 與 confluent.asc 大小相同，PoC 中為同一把）。公有 repo 在 image 中已全部 `enabled=0`。`cp-repo-ca.pem` 就是信任 bundle `ca.pem`，CA 輪替時要跟著換（3.3.0 注意事項）。
 
 ### 3.3.1.2 GPG 金鑰匯入
 
@@ -1471,7 +1620,9 @@ for h in ops01 ad01 lb01 kc01 kc02 kc04 kb01 kb02 kb03 kb04 rest01 rest02 c3-01;
 # Managed by cpctl - internal OS dependencies only
 [cp-internal-os-deps]
 name=Internal mirror - OS dependencies
-baseurl=http://ops01.poc.lab:8080/rpm/os-deps
+baseurl=https://ops01.poc.lab:8443/rpm/os-deps
+sslverify=1
+sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem
 enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
@@ -1515,7 +1666,7 @@ CP 與 C3 tar 沒有原廠簽章，完整性只靠這組 sha256，**每台節點
 fetch_extract() {  # <file> <sha256> <parent dir>
   local f=$1 sha=$2 parent=$3 top
   sudo install -d -m 0755 "$parent" /opt/confluent/.cpctl /var/cache/cp-installer
-  sudo curl -fsS --retry 3 -o /var/cache/cp-installer/$f.part http://ops01.poc.lab:8080/raw/tar/$f
+  sudo curl -fsS --retry 3 --cacert /etc/pki/tls/certs/cp-repo-ca.pem -o /var/cache/cp-installer/$f.part https://ops01.poc.lab:8443/raw/tar/$f
   sudo mv /var/cache/cp-installer/$f.part /var/cache/cp-installer/$f
   echo "$sha  /var/cache/cp-installer/$f" | sha256sum -c - || { sudo rm -f /var/cache/cp-installer/$f; return 4; }
   top=$(sudo tar -tzf /var/cache/cp-installer/$f | head -1 | cut -d/ -f1)
@@ -2428,7 +2579,9 @@ controller.quorum.bootstrap.servers=kc01.poc.lab:9093,kc02.poc.lab:9093,kc04.poc
 controller.listener.names=CONTROLLER
 listeners=CONTROLLER://kc01.poc.lab:9093
 advertised.listeners=CONTROLLER://kc01.poc.lab:9093
-listener.security.protocol.map=CONTROLLER:SSL
+listener.security.protocol.map=CONTROLLER:SSL,INTERNAL:SSL
+# Self-Balancing 在 active controller 上執行，經由這個 listener 名稱連到 broker（4.2.3.3 注意事項）
+inter.broker.listener.name=INTERNAL
 log.dirs=/var/lib/kafka/data
 ```
 
@@ -2509,6 +2662,13 @@ confluent.license.topic.replication.factor=3
 confluent.balancer.enable=true
 confluent.balancer.topic.replication.factor=3
 ```
+
+>! **Self-Balancing 要在 controller 設 `inter.broker.listener.name=INTERNAL`**（4.2.3.1）。KRaft 下 SBC 跑在 active controller，用這個 listener 名稱到 broker 的 metadata 找連線位址；沒設時預設是 `PLAINTEXT`，SBC 永遠停在 `STARTING`，`data-balancer.log` 出現 `Bootstrap server endpoint was not provided ... could not be found with a listener name ListenerName(PLAINTEXT)`。這個問題在 2026-10-18 才發現（之前的驗收沒有檢查 SBC 狀態），已補進手冊、cpctl 與 `cpctl verify`。
+>
+> 驗證（step 07 之後）：`kafka-rebalance-cluster --bootstrap-server "$B" --command-config "$CFG" --status` → `Balancer status: ENABLED`；`sudo grep 'transitioned from STARTING to RUNNING' /var/log/kafka/data-balancer.log`（active controller 上）。
+>
+> 已經在運作的叢集補正（每台 controller，再依 follower → leader 順序逐台重啟、每台等 lag 0）。Secret Protection 加密過的設定檔被改寫成 `key = value`（等號兩邊有空白），比對時要容許空白：
+> `sudo sed -i -E 's/^listener\.security\.protocol\.map *= *CONTROLLER:SSL$/listener.security.protocol.map = CONTROLLER:SSL,INTERNAL:SSL\ninter.broker.listener.name = INTERNAL/' /etc/confluent/kafka/server.properties`
 
 ### 4.2.3.4 MDS(Metadata Service)
 
@@ -3287,7 +3447,7 @@ ssh cpadmin@<host>.poc.lab 'sudo bash -c "
   install -o root -g confluent -m 0640 /tmp/file.new /dest/file && rm -f /tmp/file.new"'
 ```
 
-> 陷阱：生產環境的 `conf/sudoers.d/cpadmin.restricted` 只允許 `bash -s`、dnf、`systemctl start|stop|restart|enable confluent-*` 等；`install`、`useradd`、`visudo`、`nginx -s reload` 這類手動指令在生產節點上需要另外取得 root（或改走審核過的 helper 腳本）。PoC 映像檔是完整 sudo。
+> 陷阱：正式環境的 cpadmin 是受限 sudo（只能執行 cpnode agent，見 3.0.3 的 sudoers）；本手冊的 `install`、`useradd`、`visudo`、`nginx -s reload` 這類手動指令要由擁有完整 sudo 的管理員執行。PoC 映像檔是完整 sudo。
 
 ## 5.1 步驟 08:安全初始化（`steps/08_security_bootstrap.sh`）
 
@@ -3511,6 +3671,72 @@ done
 ```
 - **驗證**：`kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe --topic orders.events` → `PartitionCount: 6  ReplicationFactor: 3  Configs: min.insync.replicas=2`，每個 partition 的 ISR 為 3 個 broker（跨 rack-a / rack-b）。
 - **對應 cpctl**：`security::topic`；step 驗證 `step_verify`（describe `orders.events`）。
+
+### 5.1.7 Client 配額（每個 app 一組）
+
+- **目的**：限制每個應用程式能用的流量與 broker 執行緒，避免一個失控的 app 拖垮其他 app。配額掛在 Kafka principal `User:<app>` 上：
+  - SCRAM 直連的 app，principal 就是 SCRAM 帳號。
+  - REST Proxy 的 legacy app 一樣受限：REST Proxy 以該 app 的身分（impersonation，`User:app-legacy-billing`）連 Kafka。
+- **主機/帳號**：ops01 / cpadmin（同 5.1.1，`$B`、`$CFG`）。
+- **數值**（`conf/apps.env` 的 `APP_QUOTA_<app>`，PoC 值）：
+
+| app | producer_byte_rate | consumer_byte_rate | request_percentage |
+|---|---|---|---|
+| app-orders | 5242880（5 MiB/s） | 10485760（10 MiB/s） | 50 |
+| app-payments | 5242880 | 10485760 | 50 |
+| app-legacy-billing | 1048576（1 MiB/s） | 2097152（2 MiB/s） | 25 |
+
+  - byte_rate 是**每台 broker** 的上限（4 台 broker = 叢集合計最多約 4 倍）。
+  - `request_percentage` 是 broker 一條 request-handler / network 執行緒的百分比；超過時 broker 延遲回應（throttle），**不會斷線、不會丟訊息**。
+- **手動指令**：
+
+```bash
+# 先看目前的配額（沒有設定時沒有輸出）
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" \
+  --describe --entity-type users --entity-name app-orders
+# 設定（重跑會覆蓋成同樣的值，可重複執行）
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter \
+  --entity-type users --entity-name app-orders \
+  --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50'
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter \
+  --entity-type users --entity-name app-payments \
+  --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50'
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --alter \
+  --entity-type users --entity-name app-legacy-billing \
+  --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25'
+# 拿掉某一項（例如不再限制 request_percentage）
+#   ... --alter --entity-type users --entity-name app-orders --delete-config request_percentage
+```
+
+- **驗證**：
+
+```bash
+kafka-configs --bootstrap-server "$B" --command-config "$CFG" --describe --entity-type users --entity-name app-orders
+```
+預期（數字以科學記號印出，順序不固定）：
+```
+Quota configs for user-principal 'app-orders' are consumer_byte_rate=1.048576E7, request_percentage=50.0, producer_byte_rate=5242880.0
+```
+實際限流的驗證（要等 5.3 建好 client 設定檔 `$CD/app-orders-scram.properties` 之後做）：以 app-orders 身分持續壓測（broker 以約 10 秒的視窗計算速率，短時間的突發不會被限）：
+```bash
+kafka-topics --bootstrap-server "$B" --command-config "$CFG" --create --topic orders.quota-test --partitions 1 --replication-factor 3 --config retention.ms=3600000
+kafka-producer-perf-test --topic orders.quota-test --num-records 15000 --record-size 10000 --throughput -1 \
+  --producer.config $CD/app-orders-scram.properties --producer-props bootstrap.servers="$BC" acks=1 linger.ms=20 batch.size=262144 --print-metrics \
+  | grep -E 'records sent|produce-throttle-time-(avg|max)' | grep -v node-
+```
+實測（PoC，2026-10-18）：
+```
+7827 records sent, 1553.0 records/sec (14.81 MB/sec), ...     ← 一開始的突發
+2626 records sent, 523.5 records/sec (4.99 MB/sec), ...       ← 之後被壓在 5 MiB/s（單一 partition = 單一 broker）
+producer-metrics:produce-throttle-time-avg:{client-id=perf-producer-client} : 26.102     ← > 0 表示 broker 有延遲回應
+```
+測完刪除測試 topic：`kafka-topics ... --delete --topic orders.quota-test`。
+
+- **對應 cpctl**：`security::quota`（step 08，`APP_QUOTA_<app>`；只管 `producer_byte_rate`、`consumer_byte_rate`、`request_percentage`、`controller_mutation_rate` 四項，`apps.env` 拿掉的項目會從叢集刪除）。
+- **注意事項**：
+  - **不要隨手設「所有使用者的預設配額」**（`--entity-default`）：它也會限制 svc-c3、REST Proxy 代理的身分、稽核寫入帳號。`QUOTA_USER_DEFAULT` 預設留空，要設之前先估好這些服務帳號的流量。
+  - broker 之間的複寫（`kafka-internal`）不受 client 配額影響。
+  - 配額要依實際壓測與業務量調整；PoC 值只用來驗證機制。
 
 ## 5.2 步驟 09:啟動 REST Proxy、Control Center、套用 LB（`steps/09_start_edge.sh`）
 
@@ -4374,7 +4600,7 @@ drwxr-x--- 2 cp-kafka confluent 4096 Oct 16 11:09 /var/log/kafka
 
 ```
 ssh kc03.poc.lab "sudo install -d -m 0755 /var/cache/cp-installer /opt/java /opt/confluent"
-ssh kc03.poc.lab "cd /var/cache/cp-installer && sudo curl -fsS -o OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz http://ops01.poc.lab:8080/raw/tar/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz && sudo curl -fsS -o confluent-8.3.2.tar.gz http://ops01.poc.lab:8080/raw/tar/confluent-8.3.2.tar.gz"
+ssh kc03.poc.lab "cd /var/cache/cp-installer && sudo curl -fsS --cacert /etc/pki/tls/certs/cp-repo-ca.pem -o OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz https://ops01.poc.lab:8443/raw/tar/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz && sudo curl -fsS --cacert /etc/pki/tls/certs/cp-repo-ca.pem -o confluent-8.3.2.tar.gz https://ops01.poc.lab:8443/raw/tar/confluent-8.3.2.tar.gz"
 ssh kc03.poc.lab "cd /var/cache/cp-installer && echo 'ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94  OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz' | sha256sum -c && echo '946433221bae8272de416694060322aef0c9c8b3086da9574f86d6cb0d698c2f  confluent-8.3.2.tar.gz' | sha256sum -c"
 ```
 
@@ -4805,7 +5031,7 @@ Feature: confluent.metadata.version  SupportedMinVersion: CP-7.3-IV3  SupportedM
 | 9.4 遷移到銀行 CA | 內部 CA 換成銀行 PKI(`PKI_MODE=external`,3.4.9) | 3 輪(同 9.3 的三階段) |
 | 9.5 銀行 CA 下的輪替 | 憑證到期重簽、銀行換 root | 1 輪 / 3 輪 |
 
-9.2、9.3 在 2026-10-17 的全程實測環境中,於持續負載下做過(附錄 A.3);9.4 在 cp-poc 用 cpctl 做過(附錄 A.4)。每一輪 16 個 TLS 端點都確認換成新憑證,REST 都是 0 次失敗;SCRAM 直連的負載除了 9.3.2 switch 之外都是 0 筆遺失(9.3.2 那一段的負載量測無效,見附錄 A.3.2 註;銀行 root 輪替的 switch 在 A.4 以 4,530 筆 0 遺失通過)。
+9.2、9.3 在 2026-10-17 的全程實測環境中,於持續負載下做過(附錄 A.3);9.4 在 cp-poc 用 cpctl 做過(附錄 A.4)。每一輪 16 個 TLS 端點都確認換成新憑證,REST 都是 0 次失敗;SCRAM 直連的負載都是 0 筆遺失。9.3.2 switch 在 A.3 的負載量測無效(附錄 A.3.2 註),2026-10-18 已照本章重做:1,383 筆 0 遺失、REST 250 次 0 失敗(附錄 A.6)。9.4 照本章手動做過一次(A.6),也以 cpctl 做過一次(A.4)。
 
 **為什麼不停機**:所有連線兩端都信任同一份 CA bundle。憑證輪替時 CA 沒變,新舊憑證都能互通;CA 輪替則先讓所有人同時信任新舊兩張 CA(add),再換憑證(switch),最後才移除舊 CA(retire),任何時刻連線兩端都至少有一張共同信任的 CA。
 
@@ -4821,6 +5047,7 @@ Feature: confluent.metadata.version  SupportedMinVersion: CP-7.3-IV3  SupportedM
 | `trust_all` | 12 台主機的 OS trust anchor 換成 `ca.pem`;JDK cacerts 只保留 bundle 裡的 CA(多的刪掉) | 3.4.8 |
 | `push_ad` | ad01 的 LDAPS 憑證與 CA,重啟 samba,等 LDAPS 恢復 | 4.1.1 |
 | `push_jump` | 跳板機的 opmenu truststore、顯示用的憑證、break-glass 憑證 | 6.3、6.4 |
+| `push_repo` | repo over HTTPS：repo 主機的憑證換成 cp-server、每台節點的 `cp-repo-ca.pem` 換成 `ca.pem`，並確認每台都還能下載 metadata | 3.3.0、3.3.1.1 |
 | `restart_all` | 逐台重啟並等健康:controller(leader 最後)→ broker → REST(先從 LB 摘除)→ C3 | 4.2.8、8.8 |
 | `served` | 列出 16 個 TLS 端點**實際出示**的憑證序號與簽發 CA | — |
 
@@ -4840,6 +5067,7 @@ $ openssl verify -CAfile $PKI/ca.pem $PKI/kafka-internal.crt $PKI/cp-server.crt
 $ push_all_ssl
 $ push_ad
 $ push_jump
+$ push_repo                                                # repo over HTTPS (3.3.0): new cp-server on the repo server
 $ restart_all
 $ served                                                   # 每個端點的序號都要變成新的
 $ bash load.sh stop && bash load.sh report
@@ -4878,7 +5106,7 @@ $ openssl req -x509 -new -key ca-next.key -sha256 -days 3650 -out ca-next.crt \
     -subj "/CN=PoC Internal CA $(date +%Y%m%d%H%M)/OU=Confluent/O=PoC Bank/C=TW" \
     -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
 $ cat ca.crt ca-next.crt > ca.pem && chmod 0644 ca.pem     # bundle:舊 + 新
-$ truststores && push_all_ssl && trust_all && push_ad && push_jump
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump && push_repo
 $ restart_all
 ```
 
@@ -4905,12 +5133,12 @@ $ issue kafka-internal serverAuth,clientAuth $SANS_INTERNAL
 $ issue cp-server serverAuth,clientAuth $SANS_SERVER
 $ issue app-legacy-billing clientAuth
 $ issue opmenu-breakglass clientAuth
-$ truststores && push_all_ssl && trust_all && push_ad && push_jump
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump && push_repo
 $ restart_all
 $ served          # 簽發者應全部是新 CA
 ```
 
-實測:4 張憑證都由新 CA(`PoC Internal CA 202610170944`)簽發,16 個端點全部出示新 CA 的憑證;REST 0 失敗。SCRAM 負載這一段沒有量到(producer 未寫入任何訊息,附錄 A.3.2 註)。
+實測:4 張憑證都由新 CA(`PoC Internal CA 202610170944`)簽發,16 個端點全部出示新 CA 的憑證;REST 0 失敗。SCRAM 負載這一段當時沒有量到(附錄 A.3.2 註);2026-10-18 重做:1,383 筆 0 遺失、REST 250 次 0 失敗(附錄 A.6)。
 
 `app-legacy-billing.p12` 這時要交給應用程式團隊;舊憑證(舊 CA 簽的)在 retire 之前仍然有效,給對方切換的時間。
 
@@ -4927,7 +5155,7 @@ $ served | grep -vc "<新 CA 的名稱>"                       # 必須是 0
 ```bash
 $ cd $PKI && arch=archive/ca-old-$(date +%Y%m%d-%H%M%S); install -d -m 0700 $arch && mv ca-old.crt $arch/
 $ cat ca.crt > ca.pem && chmod 0644 ca.pem                 # bundle:只剩新 CA
-$ truststores && push_all_ssl && trust_all && push_ad && push_jump
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump && push_repo
 $ restart_all
 ```
 
@@ -4950,91 +5178,264 @@ REST with the NEW app certificate:    200
 
 ## 9.4 從內部 CA 遷移到銀行 CA(不停機)
 
-和 9.3 一樣分三個階段,差別是新 CA 由銀行持有:我們只拿到 root,新憑證要經過「申請 → 銀行簽 → 匯入」(3.4.9)。以下是 cpctl 的做法(實測紀錄見附錄 A.4);手動時每一步對應 3.4.9 的指令加上 9.1 的 `truststores`、`push_all_ssl`、`trust_all`、`push_ad`、`push_jump`、`restart_all`。
+和 9.3 一樣分三個階段,差別是新 CA 由銀行持有:我們只拿到銀行 root,新憑證要經過「產生申請 → 銀行簽 → 檢查後匯入」(3.4.9)。每個階段都在 ops 主機以 cpadmin 執行,用到 9.1 的共用函式;其中銀行專用的兩個:
 
-| 階段 | 指令 | 結果 | 滾動重啟 |
+| 函式 | 做什麼 | 對應章節 |
+|---|---|---|
+| `request <名稱> <EKU> [SAN]` | 新私鑰放 `pending/`(不離開 ops 主機),CSR 放 `requests/` | 3.4.9.2 |
+| `import_signed <名稱> <EKU> [SAN]` | 檢查 `incoming/<名稱>.crt`(私鑰配對、CN、不是 CA、SAN、EKU、效期、鏈到 `trust/` 的 root),全部通過才換上 `.key/.crt/.p12`;任何一項不過就印 `REJECTED` 並且什麼都不換 | 3.4.9.3 |
+
+| 階段 | `ca.pem`(信任 bundle)的內容 | 憑證由誰簽 | 滾動重啟 |
 |---|---|---|---|
-| 1 add | `cpctl certs trust add bank-root-g1.pem` | bundle = 內部 CA + 銀行 root,所有節點同時信任兩者 | 是 |
-| 2 switch | `PKI_MODE=external`;`cpctl certs rotate --cert all` 兩次 | 4 張憑證換成銀行簽的(leaf + 中繼) | 是(第 2 次) |
-| 3 retire | `cpctl certs trust remove internal` | bundle 只剩銀行 root;內部 CA 私鑰移到 `archive/` | 是 |
+| 開始 | 內部 CA | 內部 CA | — |
+| 1 add | 內部 CA + 銀行 root | 內部 CA | 是 |
+| 2 switch | 內部 CA + 銀行 root | **銀行** | 是 |
+| 3 retire | 銀行 root | 銀行 | 是 |
 
-### 9.4.1 第 1 階段 add:信任銀行 root
+### 9.4.1 第 1 階段 add:所有人同時信任內部 CA 與銀行 root
 
 ```bash
-# 銀行交付 root(PoC:Windows 端 bash windows/bank-ca.sh deliver-root)
-$ openssl x509 -in ~/bank-root-g1.pem -noout -fingerprint -sha256     # 與銀行另行公布的指紋比對
-$ cpctl certs trust add ~/bank-root-g1.pem --name bank-root-g1
+$ . ~/rotate-lib.sh && cd $PKI
+# 銀行交付的 root:先核對,再放進 trust/(只放 root,不放中繼)
+$ openssl x509 -in ~/bank-root-g1.pem -noout -subject -fingerprint -sha256 -ext basicConstraints
+subject=CN=PoC Bank Root CA G1, O=PoC Bank, C=TW
+sha256 Fingerprint=B4:F5:04:CA:...            ← 與銀行從另一個管道公布的指紋逐字比對
+X509v3 Basic Constraints: critical  CA:TRUE
+$ install -d -m 0750 trust
+$ openssl x509 -in ~/bank-root-g1.pem -out trust/bank-root-g1.pem && chmod 0644 trust/bank-root-g1.pem
+$ cat ca.crt trust/*.pem > ca.pem && chmod 0644 ca.pem      # bundle:內部 CA + 銀行 root
+$ grep -c 'BEGIN CERTIFICATE' ca.pem                         # 2
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump && push_repo
+$ restart_all
 ```
 
-**驗證**:每台 OS trust anchor 與 JDK cacerts 都是 2 張 CA;端點仍出示內部 CA 簽的憑證。
+**驗證**:同 9.3.1 —— 各服務的 truststore 與每台的 OS / JDK 都是 2 張 CA;`served` 仍然出示內部 CA 簽的憑證(這個階段不換憑證)。
 
-```
-ops01   OS-anchors=2 JDK-cp-ca=2
-kc01    OS-anchors=2 JDK-cp-ca=2      (kb01、rest01、c3-01、jump01 相同)
-```
+實測(手動,cp-man,附錄 A.6):12 台都是 2 張 CA,repo 11 台正常;負載 1,415 筆 0 遺失、REST 255 次 0 失敗。
 
->! **應用程式要在第 2 階段之前換上含銀行 root 的 truststore**(直連 Kafka 的 SCRAM app、REST 的 legacy app 都一樣),否則換憑證之後它們不認得伺服器。
+>! **應用程式要在這個階段換上含銀行 root 的 truststore 並重啟**(直連 Kafka 的 SCRAM app、REST 的 legacy app 都一樣)。Java 只在啟動時載入 truststore:沒有重啟的程式,在第 2 階段 broker 改出示銀行憑證後就連不上(`PKIX path building failed`)。實測時就發生過(附錄 A.4.2)。
 
 ### 9.4.2 第 2 階段 switch:改由銀行簽發
 
 ```bash
-$ sed -i 's/^PKI_MODE=internal$/PKI_MODE=external/' /opt/cp-installer/conf/inventory.env
-$ cpctl certs rotate --cert all          # 第 1 次:產生 4 份申請,服務不受影響
-WARN requests for the bank: app-legacy-billing cp-server kafka-internal opmenu-breakglass
-WARN hand over .../requests/<name>.csr + <name>.req.txt; put each answer into .../incoming/<name>.crt
-# 把 requests/ 交給銀行;銀行的回覆放進 incoming/(PoC:bash windows/bank-ca.sh exchange)
-$ cpctl certs rotate --cert all          # 第 2 次:檢查、匯入、派送、滾動重啟、確認端點
-imported kafka-internal: serial 677D...5AF0, issuer CN = PoC Bank Issuing CA G1-01, ..., until 2027-10-17
-imported cp-server: serial 677D...5AEF, ...
+$ . ~/rotate-lib.sh
+# 1) 產生 4 份申請(私鑰留在 pending/;SAN 與 EKU 同 3.4.4–3.4.6)
+$ request kafka-internal serverAuth,clientAuth $SANS_INTERNAL
+$ request cp-server serverAuth,clientAuth $SANS_SERVER
+$ request app-legacy-billing clientAuth
+$ request opmenu-breakglass clientAuth
+$ ls $PKI/requests                       # 把這些 .csr 連同申請單交給銀行;私鑰不交出去
+# 2) 銀行簽回後,每張放成 $PKI/incoming/<名稱>.crt(PoC:Windows 端 bash windows/bank-ca.sh exchange)
+# 3) 檢查並匯入;任何一張 REJECTED 就停,請銀行重簽
+$ import_signed kafka-internal serverAuth,clientAuth $SANS_INTERNAL
+$ import_signed cp-server serverAuth,clientAuth $SANS_SERVER
+$ import_signed app-legacy-billing clientAuth
+$ import_signed opmenu-breakglass clientAuth
+# 4) 派送(信任 bundle 不變,只有 keystore 與憑證換新)、滾動重啟
+$ push_all_ssl && push_ad && push_jump && push_repo
+$ restart_all
+$ served                                 # 簽發者都應是 PoC Bank Issuing CA G1-01
 ```
 
-**拒絕的例子**(實測時故意讓銀行只簽 serverAuth):
+**拒絕的例子**(故意讓銀行只簽 serverAuth):
 
 ```
-[ERROR] certificate kafka-internal REJECTED: extended key usage lacks clientAuth (received: TLS Web Server
-Authentication) - nothing was installed; ask the bank for a corrected certificate (request sheet: requests/kafka-internal.req.txt)
-rc=4
+REJECTED kafka-internal: extended key usage lacks clientAuth (TLS Web Server Authentication) - nothing installed
 ```
 
-這時什麼都沒換:服務繼續用原本的憑證,申請也還開著。銀行重新簽發、覆蓋 `incoming/` 後再跑一次即可。
+這時什麼都沒換:服務繼續用原本的憑證,`pending/` 的私鑰也還在。請銀行用同一份 CSR 重簽,覆蓋 `incoming/` 後再跑一次 `import_signed`。
 
-**驗證**:16 個端點都出示銀行簽的憑證,而且都送出 2 張(leaf + 中繼):
+**驗證**:每個 TLS 端點都要送出 2 張憑證(leaf + 中繼),否則只信任 root 的對方會驗證失敗:
 
+```bash
+$ for ep in kc01:9093 kb01:9092 kb01:8090 rest01:8082 c3-01:9021 c3-01:9090 ad01:636; do
+    printf '%-12s %s\n' $ep "$(openssl s_client -connect ${ep%:*}.poc.lab:${ep#*:} -showcerts </dev/null 2>/dev/null | grep -c 'BEGIN CERTIFICATE')"; done
+kc01:9093    2
+...
+c3-01:9090   2      ← Prometheus、LDAPS 直接讀 .crt,所以 .crt 必須是 leaf + 中繼(3.4.9.3)
+ad01:636     2
 ```
-endpoint     serial                                     issuer                      chain
-kc01:9093    677D50D9C8267D199AB1F4CAA532A49D09E65AF0   PoC Bank Issuing CA G1-01   2
-kb01:8090    677D50D9C8267D199AB1F4CAA532A49D09E65AEF   PoC Bank Issuing CA G1-01   2
-c3-01:9090   677D50D9C8267D199AB1F4CAA532A49D09E65AEF   PoC Bank Issuing CA G1-01   2    ← 原本 1
-ad01:636     677D50D9C8267D199AB1F4CAA532A49D09E65AEF   PoC Bank Issuing CA G1-01   2    ← 原本 1
-...(16 個端點)
-```
 
-`app-legacy-billing.p12` 要交給應用程式團隊;舊憑證(內部 CA 簽的)在第 3 階段之前仍可使用。
+`app-legacy-billing.p12` 這時交給應用程式團隊;舊憑證(內部 CA 簽的)在第 3 階段之前仍可使用。
+
+實測(手動,cp-man,附錄 A.6):4 張憑證都由 `PoC Bank Issuing CA G2-01` 簽發、`.crt` 都是 2 張;16 個端點加上 repo 的 8443 都出示新憑證並送出 2 張。
+
+**對應 cpctl**:`PKI_MODE=external` 後 `cpctl certs rotate --cert all` 跑兩次(第 1 次產生申請,銀行簽回後第 2 次檢查、匯入、派送、滾動重啟)。
 
 ### 9.4.3 第 3 階段 retire:移除內部 CA
 
+**前提**(任何一項不成立就不要做):
+
 ```bash
-$ cpctl certs trust remove internal
+$ . ~/rotate-lib.sh && cd $PKI
+$ for n in kafka-internal cp-server app-legacy-billing opmenu-breakglass; do
+    openssl verify -partial_chain -CAfile <(cat trust/*.pem) -untrusted $n.crt $n.crt; done     # 4 行 OK
+$ served | grep -c 'Internal CA'          # 0:所有端點都已出示銀行簽的憑證
+$ ls pending incoming                      # 都是空的:沒有還在等銀行的申請
+# 所有使用 client 憑證的應用程式都已換上銀行簽的憑證
 ```
 
-cpctl 先確認:每張受管憑證都鏈到剩下的信任錨點、沒有未完成的申請、各服務出示的是 ops01 上的現行憑證;任何一項不成立就停止。通過後內部 CA(`ca.crt`、`ca.key`)移到 `archive/`,bundle 只剩銀行 root,再滾動重啟一次。
+```bash
+$ arch=archive/ca-internal-$(date +%Y%m%d-%H%M%S); install -d -m 0700 $arch
+$ mv ca.crt ca.key ca.srl $arch/ 2>/dev/null; ls $arch      # 內部 CA 私鑰從此只在 archive/
+$ cat trust/*.pem > ca.pem && chmod 0644 ca.pem               # bundle:只剩銀行 root
+$ truststores && push_all_ssl && trust_all && push_ad && push_jump && push_repo
+$ restart_all
+```
 
-**驗證**:見附錄 A.4.2(每台只剩 1 張 CA;內部 CA 簽的舊 app 憑證被 TLS 拒絕,銀行簽的 200)。
+**驗證**:每台 OS / JDK 只剩 1 張 CA;內部 CA 簽的舊 app 憑證被 TLS 拒絕,銀行簽的可以:
 
->! `ca.key` 這時只在 `archive/`。遷移完成、觀察期過後,依銀行規定離線保存或銷毀。
+```bash
+$ old=$(ls -d $PKI/archive/*-app-legacy-billing | tail -1)
+$ curl -s -o /dev/null -w '%{http_code} exit=' --cacert $PKI/ca.pem --cert $old/app-legacy-billing.crt --key $old/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters; echo $?
+000 exit=56
+$ curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters
+200
+```
+
+實測(手動,cp-man,附錄 A.6):12 台只剩銀行 root;舊 app 憑證 exit 56、銀行簽的 200;switch 加 retire 期間負載 3,015 筆 0 遺失、REST 542 次 0 失敗。
+
+>! 內部 CA 的私鑰這時只在 `archive/`。觀察期過後,依銀行規定離線保存或銷毀。之後 `issue`(3.4.3)不能再用 —— 所有憑證都改走 `request` + `import_signed`。
+
+**對應 cpctl**:`cpctl certs trust remove internal`(先做上述前提檢查,通過才移除並滾動重啟)。
 
 ## 9.5 銀行 CA 下的輪替
 
-| 情境 | 做法 |
-|---|---|
-| 憑證到期(每年) | `cpctl certs rotate`(預設 kafka-internal、cp-server)跑兩次:第 1 次產生申請,銀行簽回後第 2 次匯入並滾動重啟。`cpctl certs status` 會在到期前 `PKI_RENEW_BEFORE_DAYS` 天開始警告 |
-| SAN 改變(增減主機) | 同上;cpctl 比對 SAN 不符時會自動產生申請 |
-| 銀行中繼 CA 換新、root 不變 | 只需重簽 leaf(`rotate --cert all`),信任錨點不變 |
-| 銀行換 root | 三階段:`certs trust add <新 root>` → `certs rotate --cert all` 兩次 → `certs trust remove <舊 root>` |
+銀行模式下我們沒有 CA 私鑰,所以 9.2 的 `issue` 與 9.3 的 CA 輪替都不能用,改成下表的做法。每一列都在持續負載下做(9.2 的 `load.sh`)。
 
-- 銀行 CA 模式下 `cpctl certs rotate-ca` 不能用(我們沒有 CA 私鑰),會提示改用上表的指令。
-- 申請開著的期間,`cpctl install` 照常可跑:有可用的舊憑證就繼續用、只發警告;只有「沒有可用憑證」(首次安裝、已過期)才會停在 03。
-- PoC 模擬銀行換 root:`bash windows/bank-ca.sh new-generation G2`、`deliver-root G2`,之後的 `exchange` 都由 G2 簽發。
+| 情境 | 手動做法 | 對應 cpctl |
+|---|---|---|
+| 憑證到期(每年)、懷疑私鑰外洩 | `request` → 銀行簽 → `import_signed` → `push_all_ssl && push_ad && push_jump && push_repo` → `restart_all` → `served`(同 9.4.2,只做要換的那幾張) | `cpctl certs rotate` 跑兩次 |
+| SAN 改變(增減主機) | 同上,`$SANS_INTERNAL` / `$SANS_SERVER` 用新的主機清單 | 同上(cpctl 比對 SAN 不符會自動產生申請) |
+| 銀行中繼 CA 換新、root 不變 | 只需重簽 leaf(同第 1 列);`trust/` 不變 | `cpctl certs rotate --cert all` |
+| 銀行換 root | 三階段:新 root 放進 `trust/`、`cat trust/*.pem > ca.pem`(同 9.4.1,這時有新舊兩個 root)→ 4 張全部 `request` / `import_signed`(同 9.4.2)→ 舊 root 移到 `archive/`、`cat trust/*.pem > ca.pem`(同 9.4.3) | `certs trust add <新 root>` → `certs rotate --cert all` → `certs trust remove <舊 root>` |
+
+- 到期提醒:`openssl x509 -enddate -noout -in $PKI/<名稱>.crt`;到期前 30 天(`PKI_RENEW_BEFORE_DAYS`)就要送申請,銀行的簽發時間要算進去(對應 `cpctl certs status`)。
+- 銀行換 root 時,應用程式同樣要在第 1 階段之後換上含新 root 的 truststore 並重啟(9.4.1 的警告)。
+- PoC 模擬銀行換 root:Windows 端 `bash windows/bank-ca.sh new-generation G2`、`deliver-root G2`,之後的 `exchange` 都由 G2 簽發。
+
+# 10. 日常維運
+
+本章在 ops 主機以 cpadmin 執行，環境變數同 5.1：`$B`（broker INTERNAL 9092 清單）、`$CFG`（`kafka-internal` 憑證的 admin 設定）、`$CB`（controller 9093 清單）、`$P=/var/lib/cp-installer/pki`。
+
+## 10.1 健康檢查與常見故障
+
+每天（或告警時）照下表依序看；任何一項不對，先看「常見故障」再動手。
+
+| 項目 | 手動指令 | 正常 |
+|---|---|---|
+| 服務 | `ssh <host> systemctl is-active confluent-server`（REST：`confluent-kafka-rest`；c3-01：`prometheus alertmanager confluent-control-center`） | `active` |
+| 磁碟 | `ssh <host> sudo df -P /var/lib/kafka/data /var/log/kafka`（資料目錄是 cp-kafka 的 0750，不加 sudo 會 Permission denied） | 使用率 < 75%（> 85% 要立即處理） |
+| quorum | `kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --replication` | 有一個 Leader；voter 的 Lag 接近 0 |
+| 離線 partition | `kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe --unavailable-partitions` | 沒有輸出 |
+| 低於 min ISR | `kafka-topics ... --describe --under-min-isr-partitions` | 沒有輸出（有的話 `acks=all` 的 producer 會失敗） |
+| URP | `kafka-topics ... --describe --under-replicated-partitions` | 沒有輸出 |
+| Self-Balancing | `kafka-rebalance-cluster --bootstrap-server "$B" --command-config "$CFG" --status` | `Balancer status: ENABLED` |
+| MDS / AD | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem -K ~/svc-cpctl.netrc-curl https://kb01.poc.lab:8090/security/1.0/authenticate` | `200`（MDS 正常、AD bind 與 LDAPS 正常） |
+| REST / C3 | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem --cert $P/app-legacy-billing.crt --key $P/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters`；`curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem https://c3.poc.lab:9021/` | `200` |
+| 憑證效期 | `for n in kafka-internal cp-server app-legacy-billing opmenu-breakglass; do openssl x509 -in $P/$n.crt -noout -enddate; done` | 都在 30 天以後（銀行簽發要提前送件） |
+| 端點出示的憑證 | 9.1 的 `served` | 序號與 `$P` 下的檔案相同 |
+| license | 5.4 的 license 檢查 | 未過期；剩餘天數充足 |
+
+`~/svc-cpctl.netrc-curl`（0600）內容一行 `user = "svc-cpctl:<password>"`，讓密碼不出現在指令列。
+
+**常見故障**（服務起不來時先看 `sudo journalctl -u <unit> -n 200 --no-pager`）：
+
+| 記錄裡的關鍵字 | 原因 | 處理 |
+|---|---|---|
+| `No space left on device` | 資料或 log 磁碟滿 | 先確認是哪個 topic 長大（`kafka-log-dirs --describe`），調整保留或擴充磁碟；不要手動刪 partition 目錄 |
+| `Address already in use` | 埠被其他程序佔用（或上一個程序還沒結束） | `sudo ss -ltnp \| grep <port>` 找出程序 |
+| `keystore password was incorrect`、`Keystore was tampered` | `.p12` 與設定裡的密碼不一致 | 換 keystore 後要同步密碼；Secret Protection 的設定要重新加密（3.0.5） |
+| `PKIX path building failed`、`certificate_unknown` | 對方的憑證鏈不到本機 truststore | CA 輪替漏了步驟，或用戶端沒換 truststore（9.3、9.4.1） |
+| `Invalid cluster.id`、`meta.properties` | 資料目錄是別的叢集格式化的 | `sudo -u cp-kafka kafka-storage info -c /etc/confluent/kafka/server.properties` 確認；不要重新格式化有資料的節點 |
+| `securepass`、`master key` | Secret Protection 的 master key 沒有傳給服務 | 檢查 `/etc/confluent/kafka/service.env`（0600）與 systemd drop-in 的 `EnvironmentFile` |
+| `LoginException ... retrieving token`（C3、REST） | 啟動時 MDS 還沒好 | 等 broker 的 MDS 起來後重啟該服務 |
+| `Connection refused` 到 636、LDAP 逾時 | AD / LDAPS 連不上 | 檢查 AD、防火牆、AD 憑證的 CA 是否在 truststore |
+| `OutOfMemoryError` | heap 不足 | 調整 systemd drop-in 的 `KAFKA_HEAP_OPTS`（`HEAP_<profile>_<role>`） |
+| SBC 一直 `STARTING`，`listener name ListenerName(PLAINTEXT)` | controller 沒設 `inter.broker.listener.name` | 4.2.3.1 / 4.2.3.3 注意事項 |
+
+**對應 cpctl**：`cpctl health`（唯讀；正常 rc=0、有警告 rc=2、有嚴重問題 rc=1；服務不是 active 時，會從 journal 比對上表給出可能原因）。
+
+**實測**：cp-man 手動逐項執行（附錄 A.6）；cp-poc 停掉 rest01 時 `cpctl health` 回報嚴重、rc=1（附錄 A.5）。
+
+## 10.2 broker 縮減（移除一台 broker）
+
+- **原理**：由 Self-Balancing 把該 broker 上的 partition replica 全部搬到其他 broker，搬完自動關閉該 broker。不需要手寫 reassignment 計畫。
+- **前提**：
+  - 移除後至少還有 3 台 broker（RF=3）。
+  - 沒有 URP。
+  - SBC 是 `ENABLED`（10.1）。
+  - 磁碟空間足夠接收搬過來的資料。
+- **手動指令**（以 kb04 = broker id 104 為例）：
+  ```bash
+  # 1) 目前這台有多少 replica
+  kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe | grep -c 'Replicas:.*\b104\b'
+  # 2) 交給 Self-Balancing：搬走、然後關閉 broker 104
+  kafka-remove-brokers --bootstrap-server "$B" --command-config "$CFG" --delete --broker-id 104
+  # 3) 追蹤進度，直到搬移與關閉都是完成狀態
+  kafka-remove-brokers --bootstrap-server "$B" --command-config "$CFG" --describe
+  # 4) broker 104 已經沒有任何 replica、也不在 broker 清單
+  kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe | grep -c 'Replicas:.*\b104\b'   # 0
+  kafka-broker-api-versions --bootstrap-server "$B" --command-config "$CFG" | grep -c '(id: 104 '     # 0
+  # 5) 不讓它開機後再起來
+  ssh kb04.poc.lab 'sudo systemctl stop confluent-server; sudo systemctl disable confluent-server'
+  ```
+- **之後**：
+  - 把 kb04 從 broker 清單拿掉（各元件的 bootstrap 清單：REST Proxy、C3、OP menu、應用程式設定）。
+  - 憑證的 SAN 可以保留，下次輪替時再整理。
+  - 這台的資料目錄在重新加入前要清空（10.3）。
+- **驗證**：`kafka-topics ... --describe --under-replicated-partitions` 沒有輸出；持續負載 0 遺失（9.2 的 `load.sh`）。
+- **對應 cpctl**：`cpctl broker remove --host kb04 --yes`（含上述前提檢查與等待；完成後提示修改 `HOSTS_broker` 並重跑 `cpctl install`）。
+- **實測**：持續負載下 0 遺失、REST 0 失敗 —— 手動（cp-man）9,974 筆 / 1,830 次（搬移約 13 分鐘），cpctl（cp-poc）6,795 筆 / 1,235 次（約 2 分鐘）；附錄 A.5、A.6。
+
+## 10.3 broker 擴充（加入一台 broker）
+
+- **前提**：
+  - 新主機做完 3.1–3.3：OS 基線、套件、信任 bundle。
+  - 新主機在 `cp-server`、`kafka-internal` 的 SAN 裡。**新的主機名稱要先重簽憑證**：內部 CA 用 9.2，銀行 CA 用 9.5。
+  - 決定好 node id 與 rack。
+- **手動指令**（以重新加入 kb04 為例；全新的主機只做第 2 步以後）：
+  ```bash
+  # 1) 曾經是叢集成員的主機：清空舊資料（舊的 replica 不能回來）
+  ssh kb04.poc.lab 'sudo systemctl stop confluent-server; sudo find /var/lib/kafka/data -mindepth 1 -delete'
+  # 2) 設定檔同 4.2（node.id=104、broker.rack=rack-b），以 --no-initial-controllers 格式化（4.3），啟動（4.4）
+  #    格式化同 4.3.3：Secret Protection 的 master key 從 root 才能讀的 service.env 經環境變數傳給 kafka-storage
+  ssh kb04.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+    /usr/bin/kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers\""
+  ssh kb04.poc.lab 'sudo systemctl enable --now confluent-server'
+  # 3) 註冊成功，然後 Self-Balancing 自動把 replica 搬上來（空的 broker 加入就會觸發）
+  kafka-broker-api-versions --bootstrap-server "$B" --command-config "$CFG" | grep '(id: 104 '
+  kafka-rebalance-cluster --bootstrap-server "$B" --command-config "$CFG" --describe
+  kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe | grep -c 'Replicas:.*\b104\b'   # 逐漸 > 0
+  ```
+- **驗證**：broker 104 有 replica、沒有 URP、負載 0 遺失。
+- **對應 cpctl**：把主機加進 `HOSTS_broker`（含 `HOST_<h>_NODE_ID`、`_RACK`）後執行 `cpctl broker add --host kb04 [--wipe]`；它跑一次 `cpctl install` 收斂這台主機，並等 SBC 把資料搬上去。
+- **實測**：重新加入後 12 秒內註冊；SBC 把資料搬回，cp-poc 約 4 分鐘，cp-man 較慢（20 分鐘內 10–20 個 replica，仍在進行）。
+
+## 10.4 OS 修補（滾動，必要時重開機）
+
+- **原理**：一次只動一台，順序和閘門跟 rolling restart 相同。
+  - 順序：broker → controller（follower 先、leader 最後）→ REST（先從 LB 摘除）→ C3。
+  - Confluent 與 JDK 被 `dnf versionlock` 鎖住（3.3.1.3），所以 `dnf update` 只會更新 OS 套件。
+- **每台的手動指令**（kb01 為例）：
+  ```bash
+  # 0) 叢集健康（10.1：沒有 URP、quorum 正常）
+  ssh kb01.poc.lab 'sudo dnf versionlock list | grep -c confluent'      # 鎖住的套件數 > 0
+  ssh kb01.poc.lab 'sudo dnf -q check-update | wc -l'                   # 可更新的數量
+  ssh kb01.poc.lab 'sudo systemctl stop confluent-server'                # 正常關閉（leader 交出去）
+  ssh kb01.poc.lab 'sudo dnf -y update'
+  ssh kb01.poc.lab 'rpm -q --last kernel-core | head -1; uname -r'       # 新 kernel ≠ 執行中的 kernel → 需要重開
+  ssh kb01.poc.lab 'sudo systemctl reboot'                               # 需要時
+  # 等 ssh 回來、confluent-server 自動啟動（enabled）
+  # 1) 閘門：broker 重新註冊、沒有 URP，才換下一台（同 8.5）
+  ```
+  REST：先在 LB 把那台標成 `down` 並 reload（8.7），修補完再拿掉。controller：每台之後確認 lag 為 0；leader 放最後。
+- **不在範圍**：ops 主機自己（cpctl / 手冊指令都在這台執行）、LB、AD、堡壘機，各自另排維護窗口。
+- **驗證**：每台修補後 `rpm -q confluent-server` 版本不變；全程持續負載 0 遺失。
+- **對應 cpctl**：`cpctl os patch [--role broker|controller|rest|c3] [--host H] [--reboot] --yes`；不加 `--yes` 只列出每台可更新的套件，不做任何變更。容器（PoC）不能重開機，`--reboot` 只會重啟服務並提示。
+- **實測**：cpctl 全叢集（cp-poc）1,929 筆 0 遺失、REST 335 次 0 失敗；手動三台（cp-man）299 筆 0 遺失、REST 54 次 0 失敗；PoC 的 repo 沒有 OS 更新，容器不能重開機（附錄 A.5、A.6）。
 
 # 附錄 A. 手動驗證紀錄
 
@@ -5046,6 +5447,8 @@ cpctl 先確認:每張受管憑證都鏈到剩下的信任錨點、沒有未完�
 | A.2 單節點(2026-10-16) | 一台 controller 從裸機到加入既有叢集:rpm 一次、tar.gz 一次 | 備用節點 kc03,接到 cpctl 建好的叢集 |
 | A.3 升級與輪替(2026-10-16/17) | 第 8、9 章:8.2.4 → 8.3.2 升級(含回滾、finalize)、憑證輪替、CA 三階段輪替,全程持續負載 | 同 A.1 的環境 |
 | A.4 銀行 CA(2026-10-17) | 3.4.9、9.4、9.5:內部 CA 遷移到模擬銀行 CA、銀行換 root(G1 → G2),持續負載 | cp-poc,**用 cpctl** 執行(驗證 cpctl 的外部 CA 模式) |
+| A.5 維運強化(2026-10-18) | 5.1.7 配額、3.3.0 repo HTTPS、3.0.3 受限 sudo、第 10 章日常維運 | cp-poc,用 cpctl |
+| A.6 手動實測(2026-10-18) | 上一列各章 + 9.3 CA switch 重做 + 9.4 銀行 CA 遷移,照手冊手動 | cp-man,不用 cpctl |
 
 ## A.1 全程從零實測
 
@@ -5176,9 +5579,9 @@ ssh kc03.poc.lab "sudo rm -rf /opt/confluent /opt/java /opt/jmx-exporter /var/ca
 | 9.2、9.3.1、9.3.3 | 各一個 | 1,210、1,484、1,476 筆,序號都連續,**確認 0 遺失** |
 | 9.3.2 CA switch | **沒有** | 這段時間 topic 裡沒有任何訊息:producer 一筆都沒寫入。log 已被下一段覆蓋,無法確定原因;最可能是 producer 啟動時,操作機上的 `truststore.p12` 正在原地重建(先 `rm` 再匯入),JVM 讀到缺檔或只有部分 CA 的 truststore。truststore 的重建已改成建在旁邊再改名(3.4.2、D.7、cpctl 同步修正) |
 
-所以 9.3.2 這一段只證明了 REST(268 次 0 失敗),SCRAM 直連的不中斷沒有被證明。以同樣三階段做的銀行 root 輪替(A.4,switch + retire 4,530 筆 0 遺失)可作為佐證,但那是 cpctl 而不是本章的手動程序。
+所以 9.3.2 這一段只證明了 REST(268 次 0 失敗),SCRAM 直連的不中斷沒有被證明。以同樣三階段做的銀行 root 輪替(A.4,switch + retire 4,530 筆 0 遺失)可作為佐證,但那是 cpctl 而不是本章的手動程序。 **2026-10-18 已重做(附錄 A.6):switch 1,383 筆 0 遺失、REST 250 次 0 失敗;同時也重做 add、retire,都是 0 遺失。**
 
-**REST 計數**:各段 REST 約每 1.1 秒呼叫一次,次數應與演練時間相符。9.2、9.3.1–9.3.3 都相符(4–5 分鐘、214–268 次);升級約 12 分鐘卻只有 91 次,表示 REST 迴圈中途就結束了 —— 舊版 load.sh 在第一次失敗的呼叫時會直接結束(A.4.3 #3),所以升級期間「REST 0 失敗」沒有被證明,很可能至少有一次失敗。
+**REST 計數**:各段 REST 約每 1.1 秒呼叫一次,次數應與演練時間相符。9.2、9.3.1–9.3.3 都相符(4–5 分鐘、214–268 次);升級約 12 分鐘卻只有 91 次,表示 REST 迴圈中途就結束了 —— 舊版 load.sh 在第一次失敗的呼叫時會直接結束(A.4.3 #3),所以升級期間「REST 0 失敗」沒有被證明,很可能至少有一次失敗。 升級沒有重跑;它的 REST 步驟與輪替時用的摘除程序相同,2026-10-18 手動輪替的 5 個階段 REST 都是 0 失敗且次數與時間相符(附錄 A.6)。
 
 ### A.3.3 發現並已修進手冊的問題
 
@@ -5225,6 +5628,69 @@ ssh kc03.poc.lab "sudo rm -rf /opt/confluent /opt/java /opt/jmx-exporter /var/ca
 | 5 | Prometheus 9090、LDAPS 636 只送 leaf | 這兩個服務直接讀 `.crt`;內部 CA 模式下對方本來就信任簽發者 | 銀行 CA 模式下 `.crt` = leaf + 中繼(3.4.9.3) |
 | 6 | 同一環境第二次 `cpctl certs rotate` 不會重簽 | 「本次已重簽」的標記檔留在 `$STATE_DIR/run`,從未清除 | 標記檔加上 run id |
 | 7 | 報告用的 consumer 被拒(`GroupAuthorizationException`) | app-orders 的 RBAC 只允許 `orders-*` 的 consumer group | 核對用的 consumer 一律用 `orders-load-report-*` |
+
+## A.5 維運強化實測（2026-10-18，cp-poc，cpctl）
+
+client 配額、repo HTTPS、受限 sudo、日常維運指令，都在 cp-poc 以 cpctl 實測。手動程序（5.1.7、3.3.0、3.0.3、第 10 章）另在 cp-man 照手冊執行，見 A.6。
+
+| 項目 | 做法 | 結果 |
+|---|---|---|
+| client 配額（5.1.7） | step 08 套用 3 個 app 的配額；app-orders 以 10 KB 訊息持續壓測 | 一開始突發 14.8 MB/s，之後穩定 **4.99 MB/s**（= 5 MiB/s 上限），`produce-throttle-time-avg` 26 ms；`cpctl verify` 新增 3 項配額檢查通過 |
+| repo HTTPS（3.3.0） | 離線引進 mod_ssl（11 個新 RPM，經驗證閘門）→ `cpctl install` | 8443 以 cp-server（G2-01 簽）提供三個 repo；HTTP 8080 回 403；11 台節點的 repo 檔都 pin `cp-repo-ca.pem`；之後完整安裝 changed=0 |
+| 受限 sudo（3.0.3） | `cpctl agent install --restrict`，先學習模式再強制 | 15 台 `sudo -l` 只剩 `cpnode ""`、`sudo id` 被拒；學習模式收集到 11 類路徑補進允許清單；強制模式下 `install --force` ok=1071、changed=0、failed=0、無拒絕；`cpctl verify` 68 項通過；node 程式碼一改，cpctl 就以版本不符停下，管理員安裝新 agent 後恢復 |
+| Self-Balancing | 檢查 `kafka-rebalance-cluster --status` | **發現 SBC 從未啟動**（controller 缺 `inter.broker.listener.name`）；修正後 `STARTING → RUNNING`，`cpctl verify` 新增檢查 |
+| broker 縮減 / 擴充（10.2、10.3） | 持續負載下 `cpctl broker remove --host kb04 --yes`，再 `cpctl broker add --host kb04 --wipe` | SBC 約 2 分鐘搬走 kb04 的 120 個 replica 並關閉它；加回後約 4 分鐘把資料搬回；**6,795 筆 0 遺失、REST 1,235 次 0 失敗** |
+| OS 修補（10.4） | 持續負載下 `cpctl os patch --reboot --yes`（全叢集） | 順序 kb01–kb04 → kc02、kc04 → kc01（leader）→ rest01、rest02（各先摘除）→ c3-01；**1,929 筆 0 遺失、REST 335 次 0 失敗**（PoC repo 沒有 OS 更新；容器不能重開機，只重啟服務） |
+| 健康檢查（10.1） | 停掉 rest01 的 REST Proxy | `cpctl health` 回報 service failed、REST 無回應、端點沒有出示憑證，rc=1；恢復後 rc=2（只剩試用 license 警告） |
+
+**發現並已修正的問題**：
+
+| # | 現象 | 原因 | 修正 |
+|---|---|---|---|
+| 1 | Self-Balancing 一直 `STARTING`（`kafka-remove-brokers` 回 `BalancerOfflineException`） | KRaft 下 SBC 在 controller 上，以 `inter.broker.listener.name`（預設 PLAINTEXT）找 broker 位址 | controller 設 `inter.broker.listener.name=INTERNAL` 與 `INTERNAL:SSL`（4.2.3.1、4.2.3.3） |
+| 2 | 第一次 HTTPS 設定失敗後，重跑仍沒有提供 HTTPS | 檔案已在上一次寫入，比對「沒變」就不重啟 httpd | 除了檔案有變，實際沒有在服務時也重啟（以實際狀態為準） |
+| 3 | httpd 設定測試失敗 | 寫成 `httpd -t -q`（`-q` 是 nginx 的選項） | 改為 `httpd -t` |
+| 4 | broker 已移除，等待卻逾時 | `kafka-remove-brokers --describe` 的格式是 `Broker 104 removal status - SUCCESS.` 加上子任務 `COMPLETED` | 依該 broker 的整段判斷（含單元測試） |
+| 5 | `cpctl health` 有嚴重問題時 rc 仍是 2 | 後面的警告把 rc 從 1 蓋成 2 | 嚴重優先 |
+| 6 | 受限模式下 node 函式自己產生的暫存檔被擋 | 允許清單只接受呼叫者的 `/tmp/cpctl.*` | 另接受 root 擁有的 `/tmp/cpnode.*`（呼叫者無法產生 root 擁有的檔案） |
+
+## A.6 手動實測（2026-10-18，cp-man，不用 cpctl）
+
+照本手冊的指令在 cp-man 逐條執行（`transcripts/05-ops02-2026-10-18.log`，指令檔 `cmd-10*.txt`）。範圍：
+- 今天新增或修改的章節：4.2.3.1 / 4.2.3.3 SBC 補正、5.1.7、3.3.0、3.3.1.1、3.0.3、9.4、第 10 章。
+- 重做 A.3 中沒有證明的 9.3 內部 CA switch。
+- 負載工具都是修正後的版本（只計算本次寫入的訊息、REST 失敗會被計數）。
+
+| 演練 | 重點 | 負載結果 |
+|---|---|---|
+| SBC 補正（4.2.3.3） | cp-man 也是 `STARTING`；加設定（注意 `key = value` 格式）並逐台重啟 controller 後 `ENABLED` | — |
+| client 配額（5.1.7） | 3 個 app 設定完成；壓測從 15.0 MB/s 降到 **4.99 MB/s**，throttle 平均 25 ms | — |
+| repo HTTPS（3.3.0、3.3.1.1） | 照 2.10–2.14 引進 mod_ssl（102 檔 sha 相符、簽章 0 錯誤、發佈 11 個）；8443 提供服務；11 台節點 `makecache` 全部成功；8080 被防火牆關閉；換成別的 CA 檔就失敗（sslcacert 生效） | — |
+| 9.3 內部 CA 輪替：add | 12 台 OS / JDK 都是 2 張 CA；repo 11 台正常 | 1,525 筆 0 遺失；REST 271 次 0 失敗 |
+| 9.3 內部 CA 輪替：**switch** | 4 張憑證改由新 CA 簽發；repo 憑證一起換新 | **1,383 筆 0 遺失；REST 250 次 0 失敗**（A.3 中沒證明的那一段） |
+| 9.3 內部 CA 輪替：retire | 每台只剩 1 張 CA；舊 CA 簽的 app 憑證被拒（exit 56） | 1,501 筆 0 遺失；REST 270 次 0 失敗 |
+| 9.4 遷移到銀行 CA：add | 12 台都信任內部 CA + 銀行 root G2 | 1,415 筆 0 遺失；REST 255 次 0 失敗 |
+| 9.4 拒絕的例子 | 銀行只簽 serverAuth → `REJECTED ... lacks clientAuth`，什麼都沒換、pending 私鑰保留 | — |
+| 9.4 switch + retire | 4 張銀行憑證（`.crt` 皆 2 張）；16 個端點與 repo 8443 都出示 G2-01 簽的憑證且送 2 張；retire 後只剩銀行 root；內部 CA 簽的舊 app 憑證被拒（exit 56）、銀行簽的 200 | **3,015 筆 0 遺失；REST 542 次 0 失敗** |
+| broker 縮減 / 擴充（10.2、10.3） | `kafka-remove-brokers` 約 13 分鐘搬完 131 個 replica 並關閉 kb04；重新格式化加入，12 秒註冊；SBC 開始把資料搬回（20 分鐘內 10–20 個，仍在進行） | **9,974 筆 0 遺失；REST 1,830 次 0 失敗** |
+| OS 修補（10.4） | broker kb02、follower kc01、rest01（先摘除）各一台；versionlock 鎖住 9 個套件，版本不變 | 299 筆 0 遺失；REST 54 次 0 失敗 |
+| 健康檢查（10.1） | 表中各項逐一執行；停掉 rest01 時 journal 可看到停止原因 | — |
+| 受限 sudo（3.0.3） | kb03：依手冊用 `cat` 組出的 agent，版本與 `cpctl agent build` 相同；`sudo -l` 只剩 agent；`sudo id`、刪 `/etc/hosts`、寫入給 cpadmin 的 sudoers、`bash -c` 都被拒並記錄；之後恢復完整 sudo | — |
+
+**REST 在升級期間的不中斷**（A.3.2 註中沒證明的項目）：升級沒有重跑。但升級的 REST 步驟（8.8：先在 LB 標成 `down`、處理、再放回）和 9.1 `restart_all` 的 REST 部分是同一個程序。今天手動的 5 個輪替階段各用了一次，REST 都是 0 失敗，次數也和時間相符。
+
+**發現並已修正的問題**：
+
+| # | 現象 | 原因 | 修正 |
+|---|---|---|---|
+| 1 | 手動用 sed 改 controller 設定沒有作用 | Secret Protection 加密後的檔案是 `key = value`（等號兩邊有空白） | 4.2.3.3：比對要容許空白（附指令） |
+| 2 | 節點連 repo 8443 得到 `No route to host` | 照舊版 3.2 建的環境，防火牆只開 8080 | 3.3.0：開 8443、關 8080 |
+| 3 | 節點的 repo 檢查都「通過」，其實連不上 | `dnf repolist` 不下載 metadata | 3.3.1.1 改用 `dnf makecache`；cpctl verify 也改成從節點檢查 |
+| 4 | 「不帶 `--cacert` 應被拒」的預期不成立 | ops 主機在 3.4.8 已把 CA 放進 OS trust store | 3.3.0 改寫說明 |
+| 5 | repo 憑證在 CA 輪替後仍是舊的 | 9.1 的函式沒有處理 repo | 新增 `push_repo`，加入每個階段 |
+| 6 | 退役後用舊憑證測試卻得到 exit 58 | `import_signed` 歸檔時把舊憑證蓋成銀行的回覆 | 回覆另存為 `<名稱>.bank-answer.pem`；重測 exit 56 |
+| 7 | 10.3 的格式化指令在 Secret Protection 下會失敗 | 沒有傳 master key | 改用 4.3.3 的寫法 |
+| 8 | 10.1 的磁碟檢查 `Permission denied` | 資料目錄是 cp-kafka 的 0750 | 加 `sudo` |
 
 # 附錄 B. 只在實體主機才會生效的項目
 
@@ -5423,6 +5889,7 @@ start() {
   kafka-topics --bootstrap-server "${BOOT%%,*}" --command-config "$CFG" --create --if-not-exists \
     --topic "$TOPIC" --partitions 6 --replication-factor 3 --config min.insync.replicas=2 >/dev/null 2>&1 || true
   : >"$DIR/produced.seq"
+  date +%s%3N >"$DIR/start.ms"   # the report only counts messages written after this
   : >"$DIR/rest.log"   # per run: the report must not count earlier runs (or a torn write from an unclean shutdown)
   (
     i=0
@@ -5458,13 +5925,20 @@ stop() {
 }
 
 report() {
-  local produced consumed missing
+  local produced consumed missing since
+  [[ -f $DIR/running ]] && { echo "stop the load first (the report reads until the topic is idle for 30 s)"; exit 1; }
   produced=$(wc -l <"$DIR/produced.seq")
+  # sequence numbers restart at 1 on every start and the topic keeps earlier runs: count only messages
+  # written since this run started (record timestamp), otherwise old messages would hide lost ones
+  since=$(cat "$DIR/start.ms" 2>/dev/null || echo 0)
   kafka-console-consumer --bootstrap-server "$BOOT" --consumer.config "$CFG" --topic "$TOPIC" \
-    --group "orders-load-report-$$" --from-beginning --timeout-ms 30000 2>/dev/null | grep -E '^[0-9]+$' | sort -n -u >"$DIR/consumed.seq" || true
+    --group "orders-load-report-$$" --from-beginning --timeout-ms 30000 --property print.timestamp=true 2>/dev/null |
+    awk -F'\t' -v s="$since" '{t=$1; sub(/^CreateTime:/, "", t)} t >= s && $2 ~ /^[0-9]+$/ {print $2}' |
+    sort -n -u >"$DIR/consumed.seq" || true
   consumed=$(wc -l <"$DIR/consumed.seq")
   missing=$(comm -23 <(sort -u "$DIR/produced.seq") <(sort -u "$DIR/consumed.seq") | wc -l)
-  printf 'SCRAM producer : %s produced, %s consumed, %s missing\n' "$produced" "$consumed" "$missing"
+  printf 'SCRAM producer : %s produced, %s consumed (written since %s), %s missing\n' "$produced" "$consumed" \
+    "$(date -d "@$((since / 1000))" +%T)" "$missing"
   printf 'REST v3 via LB : %s ok, %s failed\n' "$(grep -c ' 200$' "$DIR/rest.log" || true)" "$(grep -vc ' 200$' "$DIR/rest.log" || true)"
   grep -v ' 200$' "$DIR/rest.log" | head -5 || true
 }
@@ -5506,6 +5980,52 @@ issue() {
 }
 SANS_INTERNAL=kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
 SANS_SERVER=ops02.poc.lab,ops02,ad01.poc.lab,ad01,lb01.poc.lab,lb01,kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,rest.poc.lab,c3.poc.lab,localhost
+
+# request <name> <EKU> [SANs]  (bank CA, 3.4.9.2): new key in pending/ (never leaves this host), CSR in requests/
+request() {
+  ( cd $PKI && umask 077 && install -d -m 0700 pending && install -d -m 0750 requests incoming
+    n=$1; ext=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$2")
+    [ -n "${3:-}" ] && ext+=(-addext "subjectAltName=$(tr ',' '\n' <<<"$3" | sort -u | sed 's/^/DNS:/' | paste -sd, -)")
+    openssl genrsa -out pending/$n.key 3072 2>/dev/null && chmod 0600 pending/$n.key
+    openssl req -new -key pending/$n.key -sha256 -subj "/CN=$n/OU=Confluent/O=PoC Bank/C=TW" "${ext[@]}" -out requests/$n.csr
+    echo "request $n: EKU=$2 SANs=$(openssl req -in requests/$n.csr -noout -text | grep -o 'DNS:' | wc -l) -> requests/$n.csr" )
+}
+
+# import_signed <name> <EKU> [SANs]  (bank CA, 3.4.9.3): checks incoming/<name>.crt; installs ONLY if every check passes
+import_signed() {
+  ( cd $PKI && umask 077
+    n=$1 eku=$2 want=$(tr ',' '\n' <<<"${3:-}" | sed '/^$/d' | sort -u | paste -sd, -)
+    w=$(mktemp -d); awk -v d="$w" '/BEGIN CERTIFICATE/ {k++} {print > (d "/c-" k ".pem")}' incoming/$n.crt
+    fail() { echo "REJECTED $n: $* - nothing installed"; rm -rf "$w"; exit 1; }
+    kp=$(openssl pkey -in pending/$n.key -pubout); leaf=
+    for f in "$w"/c-*.pem; do [ "$(openssl x509 -in $f -noout -pubkey)" = "$kp" ] && leaf=$f; done
+    [ -n "$leaf" ] || fail "no certificate in the file matches pending/$n.key"
+    cn=$(openssl x509 -in $leaf -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p')
+    [ "$cn" = "$n" ] || fail "CN is '$cn'"
+    [[ $(openssl x509 -in $leaf -noout -ext basicConstraints 2>/dev/null) == *CA:TRUE* ]] && fail "it is a CA certificate"
+    have=$(openssl x509 -in $leaf -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr ',' '\n' | sed 's/^ *DNS://; /^ *$/d' | sort -u | paste -sd, -)
+    [ "$have" = "$want" ] || fail "SAN [$have], requested [$want]"
+    e=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage 2>/dev/null | tail -n +2 | sed 's/^ *//')
+    [[ ,$eku, == *,serverAuth,* && $e != *"Server Authentication"* ]] && fail "extended key usage lacks serverAuth ($e)"
+    [[ ,$eku, == *,clientAuth,* && $e != *"Client Authentication"* ]] && fail "extended key usage lacks clientAuth ($e)"
+    openssl x509 -in $leaf -noout -checkend $((30 * 86400)) >/dev/null || fail "expires within 30 days"
+    cat $leaf > $w/chain.pem
+    for f in "$w"/c-*.pem; do
+      [ $f = $leaf ] && continue
+      [ "$(openssl x509 -in $f -noout -subject_hash)" = "$(openssl x509 -in $f -noout -issuer_hash)" ] && continue
+      cat $f >> $w/chain.pem
+    done
+    cat trust/*.pem > $w/roots.pem
+    openssl verify -partial_chain -CAfile $w/roots.pem -untrusted $w/chain.pem $w/chain.pem >/dev/null || fail "does not chain to a root in trust/ (intermediate missing?)"
+    arch=archive/$(date +%Y%m%d-%H%M%S)-$n; install -d -m 0700 $arch
+    # previous files keep their names; the bank answer and the CSR get their own (an answer named $n.crt would
+    # overwrite the archived previous certificate)
+    cp -p $n.crt $n.key $n.p12 $n.chain.pem $arch/ 2>/dev/null; mv incoming/$n.crt $arch/$n.bank-answer.pem; mv requests/$n.csr $arch/ 2>/dev/null
+    install -m 0600 pending/$n.key $n.key && install -m 0640 $w/chain.pem $n.crt && cp $n.crt $n.chain.pem
+    openssl pkcs12 -export -name $n -inkey $n.key -in $n.crt -passout env:STORE_PASSWORD -out $n.p12
+    rm -f pending/$n.key; rm -rf "$w"
+    echo "imported $n serial=$(openssl x509 -in $n.crt -noout -serial | cut -d= -f2) issuer=$(openssl x509 -in $n.crt -noout -issuer | sed 's/.*CN=\([^,]*\).*/\1/') certs-in-file=$(grep -c BEGIN $n.crt)" )
+}
 
 # truststores from the bundle ca.pem (3.4.2 and 6.3): truststore.p12 (STORE_PASSWORD), opmenu-truststore.p12 (own password)
 truststores() {
@@ -5552,7 +6072,7 @@ for f in "$d"/ca-*.pem; do
   sudo $JH/bin/keytool -list -cacerts -storepass changeit -alias cp-ca-$fp >/dev/null 2>&1 || sudo $JH/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias cp-ca-$fp -file "$f" >/dev/null
 done; rm -rf "$d"
 for a in $(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -oE '^cp-ca-[0-9a-f]+'); do case " $want " in *" $a "*) ;; *) sudo $JH/bin/keytool -delete -cacerts -storepass changeit -alias $a ;; esac; done
-echo "$(hostname): OS anchors=$(trust list --filter=ca-anchors | grep -c 'label: PoC Internal CA') JDK=$(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -c '^cp-ca-')"
+echo "$(hostname): OS anchors=$(trust list --filter=ca-anchors | grep -c -E 'label: PoC (Internal CA|Bank Root)') JDK=$(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -c '^cp-ca-')"
 EOS
   done
 }
@@ -5564,7 +6084,7 @@ push_ad() {
   local i; for i in $(seq 1 24); do sleep 5; LDAPTLS_CACERT=$PKI/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H ldaps://ad01.poc.lab:636 -s base -b "" namingContexts >/dev/null 2>&1 && { echo "ad01 LDAPS back after ~$((i*5))s"; return 0; }; done; echo "ad01 LDAPS NOT back"
 }
 push_jump() {
-  ( cd $PKI && umask 077 && openssl pkcs12 -export -name opmenu-breakglass -inkey opmenu-breakglass.key -in opmenu-breakglass.crt -certfile ca.crt -passout env:OPMENU_BREAKGLASS_STORE_PASSWORD -out opmenu-breakglass.bg.p12 )
+  ( cd $PKI && umask 077 && openssl pkcs12 -export -name opmenu-breakglass -inkey opmenu-breakglass.key -in opmenu-breakglass.crt $([ -f ca.crt ] && echo "-certfile ca.crt") -passout env:OPMENU_BREAKGLASS_STORE_PASSWORD -out opmenu-breakglass.bg.p12 )
   ( cd $PKI && scp -q opmenu-truststore.p12 ca.pem cp-server.crt kafka-internal.crt opmenu-breakglass.bg.p12 opmenu-breakglass.crt opmenu-breakglass.key jump01.poc.lab:/tmp/ )
   ssh jump01.poc.lab 'sudo bash -s' <<'EOS'
 set -e
@@ -5580,6 +6100,19 @@ install -o opbootstrap -g opbootstrap -m 0600 /tmp/opmenu-breakglass.key /etc/op
 shred -u /tmp/opmenu-breakglass.key /tmp/opmenu-breakglass.bg.p12 2>/dev/null; rm -f /tmp/opmenu-truststore.p12 /tmp/ca.pem /tmp/cp-server.crt /tmp/kafka-internal.crt /tmp/opmenu-breakglass.crt
 echo "jump01: opmenu trust material and break-glass updated"
 EOS
+}
+
+# push_repo  (3.3.0): the internal repo over HTTPS follows every rotation - repo server certificate = cp-server,
+# every node pins ca.pem as cp-repo-ca.pem; then each node must still download the repo metadata
+push_repo() {
+  ( cd $PKI && sudo install -o root -g root -m 0644 cp-server.crt /etc/pki/tls/certs/cp-repo.crt &&
+    sudo install -o root -g root -m 0600 cp-server.key /etc/pki/tls/private/cp-repo.key &&
+    sudo httpd -t >/dev/null 2>&1 && sudo systemctl restart httpd && echo "repo server: $(openssl x509 -in cp-server.crt -noout -serial)" )
+  local h
+  for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+    scp -q $PKI/ca.pem $h.poc.lab:/tmp/cp-repo-ca.pem
+    ssh $h.poc.lab "sudo install -o root -g root -m 0644 /tmp/cp-repo-ca.pem /etc/pki/tls/certs/cp-repo-ca.pem && rm -f /tmp/cp-repo-ca.pem && sudo dnf -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' makecache >/dev/null 2>&1 && echo \"\$(hostname): repo OK\" || echo \"\$(hostname): REPO FAILED\""
+  done
 }
 
 # rolling restart of everything that holds keystores/truststores in memory: controllers -> brokers -> REST (drained) -> C3

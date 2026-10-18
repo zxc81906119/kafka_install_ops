@@ -1,0 +1,30 @@
+##### 2026-10-18 手動實測(cp-man):10.4 OS 修補(broker kb02、follower controller、rest01 各一台),持續負載下
+bash /var/lib/cp-installer/manual/load.sh start </dev/null >/var/lib/cp-installer/load/start.out 2>&1; cat /var/lib/cp-installer/load/start.out
+# broker(同 10.4 每台的步驟)
+ssh kb02.poc.lab 'sudo dnf versionlock list | grep -c confluent'
+ssh kb02.poc.lab 'sudo dnf -q check-update | wc -l'
+ssh kb02.poc.lab 'sudo systemctl stop confluent-server'
+ssh kb02.poc.lab 'sudo dnf -y update 2>&1 | tail -2'
+ssh kb02.poc.lab 'rpm -q --last kernel-core 2>/dev/null | head -1; uname -r; rpm -q confluent-server'
+ssh kb02.poc.lab 'sudo systemctl start confluent-server'
+{{
+. ~/manual.env
+wait_for broker_ok kb02
+}}
+# controller:follower(leader 最後;這裡只示範一台 follower)
+{{
+. ~/manual.env
+L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --status 2>/dev/null | awk '/LeaderId:/ {print $2}')
+F=$(for h in kc01 kc02 kc03; do [ "${h#kc0}" != "$L" ] && echo $h; done | head -1); echo "leader $L, patching follower $F"
+ssh $F.poc.lab 'sudo systemctl stop confluent-server; sudo dnf -y update 2>&1 | tail -1; rpm -q confluent-server; sudo systemctl start confluent-server'
+wait_for ctl_ok $F
+}}
+# REST:先從 LB 摘除(8.8 的 lbconf),修補後放回
+{{
+. ~/rotate-lib.sh
+lbconf rest01; sleep 5; ssh lb01.poc.lab 'grep -c " down" /etc/nginx/stream.d/cp.conf'
+ssh rest01.poc.lab 'sudo systemctl stop confluent-kafka-rest; sudo dnf -y update 2>&1 | tail -1; rpm -q confluent-kafka-rest; sudo systemctl start confluent-kafka-rest'
+for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://rest01.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 3; done; echo "rest01 answers after ~$((i*3))s"
+lbconf ""; ssh lb01.poc.lab 'grep -c " down" /etc/nginx/stream.d/cp.conf'
+}}
+bash /var/lib/cp-installer/manual/load.sh stop && bash /var/lib/cp-installer/manual/load.sh report

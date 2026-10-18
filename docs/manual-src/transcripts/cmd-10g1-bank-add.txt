@@ -1,0 +1,25 @@
+##### 2026-10-18 手動實測(cp-man):9.4.1 第 1 階段 add —— 所有人同時信任內部 CA 與銀行 root(指令照手冊)
+bash /var/lib/cp-installer/manual/load.sh start </dev/null >/var/lib/cp-installer/load/start.out 2>&1; cat /var/lib/cp-installer/load/start.out
+{{
+. ~/rotate-lib.sh && cd $PKI
+openssl x509 -in ~/bank-root-g2.pem -noout -subject -fingerprint -sha256 -ext basicConstraints
+install -d -m 0750 trust
+openssl x509 -in ~/bank-root-g2.pem -out trust/bank-root-g2.pem && chmod 0644 trust/bank-root-g2.pem
+cat ca.crt trust/*.pem > ca.pem && chmod 0644 ca.pem
+grep -c 'BEGIN CERTIFICATE' ca.pem
+}}
+{{
+. ~/rotate-lib.sh
+truststores && push_all_ssl && trust_all && push_ad && push_jump && push_repo
+}}
+{{
+. ~/rotate-lib.sh
+restart_all
+}}
+{{
+. ~/rotate-lib.sh
+for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab "sudo /usr/lib/jvm/temurin-21-jdk/bin/keytool -list -keystore /etc/confluent/ssl/truststore.p12 -storepass '$STORE_PASSWORD' 2>/dev/null | grep -c trustedCertEntry" | sed "s/^/$h truststore entries: /"; done
+served
+}}
+# 這一段的負載到此為止;第 2 階段前重新啟動負載 = 應用程式換上含銀行 root 的 truststore 並重啟(9.4.1 警告)
+bash /var/lib/cp-installer/manual/load.sh stop && bash /var/lib/cp-installer/manual/load.sh report

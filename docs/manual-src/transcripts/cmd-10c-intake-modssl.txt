@@ -1,0 +1,17 @@
+##### 2026-10-18 手動實測(cp-man):為 3.3.0 引進 mod_ssl —— 重跑 2.10–2.14(同一份指令,冪等:只發佈新增的 11 個 RPM)
+##### 2.10 內網匯入:在落地區再驗一次(ops02,cpadmin)
+ls /mnt/exchange && findmnt -no OPTIONS /mnt/exchange | grep -o '^ro'
+cd /mnt/exchange && sha256sum --quiet -c SHA256SUMS && echo "landing zone: all $(wc -l < SHA256SUMS) files match SHA256SUMS"
+for k in /mnt/exchange/gpg-keys/*.asc; do sudo rpm --import "$k"; done; rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION} %{SUMMARY}\n'
+find /mnt/exchange/rpm -name '*.rpm' -print0 | xargs -0 rpm -K | grep -v 'digests signatures OK'; echo "bad-signatures=$(find /mnt/exchange/rpm -name '*.rpm' -print0 | xargs -0 rpm -K | grep -vc 'digests signatures OK')"
+##### 2.11 發佈到 /srv/repo(先預檢衝突,全部沒問題才發佈;以 repoadmin 寫入,絕不覆寫)
+cd /mnt/exchange && while read -r sum rel; do case $rel in rpm/*|gpg-keys/*) d=/srv/repo/$rel ;; tar/*|tools/*) d=/srv/repo/raw/$rel ;; *) continue ;; esac; if [ -f "$d" ]; then [ "$(sha256sum "$d" | awk '{print $1}')" = "$sum" ] || echo "CONFLICT: $rel"; else echo "would publish $rel"; fi; done < SHA256SUMS | sort | uniq -c -w 14 | head; echo precheck-done
+cd /mnt/exchange && n=0; while read -r sum rel; do case $rel in rpm/*|gpg-keys/*) d=/srv/repo/$rel ;; tar/*|tools/*) d=/srv/repo/raw/$rel ;; *) continue ;; esac; [ -f "$d" ] && continue; sudo -u repoadmin bash -c 'umask 022; exec install -D -m 0644 "$1" "$2"' _ "/mnt/exchange/$rel" "$d" && n=$((n+1)); done < SHA256SUMS; echo "published $n files"
+cd /mnt/exchange && while read -r sum rel; do case $rel in rpm/*|gpg-keys/*) d=/srv/repo/$rel ;; tar/*|tools/*) d=/srv/repo/raw/$rel ;; *) continue ;; esac; echo "$sum  $d"; done < SHA256SUMS | sha256sum --quiet -c && echo all-published-match; find /srv/repo -type f | sed 's|/[^/]*$||' | sort | uniq -c; stat -c '%U:%G %a %n' /srv/repo/raw/tar/confluent-8.3.2.tar.gz
+##### 2.12 建立 repodata
+for r in confluent adoptium os-deps; do sudo -u repoadmin bash -c 'umask 022; exec createrepo_c -q --update "$1"' _ /srv/repo/rpm/$r && echo "repodata: rpm/$r $(zcat /srv/repo/rpm/$r/repodata/*-primary.xml.gz | grep -c '<package ') packages"; done
+##### 2.13 留存稽核副本
+ts=$(date +%Y%m%d-%H%M%S) && sudo -u repoadmin bash -c 'umask 022; install -d -m 0755 "$1" && cp "$2"/SHA256SUMS "$2"/manifest-rpm.txt "$2"/manifest-tar.txt "$1"/ && cp -r "$2"/report "$1"/' _ /srv/repo/manifests/$ts /mnt/exchange && ls -R /srv/repo/manifests/$ts
+##### 2.14 確認 repo 有在服務
+for r in confluent adoptium os-deps; do curl -fsS -o /dev/null http://ops02.poc.lab:8080/rpm/$r/repodata/repomd.xml && echo "repo $r served at http://ops02.poc.lab:8080/rpm/$r" || echo "repo $r NOT served"; done
+for f in raw/tar/confluent-8.3.2.tar.gz raw/tools/jmx_prometheus_javaagent-1.0.1.jar gpg-keys/confluent.asc; do curl -s -o /dev/null -w "%{http_code} %{size_download} $f\n" http://ops02.poc.lab:8080/$f; done; ls /srv/repo/raw/tools/ /srv/repo/raw/tar/

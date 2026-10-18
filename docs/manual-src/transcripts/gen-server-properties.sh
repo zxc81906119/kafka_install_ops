@@ -36,7 +36,8 @@ controller.quorum.bootstrap.servers=$CB
 controller.listener.names=CONTROLLER
 listeners=CONTROLLER://$fq:9093
 advertised.listeners=CONTROLLER://$fq:9093
-listener.security.protocol.map=CONTROLLER:SSL
+listener.security.protocol.map=CONTROLLER:SSL,INTERNAL:SSL
+inter.broker.listener.name=INTERNAL
 log.dirs=/var/lib/kafka/data
 EOF
 fi

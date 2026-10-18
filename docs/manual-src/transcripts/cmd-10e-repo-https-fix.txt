@@ -1,0 +1,13 @@
+##### 2026-10-18 手動實測(cp-man):3.3.0 補正 —— ops02 防火牆開 8443、關 8080;節點用 makecache 實際下載 metadata 驗證
+# 發現:cp-man 依舊版 3.2 只開了 8080,節點連 8443 得到 "No route to host";dnf repolist 不下載 metadata,不能當驗證
+sudo firewall-cmd --permanent --add-port=8443/tcp && sudo firewall-cmd --permanent --remove-port=8080/tcp && sudo firewall-cmd --reload && sudo firewall-cmd --list-ports
+{{
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  out=$(ssh $h.poc.lab "sudo dnf -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' makecache 2>&1; echo rc=\$?")
+  echo "$h: ${out##*rc=} $(grep -c -i 'error\|fail' <<<"$out") error line(s)"
+done
+}}
+ssh kb01.poc.lab "curl -fsS --cacert /etc/pki/tls/certs/cp-repo-ca.pem -o /dev/null -w '%{http_code} %{size_download}\n' https://ops02.poc.lab:8443/raw/tools/jmx_prometheus_javaagent-1.0.1.jar"
+ssh kb01.poc.lab "curl -s -o /dev/null -w 'kb01 -> HTTP 8080: %{http_code} (000 = closed by the firewall)\n' --max-time 5 http://ops02.poc.lab:8080/rpm/confluent/repodata/repomd.xml"
+# 節點只信任 cp-repo-ca.pem:換成別的 CA 檔就失敗(sslcacert 確實生效)
+ssh kb01.poc.lab "sudo dnf -q --refresh --disablerepo='*' --enablerepo='cp-internal-os-deps' --setopt=cp-internal-os-deps.sslcacert=/etc/pki/tls/certs/ca-bundle.crt.notexist makecache 2>&1 | tail -1; echo rc=\$?"

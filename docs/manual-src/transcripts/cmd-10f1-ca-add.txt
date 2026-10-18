@@ -1,0 +1,32 @@
+##### 2026-10-18 手動實測(cp-man):重做 9.3 內部 CA 輪替 —— 9.2 add(修正後的負載工具、原子化 truststore、加上 push_repo)
+bash /var/lib/cp-installer/manual/load.sh start </dev/null >/var/lib/cp-installer/load/start.out 2>&1; cat /var/lib/cp-installer/load/start.out
+{{
+. ~/rotate-lib.sh
+cd $PKI && umask 077
+test -f ca-next.crt && echo "ca-next 已存在,沿用" || {
+  openssl genrsa -out ca-next.key 3072 2>/dev/null
+  openssl req -x509 -new -key ca-next.key -sha256 -days 3650 -out ca-next.crt -subj "/CN=PoC Internal CA $(date +%Y%m%d%H%M)/OU=Confluent/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+}
+cat ca.crt ca-next.crt > ca.pem && chmod 0644 ca.pem
+for f in ca.crt ca-next.crt; do echo "$f: $(openssl x509 -in $f -noout -subject | sed 's/.*CN=\([^,]*\).*/\1/') fp=$(openssl x509 -in $f -noout -fingerprint -sha256 | cut -d= -f2 | tr -d : | cut -c1-16)"; done
+echo "bundle: $(grep -c 'BEGIN CERT' ca.pem) CAs"
+}}
+{{
+. ~/rotate-lib.sh
+truststores
+push_all_ssl
+trust_all
+push_ad
+push_jump
+push_repo
+}}
+{{
+. ~/rotate-lib.sh
+restart_all
+}}
+{{
+. ~/rotate-lib.sh
+echo "== 各節點的 truststore 都有 2 張 CA"; for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab "sudo /usr/lib/jvm/temurin-21-jdk/bin/keytool -list -keystore /etc/confluent/ssl/truststore.p12 -storepass '$STORE_PASSWORD' 2>/dev/null | grep -c trustedCertEntry" | sed "s/^/$h truststore.p12 entries: /"; done
+echo "== 服務出示的仍是舊 CA 簽的憑證"; served | head -4
+}}
+bash /var/lib/cp-installer/manual/load.sh stop && bash /var/lib/cp-installer/manual/load.sh report

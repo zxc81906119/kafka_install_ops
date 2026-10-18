@@ -24,7 +24,7 @@ lb::apply_config() {
   for lb in $(inv::hosts lb); do
     role::push_rendered "$lb" nginx-stream.conf.tpl "$LB_CONF" root root 0644
     if [[ $REMOTE_CHANGED == 1 ]] && step::mutating; then
-      remote::exec "$lb" "sudo -n nginx -t -q && sudo -n nginx -s reload" ||
+      remote::apply "$lb" sys_node::nginx_reload ||
         core::die "[$lb] nginx -t rejected the new configuration"
       log::changed "[$lb] nginx reloaded"
     fi
@@ -33,7 +33,7 @@ lb::apply_config() {
 
 role::lb::configure() { lb::apply_config; }
 role::lb::start() { :; }
-role::lb::restart() { remote::exec "$1" "sudo -n nginx -s reload"; }
+role::lb::restart() { remote::apply "$1" sys_node::nginx_reload; }
 role::lb::stop() { :; }
 role::lb::health() {
   health::wait 60 "[$1] LB listening on $PORT_REST" health::tcp "$1" "$PORT_REST" &&

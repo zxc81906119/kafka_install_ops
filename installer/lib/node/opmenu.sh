@@ -25,6 +25,7 @@ opmenu_node::jump_accounts() {
 # opmenu_node::install_pkg <tar.gz on this node> <version>   -> /opt/opmenu-<version>, /opt/opmenu -> it
 opmenu_node::install_pkg() {
   local pkg=$1 ver=$2 dir=/opt/opmenu-$2 t
+  ensure::_guard "$dir"
   if [[ -x $dir/opmenu.sh ]]; then _mark ok "OP menu $ver installed"; else
     _mark changed "install OP menu $ver"
     if ! _checking; then
@@ -54,7 +55,7 @@ opmenu_node::user_key() {
 opmenu_node::sshd_block() {
   local blk=$1 cfg=/etc/ssh/sshd_config t
   local begin='# BEGIN cpctl opmenu' end='# END cpctl opmenu'
-  t=$(mktemp)
+  t=$(mktemp /tmp/cpnode.XXXXXX)
   sed "/^$begin\$/,/^$end\$/d" "$cfg" >"$t"
   { printf '%s\n' "$begin"; cat "$blk"; printf '%s\n' "$end"; } >>"$t"
   if [[ $(sha256sum <"$t") == $(sha256sum <"$cfg") ]]; then _mark ok "sshd: OP menu block"; rm -f "$t"; return 0; fi
@@ -69,7 +70,7 @@ opmenu_node::sshd_block() {
 # opmenu_node::known_hosts <host...>   pinned host keys of the nodes in the global known_hosts (root-owned)
 opmenu_node::known_hosts() {
   local t f=/etc/ssh/ssh_known_hosts
-  t=$(mktemp)
+  t=$(mktemp /tmp/cpnode.XXXXXX)
   { printf '# Managed by cpctl - node host keys for the OP menu\n'; ssh-keyscan -T 5 -t ed25519 "$@" 2>/dev/null | sort; } >"$t"
   [[ $(grep -vc '^#' "$t") -eq $# ]] || { _mark warn "ssh-keyscan returned $(grep -vc '^#' "$t") of $# host keys"; rm -f "$t"; return 1; }
   ensure::file "$t" "$f" root root 0644
@@ -86,6 +87,6 @@ opmenu_node::node_account() {
   fi
   h=$(getent passwd "$u" | cut -d: -f6)
   ensure::dir "$h/.ssh" root "$u" 0750
-  t=$(mktemp); printf '%s\n' "$key" >"$t"
+  t=$(mktemp /tmp/cpnode.XXXXXX); printf '%s\n' "$key" >"$t"
   ensure::file "$t" "$h/.ssh/authorized_keys" root "$u" 0640
 }

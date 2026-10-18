@@ -28,6 +28,6 @@ step_verify() {
   jump::enabled || return 0
   local j
   for j in $(inv::hosts jump); do
-    remote::exec "$j" "test -x /opt/opmenu/opmenu.sh && sudo -n -u $OPMENU_OS_USER /opt/opmenu/opmenu.sh --list >/dev/null" || return 1
+    remote::run "$j" opmenu_node::selftest "$OPMENU_OS_USER" || return 1
   done
 }

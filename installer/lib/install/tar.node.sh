@@ -23,6 +23,7 @@ tar_node::account() {
 # tar_node::fetch_extract <url> <sha256> <parent dir>   -> prints the archive's top directory on stdout (last line)
 tar_node::fetch_extract() {
   local url=$1 sha=$2 parent=$3 file top mark
+  ensure::_guard "$parent"
   file=$(basename "$url")
   mark="$TAR_MARKS/$file.sha256"
   install -d -m 0755 "$parent" "$TAR_MARKS" "$TAR_CACHE"
@@ -35,7 +36,10 @@ tar_node::fetch_extract() {
   if [[ ${CPCTL_CHECK:-0} == 1 ]]; then printf 'TOP=\n'; return 0; fi
   local cached=$TAR_CACHE/$file
   if [[ ! -f $cached || $(sha256sum "$cached" | awk '{print $1}') != "$sha" ]]; then
-    curl -fsS --retry 3 -o "$cached.part" "$url"
+    # internal repo over HTTPS: pin the CA file cpctl ships for the repo (cp-repo-ca.pem)
+    local ca=()
+    [[ -f /etc/pki/tls/certs/cp-repo-ca.pem ]] && ca=(--cacert /etc/pki/tls/certs/cp-repo-ca.pem)
+    curl -fsS --retry 3 "${ca[@]}" -o "$cached.part" "$url"
     mv "$cached.part" "$cached"
   fi
   local have
@@ -63,6 +67,7 @@ tar_node::current() { [[ -L $1 ]] && basename "$(readlink "$1")" || true; }
 #   upgrade: move the link (this IS the upgrade / rollback for the tar strategy)
 tar_node::switch() {
   local mode=$1 link=$2 target=$3 cur
+  ensure::_guard "$link"
   cur=$(tar_node::current "$link")
   if [[ $cur == "$target" ]]; then _mark ok "$link -> $target"; return 0; fi
   if [[ -n $cur && $mode == install ]]; then
@@ -76,6 +81,7 @@ tar_node::switch() {
 # tar_node::seed_dir <source dir> <dest dir>   copy shipped default files once, never overwrite
 tar_node::seed_dir() {
   local src=$1 dst=$2 f n=0
+  ensure::_guard "$dst"
   install -d -m 0755 "$dst"
   for f in "$src"/*; do
     [[ -f $f && ! -e $dst/$(basename "$f") ]] || continue
@@ -88,6 +94,7 @@ tar_node::seed_dir() {
 # tar_node::remove_paths <path or glob>...   (globs are expanded HERE, on the node)
 tar_node::remove_paths() {
   local pat p any=0
+  for p in "$@"; do ensure::_guard "$p"; done
   shopt -s nullglob
   for pat in "$@"; do
     # shellcheck disable=SC2206

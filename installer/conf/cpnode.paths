@@ -1,0 +1,39 @@
+# Paths the cpnode agent may create, change or remove (SUDO_MODE=restricted). One bash glob per line; "*" also
+# matches "/". Everything else is denied - in particular the installer account's own sudoers file.
+# Built from the paths cpctl writes during install / upgrade / rotation (learning mode: SUDO_AGENT_ENFORCE=warn).
+
+# Confluent configuration, data, logs, programs (tar strategy)
+/etc/confluent /etc/confluent/* /etc/confluent-control-center /etc/confluent-control-center/*
+/var/lib/kafka /var/lib/kafka/* /var/log/kafka /var/log/kafka/*
+/var/lib/confluent /var/lib/confluent/* /var/log/confluent /var/log/confluent/*
+/opt/confluent /opt/confluent/* /opt/java /opt/java/* /opt/jmx-exporter /opt/jmx-exporter/*
+/var/cache/cp-installer /var/cache/cp-installer/*
+/var/backups/cp-installer /var/backups/cp-installer/*
+
+# systemd units and drop-ins of the managed services, journald limits
+/etc/systemd/system/confluent-* /etc/systemd/system/prometheus* /etc/systemd/system/alertmanager*
+/etc/systemd/journald.conf.d /etc/systemd/journald.conf.d/*
+
+# OS baseline (step 01)
+/etc/sysctl.d/90-confluent.conf /etc/security/limits.d/90-confluent.conf
+
+# packages and trust
+/etc/yum.repos.d/cp-internal.repo /etc/pki/rpm-gpg/RPM-GPG-KEY-cp-*
+/etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+/etc/pki/tls/certs/cp-repo-ca.pem /etc/pki/tls/certs/cp-repo.crt /etc/pki/tls/private/cp-repo.key
+
+# internal repo server (ops host) and load balancer
+/etc/httpd/conf.d/cp-repo.conf /etc/httpd/conf.d/ssl.conf
+/etc/nginx/stream.d/cp.conf
+
+# OP menu (bastion + node account); sudoers drop-ins are additionally limited to the menu accounts
+/etc/opmenu /etc/opmenu/* /opt/opmenu /opt/opmenu/* /opt/opmenu-* /var/log/opmenu /usr/local/sbin/opmenu-*
+/etc/sudoers.d/opmenu /etc/sudoers.d/opmenu-*
+/etc/ssh/cpctl-opmenu.block /etc/ssh/ssh_known_hosts
+
+# simulated AD (PoC only)
+/var/lib/samba/private/tls/*
+
+# OS baseline details (step 01): time sync, time zone, log retention, transparent huge pages
+/etc/chrony.conf /etc/sysconfig/chronyd /etc/localtime
+/etc/tmpfiles.d/90-confluent-logs.conf /etc/systemd/system/disable-thp.service

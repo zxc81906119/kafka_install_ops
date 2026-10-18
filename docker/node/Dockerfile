@@ -14,7 +14,7 @@ RUN useradd -m -s /bin/bash cpadmin \
     && install -d -m 0755 /etc/ssh/authorized_keys.d
 
 COPY sshd-cp.conf /etc/ssh/sshd_config.d/10-cp.conf
-# PoC only: full sudo for cpadmin. See installer/conf/sudoers.d/cpadmin.restricted for the bank baseline.
+# PoC only: full sudo for cpadmin (bootstrap). Production: cpctl agent install --restrict (manual 3.0.3).
 COPY sudoers-cpadmin /etc/sudoers.d/cpadmin
 RUN chmod 0440 /etc/sudoers.d/cpadmin \
     && systemctl enable sshd \

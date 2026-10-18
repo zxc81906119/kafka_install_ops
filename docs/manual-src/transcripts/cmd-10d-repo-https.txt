@@ -1,0 +1,119 @@
+##### 2026-10-18 手動實測(cp-man):3.3.0 內部 repo 改走 HTTPS(repo 主機 = ops02)
+# 1) ops02 自己的 repo 定義改為讀磁碟,裝 mod_ssl(版本 = os-deps 裡的版本)
+{{
+sudo tee /etc/yum.repos.d/cp-internal.repo >/dev/null <<'EOF'
+# Managed by cpctl - internal mirror only (public repos are not reachable from this network)
+[cp-internal-confluent]
+name=Internal mirror - Confluent Platform and Control Center
+baseurl=file:///srv/repo/rpm/confluent
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+
+[cp-internal-adoptium]
+name=Internal mirror - Eclipse Temurin
+baseurl=file:///srv/repo/rpm/adoptium
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+
+[cp-internal-os-deps]
+name=Internal mirror - OS dependencies
+baseurl=file:///srv/repo/rpm/os-deps
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+EOF
+grep baseurl /etc/yum.repos.d/cp-internal.repo
+}}
+{{
+v=$(rpm -qp --qf '%{VERSION}' /srv/repo/rpm/os-deps/mod_ssl-[0-9]*.rpm | sort -V | tail -1)
+sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' install "mod_ssl-$v"
+rpm -q mod_ssl httpd
+}}
+# 2) 憑證:cp-man 是內部 CA,cp-server 已簽好,SAN 含 ops02、ops02.poc.lab(3.4.5)
+openssl x509 -in /var/lib/cp-installer/pki/cp-server.crt -noout -subject -issuer -ext subjectAltName | grep -o 'subject=.*\|issuer=.*\|DNS:ops02[a-z.]*'
+# 3) httpd 改走 HTTPS
+{{
+cd /var/lib/cp-installer/pki
+sudo install -o root -g root -m 0644 cp-server.crt /etc/pki/tls/certs/cp-repo.crt
+sudo install -o root -g root -m 0600 cp-server.key /etc/pki/tls/private/cp-repo.key
+sudo tee /etc/httpd/conf.d/cp-repo.conf >/dev/null <<'EOF'
+# Managed by cpctl - internal repository, HTTPS only (plain HTTP answers 403)
+DocumentRoot "/srv/repo"
+<Directory "/srv/repo">
+    Require all denied
+</Directory>
+
+Listen 8443 https
+<VirtualHost *:8443>
+    ServerName ops02.poc.lab
+    SSLEngine on
+    SSLProtocol -all +TLSv1.2 +TLSv1.3
+    SSLCertificateFile /etc/pki/tls/certs/cp-repo.crt
+    SSLCertificateKeyFile /etc/pki/tls/private/cp-repo.key
+    DocumentRoot "/srv/repo"
+    <Directory "/srv/repo">
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+        <LimitExcept GET HEAD OPTIONS>
+            Require all denied
+        </LimitExcept>
+    </Directory>
+</VirtualHost>
+EOF
+echo '# Managed by cpctl - default mod_ssl vhost disabled; the internal repo is served by cp-repo.conf' | sudo tee /etc/httpd/conf.d/ssl.conf >/dev/null
+sudo httpd -t && sudo systemctl restart httpd && systemctl is-active httpd
+}}
+sudo firewall-cmd --permanent --query-port=8443/tcp 2>&1; echo "(container: firewalld may not run - see 3.2)"
+# 驗證
+{{
+P=/var/lib/cp-installer/pki
+for r in confluent adoptium os-deps; do curl -fsS --cacert $P/ca.pem -o /dev/null https://ops02.poc.lab:8443/rpm/$r/repodata/repomd.xml && echo "repo $r served over HTTPS"; done
+curl -s -o /dev/null -w 'HTTP 8080: %{http_code}\n' http://ops02.poc.lab:8080/rpm/confluent/repodata/repomd.xml
+curl -s -o /dev/null -w 'no CA:    %{http_code} exit=' https://ops02.poc.lab:8443/rpm/confluent/repodata/repomd.xml; echo $?
+openssl s_client -connect ops02.poc.lab:8443 -servername ops02.poc.lab </dev/null 2>/dev/null | grep -c 'BEGIN CERTIFICATE'
+sudo ss -ltnp | grep -E ':(443|8443|8080) ' | awk '{print $4}'
+}}
+##### 3.3.1.1 節點:先放 repo 的 CA 檔,再把 repo 定義改成 https + sslcacert
+{{
+cat > /tmp/cp-internal.repo <<'EOF'
+# Managed by cpctl - internal mirror only (public repos are not reachable from this network)
+[cp-internal-confluent]
+name=Internal mirror - Confluent Platform and Control Center
+baseurl=https://ops02.poc.lab:8443/rpm/confluent
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-confluent
+sslverify=1
+sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem
+
+[cp-internal-adoptium]
+name=Internal mirror - Eclipse Temurin
+baseurl=https://ops02.poc.lab:8443/rpm/adoptium
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-adoptium
+sslverify=1
+sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem
+
+[cp-internal-os-deps]
+name=Internal mirror - OS dependencies
+baseurl=https://ops02.poc.lab:8443/rpm/os-deps
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-rocky-9
+sslverify=1
+sslcacert=/etc/pki/tls/certs/cp-repo-ca.pem
+EOF
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
+  scp -q /var/lib/cp-installer/pki/ca.pem /tmp/cp-internal.repo $h.poc.lab:/tmp/
+  ssh $h.poc.lab "sudo install -o root -g root -m 0644 /tmp/ca.pem /etc/pki/tls/certs/cp-repo-ca.pem && sudo install -o root -g root -m 0644 /tmp/cp-internal.repo /etc/yum.repos.d/cp-internal.repo && rm -f /tmp/ca.pem /tmp/cp-internal.repo"
+  echo "$h: $(ssh $h.poc.lab "sudo dnf -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' repolist 2>&1 | grep -c cp-internal") repos over HTTPS"
+done
+}}
+# tar 策略的 raw 下載也走 HTTPS(kb01 測一次)
+ssh kb01.poc.lab "curl -fsS --cacert /etc/pki/tls/certs/cp-repo-ca.pem -o /dev/null -w '%{http_code} %{size_download}\n' https://ops02.poc.lab:8443/raw/tools/jmx_prometheus_javaagent-1.0.1.jar"
+# 舊的 HTTP 設定已經不能用(驗證 403 對節點也生效)
+ssh kb01.poc.lab "curl -s -o /dev/null -w 'kb01 -> HTTP 8080: %{http_code}\n' http://ops02.poc.lab:8080/rpm/confluent/repodata/repomd.xml"

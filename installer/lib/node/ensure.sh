@@ -6,12 +6,17 @@
 _mark() { printf '::%s:: %s\n' "$1" "$2"; }
 _checking() { [[ ${CPCTL_CHECK:-0} == 1 ]]; }
 
+# ensure::_guard <dest> [staged src] [mode] -> under the restricted cpnode agent every written / removed path is checked
+# against its allowlist (node/cpnode.main); with full sudo (bundle over "bash -s") it is a no-op
+ensure::_guard() { if [[ ${CPNODE_RESTRICTED:-0} == 1 ]]; then cpnode::check_path "$@"; fi; }
+
 node::in_container() { [[ -f /.dockerenv ]] || systemd-detect-virt -c -q 2>/dev/null; }
 node::has_systemd() { [[ -d /run/systemd/system ]]; }
 
 # ensure::dir <path> <owner> <group> <mode>
 ensure::dir() {
   local p=$1 o=$2 g=$3 m=$4
+  ensure::_guard "$p" "" "$m"
   if [[ -d $p && $(stat -c '%U:%G:%a' "$p") == "$o:$g:${m#0}" ]]; then
     _mark ok "dir $p"
     return 0
@@ -26,6 +31,7 @@ ensure::dir() {
 # Content compared by sha256. On change the previous file is kept as <dest>.bak.<timestamp>.
 ensure::file() {
   local src=$1 dst=$2 o=$3 g=$4 m=$5
+  ensure::_guard "$dst" "$src" "$m"
   local new old=""
   new=$(sha256sum "$src" | awk '{print $1}')
   [[ -f $dst ]] && old=$(sha256sum "$dst" | awk '{print $1}')
@@ -123,6 +129,7 @@ ensure::key_backups_removed() {
 # ensure::symlink <target> <link>
 ensure::symlink() {
   local t=$1 l=$2
+  ensure::_guard "$l"
   if [[ -L $l && $(readlink "$l") == "$t" ]]; then _mark ok "symlink $l -> $t"; return 0; fi
   _mark changed "symlink $l -> $t"
   _checking && return 0
@@ -131,6 +138,7 @@ ensure::symlink() {
 
 # ensure::absent <path>
 ensure::absent() {
+  ensure::_guard "$1"
   if [[ ! -e $1 && ! -L $1 ]]; then _mark ok "absent $1"; return 0; fi
   _mark changed "remove $1"
   _checking || rm -rf -- "$1"
@@ -140,6 +148,7 @@ ensure::absent() {
 # Containers: non-namespaced keys (vm.*) cannot be set -> only checked (skipped/warn).
 ensure::sysctl() {
   local k=$1 v=$2 f=$3 cur
+  ensure::_guard "$f"
   cur=$(sysctl -n "$k" 2>/dev/null | tr -s '\t ' ' ' || true)
   local want
   want=$(tr -s '\t ' ' ' <<<"$v")
@@ -171,6 +180,7 @@ ensure::sysctl() {
 # ensure::line <file> <exact line>   (append if missing)
 ensure::line() {
   local f=$1 l=$2
+  ensure::_guard "$f"
   if grep -qxF -- "$l" "$f" 2>/dev/null; then _mark ok "line in $f"; return 0; fi
   _mark changed "line in $f: $l"
   _checking || printf '%s\n' "$l" >>"$f"

@@ -59,7 +59,7 @@ upgrade::plan() {
   forb=$(upgrade::_v FORBIDDEN_CONFIGS "$to")
   for h in $(inv::hosts broker) $(inv::hosts controller); do
     for v in $forb; do
-      if remote::exec "$h" "sudo -n grep -q '^$v=' /etc/confluent/kafka/server.properties"; then
+      if remote::run "$h" sys_node::conf_has_key /etc/confluent/kafka/server.properties "$v"; then
         log::error "[$h] static config $v must be removed before upgrading to $to_mm"; ok=0
       fi
     done
@@ -81,7 +81,7 @@ upgrade::backup() {
   dir="$UPG_DIR/backup-$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$dir"
   for h in $(inv::hosts controller) $(inv::hosts broker) $(inv::hosts rest) $(inv::hosts c3); do
-    remote::exec "$h" "sudo -n tar -czf - -C / etc/confluent etc/systemd/system 2>/dev/null" >"$dir/$h-etc.tgz"
+    remote::run "$h" sys_node::backup_etc >"$dir/$h-etc.tgz"
     log::ok "[$h] /etc/confluent + systemd drop-ins saved"
   done
   local cfg

@@ -34,10 +34,19 @@ remote::exec() {
 
 # remote::run <host> [--user U] <function> [args...]
 # Runs a node-side bundle function as root (default) or as another user via sudo.
+#   SUDO_MODE=full        the function bundle travels on stdin to "sudo bash -s" (no agent to install)
+#   SUDO_MODE=restricted  the installed cpnode agent runs it ("sudo cpnode", no arguments; the call travels on stdin
+#                         NUL separated, so nothing - no password - appears on a command line or in sudo's log)
 remote::run() {
   local host=$1; shift
   local as=root
   if [[ ${1:-} == --user ]]; then as=$2; shift 2; fi
+  if remote::restricted; then
+    [[ $as == root ]] || core::die "$E_USAGE" "SUDO_MODE=restricted: running node functions as '$as' is not supported"
+    remote::_agent_ok "$host"
+    remote::_retry_ssh "$host" "sudo -n $AGENT_PATH" < <(printf '%s\0' "$CPCTL_CHECK" "${CPCTL_DIFF:-0}" "$@")
+    return
+  fi
   local call
   call=$(printf '%q ' "$@")
   local script
@@ -46,14 +55,33 @@ remote::run() {
     remote::_bundle
     printf '%s\n' "$call"
   )
-  local attempt=1 rc
+  remote::_retry_ssh "$host" "sudo -n -u $as bash -s" <<<"$script"
+}
+
+# remote::_retry_ssh <host> <remote command>   (stdin is passed on; it is buffered so a retry can resend it)
+remote::_retry_ssh() {
+  local host=$1 cmd=$2 input attempt=1 rc
+  input=$(mktemp)
+  cat >"$input"
   while :; do
     rc=0
-    ssh "${REMOTE_SSH_OPTS[@]}" "$(remote::_target "$host")" "sudo -n -u $as bash -s" <<<"$script" || rc=$?
-    if [[ $rc -ne 255 || $attempt -ge $REMOTE_RETRIES ]]; then return "$rc"; fi
+    ssh "${REMOTE_SSH_OPTS[@]}" "$(remote::_target "$host")" "$cmd" <"$input" || rc=$?
+    if [[ $rc -ne 255 || $attempt -ge $REMOTE_RETRIES ]]; then rm -f "$input"; return "$rc"; fi
     sleep $((attempt * 2))
     attempt=$((attempt + 1))
   done
+}
+
+remote::restricted() { [[ ${SUDO_MODE:-full} == restricted && ${CPCTL_SUDO_FULL:-0} != 1 ]]; }
+
+# remote::_agent_ok <host> -> the installed agent is the version this cpctl was built for (checked once per run)
+remote::_agent_ok() {
+  local mark="$RUN_DIR/$CPCTL_RUN_ID.agent.$1" have want
+  [[ -f $mark ]] && return 0
+  want=$(agent::version)
+  have=$(printf '%s\0' 0 0 --version | ssh "${REMOTE_SSH_OPTS[@]}" "$(remote::_target "$1")" "sudo -n $AGENT_PATH" 2>/dev/null) || have=""
+  [[ $have == "$want" ]] || core::die "$E_PRECHECK" "[$1] cpnode agent is ${have:-not installed}, this cpctl needs $want - run 'cpctl agent build' and have an administrator install $AGENT_DIR/cpnode as $AGENT_PATH (root:root 0755) on every host (manual: cpadmin sudo)"
+  : >"$mark"
 }
 
 # remote::apply <host> <function> [args...]  -> runs and feeds ::markers:: into the log/recap.
