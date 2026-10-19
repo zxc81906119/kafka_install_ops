@@ -209,8 +209,8 @@ section("02", "環境模擬", "用 Docker 模擬銀行主機與網路限制");
   // DMZ band
   s.addShape(pptx.ShapeType.roundRect, { x: M, y: 1.85, w: W - 2 * M, h: 1.05, rectRadius: 0.06, fill: { color: C.accentSoft }, line: { color: C.accent, dashType: "dash" } });
   s.addText("Windows 11（Git Bash）", { x: M + 0.2, y: 1.95, w: 3, h: 0.85, fontFace: F, fontSize: 15, bold: true, color: C.ink, valign: "middle" });
-  s.addText("→  :8082 / :9021  →", { x: 3.7, y: 1.95, w: 2.4, h: 0.85, fontFace: F, fontSize: 14, color: C.body, align: "center", valign: "middle" });
-  card(s, 6.2, 1.98, 6.5, 0.8, "lb01  Nginx L4（唯一可連外，代表 DMZ）", null, { headSize: 15, fill: "FFFFFF" });
+  s.addText("→  :8082  →", { x: 3.7, y: 1.95, w: 2.4, h: 0.85, fontFace: F, fontSize: 14, color: C.body, align: "center", valign: "middle" });
+  card(s, 6.2, 1.98, 6.5, 0.8, "lb01  Nginx L4：REST（唯一可連外，代表 DMZ）", null, { headSize: 15, fill: "FFFFFF" });
   // internal network
   s.addShape(pptx.ShapeType.roundRect, { x: M, y: 3.1, w: W - 2 * M, h: 3.65, rectRadius: 0.06, fill: { color: "FFFFFF" }, line: { color: C.teal, width: 1.5 } });
   s.addText("cpnet：internal 網段 172.30.0.0/24，沒有任何外網路由", { x: M + 0.2, y: 3.15, w: 9, h: 0.4, fontFace: F, fontSize: 13, bold: true, color: C.teal });
@@ -220,7 +220,7 @@ section("02", "環境模擬", "用 Docker 模擬銀行主機與網路限制");
     ["kc01–03 controller", "KRaft 動態 quorum，kc04 預留替換", C.teal],
     ["kb01–04 broker", "Confluent Server、MDS，兩個 rack", C.teal],
     ["rest01–02 REST Proxy", "mTLS + RBAC，在 LB 後方", C.teal],
-    ["c3-01 Control Center", "C3 + Prometheus + Alertmanager", C.teal],
+    ["c3-01 Control Center", "C3 + 監控；維運直連 :9021，不經 LB", C.teal],
   ];
   boxes.forEach((b, i) => {
     const col = i % 3, row = Math.floor(i / 3);

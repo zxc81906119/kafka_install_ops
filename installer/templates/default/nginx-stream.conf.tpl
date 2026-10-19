@@ -5,20 +5,10 @@ upstream cp_rest {
 ${REST_UPSTREAMS}
 }
 
-upstream cp_c3 {
-    server ${C3_FQDN}:${PORT_C3} max_fails=2 fail_timeout=10s;
-}
-
 server {
     listen ${PORT_REST};
     proxy_pass cp_rest;
     proxy_connect_timeout 3s;
     proxy_timeout 10m;
 }
-
-server {
-    listen ${PORT_C3};
-    proxy_pass cp_c3;
-    proxy_connect_timeout 3s;
-    proxy_timeout 1h;
-}
+${C3_LB_BLOCK}

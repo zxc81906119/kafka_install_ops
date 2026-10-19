@@ -164,9 +164,8 @@ wait_for() { local i; for i in $(seq 1 60); do "$@" && { echo "  healthy after ~
 lbconf() {
   { echo 'upstream cp_rest {'; echo '    hash $remote_addr consistent;'
     for r in rest01 rest02; do printf '    server %s.poc.lab:8082 max_fails=2 fail_timeout=10s%s;\n' $r "$([ "$r" = "$1" ] && echo ' down')"; done
-    echo '}'; echo 'upstream cp_c3 {'; echo '    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;'; echo '}'
-    echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'
-    echo 'server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }'; } > $S/manual/cp.conf.new
+    echo '}'
+    echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'; } > $S/manual/cp.conf.new   # C3 不經 LB
   scp -q $S/manual/cp.conf.new lb01.poc.lab:/tmp/cp.conf.new
   ssh lb01.poc.lab 'sudo install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf && rm -f /tmp/cp.conf.new && sudo nginx -t -q && sudo nginx -s reload 2>/dev/null'
 }

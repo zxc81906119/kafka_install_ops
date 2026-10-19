@@ -99,8 +99,7 @@ services:
       cpnet: { ipv4_address: 172.30.0.12 }
       frontnet: { ipv4_address: 172.31.0.12 }
     ports:
-      - "8082:8082"
-      - "9021:9021"
+      - "8082:8082"      # REST Proxy (applications); C3 is reached directly on c3-01 (C3_VIA_LB=no)
     extra_hosts: *hosts
     environment:
       TZ: Asia/Taipei
@@ -124,10 +123,17 @@ services:
 
   c3-01:
     <<: *node
+    image: cp-c3:poc
     hostname: c3-01
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
-    networks: { cpnet: { ipv4_address: 172.30.0.51 } }
+    # cpnet = cluster; opsnet = operators reach the UI directly (https://localhost:9021 on Windows).
+    # The cp-c3 image removes the default route at boot (Docker Desktop would NAT it out): c3-01 stays offline.
+    networks:
+      cpnet: { ipv4_address: 172.30.0.51 }
+      opsnet: { ipv4_address: 172.34.0.51 }
+    ports:
+      - "9021:9021"
 
   # Simulated bastion (堡壘機): fixed OS account opuser whose login shell is the OP menu; not joined to AD.
   # Reached through Docker DNS (alias) on purpose: adding it to the shared x-hosts list would make compose
@@ -163,6 +169,12 @@ networks:
     ipam: { config: [ { subnet: 172.30.0.0/24 } ] }
   frontnet:
     ipam: { config: [ { subnet: 172.31.0.0/24 } ] }
+  # Operators' network (bastion / VDI -> C3). Windows reaches C3 on 9021 through it. Masquerade off is not enough
+  # on Docker Desktop (its VM NATs anyway): the cp-c3 image also removes the default route, so C3 stays offline.
+  opsnet:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+    ipam: { config: [ { subnet: 172.34.0.0/24 } ] }
 
 volumes:
   ssh-keys:

@@ -1,0 +1,13 @@
+[Unit]
+Description=PoC lab: no default route (C3 reachable from the operators' network, no way to the Internet)
+DefaultDependencies=no
+After=local-fs.target
+Before=sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'ip route del default 2>/dev/null || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

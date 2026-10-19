@@ -46,17 +46,20 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 
 | 主機 | IP | 角色 | 說明 |
 |---|---|---|---|
-| ops01 | 172.30.0.10 | 操作機、內部 repo | 執行所有安裝指令;httpd :8443（HTTPS，3.3.0）提供 yum 與 raw repo;內部 CA 也在這台 |
+| ops01 | 172.30.0.10 | 操作機、內部 repo 建置 | 執行所有安裝指令;建置內部 repo(createrepo_c)後推到 repo01(2.15);內部 CA 也在這台 |
+| repo01 | 172.30.0.14 | 套件 web server | 模擬銀行管理的 web server:HTTPS :443 提供 yum 與 raw repo(銀行 CA 憑證) |
 | ad01 | 172.30.0.11 | AD(Samba) | LDAPS 636;正式環境是行內 AD |
-| lb01 | 172.30.0.12 | Nginx L4 | REST :8082、C3 :9021 的 TCP passthrough;唯一對外的主機 |
+| lb01 | 172.30.0.12 | Nginx L4 | REST :8082 的 TCP passthrough(只給應用程式;C3 不經 LB) |
 | jump01 | 172.30.0.13 | 堡壘機 | OP menu(固定帳號 opuser) |
 | kc01、kc02、kc04 | 172.30.0.21/22/24 | KRaft controller | node.id 1、2、4(動態 quorum) |
 | kc03 | 172.30.0.23 | 備用 controller | node.id 3;本手冊的手動驗證機 |
 | kb01–kb04 | 172.30.0.31–34 | broker + MDS | node.id 101–104;kb01/02 為 rack-a,kb03/04 為 rack-b |
 | rest01、rest02 | 172.30.0.41/42 | REST Proxy | mTLS + RBAC |
-| c3-01 | 172.30.0.51 | Control Center | 含 Prometheus、Alertmanager |
+| c3-01 | 172.30.0.51 | Control Center | 含 Prometheus、Alertmanager;**維運人員直連 :9021**(lab 另接維運網路 172.34.0.51,Windows 用 `https://localhost:9021`;該網路沒有預設路由,c3-01 仍無法連外) |
 
-所有主機的 FQDN 為 `<host>.poc.lab`;另有兩個別名 `rest.poc.lab`、`c3.poc.lab` 指向 lb01。
+所有主機的 FQDN 為 `<host>.poc.lab`;`rest.poc.lab` 是 LB 上 REST Proxy 的名稱。`c3.poc.lab` 在 lab 的 hosts 檔裡仍指向 lb01(改它要重建所有容器),但 LB 已不轉送 C3:C3 一律用 `c3-01.poc.lab` 直連。正式環境建議給 C3 一個 DNS 別名(例如 `c3.bank.local` → C3 主機),並放進 server 憑證的 SAN。
+
+**C3 為什麼直連**:C3 只有一台,而且只有維運人員使用(經跳板機或 VDI)。LB 後面只有一台並不會提高可用性,只是多一個故障點;所以預設 `C3_VIA_LB=no`。銀行規定所有 Web 管理介面都要經反向代理時,才設 `C3_VIA_LB=yes`。
 
 ## 1.4 帳號
 
@@ -4127,7 +4130,7 @@ systemctl is-active prometheus alertmanager confluent-control-center   # active 
 
 ### 5.2.3 Nginx stream（lb01）
 
-- **目的**：既有 Nginx 只做 L4 passthrough；TLS（含 client 憑證）在 REST Proxy / C3 端終止，所以 mTLS 身分不會在 LB 遺失。REST 用 `hash $remote_addr consistent` 讓同一 client 黏住同一台（v2 consumer instance 有狀態）。cpctl 只擁有 `/etc/nginx/stream.d/cp.conf` 一個檔。
+- **目的**：既有 Nginx 只做 L4 passthrough，**只轉送 REST Proxy**（C3 由維運直連，`C3_VIA_LB=no`）；TLS（含 client 憑證）在 REST Proxy 端終止，所以 mTLS 身分不會在 LB 遺失。REST 用 `hash $remote_addr consistent` 讓同一 client 黏住同一台（v2 consumer instance 有狀態）。cpctl 只擁有 `/etc/nginx/stream.d/cp.conf` 一個檔。
 - **主機/帳號**：lb01 / root。前提：`/etc/nginx/nginx.conf` 已有 `stream { include /etc/nginx/stream.d/*.conf; }`（PoC：nginx 1.28.3）。
 - **設定檔內容**（`/etc/nginx/stream.d/cp.conf`，root:root 0644）：
 ```nginx
@@ -4136,12 +4139,10 @@ upstream cp_rest {
     server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s;
     server rest02.poc.lab:8082 max_fails=2 fail_timeout=10s;   # 摘除（drain）時在行尾加 " down"
 }
-upstream cp_c3 {
-    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;
-}
 server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }
-server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }
+# Control Center is not behind the load balancer: operators reach it directly (C3_VIA_LB=no)
 ```
+  只有 `C3_VIA_LB=yes` 時才另外加上 C3 的 upstream（`server c3-01.poc.lab:9021`）與 `listen 9021`。
 - **手動指令**（lb01，root）：
 ```bash
 install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf
@@ -4151,11 +4152,12 @@ nginx -t -q && nginx -s reload      # nginx -t 失敗就不要 reload；先還�
 ```bash
 # lb01(LB 設備不一定有 ss;實測的 Debian 版 nginx image 就沒有,改看生效中的設定)
 sudo nginx -T 2>/dev/null | grep -E 'listen|server .*:'
-# ops01（DNS：rest.poc.lab、c3.poc.lab 指向 lb01）
+# ops01（rest.poc.lab 指向 lb01；C3 直連 c3-01）
 curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-legacy-billing.crt --key $PKI/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters  # 200
-curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem https://c3.poc.lab:9021/                                                                                # 200
+curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem https://c3-01.poc.lab:9021/                                                                             # 200（直連）
+timeout 3 bash -c '</dev/tcp/lb01.poc.lab/9021' && echo OPEN || echo closed                                                                     # closed（LB 不轉送 C3）
 ```
-- **對應 cpctl**：`role::lb::configure` → `lb::apply_config`、`lb::upstream_lines`、`role::lb::health`（`health::tcp` 8082、9021，各等 60 秒）；滾動升級用 `lb::drain` / `lb::undrain`。
+- **對應 cpctl**：`role::lb::configure` → `lb::apply_config`、`lb::upstream_lines`、`role::lb::health`（`health::tcp` 8082，等 60 秒；`C3_VIA_LB=yes` 時再加 9021）、`lb::c3_block`；滾動升級用 `lb::drain` / `lb::undrain`。
 - **注意事項**：OSS Nginx 沒有 runtime API，摘除後端只能改檔 + reload；reload 不會中斷既有連線，但 `proxy_timeout 10m` 內的長連線會留在舊 worker 上。
 
 ### 5.2.4 Step 09 的總驗證
@@ -4219,7 +4221,8 @@ BL=kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096
 | 21 | REST via LB | kafka-internal 憑證不能用 REST | ≠200 |
 | (+) | REST via LB | 若 PKI 目錄有 SCRAM app 的舊憑證（`app-orders.crt` 等），每張各一項 ≠200（PoC 目前沒有） | ≠200 |
 | 22 | REST via LB | app-legacy-billing 沒有 SCRAM 憑證 | 失敗＝通過 |
-| 23 | C3/監控 | C3 UI via LB `https://c3.poc.lab:9021` = 200 | 200 |
+| 23 | C3/監控 | C3 UI 直連 `https://c3-01.poc.lab:9021` = 200(維運人員經跳板機 / VDI) | 200 |
+| (+) | C3/監控 | LB 不轉送 C3(lb01:9021 關閉;`C3_VIA_LB=no`) | 連不上＝通過 |
 | 24 | C3/監控 | Prometheus 拒絕沒有憑證的 client | ≠200 |
 | 25 | C3/監控 | Prometheus 有 `io_confluent_kafka_server*` 指標（首次 scrape 約需 2 分鐘） | >0 |
 | 26 | Audit | `confluent-audit-log-events` 存在 | 成功 |
@@ -4288,7 +4291,7 @@ kafka-configs --bootstrap-server "$B" --command-config "$CFG" --describe --entit
 
 ### 5.3.7 C3 與 Prometheus（#23–#25）
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem https://c3.poc.lab:9021/                       # 200
+curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem https://c3-01.poc.lab:9021/                    # 200（直連）
 curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem https://c3-01.poc.lab:9090/-/ready              # 000
 curl -s --cacert $PKI/ca.pem --cert $PKI/cp-server.crt --key $PKI/cp-server.key \
   https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'io_confluent_kafka_server[a-z_]*' | sort -u | wc -l   # > 0
@@ -5079,9 +5082,8 @@ $ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG descri
 $ lbconf() {
     { echo 'upstream cp_rest {'; echo '    hash $remote_addr consistent;'
       for r in $RESTS; do printf '    server %s.poc.lab:8082 max_fails=2 fail_timeout=10s%s;\n' $r "$([ "$r" = "$1" ] && echo ' down')"; done
-      echo '}'; echo 'upstream cp_c3 {'; echo '    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;'; echo '}'
-      echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'
-      echo 'server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }'; } > $S/manual/cp.conf.new
+      echo '}'
+      echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'; } > $S/manual/cp.conf.new   # C3 不經 LB
     scp -q $S/manual/cp.conf.new lb01.poc.lab:/tmp/cp.conf.new
     ssh lb01.poc.lab 'sudo install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf && rm -f /tmp/cp.conf.new && sudo nginx -t -q && sudo nginx -s reload'
   }
@@ -5465,7 +5467,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-
 | Self-Balancing | `kafka-rebalance-cluster --bootstrap-server "$B" --command-config "$CFG" --status` | `Balancer status: ENABLED` |
 | MDS | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem --cert $P/svc-cpctl.crt --key $P/svc-cpctl.key https://kb01.poc.lab:8090/security/1.0/authenticate` | `200`（MDS 正常；以憑證認證，不經 AD） |
 | AD（人員登入用） | `ssh kb01.poc.lab "timeout 5 bash -c '</dev/tcp/ad01.poc.lab/636' && echo ok"` | `ok`（broker 連得到 LDAPS；人員要能登入，svc-mds-bind 的密碼也必須正確，見 4.1） |
-| REST / C3 | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem --cert $P/app-legacy-billing.crt --key $P/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters`；`curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem https://c3.poc.lab:9021/` | `200` |
+| REST / C3 | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem --cert $P/app-legacy-billing.crt --key $P/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters`；`curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem https://c3-01.poc.lab:9021/` | `200` |
 | 憑證效期 | `for n in kafka-internal cp-server svc-rest svc-c3 svc-cpctl app-legacy-billing opmenu-breakglass; do openssl x509 -in $P/$n.crt -noout -enddate; done` | 都在 30 天以後（銀行簽發要提前送件） |
 | 端點出示的憑證 | 9.1 的 `served` | 序號與 `$P` 下的檔案相同 |
 | license | 5.4 的 license 檢查 | 未過期；剩餘天數充足 |
@@ -5842,6 +5844,7 @@ client 配額、repo HTTPS、受限 sudo、日常維運指令，都在 cp-poc �
 | 2.15 手動推送 | 清空 repo01，照 2.15 原文指令執行（`transcripts/cmd-2.15-repo-web.txt`） | 推 121 檔、3 個 repodata 切換、三個 repo = ops build、明文 HTTP 000；之後 `cpctl repo push` 回報無事可做 |
 | 最終驗收 | 加入「C3 以 AD 使用者 token 提供叢集資料」「cp-server 沒有 RBAC 角色」兩項後的 `cpctl verify` | **62/62** |
 | 管理身分分開 | cpctl 管理 broker 改用 svc-cpctl（憑證 → MDS token → TOKEN listener），controller 仍用內部憑證，kafka-admin（SCRAM）只當緊急備用 | 見下方「管理身分」 |
+| C3 直連（`C3_VIA_LB=no`） | LB 只轉送 REST；c3-01 另接維運網路對 Windows 開 9021；c3-01 專用 image 開機時移除預設路由（Docker Desktop 光關 NAT 擋不住對外連線） | 驗收 65/65（C3 直連 200、lb01:9021 關閉、c3-01 仍無法連外）；再跑 install changed=0 |
 
 **管理身分**：日常管理 broker 與設定 RBAC 都是 `svc-cpctl` 一個身分（憑證，不經 AD）；`kafka-internal` 只留在叢集內部與 controller 操作；`kafka-admin`（SCRAM）不依賴 MDS，是 MDS 故障時唯一能進的管理身分，所以刻意不併入。
 
@@ -6280,9 +6283,8 @@ wait_for() { local i; for i in $(seq 1 60); do "$@" && { echo "  healthy after ~
 lbconf() {
   { echo 'upstream cp_rest {'; echo '    hash $remote_addr consistent;'
     for r in rest01 rest02; do printf '    server %s.poc.lab:8082 max_fails=2 fail_timeout=10s%s;\n' $r "$([ "$r" = "$1" ] && echo ' down')"; done
-    echo '}'; echo 'upstream cp_c3 {'; echo '    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;'; echo '}'
-    echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'
-    echo 'server { listen 9021; proxy_pass cp_c3;   proxy_connect_timeout 3s; proxy_timeout 1h;  }'; } > $S/manual/cp.conf.new
+    echo '}'
+    echo 'server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }'; } > $S/manual/cp.conf.new   # C3 不經 LB
   scp -q $S/manual/cp.conf.new lb01.poc.lab:/tmp/cp.conf.new
   ssh lb01.poc.lab 'sudo install -o root -g root -m 0644 /tmp/cp.conf.new /etc/nginx/stream.d/cp.conf && rm -f /tmp/cp.conf.new && sudo nginx -t -q && sudo nginx -s reload 2>/dev/null'
 }

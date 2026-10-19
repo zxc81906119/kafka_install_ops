@@ -13,10 +13,11 @@
 #   poc.sh cpctl <args>      run cpctl on ops01 as cpadmin
 #   poc.sh agent-push        (administrator) install the agent + policy cpctl built (agent build) on every host, as root
 #   poc.sh sudo-full         (administrator) give cpadmin full sudo again on every running host
+#   poc.sh sudo-restrict [h] (administrator) cpadmin may run only the cpnode agent (all running hosts, or the given ones)
 #   poc.sh web-cert          (bank) key + certificate for the repo web server repo01, signed by the bank CA
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 gen_pass() { # 20 random alnum chars + fixed complexity suffix (AD password policy)
   local p
@@ -53,6 +54,7 @@ cmd_build() {
   log "building cp-ad:poc";   docker build -t cp-ad:poc "$(winpath "$DOCKER_DIR/ad")"
   log "building cp-lb:poc";   docker build -t cp-lb:poc "$(winpath "$DOCKER_DIR/lb")"
   log "building cp-web:poc";  docker build -t cp-web:poc "$(winpath "$DOCKER_DIR/web")"
+  log "building cp-c3:poc";   docker build -t cp-c3:poc "$(winpath "$DOCKER_DIR/c3")"
 }
 
 cmd_up() {
@@ -122,6 +124,19 @@ cmd_sudo_full() {
   done
 }
 
+# Restrict cpadmin to the cpnode agent (the sudoers file cpctl built with "agent build"); validated before it is
+# put in place. Used after a host container was recreated (it comes back with the image's full sudo).
+cmd_sudo_restrict() {
+  local h s
+  s=$(mktemp)
+  docker exec "$(container ops01)" cat /var/lib/cp-installer/agent/sudoers-cpadmin >"$s" || die "no sudoers built - run: poc.sh cpctl agent build"
+  for h in ${*:-$(running_hosts)}; do
+    docker exec -i "$(container "$h")" sh -c 'cat > /etc/sudoers.d/.cpadmin.new && chmod 0440 /etc/sudoers.d/.cpadmin.new && visudo -cqf /etc/sudoers.d/.cpadmin.new && mv -f /etc/sudoers.d/.cpadmin.new /etc/sudoers.d/cpadmin' <"$s" &&
+      log "[$h] cpadmin: restricted to the cpnode agent"
+  done
+  rm -f "$s"
+}
+
 # The bank side of the repo web server: its TLS key and a certificate from the bank CA (bank-ca.sh sign).
 # Idempotent: a certificate valid for 30 more days is kept. repo01 reads docker/web/tls/ when httpd starts.
 cmd_web_cert() {
@@ -157,6 +172,7 @@ main() {
     cpctl) cmd_cpctl "$@" ;;
     agent-push) cmd_agent_push ;;
     sudo-full) cmd_sudo_full ;;
+    sudo-restrict) cmd_sudo_restrict "$@" ;;
     web-cert) cmd_web_cert ;;
     -h | --help | help | "") usage 0 ;;
     *) usage 1 ;;

@@ -155,17 +155,19 @@ async function main() {
 
   // ================================================================ 3 architecture
   {
-    const s = plainSlide("安裝範圍：一套高可用的 Kafka 平台", "畫面上每個方塊都是一台或一組主機。核心是 Kafka 叢集：3 台 controller 管理叢集、4 台 broker 存放資料，壞一台不影響服務。人員從 Control Center 管理，應用程式直連 Kafka 或經 REST 介面。周邊還有三台：操作機（安裝作業與套件庫建置）、行內的套件 web server、行內 AD。");
-    // actors
-    await badge(s, 1.25, 2.75, 0.85, "LuUsers", C.ink);
-    under(s, 1.25, 3.25, 1.8, "人員", null, { headSize: 16 });
-    await badge(s, 1.25, 4.75, 0.85, "LuBot", C.ink);
-    under(s, 1.25, 5.25, 1.8, "應用程式", null, { headSize: 16 });
-    // load balancer
-    panel(s, 2.6, 3.25, 1.7, 1.0, C.soft, C.line);
-    txt(s, "負載平衡", { x: 2.6, y: 3.25, w: 1.7, h: 1.0, fontSize: 16, bold: true, align: "center", valign: "middle" });
-    arrow(s, 1.75, 2.85, 2.6, 3.55);
-    arrow(s, 1.75, 4.65, 2.6, 3.95);
+    const s = plainSlide("安裝範圍：一套高可用的 Kafka 平台", "畫面上每個方塊都是一台或一組主機。核心是 Kafka 叢集：3 台 controller 管理叢集、4 台 broker 存放資料，壞一台不影響服務。應用程式直連 Kafka，或經負載平衡使用兩台 REST 介面。維運人員經跳板機或 VDI 直接連 Control Center，不經負載平衡：它只有一台，放在負載平衡後面並不會更可靠。周邊還有三台：操作機（安裝作業與套件庫建置）、行內的套件 web server、行內 AD。");
+    // applications -> load balancer -> REST; applications -> Kafka directly
+    await badge(s, 1.25, 2.8, 0.85, "LuBot", C.ink);
+    under(s, 1.25, 3.3, 1.8, "應用程式", null, { headSize: 16 });
+    panel(s, 2.6, 2.3, 1.7, 1.0, C.soft, C.line);
+    txt(s, "負載平衡", { x: 2.6, y: 2.3, w: 1.7, h: 1.0, fontSize: 16, bold: true, align: "center", valign: "middle" });
+    arrow(s, 1.75, 2.8, 2.6, 2.8);
+    arrow(s, 4.3, 2.8, 4.9, 2.8);
+    // operators -> Control Center directly (bastion / VDI)
+    await badge(s, 1.25, 4.6, 0.85, "LuUsers", C.ink);
+    under(s, 1.25, 5.1, 1.8, "維運人員", null, { headSize: 16 });
+    txt(s, "經跳板機 / VDI 直連", { x: 1.85, y: 4.12, w: 2.9, h: 0.38, fontSize: 14, color: C.body, align: "center" });
+    arrow(s, 1.75, 4.6, 4.9, 4.6);
     // edge services
     panel(s, 4.9, 2.15, 2.4, 1.3, C.tealSoft);
     await badge(s, 5.4, 2.8, 0.6, "LuNetwork", C.teal);
@@ -173,8 +175,6 @@ async function main() {
     panel(s, 4.9, 4.0, 2.4, 1.15, C.tealSoft);
     await badge(s, 5.4, 4.575, 0.6, "LuMonitor", C.teal);
     txt(s, "Control\nCenter", { x: 5.8, y: 4.0, w: 1.45, h: 1.15, fontSize: 15, bold: true, valign: "middle", color: C.teal });
-    arrow(s, 4.3, 3.55, 4.9, 2.95);
-    arrow(s, 4.3, 3.95, 4.9, 4.45);
     // kafka cluster
     const kx = 7.9, ky = 1.95, kw = W - M - kx, kh = 3.6;
     panel(s, kx, ky, kw, kh, C.accentSoft);
@@ -185,7 +185,7 @@ async function main() {
     txt(s, "Broker ×4\n存放資料", { x: kx + 3.45, y: ky + 2.05, w: 1.3, h: 0.8, fontSize: 14, bold: true, color: C.ink, valign: "middle" });
     arrow(s, 7.3, 2.8, kx, 2.8);
     arrow(s, 7.3, 4.575, kx, 4.575);
-    arrow(s, 1.75, 5.15, kx, 5.4, C.mute, 1.5, "dash");
+    arrow(s, 1.6, 3.25, kx, 3.75, C.mute, 1.5, "dash");
     // support hosts
     const sup = [["LuLaptop", "操作機：安裝作業"], ["LuDatabase", "套件 web server"], ["LuIdCard", "行內 AD：人員身分"]];
     for (let i = 0; i < sup.length; i++) {
@@ -198,7 +198,7 @@ async function main() {
   {
     const s = plainSlide("開始前，銀行需備妥六件事", "這六項是銀行端要先準備的。最常卡關的是第二項：主機要能從行內的 RHEL 套件來源安裝作業系統套件，Satellite、內部鏡像或安裝光碟都可以。AD 只需要人員群組，加上一個沒有任何管理權限的唯讀查詢帳號；平台內部的服務一律用憑證識別，不在 AD 建帳號。套件 web server 由銀行管理，只需給我們一個能寫入網站目錄的部署帳號，並以銀行 CA 簽發的憑證提供 HTTPS。");
     const items = [
-      ["LuServer", "RHEL 9 主機", "依角色準備\n規格與數量"],
+      ["LuServer", "RHEL 9 主機", "依元件準備\n規格與數量"],
       ["LuDatabase", "OS 套件來源", "Satellite、鏡像\n或安裝光碟"],
       ["LuIdCard", "AD", "人員群組\n＋唯讀查詢帳號"],
       ["LuServer", "套件伺服器", "web server\n部署帳號＋HTTPS"],

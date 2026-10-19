@@ -330,7 +330,14 @@ verify::run_all() {
   log::step "---- Control Center and monitoring"
   local c3
   c3=$(inv::fqdn "$(inv::hosts c3 | head -1)")
-  verify::check "C3 UI via LB https://$LB_C3_NAME:$PORT_C3 = 200" test "$(verify::rest_code "https://$LB_C3_NAME:$PORT_C3/" -)" = 200
+  if lb::c3_via_lb; then
+    verify::check "C3 UI via LB https://$LB_C3_NAME:$PORT_C3 = 200" test "$(verify::rest_code "https://$LB_C3_NAME:$PORT_C3/" -)" = 200
+  else
+    verify::check "C3 UI reached directly https://$c3:$PORT_C3 = 200 (operators via bastion / VDI)" test "$(verify::rest_code "https://$c3:$PORT_C3/" -)" = 200
+    local lb1
+    lb1=$(inv::fqdn "$(inv::hosts lb | head -1)")
+    verify::check_not "the load balancer does not forward C3 ($lb1:$PORT_C3 closed; C3_VIA_LB=no)" health::tcp "$(inv::hosts lb | head -1)" "$PORT_C3"
+  fi
   verify::check "C3 serves the cluster to an AD user (alice's MDS token)" verify::c3_as_human alice "$(inv::secret HUMAN_DEFAULT_PASSWORD)"
   verify::check "the shared server certificate (User:cp-server) holds no RBAC role (C3 runs as svc-c3)" verify::no_roles User:cp-server
   verify::check_not "Prometheus rejects clients without a certificate" test "$(verify::rest_code "https://$c3:$PORT_PROMETHEUS/-/ready" -)" = 200

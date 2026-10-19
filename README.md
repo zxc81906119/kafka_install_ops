@@ -13,11 +13,13 @@
 ## 架構
 
 ```
-Windows ──(8082 / 9021)── lb01  Nginx stream (L4 passthrough, source-hash 黏著) ── 唯一可連外的節點 (DMZ)
-                             ├─ rest01 / rest02 :8082   REST Proxy (mTLS + RBAC)
-                             └─ c3-01 :9021             Control Center (AD 帳密登入)
+應用程式 ──(8082)── lb01  Nginx stream (L4 passthrough, source-hash 黏著) ── 唯一可連外的節點 (DMZ)
+                       └─ rest01 / rest02 :8082   REST Proxy (mTLS + RBAC)
+維運人員 ──(9021, 經跳板機 / VDI)── c3-01 :9021   Control Center (AD 帳密登入)，直連、不經 LB
+                                     lab：維運網路 opsnet，Windows 開 https://localhost:9021；c3-01 沒有預設路由，仍無法連外
 cpnet (internal, 無外網) ──────────────────────────────────────────────────────────
-  ops01   操作機 + 內部 yum/raw repo (:8080)        ad01  AD (LDAPS :636)
+  ops01   操作機、內部 repo 建置                     repo01 套件 web server (HTTPS :443，銀行管理)
+  ad01    AD (LDAPS :636)                          jump01 跳板機 (OP 選單)
   kc01-03 KRaft controller :9093 (mTLS)             kb01-04 broker + MDS :8090
 ```
 
@@ -81,7 +83,7 @@ bash windows/poc.sh cpctl install          # 步驟 00–10，可中斷後重跑
 bash windows/poc.sh cpctl verify           # 端到端驗證（48 項）
 ```
 
-瀏覽器開啟 `https://localhost:9021`（C3，需信任 `ops01:/var/lib/cp-installer/pki/ca.pem`），用 `conf/apps.env` 中的 AD 帳號登入（例如 `alice`，密碼為 `HUMAN_DEFAULT_PASSWORD`）。
+瀏覽器開啟 `https://localhost:9021`（C3 直連，不經 LB；需信任 `ops01:/var/lib/cp-installer/pki/ca.pem`），用 `conf/apps.env` 中的 AD 帳號登入（例如 `alice`，密碼為 `HUMAN_DEFAULT_PASSWORD`）。
 
 ## 離線軟體引進流程（建議與銀行討論的方案）
 

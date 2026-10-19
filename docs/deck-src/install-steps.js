@@ -20,7 +20,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 1 download
     {
       const s = stepSlide(0, "只帶原廠套件，OS 套件由行內提供",
-        "第一步在可以連外的下載機進行。只下載版本清單上指定的 Confluent 與 Java 原廠套件，連同原廠的簽章公鑰一起保存。下載環境用和正式主機同版的精簡系統，算出來的相依才會正確。作業系統需要的套件不帶進去，只依主機角色列出名稱，交給行內 OS 團隊從既有來源提供。每個檔案都記下來源、版本、雜湊值與下載時間；舊版本也保留，回滾或原廠下架時才有得用。");
+        "第一步在可以連外的下載機進行。只下載版本清單上指定的 Confluent 與 Java 原廠套件，連同原廠的簽章公鑰一起保存。下載環境用和正式主機同版的精簡系統，算出來的相依才會正確。作業系統需要的套件不帶進去，只依主機上的元件列出名稱，交給行內 OS 團隊從既有來源提供。每個檔案都記下來源、版本、雜湊值與下載時間；舊版本也保留，回滾或原廠下架時才有得用。");
       await badge(s, 1.35, 2.85, 1.0, "LuGlobe", C.teal);
       under(s, 1.35, 3.42, 2.0, "外網下載機", null, { headSize: 15 });
       arrow(s, 1.9, 2.85, 2.95, 2.85, C.mute, 2);
@@ -42,7 +42,7 @@ module.exports = function makeSteps(ctx) {
         ["LuKeyRound", "保存原廠公鑰", "之後每一關都用它驗簽"],
         ["LuFingerprint", "記錄每個檔案", "來源、版本、雜湊、時間"],
         ["LuArchive", "保留舊版本", "回滾、原廠下架時仍可用"],
-        ["LuFileText", "OS 套件名稱清單", "依主機角色列出"],
+        ["LuFileText", "OS 套件名稱清單", "依主機上的元件列出"],
       ]);
     }
 
@@ -109,7 +109,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 4 host baseline
     {
       const s = stepSlide(3, "每台主機都照同一套標準設定",
-        "安裝 Kafka 之前，先把每台主機的作業系統調成同一套標準：檔案數、記憶體、網路緩衝等系統參數調到建議值；關閉透明大頁、避免使用 swap；時間與行內 NTP 同步，誤差小於 1 秒；防火牆只開各角色需要的埠；建立不能登入的服務專用帳號；信任行內 CA，日誌限量保留。");
+        "安裝 Kafka 之前，先把每台主機的作業系統調成同一套標準：檔案數、記憶體、網路緩衝等系統參數調到建議值；關閉透明大頁、避免使用 swap；時間與行內 NTP 同步，誤差小於 1 秒；防火牆只開各元件需要的埠；建立不能登入的服務專用帳號；信任行內 CA，日誌限量保留。");
       const roles = [["LuServerCog", "Controller"], ["LuServer", "Broker"], ["LuNetwork", "REST 介面"], ["LuMonitor", "Control Center"], ["LuLaptop", "操作機"], ["LuDoorOpen", "跳板機"]];
       const step = (W - 2 * M) / roles.length;
       panel(s, M, 1.95, W - 2 * M, 2.1, C.accentSoft);
@@ -122,7 +122,7 @@ module.exports = function makeSteps(ctx) {
         ["LuSlidersHorizontal", "系統參數", "檔案數、記憶體、網路緩衝"],
         ["LuMemoryStick", "記憶體行為", "關透明大頁，避免 swap"],
         ["LuClock", "時間同步", "與行內 NTP 誤差小於 1 秒"],
-        ["LuBrickWall", "防火牆", "只開各角色需要的埠"],
+        ["LuBrickWall", "防火牆", "只開各元件需要的埠"],
         ["LuUserCog", "服務專用帳號", "不能登入、不能 SSH"],
         ["LuBadgeCheck", "信任與日誌", "信任行內 CA，日誌限量保留"],
       ]);
@@ -131,7 +131,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 5 install packages
     {
       const s = stepSlide(4, "先試算，通過才安裝，裝完鎖定版本",
-        "每台主機只從內部套件庫安裝，連線用 HTTPS 並驗證伺服器憑證；安裝時逐一驗證原廠簽章。正式安裝前先試算：確認不缺任何套件，也不會順帶升級其他系統套件。依主機角色只裝需要的套件和指定版本，裝完鎖定版本，日後例行更新不會誤升級。Control Center 主機不裝其他平台套件，避免衝突。");
+        "每台主機只從內部套件庫安裝，連線用 HTTPS 並驗證伺服器憑證；安裝時逐一驗證原廠簽章。正式安裝前先試算：確認不缺任何套件，也不會順帶升級其他系統套件。依主機上的元件只裝需要的套件和指定版本，裝完鎖定版本，日後例行更新不會誤升級。Control Center 主機不裝其他平台套件，避免衝突。");
       const steps = [["LuDatabase", "內部套件庫", C.teal], ["LuCalculator", "試算", C.accent], ["LuPackage", "安裝", C.teal], ["LuLock", "鎖定版本", C.teal]];
       const sx = 1.9, step = (W - 2 * sx) / 3, cy = 2.75;
       for (let i = 0; i < steps.length; i++) {
@@ -144,7 +144,7 @@ module.exports = function makeSteps(ctx) {
         ["LuLink", "指向內部套件庫", "HTTPS，驗證伺服器憑證"],
         ["LuKeyRound", "匯入原廠公鑰", "安裝時逐一驗證簽章"],
         ["LuCalculator", "安裝前試算", "不缺套件、不動系統套件"],
-        ["LuPackage", "依角色安裝", "只裝需要的套件與版本"],
+        ["LuPackage", "依元件安裝", "只裝需要的套件與版本"],
         ["LuLock", "鎖定版本", "例行更新不會誤升級"],
         ["LuMonitor", "C3 主機獨立", "不裝其他平台套件"],
       ]);
@@ -184,7 +184,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 7 configure + start
     {
       const s = stepSlide(6, "依序啟動，健康才進下一段",
-        "依主機角色產生設定檔，不從範例檔手改；設定裡的密碼加密保存，設定檔與私鑰只有服務帳號讀得到。叢集儲存只初始化一次。啟動有固定順序：先啟動管理叢集的 controller，確認成員到齊；再啟動存放資料的 broker，確認每台都已加入；最後才啟動對外的 REST 介面與 Control Center，並由負載平衡器對外提供。任何一段不健康就停下來處理，不往下一段走。");
+        "依主機上的元件產生設定檔，不從範例檔手改；設定裡的密碼加密保存，設定檔與私鑰只有服務帳號讀得到。叢集儲存只初始化一次。啟動有固定順序：先啟動管理叢集的 controller，確認成員到齊；再啟動存放資料的 broker，確認每台都已加入；最後才啟動 REST 介面與 Control Center：REST 由負載平衡器提供給應用程式，Control Center 由維運人員經跳板機直連。任何一段不健康就停下來處理，不往下一段走。");
       const stages = [
         ["Controller", ["LuServerCog", "LuServerCog", "LuServerCog"], C.accent, C.accentSoft],
         ["Broker", ["LuServer", "LuServer", "LuServer", "LuServer"], C.accent, C.accentSoft],
@@ -206,12 +206,12 @@ module.exports = function makeSteps(ctx) {
         }
       }
       await worklist(s, [
-        ["LuFileCog", "依角色產生設定", "不從範例檔手改"],
+        ["LuFileCog", "依元件產生設定", "不從範例檔手改"],
         ["LuLockKeyhole", "密碼加密保存", "只有服務帳號讀得到"],
         ["LuHardDrive", "初始化叢集儲存", "只做一次"],
         ["LuListOrdered", "依序啟動", "controller → broker → 對外"],
         ["LuHeartPulse", "每段確認健康", "成員到齊、服務有回應"],
-        ["LuNetwork", "對外經負載平衡", "REST、C3 不直接對外"],
+        ["LuNetwork", "REST 經負載平衡", "C3 由維運人員直連"],
       ]);
     }
 
