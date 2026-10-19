@@ -166,6 +166,53 @@ verify::quota_matches() {
 }
 
 
+# verify::mds_cert_sub <name> -> MDS issues a token to the client certificate <name> and its principal (sub) is <name>
+verify::mds_cert_sub() {
+  local t p
+  t=$(curl -s --max-time 10 --cacert "$PKI_DIR/ca.pem" --cert "$PKI_DIR/$1.crt" --key "$PKI_DIR/$1.key" \
+    "https://$(inv::fqdn "$(inv::hosts broker | head -1)"):$PORT_MDS/security/1.0/authenticate" | jq -r '.auth_token // empty')
+  [[ -n $t ]] || return 1
+  p=$(cut -d. -f2 <<<"$t" | tr '_-' '/+')
+  while ((${#p} % 4)); do p+='='; done
+  [[ $(base64 -d <<<"$p" 2>/dev/null | jq -r .sub) == "$1" ]]
+}
+
+# verify::cert_identity <host> <config file> -> the component gets its MDS token from its certificate:
+# token login by certificate configured, no MDS user/password (basic.auth.user.info) left in the file
+verify::cert_identity() {
+  local conf
+  conf=$(remote::run "$1" sys_node::read_conf "$2") || return 1
+  grep -q 'TokenCertificateLoginCallbackHandler' <<<"$conf" && ! grep -q 'basic\.auth\.user\.info' <<<"$conf"
+}
+
+# verify::_mds <path> [curl args...] -> MDS call authenticated with the svc-cpctl certificate
+verify::_mds() {
+  local p=$1 t mds
+  shift
+  mds="https://$(inv::fqdn "$(inv::hosts broker | head -1)"):$PORT_MDS"
+  t=$(curl -s --max-time 10 --cacert "$PKI_DIR/ca.pem" --cert "$PKI_DIR/svc-cpctl.crt" --key "$PKI_DIR/svc-cpctl.key" \
+    "$mds/security/1.0/authenticate" | jq -r '.auth_token // empty') || return 1
+  curl -s --max-time 10 --cacert "$PKI_DIR/ca.pem" -H "Authorization: Bearer $t" "$@" "$mds$p"
+}
+
+# verify::no_roles <principal> -> no RBAC role binding on the Kafka cluster
+verify::no_roles() {
+  local cid
+  cid=$(rbac::cluster_id)
+  [[ $(verify::_mds "/security/1.0/lookup/principal/$1/resources" -X POST -H 'Content-Type: application/json' \
+    -d "{\"clusters\":{\"kafka-cluster\":\"$cid\"}}") == '{}' ]]
+}
+
+# verify::c3_as_human <user> <password> -> C3 lists the Kafka cluster for a person logged in through MDS (AD)
+verify::c3_as_human() {
+  local t
+  t=$(printf 'user = "%s:%s"\n' "$1" "$2" | curl -s -K - --max-time 10 --cacert "$PKI_DIR/ca.pem" \
+    "https://$(inv::fqdn "$(inv::hosts broker | head -1)"):$PORT_MDS/security/1.0/authenticate" | jq -r '.auth_token // empty')
+  [[ -n $t ]] || return 1
+  [[ $(curl -s --max-time 20 --cacert "$PKI_DIR/ca.pem" -H "Authorization: Bearer $t" \
+    "https://$(inv::fqdn "$(inv::hosts c3 | head -1)"):$PORT_C3/2.0/clusters/kafka") == *'"clusterId"'* ]]
+}
+
 verify::rest_code() { # <url> <cert name|-> [curl args...]
   local url=$1 cert=$2; shift 2
   local certargs=()
@@ -221,6 +268,16 @@ verify::run_all() {
   verify::check_not "app-orders is denied on payments.events (no binding)" verify::produce "$boot_client" "$(verify::scram_config app-orders)" payments.events "$msg"
   verify::check_not "wrong SCRAM password is rejected" verify::produce "$boot_client" "$(verify::ldap_config app-orders x)" orders.events "$msg"
 
+  log::step "---- Service identities by certificate (AD holds only the bind account svc-mds-bind)"
+  local svc
+  for svc in ${SERVICE_CERTS:-}; do
+    verify::check "MDS issues a token to the $svc certificate, principal $svc (no AD account, no password)" verify::mds_cert_sub "$svc"
+  done
+  verify::check "[$(inv::hosts rest | head -1)] REST Proxy: MDS and Kafka identity from svc-rest certificate, no MDS password" \
+    verify::cert_identity "$(inv::hosts rest | head -1)" "$REST_CONF"
+  verify::check "[$(inv::hosts c3 | head -1)] Control Center: MDS and Kafka identity from svc-c3 certificate, no MDS password" \
+    verify::cert_identity "$(inv::hosts c3 | head -1)" "$C3_CONF"
+
   log::step "---- Humans over LDAP (AD) + group RBAC"
   local pw
   pw=$(inv::secret HUMAN_DEFAULT_PASSWORD)
@@ -253,6 +310,8 @@ verify::run_all() {
   local c3
   c3=$(inv::fqdn "$(inv::hosts c3 | head -1)")
   verify::check "C3 UI via LB https://$LB_C3_NAME:$PORT_C3 = 200" test "$(verify::rest_code "https://$LB_C3_NAME:$PORT_C3/" -)" = 200
+  verify::check "C3 serves the cluster to an AD user (alice's MDS token)" verify::c3_as_human alice "$(inv::secret HUMAN_DEFAULT_PASSWORD)"
+  verify::check "the shared server certificate (User:cp-server) holds no RBAC role (C3 runs as svc-c3)" verify::no_roles User:cp-server
   verify::check_not "Prometheus rejects clients without a certificate" test "$(verify::rest_code "https://$c3:$PORT_PROMETHEUS/-/ready" -)" = 200
   local series
   series=$(curl -s --max-time 20 --cacert "$PKI_DIR/ca.pem" --cert "$PKI_DIR/cp-server.crt" --key "$PKI_DIR/cp-server.key" \
@@ -262,14 +321,18 @@ verify::run_all() {
 
   log::step "---- Audit, packages, offline"
   if repo::tls; then
-    verify::check "internal repo served over HTTPS; the server certificate chains to the trust bundle" repo::_served_quiet
+    if repo::remote_web; then
+      verify::check "internal repo served by $REPO_WEB_HOST over HTTPS, identical to the ops build (repomd.xml of every repo)" repo::verify_served
+    else
+      verify::check "internal repo served over HTTPS; the server certificate chains to the trust bundle" repo::_served_quiet
+    fi
     # from a NODE, with the CA file dnf pins: a check on the repo host itself would not see its firewall
     local node
     node=$(inv::hosts broker | head -1)
     verify::check "[$node] reaches the repo over HTTPS with the pinned CA (cp-repo-ca.pem)" \
       remote::exec "$node" "curl -fsS --max-time 10 --cacert /etc/pki/tls/certs/cp-repo-ca.pem -o /dev/null ${REPO_YUM_BASEURL%/}/confluent/repodata/repomd.xml"
     local plain
-    plain="http://$(inv::fqdn "$(repo::server)"):8080/rpm/confluent/repodata/repomd.xml"
+    if repo::remote_web; then plain="http://$REPO_WEB_HOST/rpm/confluent/repodata/repomd.xml"; else plain="http://$(inv::fqdn "$(repo::server)"):8080/rpm/confluent/repodata/repomd.xml"; fi
     verify::check_not "plain HTTP does not serve the repo ($plain answers 403 or nothing)" \
       bash -c '[[ $(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$1") == 200 ]]' _ "$plain"
   fi

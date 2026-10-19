@@ -15,7 +15,8 @@ role::c3::configure() {
   HOST_FQDN=$(inv::fqdn "$host")
   local pr="PROM_RETENTION_$PROFILE"; PROM_RETENTION=${!pr}
 
-  role::push_ssl "$host" ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key mds-public.pem
+  # svc-c3.p12: Control Center's own identity towards MDS and Kafka (no AD account; cp-server stays the UI certificate)
+  role::push_ssl "$host" ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12 mds-public.pem
   [[ $REMOTE_CHANGED == 1 ]] && { any_prom=1; any_c3=1; }
 
   # Prometheus / Alertmanager: TLS + mandatory client certificates

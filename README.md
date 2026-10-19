@@ -29,7 +29,8 @@ cpnet (internal, 無外網) ─────────────────�
 | 應用程式 | Kafka（CLIENT :9095） | SASL_SSL SCRAM-SHA-512 | `User:<app>` |
 | 應用程式 | REST Proxy（經 LB） | mTLS，每個 app 一張 client 憑證 | `User:<app>`（REST 以 MDS token 代理身分） |
 | 人員 | Kafka CLI（LDAP :9096）、MDS、C3 | AD 帳密（LDAPS） | `Group:<AD 群組>` |
-| REST Proxy / C3 本身 | MDS、TOKEN listener :9094 | AD 服務帳號 `svc-rest` / `svc-c3` | 各自獨立 |
+| REST Proxy / C3 / cpctl 本身 | MDS、TOKEN listener :9094 | **各自的 client 憑證** `CN=svc-rest` / `svc-c3` / `svc-cpctl`，向 MDS 換 token；不是 AD 帳號、沒有密碼 | `User:svc-rest` / `User:svc-c3` / `User:svc-cpctl` |
+| MDS → AD | LDAPS :636 | 唯讀 bind 帳號 `svc-mds-bind`（一般網域使用者）：**AD 上唯一的服務帳號** | — |
 | 所有伺服器的 HTTPS / TLS | — | **共用 server 憑證** `CN=cp-server`（SAN 含所有主機與 LB 名稱） | — |
 
 - C3 / REST Proxy → Kafka 走 TOKEN listener（:9094）：單向 TLS，身分由 MDS 簽發的 OAUTHBEARER token 證明（RS256、效期 1 小時，與官方範例一致）。若資安要求伺服器之間一律雙向驗證，可把 `listener.name.token.ssl.client.auth` 改為 `required`，並讓 REST / C3 出示共用的 `cp-server` 憑證；改完需要滾動重啟。
@@ -155,7 +156,8 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 | Log 保留 | log4j2 只輪替不刪除 → `systemd-tmpfiles` 每日刪除 `LOG_RETENTION_DAYS`（預設 14 天）前的檔案；journald 上限 1G | step 01 |
 | LDAP 韌性 | 多台 AD（`AD_LDAP_HOSTS`）、連線逾時 3 秒、群組快取 60 秒更新，AD 中斷時沿用快取最長 24 小時 | 憑證輪替時 Samba 重啟，登入不中斷 |
 | client 配額 | `APP_QUOTA_<app>`（apps.env）→ Kafka user quota（produce / consume byte rate、request %）；REST 的 app 經 impersonation 同樣受限 | 壓測從約 15 MB/s 壓到 4.99 MB/s（= 5 MiB/s 上限），cpctl 與手動結果相同；`cpctl verify` 檢查 |
-| repo HTTPS | ops 主機以 cp-server 憑證提供 8443；節點 `sslcacert` 只信任 bundle；HTTP 回 403 或被防火牆關閉；mod_ssl 走離線引進 | 11 台節點從節點端實際下載 metadata；輪替時 repo 憑證與 CA 檔跟著換（`push_repo` / step 03） |
+| repo HTTPS | 兩種：ops 主機自己提供（cp-server 憑證、8443）；或**另一台銀行管理的 web server**（`REPO_WEB_HOST`）：ops 只建置（createrepo_c），以 SSH + tar 推送，web server 不需 createrepo_c / rsync / root；repomd.xml 最後切換；節點 `sslcacert` = `REPO_WEB_CA` | PoC 已切到 repo01（銀行 CA 簽的憑證）：推 8.5GB、142 檔；切換後 55/55 驗收；之後整套移除重裝，所有套件從 repo01 安裝；全新空主機只靠 repo01 裝起 46 個套件（含 JDK、OS 相依） |
+| 服務身分不在 AD | REST Proxy、C3、cpctl 用憑證向 MDS 取 token（`TokenCertificateLoginCallbackHandler`、C3 proxy store、`confluent login --certificate-only`）；AD 只需人員群組 + `svc-mds-bind` | ad01 刪除舊的 svc-rest / svc-c3 / svc-cpctl 後整套重裝：60/60 驗收；共用的 cp-server 憑證沒有任何 RBAC 角色 |
 | 受限 sudo | cpadmin 只能執行 cpnode agent（stdin 傳參、固定函式、路徑允許清單、禁止 setuid、sudoers 只給選單帳號、每次呼叫留紀錄）；agent 改版由管理員安裝 | cp-poc 受限下完整安裝 changed=0、無拒絕；cp-man 手動組出的 agent 與 cpctl 版本一致，越權呼叫都被拒 |
 | Self-Balancing | controller 設 `inter.broker.listener.name=INTERNAL`（否則 SBC 永遠 STARTING，之前未被發現） | `cpctl verify` 檢查 `Balancer status: ENABLED` |
 | 日常維運 | `cpctl health`、`broker add/remove`、`os patch`（手冊第 10 章為手動版） | broker 擴縮與 OS 修補在持續負載下 0 遺失、REST 0 失敗（手冊附錄 A.5、A.6） |
@@ -220,7 +222,7 @@ cpctl upgrade finalize --to 8.3.2   # kafka-features upgrade --release-version�
 - `kafka-internal` 憑證由所有 controller 和 broker 共用，而且是 super user：任何一台的私鑰外洩，等於整個叢集被取得。緩解方式：私鑰權限 0640、以 `cpctl certs rotate` 定期（或事故時立即）輪替；正式環境也可以改成每台各自一張憑證。
 - JMX exporter 的 keystore 密碼必須以明文寫在 exporter 的 YAML（0640 root:confluent；YAML 不支援 Secret Protection）。scrape 密碼則只存雜湊。
 - Confluent Server 不以 JMX 提供 raft 指標；controller quorum 健康以 `ActiveControllerCount` 告警，詳細狀態用 `cpctl verify`。consumer lag 不是 broker JMX 指標，由 C3 顯示（或另接 lag exporter）。
-- svc-cpctl 是安裝用的 bootstrap 帳號，列在 `super.users` 中；安裝完成後建議停用，需要時再由 break-glass 程序啟用。
+- svc-cpctl 是安裝用的身分（client 憑證，不是 AD 帳號），列在 `super.users` 中：持有它的私鑰（ops01 `pki/svc-cpctl.key`，0600）就等於 super user。安裝完成後建議把私鑰移到離線保管，需要時再取回。
 - 在 Docker Desktop 上，從 Windows 發出的請求來源 IP 都相同，LB 的 source-hash 黏著會把它們全部送到同一台 REST Proxy；負載分散要從 cpnet 內的不同來源驗證。
 - **整個環境冷開機**（例如停電後所有主機同時開機）：C3 若比 MDS 先啟動，會卡在「client has already been closed」且不開 9021（2026-10-16 實測）。已在 C3 的 systemd drop-in 加上啟動前等待 MDS（最多 5 分鐘，逾時仍會啟動）。正式環境的開機順序建議仍是 controller → broker → REST / C3。
 - 模擬環境用 `bash windows/poc.sh start` 啟動時會帶 `spare` profile：controller 替換演練後 kc04 是正式 voter，少了它 quorum 只剩兩台。

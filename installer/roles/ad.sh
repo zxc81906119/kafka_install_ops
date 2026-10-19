@@ -35,10 +35,9 @@ role::ad::accounts() {
   remote::apply "$host" ad::ensure_ou "$ou_users,$AD_BASE_DN"
   remote::apply "$host" ad::ensure_ou "$ou_groups,$AD_BASE_DN"
   remote::apply "$host" ad::ensure_ou "$ou_svc,$AD_BASE_DN"
+  # the only service account in AD: the read-only bind account of MDS (svc-rest / svc-c3 / svc-cpctl are
+  # certificate identities, SERVICE_CERTS - nothing to create here)
   remote::apply "$host" ad::ensure_user svc-mds-bind "$(inv::secret LDAP_BIND_PASSWORD)" "$ou_svc"
-  remote::apply "$host" ad::ensure_user svc-rest "$(inv::secret SVC_REST_PASSWORD)" "$ou_svc"
-  remote::apply "$host" ad::ensure_user svc-c3 "$(inv::secret SVC_C3_PASSWORD)" "$ou_svc"
-  remote::apply "$host" ad::ensure_user svc-cpctl "$(inv::secret SVC_CPCTL_PASSWORD)" "$ou_svc"
   for g in $AD_GROUPS; do remote::apply "$host" ad::ensure_group "$g" "$ou_groups"; done
   for pair in $AD_USERS; do
     u=${pair%%:*}; g=${pair#*:}

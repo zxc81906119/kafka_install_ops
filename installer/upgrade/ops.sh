@@ -219,13 +219,19 @@ ops::health() {
   ops::_sbc_enabled && log::ok "Self-Balancing running" || ops::_warn "Self-Balancing not running (controllers need inter.broker.listener.name=INTERNAL)"
 
   log::step "---- AD / MDS"
-  # credentials through curl's config on stdin: never on a command line (ps)
-  if [[ $(printf 'user = "svc-cpctl:%s"\n' "$(inv::secret SVC_CPCTL_PASSWORD)" |
-    curl -K - -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert "$PKI_DIR/ca.pem" \
-    "https://$(inv::fqdn "$(inv::hosts broker | head -1)"):$PORT_MDS/security/1.0/authenticate") == 200 ]]; then
-    log::ok "MDS issues a token to svc-cpctl (MDS up, AD bind + LDAPS work)"
+  local mds
+  mds="https://$(inv::fqdn "$(inv::hosts broker | head -1)"):$PORT_MDS/security/1.0/authenticate"
+  if [[ $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert "$PKI_DIR/ca.pem" \
+    --cert "$PKI_DIR/svc-cpctl.crt" --key "$PKI_DIR/svc-cpctl.key" "$mds") == 200 ]]; then
+    log::ok "MDS issues a token to the svc-cpctl certificate (MDS up)"
   else
-    ops::_crit "MDS login for svc-cpctl failed - check MDS (broker 8090), AD reachability (LDAPS 636) and the svc-cpctl password"
+    ops::_crit "MDS refuses the svc-cpctl certificate - check MDS (broker 8090) and the certificate (cpctl certs status)"
+  fi
+  # people log in with AD: the bind account must work (a human login fails with 401 when AD / LDAPS / svc-mds-bind is broken)
+  if remote::exec "$(inv::hosts broker | head -1)" "timeout 5 bash -c '</dev/tcp/$(inv::fqdn "$AD_HOST")/636'" 2>/dev/null; then
+    log::ok "AD (LDAPS 636) reachable from the brokers"
+  else
+    ops::_crit "AD LDAPS 636 not reachable from the brokers - people cannot log in"
   fi
 
   log::step "---- REST Proxy / Control Center"

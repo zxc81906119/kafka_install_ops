@@ -27,7 +27,7 @@ role::common_vars() {
   LDAP_BIND_DN="CN=svc-mds-bind,OU=Service,$AD_OU"
   export LDAP_PROVIDER_URLS
   LDAP_PROVIDER_URLS=$(for d in ${AD_LDAP_HOSTS:-$AD_HOST}; do printf 'ldaps://%s:636 ' "$(inv::fqdn "$d")"; done | sed 's/ $//')
-  # kafka-internal: brokers/controllers; kafka-admin: SCRAM break-glass; svc-cpctl: AD installer account (RBAC bootstrap)
+  # kafka-internal: brokers/controllers; kafka-admin: SCRAM break-glass; svc-cpctl: cpctl (RBAC bootstrap, MDS by certificate)
   SUPER_USERS="User:kafka-internal;User:kafka-admin;User:svc-cpctl"
   IMPERSONATION_SUPER_USERS="User:svc-rest"
   IMPERSONATION_PROTECTED_USERS=$(role::protected_users)
@@ -50,18 +50,18 @@ role::common_vars() {
   AUDIT_PASSWORD=$(inv::secret AUDIT_PASSWORD)
   AUDIT_RETENTION_MS=$((AUDIT_RETENTION_DAYS * 86400000))
   AUDIT_ROUTER_JSON=$(role::audit_router_json)
-  export STORE_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD MDS_TOKEN_PASSPHRASE
+  export STORE_PASSWORD LDAP_BIND_PASSWORD MDS_TOKEN_PASSPHRASE
   export AD_OU PORT_CONTROLLER PORT_INTERNAL PORT_TOKEN PORT_CLIENT PORT_LDAP PORT_MDS PORT_REST PORT_C3 \
     PORT_PROMETHEUS PORT_ALERTMANAGER LB_REST_NAME
 }
 
-# Never-impersonate list, derived (not hand-maintained): every super user + every AD service account.
+# Never-impersonate list, derived (not hand-maintained): every super user + every service identity.
 role::protected_users() {
   local p out=() svc
   IFS=';' read -ra out <<<"$SUPER_USERS"
   local bg=""
   [[ ${OPMENU:-off} == on ]] && bg=${OPMENU_BREAKGLASS:-}
-  for svc in $AD_SERVICE_ACCOUNTS ${AUDIT_PRINCIPAL:-} $bg; do
+  for svc in $AD_SERVICE_ACCOUNTS ${SERVICE_CERTS:-} ${AUDIT_PRINCIPAL:-} $bg; do
     p="User:$svc"
     [[ " ${out[*]} " == *" $p "* ]] || out+=("$p")
   done

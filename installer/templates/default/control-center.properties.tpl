@@ -11,16 +11,32 @@ ${LICENSE_LINE}
 bootstrap.servers=${TOKEN_BOOTSTRAP}
 confluent.controlcenter.streams.security.protocol=SASL_SSL
 confluent.controlcenter.streams.sasl.mechanism=OAUTHBEARER
-confluent.controlcenter.streams.sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenUserLoginCallbackHandler
-confluent.controlcenter.streams.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required username="svc-c3" password="${SVC_C3_PASSWORD}" metadataServerUrls="${MDS_URLS}";
+# MDS token for svc-c3, fetched with the svc-c3 client certificate (streams.ssl.keystore.*) - no AD account
+confluent.controlcenter.streams.sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenCertificateLoginCallbackHandler
+confluent.controlcenter.streams.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required metadataServerUrls="${MDS_URLS}";
+confluent.controlcenter.streams.ssl.keystore.type=PKCS12
+confluent.controlcenter.streams.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
+confluent.controlcenter.streams.ssl.keystore.password=${STORE_PASSWORD}
+confluent.controlcenter.streams.ssl.key.password=${STORE_PASSWORD}
 confluent.controlcenter.streams.ssl.truststore.type=PKCS12
 confluent.controlcenter.streams.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.controlcenter.streams.ssl.truststore.password=${STORE_PASSWORD}
 
 ############################# RBAC (humans log in with AD credentials through MDS) #############################
 confluent.metadata.bootstrap.server.urls=${MDS_URLS}
-confluent.metadata.basic.auth.user.info=svc-c3:${SVC_C3_PASSWORD}
-confluent.metadata.http.auth.credentials.provider=BASIC
+# C3's own calls to MDS authenticate with the svc-c3 client certificate (User:svc-c3, SystemAdmin) - not with
+# cp-server, the UI certificate every server shares: the proxy store is the client side of C3's REST calls
+confluent.controlcenter.rest.proxy.ssl.keystore.type=PKCS12
+confluent.controlcenter.rest.proxy.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
+confluent.controlcenter.rest.proxy.ssl.keystore.password=${STORE_PASSWORD}
+confluent.controlcenter.rest.proxy.ssl.key.password=${STORE_PASSWORD}
+confluent.controlcenter.rest.proxy.ssl.truststore.type=PKCS12
+confluent.controlcenter.rest.proxy.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
+confluent.controlcenter.rest.proxy.ssl.truststore.password=${STORE_PASSWORD}
+confluent.metadata.ssl.keystore.type=PKCS12
+confluent.metadata.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
+confluent.metadata.ssl.keystore.password=${STORE_PASSWORD}
+confluent.metadata.ssl.key.password=${STORE_PASSWORD}
 confluent.metadata.ssl.truststore.type=PKCS12
 confluent.metadata.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.metadata.ssl.truststore.password=${STORE_PASSWORD}

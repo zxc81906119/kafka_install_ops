@@ -1,6 +1,6 @@
 {
   "idem": "changed=0",
-  "verifyTotal": "55",
+  "verifyTotal": "62",
   "opmenuRows": [
     ["alice（管理群組）以固定帳號 opuser 進選單查看 topic", "成功；紀錄的操作者是 alice"],
     ["輸入錯誤的 AD 密碼", "登入被拒"],

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RBAC through the Confluent CLI (MDS), logged in as the AD installer account svc-cpctl.
+# RBAC through the Confluent CLI (MDS), logged in with the svc-cpctl client certificate (no AD account).
 # Idempotent: existing bindings are listed first; only missing ones are created.
 [[ -n ${_LIB_RBAC_LOADED:-} ]] && return 0
 _LIB_RBAC_LOADED=1
@@ -10,10 +10,10 @@ rbac::login() {
   mkdir -p "$STATE_DIR/cli-home"
   local url
   url="https://$(inv::fqdn "$(inv::hosts broker | head -1)"):$PORT_MDS"
-  CONFLUENT_PLATFORM_USERNAME=svc-cpctl CONFLUENT_PLATFORM_PASSWORD=$(inv::secret SVC_CPCTL_PASSWORD) \
-    rbac::cli login --url "$url" --certificate-authority-path "$PKI_DIR/ca.pem" >/dev/null ||
-    core::die "MDS login as svc-cpctl failed ($url)"
-  log::ok "logged in to MDS $url as svc-cpctl"
+  rbac::cli login --url "$url" --certificate-authority-path "$PKI_DIR/ca.pem" --certificate-only \
+    --client-cert-path "$PKI_DIR/svc-cpctl.crt" --client-key-path "$PKI_DIR/svc-cpctl.key" >/dev/null ||
+    core::die "MDS login with the svc-cpctl certificate failed ($url)"
+  log::ok "logged in to MDS $url as svc-cpctl (client certificate)"
 }
 
 rbac::cluster_id() { core::load_env "$STATE_DIR/kraft.env"; printf '%s' "$CLUSTER_ID"; }

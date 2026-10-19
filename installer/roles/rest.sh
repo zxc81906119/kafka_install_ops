@@ -11,7 +11,8 @@ role::rest::configure() {
   export HOST_FQDN REST_ID
   HOST_FQDN=$(inv::fqdn "$host")
   REST_ID=$(inv::get "$host" REST_ID "$host")
-  role::push_ssl "$host" ca.pem truststore.p12 cp-server.p12 mds-public.pem; [[ $REMOTE_CHANGED == 1 ]] && any=1
+  # cp-server.p12: HTTPS for clients; svc-rest.p12: REST Proxy's own identity towards MDS and Kafka (no AD account)
+  role::push_ssl "$host" ca.pem truststore.p12 cp-server.p12 svc-rest.p12 mds-public.pem; [[ $REMOTE_CHANGED == 1 ]] && any=1
   remote::apply "$host" ensure::dir /etc/confluent/kafka-rest root confluent 0750
   role::push_properties "$host" kafka-rest.properties.tpl "$REST_CONF" kafka-rest
   [[ $REMOTE_CHANGED == 1 ]] && any=1

@@ -93,8 +93,8 @@ push_all_ssl() {  # role-specific file sets (3.4.7)
   local h
   for h in kc01 kc02 kc03; do push_ssl $h ca.pem truststore.p12 kafka-internal.p12; done
   for h in kb01 kb02 kb03 kb04; do push_ssl $h ca.pem truststore.p12 kafka-internal.p12 cp-server.p12; done
-  for h in rest01 rest02; do push_ssl $h ca.pem truststore.p12 cp-server.p12; done
-  push_ssl c3-01 ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key
+  for h in rest01 rest02; do push_ssl $h ca.pem truststore.p12 cp-server.p12 svc-rest.p12; done
+  push_ssl c3-01 ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12
   echo "pushed /etc/confluent/ssl to 10 hosts"
 }
 

@@ -2,7 +2,7 @@
 # cpctl - Confluent Platform offline installer / operator tool (runs on the ops host as cpadmin).
 #
 # Usage: cpctl <command> [options]
-#   repo import|verify|list            landing zone -> internal repo, check it, list it
+#   repo import|push|verify|list       landing zone -> internal repo (+ push to REPO_WEB_HOST), check it, list it
 #   install [--from NN]                run steps 00..10 (idempotent; resumable)
 #   step <NN_name>                     run a single step
 #   verify                             end-to-end checks (same as step 10)
@@ -82,9 +82,10 @@ case $cmd in
     lock::acquire
     case ${1:-} in
       import) repo::import ;;
+      push) repo::remote_web || core::die "$E_PRECHECK" "REPO_WEB_HOST not set: the ops host serves the repo itself"; repo::push ;;
       verify)
         repo::verify || core::die "$E_PRECHECK" "internal repo incomplete - run: cpctl repo import"
-        if repo::tls && [[ ! -f $PKI_DIR/cp-server.crt ]]; then
+        if repo::tls && ! repo::remote_web && [[ ! -f $PKI_DIR/cp-server.crt ]]; then
           log::info "repo over HTTPS: served from step 02 on (no server certificate yet)"
         else
           repo::verify_served || core::die "$E_PRECHECK" "internal repo not served at $REPO_YUM_BASEURL"

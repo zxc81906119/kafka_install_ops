@@ -110,7 +110,7 @@ const OPMENU_ROWS = NUM.opmenuRows || [["(待驗證)", "—"]];
 // ===================================================================== 2 executive summary
 {
   const s = base("摘要");
-  title(s, "結論：離線、全自動、可重跑、可升級的安裝流程已驗證可行", "以 Docker 模擬 14 台銀行主機（含堡壘機），所有安裝都由操作機上的 cpctl 經 SSH 完成");
+  title(s, "結論：離線、全自動、可重跑、可升級的安裝流程已驗證可行", "以 Docker 模擬 15 台銀行主機（含堡壘機與 repo web server），所有安裝都由操作機上的 cpctl 經 SSH 完成");
   const k = [
     ["12 步", "一個指令完成安裝", "cpctl install\n執行步驟 00–11\n失敗可從中斷處續跑"],
     [VERIFY_TOTAL + " / " + VERIFY_TOTAL, "端到端驗證通過", "quorum、mTLS、SCRAM、RBAC\nAD、REST、C3、稽核\n監控、憑證、配額、OP menu"],
@@ -194,7 +194,7 @@ section("01", "需求與關鍵決策", "先把拓樸、版本、安全模型和�
     ["一般應用程式", "Kafka CLIENT :9095", "SASL_SSL SCRAM-SHA-512", "User:<app>"],
     ["legacy 應用程式", "REST Proxy（經 LB）", "mTLS，每個 app 一張 client 憑證", "User:<app>（REST 代理身分）"],
     ["人員", "Kafka CLI、MDS、C3", "AD 帳密（LDAPS）", "Group:<AD 群組>"],
-    ["REST Proxy / C3 本身", "MDS、TOKEN :9094", "AD 服務帳號 svc-rest / svc-c3", "各自獨立"],
+    ["REST Proxy / C3 / cpctl", "MDS、TOKEN :9094", "各自的 client 憑證（svc-rest / svc-c3 / svc-cpctl），不是 AD 帳號", "各自獨立"],
     ["稽核日誌寫入者", "Kafka CLIENT :9095", "SCRAM（confluent-audit）", "只有稽核 topic 的寫入權"],
   ], { colW: [2.4, 2.9, 3.6, 3.23], fontSize: 13, rowH: 0.58 });
   s.addNotes("REST Proxy 只開放給 legacy app：principal 對應規則由 apps.env 自動產生且沒有 DEFAULT，其他憑證一律拒絕。impersonation 保護名單也是自動產生。");
@@ -205,7 +205,7 @@ section("02", "環境模擬", "用 Docker 模擬銀行主機與網路限制");
 
 {
   const s = base("02 環境模擬");
-  title(s, "13 個容器模擬銀行主機，除了 LB 之外完全無外網", "容器內跑 systemd，服務管理方式與實體機相同；換成實體機只改 inventory");
+  title(s, "15 個容器模擬銀行主機，除了 LB 之外完全無外網", "容器內跑 systemd，與實體機相同；另有堡壘機 jump01 與 repo web server repo01");
   // DMZ band
   s.addShape(pptx.ShapeType.roundRect, { x: M, y: 1.85, w: W - 2 * M, h: 1.05, rectRadius: 0.06, fill: { color: C.accentSoft }, line: { color: C.accent, dashType: "dash" } });
   s.addText("Windows 11（Git Bash）", { x: M + 0.2, y: 1.95, w: 3, h: 0.85, fontFace: F, fontSize: 15, bold: true, color: C.ink, valign: "middle" });
@@ -215,7 +215,7 @@ section("02", "環境模擬", "用 Docker 模擬銀行主機與網路限制");
   s.addShape(pptx.ShapeType.roundRect, { x: M, y: 3.1, w: W - 2 * M, h: 3.65, rectRadius: 0.06, fill: { color: "FFFFFF" }, line: { color: C.teal, width: 1.5 } });
   s.addText("cpnet：internal 網段 172.30.0.0/24，沒有任何外網路由", { x: M + 0.2, y: 3.15, w: 9, h: 0.4, fontFace: F, fontSize: 13, bold: true, color: C.teal });
   const boxes = [
-    ["ops01 操作機", "cpctl、內部 repo、NTP 來源", C.accent],
+    ["ops01 操作機", "cpctl、內部 repo 建置、NTP 來源；repo 由 repo01 提供", C.accent],
     ["ad01 AD", "Samba AD DC，LDAPS 636", C.teal],
     ["kc01–03 controller", "KRaft 動態 quorum，kc04 預留替換", C.teal],
     ["kb01–04 broker", "Confluent Server、MDS，兩個 rack", C.teal],
@@ -317,7 +317,7 @@ section("04", "自動化安裝", "cpctl：單一入口、冪等、可續跑、�
   title(s, "11 個步驟由一個指令完成，任何一步失敗都能從中斷處續跑", "每一步結束都自我驗證，通過才記錄完成");
   const steps = [
     ["00", "precheck", "OS、資源、DNS、時間"], ["01", "os_baseline", "OS 參數、時間、防火牆"], ["02", "distribute", "內部 repo、GPG、安裝套件"],
-    ["03", "pki", "CA、共用憑證、信任庫"], ["04", "ad_bootstrap", "LDAPS、服務帳號、群組"], ["05", "configure", "設定、加密、滾動重啟"],
+    ["03", "pki", "CA、共用憑證、信任庫"], ["04", "ad_bootstrap", "LDAPS、查詢帳號、群組"], ["05", "configure", "設定、加密、滾動重啟"],
     ["06", "kraft_format", "動態 quorum 格式化"], ["07", "start_core", "controller → broker"], ["08", "security_bootstrap", "SCRAM、RBAC、topic"],
     ["09", "start_edge", "REST、C3、LB"], ["10", "verify", "端到端驗證"], ["11", "opmenu", "堡壘機維運選單"],
   ];
@@ -365,8 +365,8 @@ section("04", "自動化安裝", "cpctl：單一入口、冪等、可續跑、�
     ["SCRAM 帳號", "apps.env 中 APP_CHANNEL=scram 的 app", "kafka-configs 建立 SCRAM-SHA-512 憑證"],
     ["人員權限", "AD 群組對應（kafka-admins / operators / devs）", "Group: 綁定 SystemAdmin、Operator、DeveloperRead"],
     ["應用程式權限", "APP_BINDINGS_<app>", "User:<app> 逐一綁定（mTLS 不能用群組）"],
-    ["服務帳號", "svc-c3（官方要求 SystemAdmin）、svc-rest", "只給必要權限；svc-rest 可讀 license topic"],
-    ["impersonation 保護", "super users + 所有服務帳號", "自動產生，REST 不能代理這些身分"],
+    ["服務身分（憑證）", "svc-c3（官方要求 SystemAdmin）、svc-rest、svc-cpctl", "不在 AD、沒有密碼；svc-rest 只可讀 license topic"],
+    ["impersonation 保護", "super users + 所有服務身分", "自動產生，REST 不能代理這些身分"],
     ["Topic", "TOPICS（RF=3、min.insync=2）", "建立並驗證"],
   ], { colW: [2.4, 4.6, 5.13], fontSize: 14, rowH: 0.62 });
   s.addNotes("新增一個 app 只要在 apps.env 加幾行，再跑 step 08，權限就會建好；重跑不會重複建立。");
@@ -598,7 +598,7 @@ section("08", "上線準備", "從 PoC 移到正式環境需要調整與確認�
   table(s, [
     ["風險", "影響", "緩解"],
     ["kafka-internal 由所有節點共用且為 super user", "任一台私鑰外洩 = 叢集權限外洩", "權限 0640、cpctl certs rotate 可隨時輪替；正式可改每台一張"],
-    ["svc-cpctl 為 bootstrap super user", "權限過大", "安裝後停用，需要時走 break-glass"],
+    ["svc-cpctl 為 bootstrap super user", "持有私鑰即 super user", "私鑰 0600；安裝後移到離線保管，需要時取回"],
     ["License 為試用", "到期後功能受限", "license status 監控，30 天前警告；上線前放入正式 license"],
     ["JMX keystore 密碼需明文", "設定檔含密碼", "檔案 0640 root:confluent；scrape 密碼只存雜湊"],
     ["Nginx 開源版只有被動健康檢查", "故障切換需等連線失敗", "max_fails / fail_timeout；實測切換時間"],
@@ -614,7 +614,7 @@ section("08", "上線準備", "從 PoC 移到正式環境需要調整與確認�
     ["軟體引進 SOP", "外網下載機、掃描要求、檔案交換平台、放行簽核（例如：要掃哪些項目、誰簽核）"],
     ["操作控制機", "一台可 SSH 到所有部署機的操作機"],
     ["主機與網路", "主機清單、網段、DNS、防火牆開通（port 清單已可產出）"],
-    ["AD", "服務帳號與群組申請、LDAPS 憑證鏈"],
+    ["AD", "人員群組 + 一個唯讀查詢帳號、LDAPS 憑證鏈"],
     ["憑證", "行內 CA 簽發流程與效期規範"],
     ["時間與監控", "行內 NTP、Prometheus / Alertmanager 對接窗口"],
     ["License", "正式 license 與到期管理窗口"],

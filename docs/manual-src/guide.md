@@ -67,7 +67,8 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 | cp-kafka / cp-kafka-rest / cp-control-center | 各服務主機 | 服務執行帳號;system user、nologin、不可 SSH;群組都是 `confluent` |
 | kafka-internal(憑證) | kc、kb | controller 與 broker 之間的 mTLS 身分;super user |
 | kafka-admin(SCRAM) | Kafka | 管理用帳號,format 時寫入 |
-| svc-mds-bind、svc-rest、svc-c3 | AD | MDS 查 LDAP、REST Proxy 代理身分、C3 服務帳號 |
+| svc-mds-bind | AD | MDS 查詢人員與群組的唯讀帳號（一般網域使用者，沒有管理權限）；AD 上唯一的服務帳號 |
+| svc-rest、svc-c3、svc-cpctl（憑證） | ops01 簽發 | REST Proxy、C3、cpctl 向 MDS 取 token 的身分（CN = 名稱）；不在 AD、沒有密碼 |
 | opuser / opbootstrap / kafkaops | jump01、各節點 | OP menu 的固定帳號(第 6 章) |
 
 ## 1.5 埠號
@@ -769,6 +770,85 @@ repo os-deps served at http://ops01.poc.lab:8080/rpm/os-deps
 - `repo verify` 只檢查三個 RPM repo 的 `repomd.xml`，**不檢查** raw 的 tar/jar/opmenu；這些在對應步驟（tar 安裝、JMX exporter、11_opmenu）才會以 `... not in the internal repo` 失敗。手動時請一併確認：`raw/tar/confluent-8.3.2.tar.gz`（tar 策略）、`raw/tools/jmx_prometheus_javaagent-1.0.1.jar`、`raw/tools/opmenu-$OPMENU_VERSION.tar.gz` 存在。
 - 節點端使用此 repo 的 `/etc/yum.repos.d/cp-internal.repo`（`[cp-internal-confluent]`、`[cp-internal-adoptium]`、`[cp-internal-os-deps]`，`gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-<key>`）由後續步驟（`install::prepare`，01/02 步）佈署，不在本章範圍。
 
+## 2.15 內部 repo 放在另一台 web server（銀行管理，`REPO_WEB_HOST`）
+
+**目的**：銀行通常已有自己管理的 web server，不讓 ops01 兼任。這時 **repo 仍在 ops01 建置**（2.10–2.13：驗證、`/srv/repo`、`createrepo_c`），只把建好的檔案推到 web server。web server 只負責提供靜態檔案：**不需要 `createrepo_c`、`rsync`，也不給 cpadmin root**。
+
+**銀行要提供的東西**：
+
+| 項目 | PoC 的值（`conf/inventory.env`） |
+|---|---|
+| 一個可用 SSH 登入、只能寫網站目錄的部署帳號，登記 ops01 cpadmin 的公鑰 | `REPO_WEB_USER=repodeploy`、`REPO_WEB_HOST=repo01.poc.lab` |
+| 網站目錄（該帳號可寫，httpd 唯讀提供） | `REPO_WEB_ROOT=/var/www/repo` |
+| web server 上的指令：`sh`、`tar`、`find`、`sha256sum`（RHEL 最精簡安裝就有） | — |
+| HTTPS 網址與它憑證的 CA 鏈（節點用它驗證 web server） | `REPO_YUM_BASEURL=https://repo01.poc.lab/rpm`、`REPO_RAW_BASEURL=https://repo01.poc.lab/raw`、`REPO_WEB_CA=<銀行根憑證>` |
+
+**在哪台／帳號**：ops01，`cpadmin`。以下設 `W=repodeploy@repo01.poc.lab`、`D=/var/www/repo`。
+
+### 2.15.1 前提檢查（在動任何檔案之前）
+
+```bash
+W=repodeploy@repo01.poc.lab; D=/var/www/repo
+command -v createrepo_c tar sha256sum                                    # ops01 的建置工具
+ssh $W "cd $D && test -w . && command -v tar find sha256sum && echo web-ok"   # 部署帳號可寫、工具齊全
+```
+
+預期：ops01 印出三個路徑；web server 印出三個路徑與 `web-ok`。任一缺少就停止，先補齊（ops01 的工具見 2.9）。
+
+### 2.15.2 推送 web server 缺少的檔案（RPM、raw、金鑰、稽核副本；不含 repodata）
+
+```bash
+cd /srv/repo
+find . -type f -printf '%P\t%s\n' | grep -v '/repodata/' | sort -t$'\t' -k1,1 > /tmp/ops.lst
+ssh $W "cd $D && find . -type f -printf '%P\t%s\n'" | sort -t$'\t' -k1,1 > /tmp/web.lst
+join -t$'\t' /tmp/ops.lst /tmp/web.lst | awk -F'\t' '$2 != $3 {print "DIFFERS: " $1; bad=1} END {exit bad}' \
+  || echo "STOP: 已發佈的檔案在 web server 上內容不同，不可覆蓋"
+comm -23 <(cut -f1 /tmp/ops.lst) <(cut -f1 /tmp/web.lst) > /tmp/missing.lst; wc -l < /tmp/missing.lst
+tr '\n' '\0' < /tmp/missing.lst | tar --null -T - -cf - | ssh $W "umask 022 && cd $D && tar --no-same-owner --no-same-permissions -xf -"
+```
+
+### 2.15.3 切換 repodata（每個 yum repo；repomd.xml 最後換）
+
+```bash
+for r in confluent adoptium os-deps; do
+  l=$(sha256sum rpm/$r/repodata/repomd.xml | cut -d' ' -f1)
+  w=$(ssh $W "sha256sum $D/rpm/$r/repodata/repomd.xml 2>/dev/null" | cut -d' ' -f1)
+  if [ "$l" = "$w" ]; then echo "$r: repodata current"; continue; fi
+  (cd rpm/$r && tar --exclude=repodata/repomd.xml -cf - repodata) | ssh $W "umask 022 && cd $D/rpm/$r && tar --no-same-owner --no-same-permissions -xf -"
+  keep=$(cd rpm/$r/repodata && ls | tr '\n' ' ')
+  ssh $W "set -e; umask 022; cd $D/rpm/$r/repodata; cat > .repomd.xml.new; mv -f .repomd.xml.new repomd.xml
+    for f in *; do case ' $keep' in *\" \$f \"*) ;; *) rm -f -- \"\$f\" ;; esac; done" < rpm/$r/repodata/repomd.xml
+  echo "$r: repodata switched"
+done
+```
+
+順序的理由：先放新的 metadata 檔（檔名含雜湊，不會和舊的衝突），再用 `mv` 一次換掉 `repomd.xml`，最後刪掉新 `repomd.xml` 已不引用的舊檔。節點任何時刻讀到的 `repomd.xml`，它指到的檔案都已存在。
+
+### 2.15.4 驗證：web server 提供的就是 ops01 建好的
+
+```bash
+CA=/var/lib/cp-installer/pki/trust/bank-root-g2.pem     # = REPO_WEB_CA
+for r in confluent adoptium os-deps; do
+  [ "$(curl -fsS --cacert $CA https://repo01.poc.lab/rpm/$r/repodata/repomd.xml | sha256sum | cut -d' ' -f1)" = \
+    "$(sha256sum /srv/repo/rpm/$r/repodata/repomd.xml | cut -d' ' -f1)" ] && echo "$r = ops build" || echo "$r DIFFERENT"
+done
+curl -s -o /dev/null -w 'plain HTTP: %{http_code}\n' http://repo01.poc.lab/rpm/confluent/repodata/repomd.xml
+```
+
+預期：三個 `= ops build`；明文 HTTP 為 `000`（未開）或 `403`。
+
+### 2.15.5 節點端
+
+和 3.3.1.1 相同，只有兩處不同：`baseurl=https://repo01.poc.lab/rpm/<repo>`；`/etc/pki/tls/certs/cp-repo-ca.pem` 的內容是 `REPO_WEB_CA`（web server 憑證的 CA），不是叢集的 trust bundle。**ops01 自己也改走 HTTPS**（不再是 `file://`），也不需要 httpd、mod_ssl，防火牆不必開 8443。
+
+**對應 cpctl**：`cpctl repo import`（結尾自動推送）、`cpctl repo push`（只推送）、`cpctl repo verify`（比對 web server 與 ops01 的 `repomd.xml`）→ `repo::push()`、`repo::verify_served()`。`cpctl install` 在 00 與 02 步先確認 web server 提供的是最新建置，才讓任何主機安裝。
+
+**注意事項／陷阱**：
+- 已發佈的檔案永不覆蓋：web server 上同名但大小不同的檔案會讓推送整個停止（可能被改過，先查明）。
+- 推送只新增、不刪 RPM：web server 和 ops01 一樣保留所有舊版本（回滾需要）。
+- web server 的 httpd、憑證、防火牆由銀行管理；cpctl 只檢查「節點用 `REPO_WEB_CA` 連得上」與「明文 HTTP 不提供 repo」。
+- 銀行換 web server 憑證的 CA 時，更新 `REPO_WEB_CA` 後執行 `cpctl install --from 02`，把新的 CA 檔推到所有節點。
+
 # 3. 安裝前準備、OS 基線、套件與憑證(步驟 00–03)
 
 ## 3.0 共通前提
@@ -894,7 +974,7 @@ ssh cpadmin@kb01.poc.lab 'sudo -n true && echo SUDO_OK'      # → SUDO_OK
 cd /var/lib/cp-installer && umask 077
 install -m 0600 /dev/null secrets.env
 printf 'AD_ADMIN_PASSWORD=%s\n' '<由 AD 團隊提供>' >> secrets.env        # 只有 PoC 自建 AD 時需要
-for k in LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD SVC_CPCTL_PASSWORD KAFKA_ADMIN_PASSWORD \
+for k in LDAP_BIND_PASSWORD KAFKA_ADMIN_PASSWORD \
          STORE_PASSWORD HUMAN_DEFAULT_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE AUDIT_PASSWORD \
          JMX_EXPORTER_PASSWORD OPMENU_TRUSTSTORE_PASSWORD OPMENU_BREAKGLASS_STORE_PASSWORD \
          APP_APP_ORDERS_PASSWORD APP_APP_PAYMENTS_PASSWORD APP_APP_LEGACY_BILLING_PASSWORD; do
@@ -941,7 +1021,7 @@ cpctl 成功訊息：`inventory: 3 controllers, 4 brokers, 2 REST, 1 C3`。
 
 ```bash
 cd /opt/cp-installer/conf
-for s in AD_ADMIN_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD SVC_CPCTL_PASSWORD KAFKA_ADMIN_PASSWORD STORE_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE APP_APP_ORDERS_PASSWORD APP_APP_PAYMENTS_PASSWORD; do grep -q "^$s=." secrets.env && echo "$s ok" || echo "$s MISSING"; done
+for s in AD_ADMIN_PASSWORD LDAP_BIND_PASSWORD KAFKA_ADMIN_PASSWORD STORE_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE APP_APP_ORDERS_PASSWORD APP_APP_PAYMENTS_PASSWORD; do grep -q "^$s=." secrets.env && echo "$s ok" || echo "$s MISSING"; done
 ```
 
 預期：每行皆 `ok`。App 密碼只檢查 `APP_CHANNEL_*=scram` 的 app（`app-orders`、`app-payments`；`app-legacy-billing` 走 REST，不檢查），變數名規則 `APP_<app 大寫、- 改 _>_PASSWORD`。cpctl 訊息：`secrets present for all service accounts and apps`；缺少時 `secret <NAME> is not set in conf/secrets.env`。
@@ -1971,16 +2051,20 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
 - **對應 cpctl**：`pki::issue cp-server "$(pki::sans_server)" serverAuth,clientAuth`。
 - **注意事項**：增減主機或改 LB 名稱後 SAN 不符，cpctl 會自動重簽（比對排序後的 SAN 清單）；手動時須記得重簽並重新派送、滾動重啟。共用憑證的私鑰遍布所有伺服器（含 ad01/lb01 的 SAN），這是 PoC 的簡化設計，資安審查時要說明。
 
-### 3.4.6 應用程式 client 憑證 + MDS token 金鑰
+### 3.4.6 應用程式與服務的 client 憑證 + MDS token 金鑰
 
 - **目的**：
   - 只有走 REST Proxy mTLS 的 legacy app 需要 client 憑證（principal = CN）：PoC 為 `app-legacy-billing`（`APP_CHANNEL_app_legacy_billing=rest`）。`app-orders`、`app-payments` 走 SCRAM，不發憑證。
   - `OPMENU=on` → 另發 break-glass 身分 `opmenu-breakglass`（OP menu 第 91 項，RBAC SystemAdmin）。
+  - 服務身分（`SERVICE_CERTS`）：`svc-rest`（REST Proxy）、`svc-c3`（Control Center）、`svc-cpctl`（cpctl / CLI）。它們用這張憑證向 MDS 認證、換 token，**不是 AD 帳號，沒有密碼**；MDS 從 CN 得到 `User:svc-rest` 等身分，RBAC 綁定照舊。
   - MDS 用 RSA 2048 金鑰對簽發 / 驗證 OAuth token；節點只拿 AES-256 加密的 PKCS#8 私鑰。
 - **手動指令**：
   ```bash
   issue app-legacy-billing clientAuth          # 無 SAN
   issue opmenu-breakglass clientAuth           # 僅 OPMENU=on
+  issue svc-rest clientAuth                    # 服務身分（無 SAN）：REST Proxy
+  issue svc-c3 clientAuth                      #                    Control Center
+  issue svc-cpctl clientAuth                   #                    cpctl / confluent CLI
 
   # MDS token key pair（已存在就不要重建：重建會讓所有已發 token 失效）
   openssl genrsa -out mds-token-keypair.pem 2048
@@ -2015,8 +2099,8 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
 |---|---|
 | controller | `ca.pem truststore.p12 kafka-internal.p12 mds-token-keypair.enc.pem mds-public.pem` |
 | broker | controller 的全部 + `cp-server.p12` |
-| rest | `ca.pem truststore.p12 cp-server.p12 mds-public.pem` |
-| c3 | `ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key mds-public.pem` |
+| rest | `ca.pem truststore.p12 cp-server.p12 svc-rest.p12 mds-public.pem`（svc-rest.p12：REST Proxy 向 MDS / Kafka 的身分） |
+| c3 | `ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12 mds-public.pem`（svc-c3.p12：C3 向 MDS / Kafka 的身分） |
 
   （jump01 的 opmenu truststore / break-glass keystore 由 step 11 處理，不在此範圍。）
 - **權限**：`/etc/confluent` root:root 0755、`/etc/confluent/ssl` root:confluent 0750、檔案 root:confluent 0640（`confluent` 群組由 step 02 建立）。
@@ -2257,7 +2341,7 @@ $ install -m 0600 /dev/null $ADMIN_CFG && vi $ADMIN_CFG     # 先建 0600 的空
 | 類型 | 名稱 | 位置 |
 |---|---|---|
 | OU | `OU=Confluent`、`OU=Users,OU=Confluent`、`OU=Groups,OU=Confluent`、`OU=Service,OU=Confluent` | `DC=corp,DC=poc,DC=lab` 底下 |
-| 服務帳號 | `svc-mds-bind`(MDS 查 AD 用的 bind 帳號)、`svc-rest`、`svc-c3`、`svc-cpctl` | `OU=Service,OU=Confluent` |
+| 服務帳號 | `svc-mds-bind`(MDS 查 AD 用的唯讀 bind 帳號;一般網域使用者,不需任何管理權限)。**AD 上只有這一個服務帳號**:REST Proxy、C3、cpctl 用憑證向 MDS 認證(`svc-rest`、`svc-c3`、`svc-cpctl`,4.1.x / 3.4),不建 AD 帳號 | `OU=Service,OU=Confluent` |
 | 群組 | `kafka-admins`、`kafka-operators`、`kafka-devs` | `OU=Groups,OU=Confluent` |
 | 測試使用者 | `alice`→kafka-admins、`bob`→kafka-operators、`carol`→kafka-devs | `OU=Users,OU=Confluent` |
 
@@ -2335,14 +2419,13 @@ EOF
 服務帳號與使用者需要密碼,請**逐一互動輸入**(不帶密碼參數時 `samba-tool user create` 會提示輸入,不會留在 history):
 
 ```bash
-# 服務帳號:svc-mds-bind 用 LDAP_BIND_PASSWORD、svc-rest 用 SVC_REST_PASSWORD、
-#           svc-c3 用 SVC_C3_PASSWORD、svc-cpctl 用 SVC_CPCTL_PASSWORD(皆在 conf/secrets.env)
+# 唯一的服務帳號:svc-mds-bind,密碼 = LDAP_BIND_PASSWORD(conf/secrets.env)
+# (svc-rest、svc-c3、svc-cpctl 不在 AD:它們用憑證向 MDS 認證,見 3.4 與 5.1.2)
 $ ssh -t ad01.poc.lab "sudo samba-tool user create svc-mds-bind --userou='OU=Service,OU=Confluent'"
 New Password: <password>
 Retype Password: <password>
 User 'svc-mds-bind' added successfully
 $ ssh ad01.poc.lab "sudo samba-tool user setexpiry svc-mds-bind --noexpiry"
-#   svc-rest、svc-c3、svc-cpctl 同上
 
 # 測試使用者(密碼 HUMAN_DEFAULT_PASSWORD)與群組成員
 $ ssh -t ad01.poc.lab "sudo samba-tool user create alice --userou='OU=Users,OU=Confluent'"
@@ -2365,7 +2448,7 @@ User 'svc-mds-bind' added successfully
 $ ssh ad01.poc.lab "sudo samba-tool user setexpiry svc-mds-bind --noexpiry"
 ```
 
-其他帳號同理:svc-rest(`SVC_REST_PASSWORD`)、svc-c3(`SVC_C3_PASSWORD`)、svc-cpctl(`SVC_CPCTL_PASSWORD`)放 `OU=Service,OU=Confluent`;alice、bob、carol(`HUMAN_DEFAULT_PASSWORD`)放 `OU=Users,OU=Confluent`,再 `samba-tool group addmembers` 加入群組。
+測試使用者同理:alice、bob、carol(`HUMAN_DEFAULT_PASSWORD`)放 `OU=Users,OU=Confluent`,再 `samba-tool group addmembers` 加入群組。
 
 **驗證**:
 
@@ -2389,7 +2472,7 @@ dn: CN=svc-mds-bind,OU=Service,OU=Confluent,DC=corp,DC=poc,DC=lab
 
 **注意事項**:
 - 密碼**只在建立時設定**;帳號已存在時 cpctl 不會改密碼。若 `secrets.env` 的密碼改了,要自己用 `samba-tool user setpassword` 同步,否則 MDS bind 失敗。
-- `ldap.user.search.base` 是 `OU=Confluent`(含 Users 與 Service 兩個子 OU),所以服務帳號也能被 MDS 當成「使用者」認證(REST、C3 用 svc-rest / svc-c3 登入 MDS 就靠這個)。
+- 服務(REST Proxy、C3、cpctl)不再以 AD 帳號登入 MDS,而是用憑證:MDS 從憑證 CN 取得 `User:svc-rest` 等身分,完全不查 AD。所以 AD 上只需要人員、群組和 `svc-mds-bind`。2026-10-19 起 PoC 的 ad01 已刪除舊的 svc-rest / svc-c3 / svc-cpctl,整套重裝並驗收通過。
 - 群組的 DN 會被 `ldap.group.member.attribute.pattern=CN=([^,]+),.*` 解析成使用者名稱,所以使用者的 CN 必須等於 sAMAccountName(`samba-tool user create` 預設如此;正式 AD 若 CN 是中文姓名就要改 pattern 或改用 `ldap.user.memberof.attribute`)。
 - cpctl 的 `ad::ldapsearch` 用 `-w <password>`,手動時建議改 `-W`(互動)或 `-y <0600 檔案>`。
 
@@ -2404,7 +2487,7 @@ dn: CN=svc-mds-bind,OU=Service,OU=Confluent,DC=corp,DC=poc,DC=lab
 ```bash
 $ BIND="CN=svc-mds-bind,OU=Service,OU=Confluent,DC=corp,DC=poc,DC=lab"
 $ install -m 0600 /dev/null ~/.bindpw && vi ~/.bindpw     # 寫入 LDAP_BIND_PASSWORD(檔尾不要換行)
-$ for n in svc-mds-bind svc-rest svc-c3 svc-cpctl; do
+$ for n in svc-mds-bind; do
     LDAPTLS_CACERT=$PKI/ca.pem ldapsearch -LLL -x -o nettimeout=5 -H ldaps://ad01.poc.lab:636 \
       -D "$BIND" -y ~/.bindpw -b "DC=corp,DC=poc,DC=lab" "(sAMAccountName=$n)" dn | grep -q '^dn:' \
       && echo "OK  account $n" || echo "MISSING account $n"
@@ -3504,17 +3587,26 @@ SCRAM credential configs for user-principal 'app-orders' are SCRAM-SHA-512=itera
 
 ### 5.1.2 MDS 登入（Confluent CLI）
 
-- **目的**：之後的 RBAC 綁定都透過 MDS 建立；以 AD 安裝帳號 `svc-cpctl`（同時列在 `super.users`）登入。
+- **目的**：之後的 RBAC 綁定都透過 MDS 建立；以 `svc-cpctl`（同時列在 `super.users`）的**用戶端憑證**登入；它不是 AD 帳號、沒有密碼，憑證在 03 步簽發（`pki/svc-cpctl.crt`、`.key`）。
 - **主機/帳號**：ops01 / cpadmin。
 - **手動指令**：
 
 ```bash
 export HOME_CLI=/var/lib/cp-installer/cli-home    # cpctl 用的 CLI 設定目錄（HOME 指向此處）
 mkdir -p "$HOME_CLI"
- HOME=$HOME_CLI CONFLUENT_PLATFORM_USERNAME=svc-cpctl CONFLUENT_PLATFORM_PASSWORD='<password>' \
-  confluent login --url https://kb01.poc.lab:8090 \
-  --certificate-authority-path /var/lib/cp-installer/pki/ca.pem
+P=/var/lib/cp-installer/pki
+# svc-cpctl 不是 AD 帳號、沒有密碼：用它的用戶端憑證登入（MDS 從 CN 取得 User:svc-cpctl）
+HOME=$HOME_CLI confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path $P/ca.pem \
+  --certificate-only --client-cert-path $P/svc-cpctl.crt --client-key-path $P/svc-cpctl.key
 alias cfl='HOME=/var/lib/cp-installer/cli-home confluent'
+```
+
+實測（2026-10-19，`cfl iam rbac role-binding list --principal User:svc-c3 --kafka-cluster $CID`）：
+
+```
+   Principal  |    Role     | Resource Type | Name | Pattern Type
+--------------+-------------+---------------+------+---------------
+  User:svc-c3 | SystemAdmin | Cluster       |      |
 ```
 
 - **驗證**：`cfl iam rbac role-binding list --principal User:svc-c3 --kafka-cluster $CID` 能列出結果（未登入會提示需 login）。
@@ -3559,15 +3651,16 @@ cfl iam rbac role-binding create --principal User:app-legacy-billing --role Deve
 cfl iam rbac role-binding create --principal User:app-legacy-billing --role DeveloperRead  --kafka-cluster $CID --resource Group:billing- --prefix
 ```
 
-  不用 CLI 時，等價的 MDS REST（以 svc-cpctl basic auth）：
+  不用 CLI 時，等價的 MDS REST：先用 svc-cpctl 憑證向 MDS 換一個 token，之後的呼叫都帶這個 token：
 
 ```bash
+T=$(curl -s --cacert $PKI/ca.pem --cert $PKI/svc-cpctl.crt --key $PKI/svc-cpctl.key \n  "$MDS/security/1.0/authenticate" | jq -r .auth_token)
 # cluster 層級角色
-curl -s --cacert $PKI/ca.pem -u 'svc-cpctl:<password>' -H 'Content-Type: application/json' -X POST \
+curl -s --cacert $PKI/ca.pem -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -X POST \
   "$MDS/security/1.0/principals/User:svc-c3/roles/SystemAdmin" \
   -d "{\"clusters\":{\"kafka-cluster\":\"$CID\"}}"
 # 資源層級角色（PREFIXED / LITERAL）
-curl -s --cacert $PKI/ca.pem -u 'svc-cpctl:<password>' -H 'Content-Type: application/json' -X POST \
+curl -s --cacert $PKI/ca.pem -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -X POST \
   "$MDS/security/1.0/principals/User:app-orders/roles/DeveloperWrite/bindings" \
   -d "{\"scope\":{\"clusters\":{\"kafka-cluster\":\"$CID\"}},\"resourcePatterns\":[{\"resourceType\":\"Topic\",\"name\":\"orders.\",\"patternType\":\"PREFIXED\"}]}"
 ```
@@ -3576,7 +3669,7 @@ curl -s --cacert $PKI/ca.pem -u 'svc-cpctl:<password>' -H 'Content-Type: applica
 
 ```bash
 for p in User:app-orders Group:kafka-admins User:svc-rest User:confluent-audit User:svc-c3; do
-  curl -s --cacert $PKI/ca.pem -u 'svc-cpctl:<password>' -H 'Content-Type: application/json' -X POST \
+  curl -s --cacert $PKI/ca.pem -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -X POST \
     -d "{\"clusters\":{\"kafka-cluster\":\"$CID\"}}" "$MDS/security/1.0/lookup/principal/$p/resources"; echo
 done
 ```
@@ -3605,7 +3698,7 @@ done
 ```properties
 super.users = User:kafka-internal;User:kafka-admin;User:svc-cpctl
 confluent.metadata.server.impersonation.super.users = User:svc-rest
-# 自動推導：所有 super.users + AD_SERVICE_ACCOUNTS + AUDIT_PRINCIPAL + OPMENU_BREAKGLASS（OPMENU=on 時）
+# 自動推導：所有 super.users + AD_SERVICE_ACCOUNTS + SERVICE_CERTS（憑證身分）+ AUDIT_PRINCIPAL + OPMENU_BREAKGLASS（OPMENU=on 時）
 confluent.metadata.server.impersonation.protected.users = User:kafka-internal;User:kafka-admin;User:svc-cpctl;User:svc-mds-bind;User:svc-rest;User:svc-c3;User:confluent-audit;User:opmenu-breakglass
 ```
 - **驗證**：`ssh cpadmin@kb01.poc.lab 'sudo grep impersonation /etc/confluent/kafka/server.properties'`。
@@ -3782,10 +3875,12 @@ confluent.rest.auth.propagate.method=SSL
 confluent.rest.auth.ssl.principal.mapping.rules=RULE:.*CN=(app-legacy-billing)([^a-zA-Z0-9._-].*)?$/$1/
 auth.ssl.principal.mapping.rules=RULE:.*CN=(app-legacy-billing)([^a-zA-Z0-9._-].*)?$/$1/
 public.key.path=/etc/confluent/ssl/mds-public.pem
-# MDS(以 svc-rest 身分)
+# MDS:以 svc-rest 的用戶端憑證認證(CN=svc-rest -> User:svc-rest);不是 AD 帳號,沒有密碼
 confluent.metadata.bootstrap.server.urls=https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090
-confluent.metadata.http.auth.credentials.provider=BASIC
-confluent.metadata.basic.auth.user.info=svc-rest:<svc-rest-password>
+confluent.metadata.ssl.keystore.type=PKCS12
+confluent.metadata.ssl.keystore.location=/etc/confluent/ssl/svc-rest.p12
+confluent.metadata.ssl.keystore.password=<store-password>
+confluent.metadata.ssl.key.password=<store-password>
 confluent.metadata.ssl.truststore.type=PKCS12
 confluent.metadata.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.metadata.ssl.truststore.password=<store-password>
@@ -3793,8 +3888,13 @@ confluent.metadata.ssl.truststore.password=<store-password>
 bootstrap.servers=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094
 client.security.protocol=SASL_SSL
 client.sasl.mechanism=OAUTHBEARER
-client.sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenUserLoginCallbackHandler
-client.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required username="svc-rest" password="<svc-rest-password>" metadataServerUrls="https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090";
+# REST Proxy 自己的 Kafka 身分:用 svc-rest 憑證(client.ssl.keystore.*)向 MDS 換 token
+client.sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenCertificateLoginCallbackHandler
+client.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required metadataServerUrls="https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090";
+client.ssl.keystore.type=PKCS12
+client.ssl.keystore.location=/etc/confluent/ssl/svc-rest.p12
+client.ssl.keystore.password=<store-password>
+client.ssl.key.password=<store-password>
 client.ssl.truststore.type=PKCS12
 client.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 client.ssl.truststore.password=<store-password>
@@ -3926,19 +4026,33 @@ confluent.controlcenter.data.dir=/var/lib/confluent/control-center
 confluent.controlcenter.internal.topics.replication=3
 confluent.controlcenter.command.topic.replication=3
 confluent.controlcenter.docs.host=docs.confluent.io
-# Kafka:TOKEN listener + MDS token(svc-c3)
+# Kafka:TOKEN listener + MDS token(svc-c3,用 svc-c3 憑證換;不是 AD 帳號)
 bootstrap.servers=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094
 confluent.controlcenter.streams.security.protocol=SASL_SSL
 confluent.controlcenter.streams.sasl.mechanism=OAUTHBEARER
-confluent.controlcenter.streams.sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenUserLoginCallbackHandler
-confluent.controlcenter.streams.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required username="svc-c3" password="<svc-c3-password>" metadataServerUrls="https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090";
+confluent.controlcenter.streams.sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenCertificateLoginCallbackHandler
+confluent.controlcenter.streams.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required metadataServerUrls="https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090";
+confluent.controlcenter.streams.ssl.keystore.type=PKCS12
+confluent.controlcenter.streams.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
+confluent.controlcenter.streams.ssl.keystore.password=<store-password>
+confluent.controlcenter.streams.ssl.key.password=<store-password>
 confluent.controlcenter.streams.ssl.truststore.type=PKCS12
 confluent.controlcenter.streams.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.controlcenter.streams.ssl.truststore.password=<store-password>
 # RBAC:人員以 AD 帳密經 MDS 登入
 confluent.metadata.bootstrap.server.urls=https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090
-confluent.metadata.basic.auth.user.info=svc-c3:<svc-c3-password>
-confluent.metadata.http.auth.credentials.provider=BASIC
+# C3 自己呼叫 MDS 時出示 svc-c3 憑證(User:svc-c3,SystemAdmin);UI 憑證 cp-server 沒有任何 RBAC 角色
+confluent.controlcenter.rest.proxy.ssl.keystore.type=PKCS12
+confluent.controlcenter.rest.proxy.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
+confluent.controlcenter.rest.proxy.ssl.keystore.password=<store-password>
+confluent.controlcenter.rest.proxy.ssl.key.password=<store-password>
+confluent.controlcenter.rest.proxy.ssl.truststore.type=PKCS12
+confluent.controlcenter.rest.proxy.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
+confluent.controlcenter.rest.proxy.ssl.truststore.password=<store-password>
+confluent.metadata.ssl.keystore.type=PKCS12
+confluent.metadata.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
+confluent.metadata.ssl.keystore.password=<store-password>
+confluent.metadata.ssl.key.password=<store-password>
 confluent.metadata.ssl.truststore.type=PKCS12
 confluent.metadata.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.metadata.ssl.truststore.password=<store-password>
@@ -4832,12 +4946,12 @@ $ kafka-topics   --bootstrap-server $B --command-config $CFG --describe > $BK/to
 $ kafka-configs  --bootstrap-server $B --command-config $CFG --describe --entity-type users > $BK/scram-users.txt
 $ kafka-features --bootstrap-server $B --command-config $CFG describe > $BK/features.txt
 $ kafka-acls     --bootstrap-server $B --command-config $CFG --list > $BK/acls.txt
-# RBAC 綁定(每個 principal 一份 JSON;svc-cpctl 帳密放 0600 netrc)
-$ install -m 0600 /dev/null ~/.netrc-mds && printf 'machine kb01.poc.lab login svc-cpctl password %s\n' "$SVC_CPCTL_PASSWORD" > ~/.netrc-mds
+# RBAC 綁定(每個 principal 一份 JSON;以 svc-cpctl 憑證向 MDS 換 token,不用密碼)
+$ T=$(curl -s --cacert $PKI/ca.pem --cert $PKI/svc-cpctl.crt --key $PKI/svc-cpctl.key "$MDS/security/1.0/authenticate" | jq -r .auth_token)
 $ for p in User:svc-c3 User:svc-rest User:confluent-audit User:opmenu-breakglass Group:kafka-admins Group:kafka-operators Group:kafka-devs User:app-orders User:app-payments User:app-legacy-billing; do
-    curl -s --cacert $PKI/ca.pem --netrc-file ~/.netrc-mds -H 'Content-Type: application/json' -X POST \
+    curl -s --cacert $PKI/ca.pem -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -X POST \
       -d "{\"clusters\":{\"kafka-cluster\":\"$CID\"}}" "$MDS/security/1.0/lookup/principal/$p/resources" > "$BK/rbac-${p/:/_}.json"
-  done; rm -f ~/.netrc-mds
+  done
 $ cp $S/kraft.env $BK/; echo "$TO" > $BK/target; ln -sfn $BK $S/upgrade/last-backup
 ```
 
@@ -5133,6 +5247,7 @@ $ issue kafka-internal serverAuth,clientAuth $SANS_INTERNAL
 $ issue cp-server serverAuth,clientAuth $SANS_SERVER
 $ issue app-legacy-billing clientAuth
 $ issue opmenu-breakglass clientAuth
+$ for n in svc-rest svc-c3 svc-cpctl; do issue $n clientAuth; done
 $ truststores && push_all_ssl && trust_all && push_ad && push_jump && push_repo
 $ restart_all
 $ served          # 簽發者應全部是新 CA
@@ -5219,11 +5334,12 @@ $ restart_all
 
 ```bash
 $ . ~/rotate-lib.sh
-# 1) 產生 4 份申請(私鑰留在 pending/;SAN 與 EKU 同 3.4.4–3.4.6)
+# 1) 產生 7 份申請(私鑰留在 pending/;SAN 與 EKU 同 3.4.4–3.4.6)
 $ request kafka-internal serverAuth,clientAuth $SANS_INTERNAL
 $ request cp-server serverAuth,clientAuth $SANS_SERVER
 $ request app-legacy-billing clientAuth
 $ request opmenu-breakglass clientAuth
+$ for n in svc-rest svc-c3 svc-cpctl; do request $n clientAuth; done
 $ ls $PKI/requests                       # 把這些 .csr 連同申請單交給銀行;私鑰不交出去
 # 2) 銀行簽回後,每張放成 $PKI/incoming/<名稱>.crt(PoC:Windows 端 bash windows/bank-ca.sh exchange)
 # 3) 檢查並匯入;任何一張 REJECTED 就停,請銀行重簽
@@ -5231,6 +5347,7 @@ $ import_signed kafka-internal serverAuth,clientAuth $SANS_INTERNAL
 $ import_signed cp-server serverAuth,clientAuth $SANS_SERVER
 $ import_signed app-legacy-billing clientAuth
 $ import_signed opmenu-breakglass clientAuth
+$ for n in svc-rest svc-c3 svc-cpctl; do import_signed $n clientAuth; done
 # 4) 派送(信任 bundle 不變,只有 keystore 與憑證換新)、滾動重啟
 $ push_all_ssl && push_ad && push_jump && push_repo
 $ restart_all
@@ -5331,13 +5448,14 @@ $ curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-
 | 低於 min ISR | `kafka-topics ... --describe --under-min-isr-partitions` | 沒有輸出（有的話 `acks=all` 的 producer 會失敗） |
 | URP | `kafka-topics ... --describe --under-replicated-partitions` | 沒有輸出 |
 | Self-Balancing | `kafka-rebalance-cluster --bootstrap-server "$B" --command-config "$CFG" --status` | `Balancer status: ENABLED` |
-| MDS / AD | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem -K ~/svc-cpctl.netrc-curl https://kb01.poc.lab:8090/security/1.0/authenticate` | `200`（MDS 正常、AD bind 與 LDAPS 正常） |
+| MDS | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem --cert $P/svc-cpctl.crt --key $P/svc-cpctl.key https://kb01.poc.lab:8090/security/1.0/authenticate` | `200`（MDS 正常；以憑證認證，不經 AD） |
+| AD（人員登入用） | `ssh kb01.poc.lab "timeout 5 bash -c '</dev/tcp/ad01.poc.lab/636' && echo ok"` | `ok`（broker 連得到 LDAPS；人員要能登入，svc-mds-bind 的密碼也必須正確，見 4.1） |
 | REST / C3 | `curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem --cert $P/app-legacy-billing.crt --key $P/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters`；`curl -s -o /dev/null -w '%{http_code}\n' --cacert $P/ca.pem https://c3.poc.lab:9021/` | `200` |
-| 憑證效期 | `for n in kafka-internal cp-server app-legacy-billing opmenu-breakglass; do openssl x509 -in $P/$n.crt -noout -enddate; done` | 都在 30 天以後（銀行簽發要提前送件） |
+| 憑證效期 | `for n in kafka-internal cp-server svc-rest svc-c3 svc-cpctl app-legacy-billing opmenu-breakglass; do openssl x509 -in $P/$n.crt -noout -enddate; done` | 都在 30 天以後（銀行簽發要提前送件） |
 | 端點出示的憑證 | 9.1 的 `served` | 序號與 `$P` 下的檔案相同 |
 | license | 5.4 的 license 檢查 | 未過期；剩餘天數充足 |
 
-`~/svc-cpctl.netrc-curl`（0600）內容一行 `user = "svc-cpctl:<password>"`，讓密碼不出現在指令列。
+MDS 這一項不需要任何密碼：`svc-cpctl` 用憑證認證。
 
 **常見故障**（服務起不來時先看 `sudo journalctl -u <unit> -n 200 --no-pager`）：
 
@@ -5691,6 +5809,28 @@ client 配額、repo HTTPS、受限 sudo、日常維運指令，都在 cp-poc �
 | 6 | 退役後用舊憑證測試卻得到 exit 58 | `import_signed` 歸檔時把舊憑證蓋成銀行的回覆 | 回覆另存為 `<名稱>.bank-answer.pem`；重測 exit 56 |
 | 7 | 10.3 的格式化指令在 Secret Protection 下會失敗 | 沒有傳 master key | 改用 4.3.3 的寫法 |
 | 8 | 10.1 的磁碟檢查 `Permission denied` | 資料目錄是 cp-kafka 的 0750 | 加 `sudo` |
+
+## A.7 repo 改由另一台 web server 提供、服務身分改用憑證（2026-10-19，cp-poc）
+
+**範圍**：
+- 2.15：內部 repo 由銀行管理的 web server（repo01）提供，ops01 只負責建置。repo01 只有 httpd、sshd 和部署帳號，沒有 `createrepo_c`、`rsync`，cpadmin 在上面沒有 root。
+- REST Proxy、C3、cpctl 改用憑證向 MDS 取得 token；AD 上只留 `svc-mds-bind`。
+
+| 測試 | 做法 | 結果 |
+|---|---|---|
+| 首次推送 | `cpctl repo import`（結尾推送） | 142 個檔案、8.5GB，約 30 秒；三個 repo 的 repodata 切換；再推一次 changed=0 |
+| 既有叢集切換到 repo01 | 停掉 ops01 的 httpd；`cpctl install` | 13 台的 repo 檔改指向 repo01（含 ops01，不再用 `file://`）；驗收 55/55 |
+| 刪掉 AD 上的服務帳號 | ad01 刪除 svc-rest、svc-c3、svc-cpctl，只剩 svc-mds-bind | — |
+| 整套移除重裝 | `cpctl uninstall` → `cpctl install`；03 步產生 3 份新申請 → `bank-ca.sh exchange` → 再跑 | 套件全部從 repo01 重新安裝；`cpctl verify` 60/60；再跑 install **changed=0** |
+| C3 用的身分 | 用 svc-cpctl 憑證查 RBAC；alice 以 MDS token 呼叫 C3 API | `User:cp-server` 沒有任何角色、`User:svc-c3` 是 SystemAdmin；C3 回傳叢集資料 |
+| 全新空主機 | 不連外網的新容器，只放 repo 檔、CA 檔、原廠金鑰 | `dnf install` 46 個套件（CP、JDK、OS 相依），GPG 全部通過，java 可執行 |
+| 2.15 手動推送 | 清空 repo01，照 2.15 原文指令執行（`transcripts/cmd-2.15-repo-web.txt`） | 推 121 檔、3 個 repodata 切換、三個 repo = ops build、明文 HTTP 000；之後 `cpctl repo push` 回報無事可做 |
+| 最終驗收 | 加入「C3 以 AD 使用者 token 提供叢集資料」「cp-server 沒有 RBAC 角色」兩項後的 `cpctl verify` | **62/62** |
+
+**發現並已處理的事**：
+- `repo import` 原本先複製檔案、最後才執行 `createrepo_c`；建置主機沒有這個指令時，會留下沒有 repodata 的檔案。已改成**先檢查工具**（ops01 與 web server），缺少就在動任何檔案前停止。
+- C3 對 MDS 的身分若沿用 UI 的 `cp-server` 憑證，就要把 SystemAdmin 給所有伺服器共用的憑證。已改用 proxy store 出示 `svc-c3` 憑證；驗收檢查 `cp-server` 沒有任何 RBAC 角色。
+- 手動實測時用 `bash < 腳本` 執行會被第一個 `ssh` 吃掉後續指令（ssh 讀 stdin）；在終端機逐行輸入、或執行腳本檔都沒有這個問題。
 
 # 附錄 B. 只在實體主機才會生效的項目
 

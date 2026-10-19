@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Repo adapter "local": the ops host itself is the internal repository
-# (createrepo_c + httpd), for banks without an artifact repository reachable from the target zone.
+# Repo adapter "local": the ops host BUILDS the internal repository (verify, createrepo_c) under /srv/repo,
+# for banks without an artifact repository reachable from the target zone. Who SERVES it:
+#   REPO_WEB_HOST empty  the ops host itself (httpd configured by cpctl)
+#   REPO_WEB_HOST set    a separate, bank-managed web server: repo::push copies the build there over SSH as
+#                        REPO_WEB_USER (sshd, sh, tar, find, sha256sum there - no root, no createrepo_c)
 # Interface (other adapters - satellite / artifactory / nexus - implement the same functions):
 #   repo::import    landing zone -> internal repo (verify first, never overwrite a published file)
 #   repo::verify    internal repo is complete;  repo::verify_served  it answers at REPO_YUM_BASEURL
@@ -47,7 +50,24 @@ repo::_verify_landing() {
   log::ok "all RPM signatures verified against vendor keys"
 }
 
+# repo::_build_tools -> the build host has what the import needs, checked BEFORE anything is published
+# (a missing createrepo_c would otherwise leave copied RPMs without repodata)
+repo::_build_tools() {
+  local h t missing=()
+  h=$(repo::server)
+  for t in createrepo_c tar sha256sum; do
+    remote::exec "$h" "command -v $t >/dev/null" || missing+=("$t")
+  done
+  ((${#missing[@]} == 0)) || core::die "$E_PRECHECK" "[$h] missing on the repo build host: ${missing[*]} - install from the bank's RHEL repo or the landing zone bootstrap/ (manual 2.9)"
+  if repo::remote_web; then
+    repo::_web "cd '$REPO_WEB_ROOT' && test -w . && command -v tar find sha256sum >/dev/null" ||
+      core::die "$E_PRECHECK" "web server $REPO_WEB_USER@$REPO_WEB_HOST: no SSH login, $REPO_WEB_ROOT not writable, or tar/find/sha256sum missing"
+  fi
+  log::ok "repo build tools present on $h${REPO_WEB_HOST:+; $REPO_WEB_USER@$REPO_WEB_HOST can write $REPO_WEB_ROOT}"
+}
+
 repo::import() {
+  repo::_build_tools
   repo::_verify_landing
   local rel sum dest changed_dirs=() added=0 kept=0 conflicts=0
   declare -A dirty=()
@@ -102,6 +122,66 @@ repo::import() {
     log::info "audit copy: $audit"
   fi
   log::info "import summary: $added new, $kept already published"
+  repo::push
+}
+
+# ---- separate web server (REPO_WEB_HOST set) -----------------------------------------------------------
+repo::remote_web() { [[ -n ${REPO_WEB_HOST:-} ]]; }
+repo::_web() { ssh "${REMOTE_SSH_OPTS[@]}" "$REPO_WEB_USER@$REPO_WEB_HOST" "$@"; }
+# the CA file dnf / curl pin for the repo: the bank's CA for its web server, else the trust bundle
+repo::ca_file() { if repo::remote_web; then printf '%s' "$REPO_WEB_CA"; else printf '%s' "$PKI_DIR/ca.pem"; fi; }
+
+# repo::push -> make the web server serve exactly the ops build:
+#   1. files it lacks (RPMs, raw archives, keys, manifests); a file it has with another size is an error
+#      (published files never change)
+#   2. per yum repo whose repomd.xml differs: the metadata files, then repomd.xml (renamed into place), then
+#      the metadata files the new repomd.xml no longer names - a client never sees metadata naming a missing file
+repo::push() {
+  repo::remote_web || return 0
+  local listing rel size missing=() conflicts=0 r keep
+  declare -A have=()
+  listing=$(repo::_web "cd '$REPO_WEB_ROOT' && find . -type f -printf '%P\t%s\n'") ||
+    core::die "$E_PRECHECK" "cannot list $REPO_WEB_USER@$REPO_WEB_HOST:$REPO_WEB_ROOT"
+  while IFS=$'\t' read -r rel size; do [[ -n $rel ]] && have[$rel]=$size; done <<<"$listing"
+  while IFS=$'\t' read -r rel size; do
+    [[ $rel == */repodata/* ]] && continue
+    if [[ -z ${have[$rel]+x} ]]; then
+      missing+=("$rel")
+    elif [[ ${have[$rel]} != "$size" ]]; then
+      log::error "$REPO_WEB_HOST has a different $rel (size ${have[$rel]}, ops build $size)"
+      conflicts=$((conflicts + 1))
+    fi
+  done < <(cd "$REPO_LOCAL_ROOT" && find . -type f -printf '%P\t%s\n')
+  ((conflicts == 0)) || core::die "$E_PRECHECK" "refusing to push: $conflicts file(s) differ on $REPO_WEB_HOST"
+  if ((${#missing[@]} == 0)); then
+    log::ok "web server $REPO_WEB_HOST has every published file"
+  elif core::is_check_mode; then
+    log::changed "would push ${#missing[@]} file(s) to $REPO_WEB_HOST:$REPO_WEB_ROOT"
+  else
+    printf '%s\0' "${missing[@]}" | (cd "$REPO_LOCAL_ROOT" && tar --null -T - -cf -) |
+      repo::_web "umask 022 && cd '$REPO_WEB_ROOT' && tar --no-same-owner --no-same-permissions -xf -" ||
+      core::die "push to $REPO_WEB_HOST failed (rerun: cpctl repo push)"
+    log::changed "pushed ${#missing[@]} file(s) to $REPO_WEB_HOST:$REPO_WEB_ROOT"
+  fi
+  for r in "$REPO_LOCAL_ROOT"/rpm/*/; do
+    r=${r%/}
+    r=${r#"$REPO_LOCAL_ROOT"/}
+    [[ -f $REPO_LOCAL_ROOT/$r/repodata/repomd.xml ]] || continue
+    if [[ $(core::sha256 "$REPO_LOCAL_ROOT/$r/repodata/repomd.xml") == \
+      "$(repo::_web "sha256sum '$REPO_WEB_ROOT/$r/repodata/repomd.xml' 2>/dev/null" | awk '{print $1}')" ]]; then
+      log::ok "repodata current on $REPO_WEB_HOST: $r"
+      continue
+    fi
+    if core::is_check_mode; then log::changed "would push repodata $r"; continue; fi
+    (cd "$REPO_LOCAL_ROOT/$r" && tar --exclude=repodata/repomd.xml -cf - repodata) |
+      repo::_web "umask 022 && cd '$REPO_WEB_ROOT/$r' && tar --no-same-owner --no-same-permissions -xf -" ||
+      core::die "push of $r/repodata to $REPO_WEB_HOST failed"
+    keep=$(cd "$REPO_LOCAL_ROOT/$r/repodata" && find . -maxdepth 1 -type f -printf '%f ')
+    repo::_web "set -e; umask 022; cd '$REPO_WEB_ROOT/$r/repodata'; cat >.repomd.xml.new; mv -f .repomd.xml.new repomd.xml
+      for f in *; do case ' $keep' in *\" \$f \"*) ;; *) rm -f -- \"\$f\" ;; esac; done" <"$REPO_LOCAL_ROOT/$r/repodata/repomd.xml" ||
+      core::die "switch of $r/repodata on $REPO_WEB_HOST failed"
+    log::changed "repodata switched on $REPO_WEB_HOST: $r"
+  done
 }
 
 # repo::verify -> the internal repo is complete (repo metadata of every yum repo present on the ops host).
@@ -116,20 +196,28 @@ repo::verify() {
       rc=1
     fi
   done
+  if repo::remote_web && repo::tls && [[ ! -s $REPO_WEB_CA ]]; then
+    log::error "REPO_WEB_CA $REPO_WEB_CA missing: the CA chain of $REPO_WEB_HOST's certificate (from the bank)"
+    rc=1
+  fi
   return "$rc"
 }
 
 # repo::verify_served -> every yum repo answers at REPO_YUM_BASEURL (HTTPS: server certificate checked against
 # the trust bundle); over HTTPS, plain HTTP on the old port must not serve the repo
 repo::verify_served() {
-  local r rc=0 base=${REPO_YUM_BASEURL%/} ca=()
-  repo::tls && ca=(--cacert "$PKI_DIR/ca.pem")
+  local r rc=0 base=${REPO_YUM_BASEURL%/} ca=() served
+  repo::tls && ca=(--cacert "$(repo::ca_file)")
   for r in confluent adoptium os-deps; do
-    if curl -fsS "${ca[@]}" -o /dev/null "$base/$r/repodata/repomd.xml"; then
-      log::ok "repo $r served at $base/$r"
-    else
+    if ! served=$(curl -fsS "${ca[@]}" "$base/$r/repodata/repomd.xml" | sha256sum | awk '{print $1}') ||
+      [[ $served == "$(printf '' | sha256sum | awk '{print $1}')" ]]; then
       log::error "repo $r not served at $base/$r"
       rc=1
+    elif [[ $served != "$(core::sha256 "$REPO_LOCAL_ROOT/rpm/$r/repodata/repomd.xml")" ]]; then
+      log::error "repo $r served at $base/$r is not the current ops build (run: cpctl repo push)"
+      rc=1
+    else
+      log::ok "repo $r served at $base/$r (= ops build)"
     fi
   done
   return "$rc"
@@ -145,7 +233,7 @@ repo::tls() { [[ $REPO_YUM_BASEURL == https://* ]]; }
 # repo::_served_quiet -> probe only (no log lines, no failure count): one repo answers at REPO_YUM_BASEURL
 repo::_served_quiet() {
   local ca=()
-  repo::tls && ca=(--cacert "$PKI_DIR/ca.pem")
+  repo::tls && ca=(--cacert "$(repo::ca_file)")
   curl -fsS "${ca[@]}" -o /dev/null "${REPO_YUM_BASEURL%/}/confluent/repodata/repomd.xml" 2>/dev/null
 }
 
@@ -189,6 +277,7 @@ EOF
 
 # repo::tls_configure -> certificate + key + vhost on the ops host; restart httpd only when something changed
 repo::tls_configure() {
+  repo::remote_web && return 0 # the bank runs the web server, its httpd and its certificate
   local h changed=0 t
   h=$(inv::hosts ops | head -1)
   [[ -f $PKI_DIR/cp-server.crt && -f $PKI_DIR/cp-server.key ]] || core::die "$E_PRECHECK" "repo over HTTPS needs the cp-server certificate (step 03 / bank)"
@@ -221,8 +310,9 @@ repo::list() {
 }
 readonly REPO_CA_FILE=/etc/pki/tls/certs/cp-repo-ca.pem
 
-# repo::is_server <host> -> the host that serves the internal repo (reads it from disk, no network)
-repo::is_server() { [[ $REPO_PROVIDER == local && $(inv::hosts ops | head -1) == "$1" ]]; }
+# repo::is_server <host> -> the host that serves the internal repo (reads it from disk, no network);
+# with a separate web server no cluster host is: the ops host installs over HTTPS like every other host
+repo::is_server() { [[ $REPO_PROVIDER == local && -z ${REPO_WEB_HOST:-} && $(inv::hosts ops | head -1) == "$1" ]]; }
 
 # repo::base_for <host> -> baseurl for that host: the repo server itself uses file://, so it can install
 # its own packages (JDK, mod_ssl) before the HTTPS listener and its certificate exist
@@ -248,7 +338,9 @@ repo::clients() {
 repo::trust_push() {
   repo::tls || return 0
   repo::is_server "$1" && return 0
-  [[ -f $PKI_DIR/ca.pem ]] || core::die "$E_PRECHECK" "repo over HTTPS: no trust bundle yet ($PKI_DIR/ca.pem)"
-  remote::put "$1" "$PKI_DIR/ca.pem" "$REPO_CA_FILE" root root 0644
+  local ca
+  ca=$(repo::ca_file)
+  [[ -s $ca ]] || core::die "$E_PRECHECK" "repo over HTTPS: CA file $ca missing (REPO_WEB_CA, or the trust bundle of step 03)"
+  remote::put "$1" "$ca" "$REPO_CA_FILE" root root 0644
 }
 

@@ -2,7 +2,7 @@
 # cpctl certs status | rotate [--cert NAME[,NAME]] | rotate-ca --phase add|switch|retire
 #
 # Leaf rotation (yearly): re-issue the shared certificates, push, rolling restart behind health gates.
-#   Default set = kafka-internal,cp-server. App client certs (legacy REST apps) only with --cert / --cert all,
+#   Default set = kafka-internal,cp-server + the service identities (SERVICE_CERTS). App client certs (legacy REST apps) only with --cert / --cert all,
 #   because the new key + certificate must also be handed to the application team.
 #
 # CA rotation (three runs, each one a complete rolling restart; zero downtime because every node trusts
@@ -62,7 +62,8 @@ certs::status() {
 }
 
 certs::rotate() {
-  local names=kafka-internal,cp-server
+  local names
+  names=$(printf '%s\n' kafka-internal cp-server ${SERVICE_CERTS:-} | paste -sd, -)
   while [[ $# -gt 0 ]]; do
     case $1 in
       --cert) names=$2; shift 2 ;;

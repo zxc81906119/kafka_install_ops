@@ -468,3 +468,50 @@ ops_setup() {
   ops::_crit c >/dev/null; [ "$HEALTH_RC" = 1 ]
   ops::_warn w >/dev/null; [ "$HEALTH_RC" = 1 ]
 }
+
+# ---------- repo push to a separate web server (REPO_WEB_HOST); the "web server" is a local directory
+repo_web_setup() {
+  export REPO_LOCAL_ROOT="$BATS_TEST_TMPDIR/build" REPO_WEB_HOST=web.test.lab REPO_WEB_USER=deploy
+  export REPO_WEB_ROOT="$BATS_TEST_TMPDIR/web"
+  mkdir -p "$REPO_LOCAL_ROOT/rpm/x/repodata" "$REPO_LOCAL_ROOT/raw/tools" "$REPO_WEB_ROOT"
+  printf 'pkg-1\n' >"$REPO_LOCAL_ROOT/rpm/x/a-1.rpm"
+  printf 'tool\n' >"$REPO_LOCAL_ROOT/raw/tools/t.jar"
+  printf 'meta-1\n' >"$REPO_LOCAL_ROOT/rpm/x/repodata/aaa-primary.xml.gz"
+  printf '<repomd>aaa</repomd>\n' >"$REPO_LOCAL_ROOT/rpm/x/repodata/repomd.xml"
+  # shellcheck source=/dev/null
+  source "$CPCTL_HOME/lib/repo/local.sh"
+  repo::_web() { bash -c "$*"; }   # instead of ssh deploy@web
+}
+
+@test "repo push: first push copies everything; a repodata change switches repomd.xml and drops stale metadata" {
+  repo_web_setup
+  repo::push
+  [ "$(cat "$REPO_WEB_ROOT/rpm/x/a-1.rpm")" = pkg-1 ]
+  [ -f "$REPO_WEB_ROOT/raw/tools/t.jar" ]
+  cmp "$REPO_LOCAL_ROOT/rpm/x/repodata/repomd.xml" "$REPO_WEB_ROOT/rpm/x/repodata/repomd.xml"
+  # new package + new metadata generation (createrepo_c replaces the hashed files)
+  printf 'pkg-2\n' >"$REPO_LOCAL_ROOT/rpm/x/a-2.rpm"
+  rm "$REPO_LOCAL_ROOT/rpm/x/repodata/aaa-primary.xml.gz"
+  printf 'meta-2\n' >"$REPO_LOCAL_ROOT/rpm/x/repodata/bbb-primary.xml.gz"
+  printf '<repomd>bbb</repomd>\n' >"$REPO_LOCAL_ROOT/rpm/x/repodata/repomd.xml"
+  repo::push
+  [ -f "$REPO_WEB_ROOT/rpm/x/a-2.rpm" ]
+  [ -f "$REPO_WEB_ROOT/rpm/x/repodata/bbb-primary.xml.gz" ]
+  [ ! -e "$REPO_WEB_ROOT/rpm/x/repodata/aaa-primary.xml.gz" ]
+  [ "$(cat "$REPO_WEB_ROOT/rpm/x/repodata/repomd.xml")" = "<repomd>bbb</repomd>" ]
+  [ "$(ls -A "$REPO_WEB_ROOT/rpm/x/repodata" | wc -l)" = 2 ]   # no .repomd.xml.new left behind
+  run repo::push   # nothing to do the second time
+  [ "$status" -eq 0 ]
+  [[ $output == *"has every published file"* && $output == *"repodata current"* ]]
+}
+
+@test "repo push: a published file that differs on the web server stops the push before anything is copied" {
+  repo_web_setup
+  mkdir -p "$REPO_WEB_ROOT/rpm/x"
+  printf 'tampered!\n' >"$REPO_WEB_ROOT/rpm/x/a-1.rpm"
+  run repo::push
+  [ "$status" -ne 0 ]
+  [[ $output == *"differ on web.test.lab"* ]]
+  [ ! -e "$REPO_WEB_ROOT/raw/tools/t.jar" ]
+  [ ! -e "$REPO_WEB_ROOT/rpm/x/repodata/repomd.xml" ]
+}

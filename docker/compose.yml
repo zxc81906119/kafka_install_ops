@@ -140,6 +140,23 @@ services:
         ipv4_address: 172.30.0.13
         aliases: [jump01.poc.lab]
 
+  # Simulated BANK web server for the internal repo (separate from ops01; bank-managed, cpctl has no root here).
+  # cpctl builds the repo on ops01 and pushes it as repodeploy over SSH (REPO_WEB_HOST in inventory.env).
+  # Docker DNS alias for the same reason as jump01 (no change to the shared x-hosts list).
+  repo01:
+    <<: *node
+    image: cp-web:poc
+    hostname: repo01
+    networks:
+      cpnet:
+        ipv4_address: 172.30.0.14
+        aliases: [repo01.poc.lab]
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ssh-keys:/etc/ssh/authorized_keys.d:ro
+      - ./web/tls:/etc/pki/repo-tls:ro
+      - repo-web:/var/www/repo
+
 networks:
   cpnet:
     internal: true
@@ -152,5 +169,6 @@ volumes:
   ops-state:
   ops-repo:
   ops-home:
+  repo-web:
   ad-data:
   ad-etc:

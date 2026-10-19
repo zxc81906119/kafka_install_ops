@@ -210,6 +210,9 @@ pki::_purpose() {
     kafka-internal) echo "controllers + brokers: CONTROLLER / INTERNAL listeners (server AND client of the same TLS connection), telemetry client to Prometheus" ;;
     cp-server) echo "all servers: Kafka client listeners, MDS, REST Proxy, Control Center, Prometheus, LDAPS; client of C3 / Prometheus towards Prometheus / Alertmanager" ;;
     "${OPMENU_BREAKGLASS:-}") echo "OP menu break-glass identity (client certificate, RBAC SystemAdmin)" ;;
+    svc-rest) echo "service identity of REST Proxy towards MDS and Kafka (client certificate, principal User:svc-rest, impersonation)" ;;
+    svc-c3) echo "service identity of Control Center towards MDS and Kafka (client certificate, principal User:svc-c3, SystemAdmin)" ;;
+    svc-cpctl) echo "service identity of the installer cpctl towards MDS (client certificate, principal User:svc-cpctl, super user)" ;;
     *) echo "client certificate of application $1 (REST Proxy mTLS, principal User:$1)" ;;
   esac
 }
@@ -415,9 +418,11 @@ pki::truststore() {
   printf '%s' "$sha" >"$mark"
 }
 
-# pki::leaves -> the leaf certificates cpctl manages (shared certs + client certs of legacy REST apps)
+# pki::leaves -> the leaf certificates cpctl manages (shared certs, service identities, client certs of legacy REST apps)
 pki::leaves() {
   printf '%s\n' kafka-internal cp-server
+  local svc
+  for svc in ${SERVICE_CERTS:-}; do printf '%s\n' "$svc"; done
   [[ ${OPMENU:-off} == on ]] && printf '%s\n' "$OPMENU_BREAKGLASS"
   inv::apps rest
 }
@@ -552,6 +557,9 @@ pki::issue_all() {
   # machines: client certificates ONLY for legacy apps that use REST Proxy (principal = CN)
   local app
   for app in $(inv::apps rest); do pki::issue "$app" "" clientAuth; done
+  # service identities towards MDS (REST Proxy, Control Center, cpctl): certificate instead of an AD account
+  local svc
+  for svc in ${SERVICE_CERTS:-}; do pki::issue "$svc" "" clientAuth; done
   # OP menu break-glass identity (menu item 91; RBAC SystemAdmin, key held by opbootstrap on the bastion)
   if [[ ${OPMENU:-off} == on ]]; then pki::issue "$OPMENU_BREAKGLASS" "" clientAuth; fi
   if pki::external && step::mutating; then pki::pending_gate; fi

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 STEP_DESC="install packages from the internal repo (exact versions, GPG-checked, versionlocked)"
 
-step_inputs() { cat "$CONF_DIR/versions.env"; printf '%s\n' "$CP_VERSION" "$INSTALL_METHOD" "$REPO_YUM_BASEURL"; }
+step_inputs() { cat "$CONF_DIR/versions.env"; printf '%s\n' "$CP_VERSION" "$INSTALL_METHOD" "$REPO_YUM_BASEURL" "${REPO_WEB_HOST:-}"; cat "${REPO_WEB_CA:-/dev/null}" 2>/dev/null || true; }
 
 distribute::host() {
   local h=$1 role
@@ -15,12 +15,17 @@ distribute::host() {
 step_apply() {
   local hosts=()
   mapfile -t hosts < <(inv::hosts ops; inv::hosts controller; inv::hosts broker; inv::hosts rest; inv::hosts c3; inv::hosts jump)
+  # separate web server: it must already serve the current ops build (cpctl repo import / push) - every host,
+  # the ops host included, installs from it
+  if repo::remote_web && step::mutating; then
+    repo::verify_served || core::die "$E_GATE" "internal repo not served by $REPO_WEB_HOST - run: cpctl repo push"
+  fi
   # ops first (it needs the JDK for keytool in 03_pki), then everything else in parallel
   distribute::host "${hosts[0]}"
-  # internal repo over HTTPS: the repo server needs its certificate (cp-server) before any other host can
-  # install - so the certificates are issued here already (openssl only; with the bank CA this is where the
+  # internal repo over HTTPS served by the ops host: it needs its certificate (cp-server) before any other host
+  # can install - so the certificates are issued here already (openssl only; with the bank CA this is where the
   # install waits for the bank's answers), then the HTTPS listener is configured and checked
-  if repo::tls; then
+  if repo::tls && ! repo::remote_web; then
     pki::issue_all
     repo::tls_configure
     if step::mutating; then repo::verify_served || core::die "$E_GATE" "internal repo not served over HTTPS at $REPO_YUM_BASEURL"; fi

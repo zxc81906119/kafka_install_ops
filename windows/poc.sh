@@ -13,9 +13,10 @@
 #   poc.sh cpctl <args>      run cpctl on ops01 as cpadmin
 #   poc.sh agent-push        (administrator) install the agent + policy cpctl built (agent build) on every host, as root
 #   poc.sh sudo-full         (administrator) give cpadmin full sudo again on every running host
+#   poc.sh web-cert          (bank) key + certificate for the repo web server repo01, signed by the bank CA
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 gen_pass() { # 20 random alnum chars + fixed complexity suffix (AD password policy)
   local p
@@ -28,7 +29,7 @@ cmd_secrets() {
   [[ -f "$CONF_DIR/apps.env" ]] || die "missing $CONF_DIR/apps.env"
   # shellcheck source=/dev/null
   source "$CONF_DIR/apps.env"
-  local keys=(AD_ADMIN_PASSWORD LDAP_BIND_PASSWORD SVC_REST_PASSWORD SVC_C3_PASSWORD SVC_CPCTL_PASSWORD
+  local keys=(AD_ADMIN_PASSWORD LDAP_BIND_PASSWORD
     KAFKA_ADMIN_PASSWORD STORE_PASSWORD HUMAN_DEFAULT_PASSWORD SECRET_MASTER_PASSPHRASE MDS_TOKEN_PASSPHRASE AUDIT_PASSWORD JMX_EXPORTER_PASSWORD
     OPMENU_TRUSTSTORE_PASSWORD OPMENU_BREAKGLASS_STORE_PASSWORD)
   local app
@@ -51,6 +52,7 @@ cmd_build() {
   log "building cp-ops:poc";  docker build -t cp-ops:poc "$(winpath "$DOCKER_DIR/ops")"
   log "building cp-ad:poc";   docker build -t cp-ad:poc "$(winpath "$DOCKER_DIR/ad")"
   log "building cp-lb:poc";   docker build -t cp-lb:poc "$(winpath "$DOCKER_DIR/lb")"
+  log "building cp-web:poc";  docker build -t cp-web:poc "$(winpath "$DOCKER_DIR/web")"
 }
 
 cmd_up() {
@@ -96,7 +98,8 @@ cmd_cpctl() {
 
 # The two actions below stand for the bank's system administrator: after "cpctl agent install --restrict" the
 # installer account can neither replace the agent nor widen its own sudo. They act as root through docker exec.
-running_hosts() { docker ps --format '{{.Names}}' | sed -n 's/^cp-poc-\(.*\)-1$/\1/p' | sort; }
+# repo01 is the bank's own web server: no installer account, no agent
+running_hosts() { docker ps --format '{{.Names}}' | sed -n 's/^cp-poc-\(.*\)-1$/\1/p' | grep -vx repo01 | sort; }
 
 cmd_agent_push() {
   local agent h
@@ -119,6 +122,24 @@ cmd_sudo_full() {
   done
 }
 
+# The bank side of the repo web server: its TLS key and a certificate from the bank CA (bank-ca.sh sign).
+# Idempotent: a certificate valid for 30 more days is kept. repo01 reads docker/web/tls/ when httpd starts.
+cmd_web_cert() {
+  local d csr
+  d="$(winpath "$DOCKER_DIR/web/tls")"
+  mkdir -p "$d"
+  if [[ -f $d/repo.crt ]] && openssl x509 -in "$d/repo.crt" -noout -checkend 2592000 >/dev/null 2>&1; then
+    log "repo01 certificate still valid: $(openssl x509 -in "$d/repo.crt" -noout -subject -enddate | paste -sd' ')"
+    return 0
+  fi
+  csr="$d/repo.csr"
+  openssl req -new -newkey rsa:3072 -nodes -keyout "$d/repo.key" -out "$csr" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" \
+    -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null
+  bash "$WIN_DIR/bank-ca.sh" sign "$csr" "$d/repo.crt"
+  rm -f "$csr"
+  log "repo01 certificate in docker/web/tls/ - (re)start httpd: poc.sh exec repo01 systemctl restart httpd"
+}
+
 main() {
   local cmd=${1:-}; shift || true
   case $cmd in
@@ -136,6 +157,7 @@ main() {
     cpctl) cmd_cpctl "$@" ;;
     agent-push) cmd_agent_push ;;
     sudo-full) cmd_sudo_full ;;
+    web-cert) cmd_web_cert ;;
     -h | --help | help | "") usage 0 ;;
     *) usage 1 ;;
   esac
