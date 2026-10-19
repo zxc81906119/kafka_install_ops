@@ -45,8 +45,36 @@ kafka::_configure() { # <role> <host>
 
 kafka::_running() { remote::run "$1" svc::is_active confluent-server >/dev/null 2>&1; }
 
-# Admin client config on the ops host: super-user via the shared internal certificate.
+# Admin client on the ops host for BROKER operations (topics, SCRAM, quotas, features, backups): svc-cpctl, the
+# installer's super-user identity - its client certificate buys an MDS token, used on the TOKEN listener.
+# kafka-admin (SCRAM) stays the break-glass that works without MDS; kafka-internal stays cluster-internal.
 kafka::admin_config() {
+  local f=$STATE_DIR/client/admin-token.properties
+  if [[ ! -f $f ]]; then
+    mkdir -p "$STATE_DIR/client"
+    cat >"$f" <<EOF
+security.protocol=SASL_SSL
+sasl.mechanism=OAUTHBEARER
+sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenCertificateLoginCallbackHandler
+sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required metadataServerUrls="$(inv::endpoints broker "$PORT_MDS" https)";
+ssl.keystore.type=PKCS12
+ssl.keystore.location=$PKI_DIR/svc-cpctl.p12
+ssl.keystore.password=$STORE_PASSWORD
+ssl.key.password=$STORE_PASSWORD
+ssl.truststore.type=PKCS12
+ssl.truststore.location=$PKI_DIR/truststore.p12
+ssl.truststore.password=$STORE_PASSWORD
+ssl.endpoint.identification.algorithm=https
+EOF
+    chmod 0600 "$f"
+  fi
+  printf '%s' "$f"
+}
+kafka::bootstrap_admin() { inv::endpoints broker "$PORT_TOKEN"; }
+
+# Controllers have no TOKEN listener: quorum / controller operations (--bootstrap-controller) use the shared
+# internal certificate on the CONTROLLER listener.
+kafka::controller_config() {
   local f=$STATE_DIR/client/internal.properties
   if [[ ! -f $f ]]; then
     mkdir -p "$STATE_DIR/client"
@@ -66,7 +94,6 @@ EOF
   printf '%s' "$f"
 }
 
-kafka::bootstrap_internal() { inv::endpoints broker "$PORT_INTERNAL"; }
 
 # kafka::admin <tool> [args...]  run a Kafka CLI tool on the ops host as the internal super-user
 kafka::admin() {
@@ -95,7 +122,7 @@ kafka::_controller_caught_up() {
   local id
   id=$(inv::get "$1" NODE_ID)
   kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" \
-    --command-config "$(kafka::admin_config)" describe --replication 2>/dev/null |
+    --command-config "$(kafka::controller_config)" describe --replication 2>/dev/null |
     awk -v id="$id" '$1 == id && ($NF == "Leader" || $NF == "Follower") && $4 + 0 == 0 { ok = 1 } END { exit ok ? 0 : 1 }'
 }
 
@@ -110,10 +137,10 @@ kafka::_broker_healthy() {
   local host=$1 id cfg out
   id=$(inv::get "$host" NODE_ID)
   cfg=$(kafka::admin_config)
-  out=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_internal)" \
+  out=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_admin)" \
     --command-config "$cfg" 2>/dev/null || true)
   grep -qF "(id: $id rack" <<<"$out" || return 1
-  out=$(kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" \
+  out=$(kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" \
     --describe --under-replicated-partitions 2>/dev/null) || return 1
   [[ -z $out ]]
 }

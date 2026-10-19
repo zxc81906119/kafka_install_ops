@@ -159,7 +159,7 @@ push_repo() {
 
 # rolling restart of everything that holds keystores/truststores in memory: controllers -> brokers -> REST (drained) -> C3
 broker_ok() { local id=$((100 + ${1#kb0})); kafka-broker-api-versions --bootstrap-server $B --command-config $CFG 2>/dev/null | grep -q "(id: $id rack: [a-z-]* isFenced: false)" && [ -z "$(kafka-topics --bootstrap-server $B --command-config $CFG --describe --under-replicated-partitions 2>/dev/null)" ]; }
-ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
+ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
 wait_for() { local i; for i in $(seq 1 60); do "$@" && { echo "  healthy after ~$((i*5))s"; return 0; }; sleep 5; done; echo "  NOT HEALTHY - stop here"; return 1; }
 lbconf() {
   { echo 'upstream cp_rest {'; echo '    hash $remote_addr consistent;'
@@ -172,7 +172,7 @@ lbconf() {
 }
 restart_all() {
   local h L
-  L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --status | awk '/LeaderId:/ {print $2}')
+  L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --status | awk '/LeaderId:/ {print $2}')
   for h in $(for c in kc01 kc02 kc03; do [ "${c#kc0}" != "$L" ] && echo $c; done) kc0$L; do echo "restart $h ($(date +%T))"; ssh $h.poc.lab 'sudo systemctl restart confluent-server'; wait_for ctl_ok $h || return 1; done
   for h in kb01 kb02 kb03 kb04; do echo "restart $h ($(date +%T))"; ssh $h.poc.lab 'sudo systemctl restart confluent-server'; sleep 10; wait_for broker_ok $h || return 1; done
   for h in rest01 rest02; do

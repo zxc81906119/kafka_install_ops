@@ -31,6 +31,9 @@ cpnet (internal, 無外網) ─────────────────�
 | 人員 | Kafka CLI（LDAP :9096）、MDS、C3 | AD 帳密（LDAPS） | `Group:<AD 群組>` |
 | REST Proxy / C3 / cpctl 本身 | MDS、TOKEN listener :9094 | **各自的 client 憑證** `CN=svc-rest` / `svc-c3` / `svc-cpctl`，向 MDS 換 token；不是 AD 帳號、沒有密碼 | `User:svc-rest` / `User:svc-c3` / `User:svc-cpctl` |
 | MDS → AD | LDAPS :636 | 唯讀 bind 帳號 `svc-mds-bind`（一般網域使用者）：**AD 上唯一的服務帳號** | — |
+| cpctl 管理 broker（topic、SCRAM、配額、features、備份） | TOKEN :9094 | svc-cpctl 憑證 → MDS token → OAUTHBEARER | `User:svc-cpctl`（super user） |
+| cpctl 管理 controller（quorum、增減 controller） | CONTROLLER :9093 | 共用內部憑證 mTLS（controller 沒有 TOKEN listener） | `User:kafka-internal` |
+| 緊急備用 | CLIENT :9095 | `kafka-admin` SCRAM（格式化時寫入；不依賴 MDS，MDS 故障時唯一能進的管理身分；平常不用） | `User:kafka-admin`（super user） |
 | 所有伺服器的 HTTPS / TLS | — | **共用 server 憑證** `CN=cp-server`（SAN 含所有主機與 LB 名稱） | — |
 
 - C3 / REST Proxy → Kafka 走 TOKEN listener（:9094）：單向 TLS，身分由 MDS 簽發的 OAUTHBEARER token 證明（RS256、效期 1 小時，與官方範例一致）。若資安要求伺服器之間一律雙向驗證，可把 `listener.name.token.ssl.client.auth` 改為 `required`，並讓 REST / C3 出示共用的 `cp-server` 憑證；改完需要滾動重啟。

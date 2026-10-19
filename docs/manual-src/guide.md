@@ -2306,13 +2306,39 @@ PoC 用 `windows/bank-ca.sh` 模擬銀行（root `PoC Bank Root CA G1` → 中�
 $ export S=/var/lib/cp-installer              # cpctl 的 STATE_DIR
 $ export PKI=$S/pki                          # 03_pki 產生的 CA、憑證、keystore
 $ export CB=kc01.poc.lab:9093,kc02.poc.lab:9093,kc04.poc.lab:9093      # controller bootstrap
-$ export BI=kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092  # broker INTERNAL
-$ export ADMIN_CFG=$S/client/internal.properties   # 管理用 client 設定(內部憑證 = super user)
+$ export BI=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094  # broker TOKEN listener(管理用)
+$ export ADMIN_CFG=$S/client/admin-token.properties   # 管理 broker:svc-cpctl 憑證 → MDS token(super user)
+$ export CCFG=$S/client/internal.properties           # 管理 controller:共用內部憑證(controller 沒有 TOKEN listener)
 $ export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
          KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 ```
 
-`$ADMIN_CFG`(0600,cpadmin)內容如下,cpctl 在第一次需要時由 `kafka::admin_config` 產生:
+管理身分分三種,各有用途:
+
+| 身分 | 方式 | 用在 |
+|---|---|---|
+| `svc-cpctl`(`$ADMIN_CFG`) | 憑證 → MDS 換 token → TOKEN listener(OAUTHBEARER) | 日常管理 broker:topic、SCRAM、配額、features、備份 |
+| `kafka-internal`(`$CCFG`) | 共用內部憑證,mTLS 直連 CONTROLLER listener | 只用在 controller:quorum 狀態、增減 controller |
+| `kafka-admin` | SCRAM(CLIENT listener 9095) | **緊急備用**:MDS 故障時唯一能進叢集的管理身分;平常不用,密碼另外保管 |
+
+`$ADMIN_CFG`(0600,cpadmin;cpctl 由 `kafka::admin_config` 產生)。要等 broker 與 MDS 啟動後(4.3)才能用:
+
+```properties
+security.protocol=SASL_SSL
+sasl.mechanism=OAUTHBEARER
+sasl.login.callback.handler.class=io.confluent.kafka.clients.plugins.auth.token.TokenCertificateLoginCallbackHandler
+sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required metadataServerUrls="https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090";
+ssl.keystore.type=PKCS12
+ssl.keystore.location=/var/lib/cp-installer/pki/svc-cpctl.p12
+ssl.keystore.password=<store-password>
+ssl.key.password=<store-password>
+ssl.truststore.type=PKCS12
+ssl.truststore.location=/var/lib/cp-installer/pki/truststore.p12
+ssl.truststore.password=<store-password>
+ssl.endpoint.identification.algorithm=https
+```
+
+`$CCFG`(0600;`kafka::controller_config`):
 
 ```properties
 security.protocol=SSL
@@ -2328,6 +2354,7 @@ ssl.endpoint.identification.algorithm=https
 
 ```bash
 $ install -m 0600 /dev/null $ADMIN_CFG && vi $ADMIN_CFG     # 先建 0600 的空檔再填內容
+$ install -m 0600 /dev/null $CCFG && vi $CCFG
 ```
 
 > 路徑以 RPM 安裝方式為準(`/usr/bin`、`/etc/kafka`、`/usr/lib/jvm/temurin-21-jdk`)。tar.gz 方式請把 `/usr/bin/kafka-*` 換成 `/opt/confluent/current/bin/kafka-*`、`/etc/kafka` 換成 tar 的 `etc/kafka`、JAVA_HOME 換成 `/opt/java/current`(見第 7 章)。
@@ -2673,7 +2700,7 @@ log.dirs=/var/lib/kafka/data
 | listener | port | protocol | 認證 | 用途 | keystore |
 |---|---|---|---|---|---|
 | CONTROLLER | 9093 | SSL | mTLS(kafka-internal) | controller 之間、broker → controller | kafka-internal.p12 |
-| INTERNAL | 9092 | SSL | mTLS(kafka-internal) | broker 之間、管理工具 | kafka-internal.p12 |
+| INTERNAL | 9092 | SSL | mTLS(kafka-internal) | broker 之間(管理工具改走 TOKEN,以 svc-cpctl 身分) | kafka-internal.p12 |
 | TOKEN | 9094 | SASL_SSL | OAUTHBEARER(MDS token) | C3、REST Proxy(impersonation) | cp-server.p12 |
 | CLIENT | 9095 | SASL_SSL | SCRAM-SHA-512 | 應用程式、audit writer | cp-server.p12 |
 | LDAP | 9096 | SASL_SSL | PLAIN → AD | 人員用 CLI | cp-server.p12 |
@@ -3273,7 +3300,7 @@ $ for h in kc01 kc02 kc04; do ssh $h.poc.lab "sudo systemctl enable -q confluent
 # 1) port 9093 開了(每台最多等 180 秒)
 $ for h in kc01 kc02 kc04; do timeout 3 bash -c "exec 3<>/dev/tcp/$h.poc.lab/9093" && echo "$h 9093 open"; done
 # 2) quorum 狀態
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --status
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --status
 ClusterId:              jjRYywATQBGIf11rBTcNGg
 LeaderId:               4
 LeaderEpoch:            29
@@ -3287,7 +3314,7 @@ CurrentObservers:       [...]
 ### 4.4.3 每個 voter 都跟上(lag 0)
 
 ```bash
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication
 NodeId	DirectoryId           	LogEndOffset	Lag	LastFetchTimestamp	LastCaughtUpTimestamp	Status
 4     	gIrea9u4RGOZQU1Xn1JJAw	227235      	0  	...	...	Leader
 1     	yWE5-5XwTFmNSxtKslzuyA	227235      	0  	...	...	Follower
@@ -3297,7 +3324,7 @@ NodeId	DirectoryId           	LogEndOffset	Lag	LastFetchTimestamp	LastCaughtUpTi
 判斷方式(與 cpctl 相同):對每個 node.id,第 4 欄 `Lag` 為 0 且最後一欄是 `Leader` 或 `Follower`:
 
 ```bash
-$ for id in 1 2 4; do kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication \
+$ for id in 1 2 4; do kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication \
     | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {print id, (ok?"caught-up":"NOT-READY")}'; done
 1 caught-up
 2 caught-up
@@ -3307,7 +3334,7 @@ $ for id in 1 2 4; do kafka-metadata-quorum --bootstrap-controller $CB --command
 再確認動態 quorum:
 
 ```bash
-$ kafka-features --bootstrap-controller $CB --command-config $ADMIN_CFG describe | grep kraft.version
+$ kafka-features --bootstrap-controller $CB --command-config $CCFG describe | grep kraft.version
 Feature: kraft.version   SupportedMinVersion: 0   SupportedMaxVersion: 1   FinalizedVersionLevel: 1   Epoch: ...
 ```
 
@@ -3340,7 +3367,7 @@ kb03.poc.lab:9092 (id: 103 rack: rack-b isFenced: false) -> (
 $ kafka-topics --bootstrap-server $BI --command-config $ADMIN_CFG --describe --under-replicated-partitions
 
 # 4) broker 出現在 quorum 的 observer
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk '$NF=="Observer"'
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication | awk '$NF=="Observer"'
 104   6oFCjuQum6rqO-jKWqzqIQ   227235   0   ...   Observer
 ...
 ```
@@ -3398,7 +3425,7 @@ $ ssh kc03.poc.lab "sudo systemctl enable -q confluent-server && sudo systemctl 
 4. 等 kc03 以 observer 追上(Status=Observer、Lag=0,最多約 5 分鐘):
 
 ```bash
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk '$1==3'
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication | awk '$1==3'
 3     	QZR-4oqubnW7p4s1HjNfEQ	224393      	0  	...	...	Observer
 ```
 
@@ -3422,7 +3449,7 @@ Added controller 3 with directory id QZR-4oqubnW7p4s1HjNfEQ and endpoints: CONTR
 **驗證**:
 
 ```bash
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk '$NF!="Observer"'
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication | awk '$NF!="Observer"'
 NodeId	DirectoryId           	LogEndOffset	Lag	...	Status
 1     	yWE5-5XwTFmNSxtKslzuyA	224435      	0  	...	Leader
 2     	fiI33QRPTKa8xDvu6kCPmw	224435      	0  	...	Follower
@@ -3448,15 +3475,15 @@ NodeId	DirectoryId           	LogEndOffset	Lag	...	Status
 
 ```bash
 # 1) 找出要移除節點的 directory id(第 2 欄)
-$ DIR=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication | awk '$1==3 {print $2; exit}')
+$ DIR=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication | awk '$1==3 {print $2; exit}')
 $ echo $DIR
 QZR-4oqubnW7p4s1HjNfEQ
 # 2) 移除 voter
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG \
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG \
     remove-controller --controller-id 3 --controller-directory-id $DIR
 Removed  KRaft controller 3 with directory id QZR-4oqubnW7p4s1HjNfEQ
 # 3) 確認已不是 voter(最多等 120 秒),再停機
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $ADMIN_CFG describe --replication \
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication \
     | awk '$1==3 && ($NF=="Leader"||$NF=="Follower")' | wc -l
 0
 $ ssh kc03.poc.lab "sudo systemctl disable -q --now confluent-server"
@@ -3497,28 +3524,16 @@ $ ssh kc03.poc.lab "sudo systemctl disable -q --now confluent-server"
 export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk
 export KAFKA_HEAP_OPTS=-Xmx256m
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml   # 工具專用 log4j，避免寫進 broker log
-export B=kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092
+export B=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094    # broker TOKEN listener
 export CB=kc01.poc.lab:9093,kc02.poc.lab:9093,kc04.poc.lab:9093
-export CFG=/var/lib/cp-installer/client/internal.properties
+export CFG=/var/lib/cp-installer/client/admin-token.properties    # broker 管理:svc-cpctl → MDS token
+export CCFG=/var/lib/cp-installer/client/internal.properties      # controller 管理:共用內部憑證
 export PKI=/var/lib/cp-installer/pki
 export CID=jjRYywATQBGIf11rBTcNGg
 export MDS=https://kb01.poc.lab:8090
 ```
 
-`$CFG`（管理用 client 設定，super user `User:kafka-internal`，0600；cpctl 在 `kafka::admin_config` 第一次需要時才產生）：
-
-```properties
-security.protocol=SSL
-ssl.keystore.type=PKCS12
-ssl.keystore.location=/var/lib/cp-installer/pki/kafka-internal.p12
-# 以下 <password> 都是 STORE_PASSWORD
-ssl.keystore.password=<password>
-ssl.key.password=<password>
-ssl.truststore.type=PKCS12
-ssl.truststore.location=/var/lib/cp-installer/pki/truststore.p12
-ssl.truststore.password=<password>
-ssl.endpoint.identification.algorithm=https
-```
+`$CFG` 與 4.0 的 `$ADMIN_CFG` 相同（super user `User:svc-cpctl`，憑證換 MDS token），`$CCFG` 與 4.0 相同（`User:kafka-internal`，只用於 `--bootstrap-controller`）。<password> 都是 STORE_PASSWORD。
 
 手動推檔的慣例（等同 cpctl 的 `remote::put` + `ensure::file`）：先 `scp` 到節點 `/tmp`，比對 sha256，不同時先備份 `<檔名>.bak.YYYYmmddHHMMSS` 再 `install -o <owner> -g <group> -m <mode>`：
 
@@ -4221,9 +4236,9 @@ BL=kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096
 
 ### 5.3.2 KRaft 與 broker（#1–#5）
 ```bash
-kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --status
+kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CCFG" describe --status
 #  LeaderId: <1|2|4>；CurrentVoters 內 3 筆，每筆都有 "directoryId"
-kafka-features --bootstrap-controller "$CB" --command-config "$CFG" describe | grep kraft.version
+kafka-features --bootstrap-controller "$CB" --command-config "$CCFG" describe | grep kraft.version
 #  Feature: kraft.version ... FinalizedVersionLevel: 1
 kafka-features --bootstrap-server "$B" --command-config "$CFG" describe | grep confluent.metadata.version
 kafka-broker-api-versions --bootstrap-server "$B" --command-config "$CFG" | grep '(id:'
@@ -4233,7 +4248,7 @@ kafka-broker-api-versions --bootstrap-server "$B" --command-config "$CFG" | grep
 ### 5.3.3 內部 mTLS（#6–#7）
 ```bash
 timeout 40 kafka-metadata-quorum --bootstrap-controller "$CB" --command-config $CD/nocert.properties describe --status   # 應失敗（SSL handshake）
-kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --status                            # 應成功
+kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CCFG" describe --status                            # 應成功
 ```
 
 ### 5.3.4 App over SCRAM + RBAC（#8–#11）
@@ -4879,7 +4894,7 @@ BROKERS="kb01 kb02 kb03 kb04" CONTROLLERS="kc01 kc02 kc04" RESTS="rest01 rest02"
 # broker 健康:已註冊且未 fence、沒有 under-replicated partition、MDS 有回應
 broker_ok() { local id=$((100 + ${1#kb0})); kafka-broker-api-versions --bootstrap-server $B --command-config $CFG 2>/dev/null | grep -q "(id: $id rack: [a-z-]* isFenced: false)" && [ -z "$(kafka-topics --bootstrap-server $B --command-config $CFG --describe --under-replicated-partitions 2>/dev/null)" ] && curl -sf -o /dev/null --cacert $PKI/ca.pem https://$1.poc.lab:8090/v1/metadata/id; }
 # controller 健康:是 voter 且 lag 0
-ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
+ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
 # 最多等 300 秒;取樣一次不算數(寫入瞬間 lag 可能短暫不是 0)
 wait_for() { local i; for i in $(seq 1 60); do "$@" && { echo "  healthy after ~$((i*5))s"; return 0; }; sleep 5; done; echo "  NOT HEALTHY after 300s - stop here"; return 1; }
 EOF
@@ -5036,7 +5051,7 @@ $ wait_for broker_ok kb04
 ## 8.7 controller 逐台升級(follower 先、leader 最後)
 
 ```bash
-$ L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --status | awk '/LeaderId:/ {print $2}')
+$ L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --status | awk '/LeaderId:/ {print $2}')
 $ ORDER="$(for h in $CONTROLLERS; do [ "${h#kc0}" != "$L" ] && echo $h; done) kc0$L"; echo "leader $L; order: $ORDER"
 $ for h in $ORDER; do
     ssh $h.poc.lab "TO=$TO bash -s" <<'EOS'
@@ -5049,7 +5064,7 @@ sudo systemctl daemon-reload && sudo systemctl start confluent-server
 EOS
     wait_for ctl_ok $h || break
   done
-$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --status | grep -E 'LeaderId|MaxFollowerLag'
+$ kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --status | grep -E 'LeaderId|MaxFollowerLag'
 ```
 
 實測:leader 是 node 2,順序為 kc01 → kc03 → kc02,每台約 10 秒恢復;最後一台(原 leader)重啟時 leadership 自動移到 node 3,`MaxFollowerLag: 0`。
@@ -5443,7 +5458,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem --cert $PKI/app-
 |---|---|---|
 | 服務 | `ssh <host> systemctl is-active confluent-server`（REST：`confluent-kafka-rest`；c3-01：`prometheus alertmanager confluent-control-center`） | `active` |
 | 磁碟 | `ssh <host> sudo df -P /var/lib/kafka/data /var/log/kafka`（資料目錄是 cp-kafka 的 0750，不加 sudo 會 Permission denied） | 使用率 < 75%（> 85% 要立即處理） |
-| quorum | `kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CFG" describe --replication` | 有一個 Leader；voter 的 Lag 接近 0 |
+| quorum | `kafka-metadata-quorum --bootstrap-controller "$CB" --command-config "$CCFG" describe --replication` | 有一個 Leader；voter 的 Lag 接近 0 |
 | 離線 partition | `kafka-topics --bootstrap-server "$B" --command-config "$CFG" --describe --unavailable-partitions` | 沒有輸出 |
 | 低於 min ISR | `kafka-topics ... --describe --under-min-isr-partitions` | 沒有輸出（有的話 `acks=all` 的 producer 會失敗） |
 | URP | `kafka-topics ... --describe --under-replicated-partitions` | 沒有輸出 |
@@ -5826,6 +5841,9 @@ client 配額、repo HTTPS、受限 sudo、日常維運指令，都在 cp-poc �
 | 全新空主機 | 不連外網的新容器，只放 repo 檔、CA 檔、原廠金鑰 | `dnf install` 46 個套件（CP、JDK、OS 相依），GPG 全部通過，java 可執行 |
 | 2.15 手動推送 | 清空 repo01，照 2.15 原文指令執行（`transcripts/cmd-2.15-repo-web.txt`） | 推 121 檔、3 個 repodata 切換、三個 repo = ops build、明文 HTTP 000；之後 `cpctl repo push` 回報無事可做 |
 | 最終驗收 | 加入「C3 以 AD 使用者 token 提供叢集資料」「cp-server 沒有 RBAC 角色」兩項後的 `cpctl verify` | **62/62** |
+| 管理身分分開 | cpctl 管理 broker 改用 svc-cpctl（憑證 → MDS token → TOKEN listener），controller 仍用內部憑證，kafka-admin（SCRAM）只當緊急備用 | 見下方「管理身分」 |
+
+**管理身分**：日常管理 broker 與設定 RBAC 都是 `svc-cpctl` 一個身分（憑證，不經 AD）；`kafka-internal` 只留在叢集內部與 controller 操作；`kafka-admin`（SCRAM）不依賴 MDS，是 MDS 故障時唯一能進的管理身分，所以刻意不併入。
 
 **發現並已處理的事**：
 - `repo import` 原本先複製檔案、最後才執行 `createrepo_c`；建置主機沒有這個指令時，會留下沒有 repodata 的檔案。已改成**先檢查工具**（ops01 與 web server），缺少就在動任何檔案前停止。
@@ -6257,7 +6275,7 @@ push_repo() {
 
 # rolling restart of everything that holds keystores/truststores in memory: controllers -> brokers -> REST (drained) -> C3
 broker_ok() { local id=$((100 + ${1#kb0})); kafka-broker-api-versions --bootstrap-server $B --command-config $CFG 2>/dev/null | grep -q "(id: $id rack: [a-z-]* isFenced: false)" && [ -z "$(kafka-topics --bootstrap-server $B --command-config $CFG --describe --under-replicated-partitions 2>/dev/null)" ]; }
-ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
+ctl_ok() { local id=${1#kc0}; kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --replication 2>/dev/null | awk -v id=$id '$1==id && ($NF=="Leader"||$NF=="Follower") && $4+0==0 {ok=1} END {exit !ok}'; }
 wait_for() { local i; for i in $(seq 1 60); do "$@" && { echo "  healthy after ~$((i*5))s"; return 0; }; sleep 5; done; echo "  NOT HEALTHY - stop here"; return 1; }
 lbconf() {
   { echo 'upstream cp_rest {'; echo '    hash $remote_addr consistent;'
@@ -6270,7 +6288,7 @@ lbconf() {
 }
 restart_all() {
   local h L
-  L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CFG describe --status | awk '/LeaderId:/ {print $2}')
+  L=$(kafka-metadata-quorum --bootstrap-controller $CB --command-config $CCFG describe --status | awk '/LeaderId:/ {print $2}')
   for h in $(for c in kc01 kc02 kc03; do [ "${c#kc0}" != "$L" ] && echo $c; done) kc0$L; do echo "restart $h ($(date +%T))"; ssh $h.poc.lab 'sudo systemctl restart confluent-server'; wait_for ctl_ok $h || return 1; done
   for h in kb01 kb02 kb03 kb04; do echo "restart $h ($(date +%T))"; ssh $h.poc.lab 'sudo systemctl restart confluent-server'; sleep 10; wait_for broker_ok $h || return 1; done
   for h in rest01 rest02; do

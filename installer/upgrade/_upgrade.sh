@@ -28,7 +28,7 @@ upgrade::_cluster_healthy() {
 }
 
 upgrade::_finalized_release() {
-  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     describe 2>/dev/null | awk '/Feature: confluent.metadata.version/ {for (i=1;i<=NF;i++) if ($i=="FinalizedVersionLevel:") print $(i+1)}'
 }
 
@@ -86,10 +86,10 @@ upgrade::backup() {
   done
   local cfg
   cfg=$(kafka::admin_config)
-  kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" --describe >"$dir/topics.txt" 2>/dev/null
-  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" --describe --entity-type users >"$dir/scram-users.txt" 2>/dev/null || true
-  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" describe >"$dir/features.txt" 2>/dev/null
-  kafka::admin kafka-acls --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" --list >"$dir/acls.txt" 2>/dev/null || true
+  kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" --describe >"$dir/topics.txt" 2>/dev/null
+  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" --describe --entity-type users >"$dir/scram-users.txt" 2>/dev/null || true
+  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" describe >"$dir/features.txt" 2>/dev/null
+  kafka::admin kafka-acls --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" --list >"$dir/acls.txt" 2>/dev/null || true
   rbac::login
   local p
   for p in User:svc-c3 $(printf 'Group:%s ' $AD_GROUPS) $(printf 'User:%s ' $APPS); do
@@ -130,7 +130,7 @@ upgrade::host() { # <host> <role> <version>
 
 upgrade::_controller_order() { # followers first, leader last
   local leader h
-  leader=$(kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(kafka::admin_config)" \
+  leader=$(kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(kafka::controller_config)" \
     describe --status 2>/dev/null | awk '/LeaderId:/ {print $2}')
   for h in $(inv::hosts controller); do [[ $(inv::get "$h" NODE_ID) != "$leader" ]] && printf '%s\n' "$h"; done
   for h in $(inv::hosts controller); do [[ $(inv::get "$h" NODE_ID) == "$leader" ]] && printf '%s\n' "$h"; done
@@ -175,7 +175,7 @@ upgrade::finalize() { # <version> <yes>
     core::die "$E_GATE" "no backup taken for target $ver (run: cpctl upgrade backup --to $ver)"
   cur=$(upgrade::_finalized_release)
   log::info "metadata.version finalized now: $cur ; mapping for release $rel:"
-  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     version-mapping --release-version "$rel" >&2
   if [[ $yes != 1 ]]; then
     core::load_env "$STATE_DIR/kraft.env"
@@ -185,7 +185,7 @@ upgrade::finalize() { # <version> <yes>
     [[ $answer == "$CLUSTER_ID" ]] || core::die "aborted"
   fi
   if ! step::mutating; then log::changed "would run kafka-features upgrade --release-version $rel"; return 0; fi
-  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     upgrade --release-version "$rel"
   log::changed "metadata finalized: $cur -> $(upgrade::_finalized_release)"
 }

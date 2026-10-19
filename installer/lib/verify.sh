@@ -32,6 +32,21 @@ EOF
   chmod 0600 "$f"; printf '%s' "$f"
 }
 
+# verify::breakglass_config -> SCRAM client of the break-glass super user kafka-admin (works without MDS)
+verify::breakglass_config() {
+  local f
+  f=$(verify::_client_dir)/kafka-admin-scram.properties
+  cat >"$f" <<EOF
+security.protocol=SASL_SSL
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="$(inv::secret KAFKA_ADMIN_PASSWORD)";
+ssl.truststore.type=PKCS12
+ssl.truststore.location=$PKI_DIR/truststore.p12
+ssl.truststore.password=$STORE_PASSWORD
+EOF
+  chmod 0600 "$f"; printf '%s' "$f"
+}
+
 verify::ldap_config() { # <user> <password>
   local f
   f=$(verify::_client_dir)/$1-ldap.properties
@@ -68,7 +83,7 @@ verify::produce() { # <bootstrap> <config> <topic> <message>
 verify::audit_has() {
   local out
   out=$(timeout 120 env KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
-    "$(install::bin kafka-console-consumer)" --bootstrap-server "$(kafka::bootstrap_internal)" \
+    "$(install::bin kafka-console-consumer)" --bootstrap-server "$(kafka::bootstrap_admin)" \
     --consumer.config "$(kafka::admin_config)" --topic "$1" --from-beginning --timeout-ms 30000 2>/dev/null || true)
   # aggregate first: jq 1.6 "-e" reports only the LAST input's result
   jq -e -n -R --arg p "$2" --argjson g "$3" --arg m "${4:-.}" '[inputs | fromjson? | select((.data.methodName | test($m))
@@ -143,14 +158,14 @@ verify::rest_produce_code() { # <url> <cert>
 }
 
 verify::has_scram() { # <user>
-  grep -q SCRAM-SHA-512 <<<"$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  grep -q SCRAM-SHA-512 <<<"$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     --describe --entity-type users --entity-name "$1" 2>/dev/null)"
 }
 
 # verify::sbc_enabled <admin config> -> Self-Balancing runs (on the active controller; it stays STARTING when the
 # controllers lack inter.broker.listener.name)
 verify::sbc_enabled() {
-  [[ $(kafka::admin kafka-rebalance-cluster --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$1" \
+  [[ $(kafka::admin kafka-rebalance-cluster --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$1" \
     --status 2>/dev/null) == *"Balancer status: ENABLED"* ]]
 }
 
@@ -159,7 +174,7 @@ verify::quota_matches() {
   local var have want
   var="APP_QUOTA_$(core::varname "$1")"
   want=$(tr ' ' '\n' <<<"${!var:-}" | sed '/^$/d' | awk -F= '{printf "%s=%.0f\n", $1, $2}' | sort)
-  have=$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  have=$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     --describe --entity-type users --entity-name "$1" 2>/dev/null | sed -n 's/^Quota configs.* are //p' | tr ',' '\n' |
     sed 's/^ *//' | awk -F= 'NF == 2 {printf "%s=%.0f\n", $1, $2}' | sort)
   [[ -n $want && $have == "$want" ]]
@@ -222,8 +237,9 @@ verify::rest_code() { # <url> <cert name|-> [curl args...]
 
 verify::run_all() {
   role::common_vars
-  local cfg cid boot_client boot_ldap first_broker msg
+  local cfg ccfg cid boot_client boot_ldap first_broker msg
   cfg=$(kafka::admin_config)
+  ccfg=$(kafka::controller_config)
   core::load_env "$STATE_DIR/kraft.env"
   cid=$CLUSTER_ID
   boot_client=$(inv::endpoints broker "$PORT_CLIENT")
@@ -233,25 +249,25 @@ verify::run_all() {
 
   log::step "---- KRaft dynamic quorum"
   local q
-  q=$(kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$cfg" describe --status 2>&1 || true)
+  q=$(kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$ccfg" describe --status 2>&1 || true)
   grep -q 'LeaderId:' <<<"$q" && verify::pass "quorum has a leader ($(grep -o 'LeaderId:[^ ]*' <<<"$q" | head -1))" || verify::fail "quorum has no leader"
   local voters
   voters=$(grep -o '"directoryId"' <<<"$(grep 'CurrentVoters' <<<"$q")" | wc -l)
   [[ $voters -eq $(inv::hosts controller | wc -l) ]] && verify::pass "$voters voters, each with a directory id (dynamic quorum)" ||
     verify::fail "expected $(inv::hosts controller | wc -l) voters with directory ids, got $voters"
-  kafka::admin kafka-features --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$cfg" describe 2>/dev/null |
+  kafka::admin kafka-features --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$ccfg" describe 2>/dev/null |
     grep -E 'Feature: kraft.version.*FinalizedVersionLevel: 1' -q && verify::pass "kraft.version finalized at 1" || verify::fail "kraft.version is not 1"
   local mv
-  mv=$(kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" describe 2>/dev/null |
+  mv=$(kafka::admin kafka-features --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" describe 2>/dev/null |
     awk '/Feature: confluent.metadata.version/ {for (i=1;i<=NF;i++) if ($i=="FinalizedVersionLevel:") print $(i+1)}')
   log::info "metadata.version finalized level: ${mv:-?}"
 
   log::step "---- Brokers"
   local reg
-  reg=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" 2>/dev/null | grep -c '(id:' || true)
+  reg=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" 2>/dev/null | grep -c '(id:' || true)
   [[ $reg -eq $(inv::hosts broker | wc -l) ]] && verify::pass "$reg brokers registered" || verify::fail "only $reg brokers registered"
   local racks
-  racks=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" 2>/dev/null | grep -o 'rack: [^)]*' | sort -u | paste -sd' ' -)
+  racks=$(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" 2>/dev/null | grep -o 'rack: [^)]*' | sort -u | paste -sd' ' -)
   [[ $racks == *rack-a* && $racks == *rack-b* ]] && verify::pass "rack awareness: $racks" || verify::fail "racks: $racks"
   verify::check "Self-Balancing is running (balancer status ENABLED)" verify::sbc_enabled "$cfg"
 
@@ -260,7 +276,7 @@ verify::run_all() {
     KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" "$(install::bin kafka-metadata-quorum)" \
     --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(verify::nocert_config)" describe --status
   verify::check "controller accepts the shared internal certificate (super user)" kafka::admin kafka-metadata-quorum \
-    --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$cfg" describe --status
+    --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$ccfg" describe --status
 
   log::step "---- Applications over SCRAM (CLIENT listener) + RBAC"
   verify::check "app-orders produces to orders.events (RBAC DeveloperWrite)" verify::produce "$boot_client" "$(verify::scram_config app-orders)" orders.events "$msg"
@@ -277,6 +293,11 @@ verify::run_all() {
     verify::cert_identity "$(inv::hosts rest | head -1)" "$REST_CONF"
   verify::check "[$(inv::hosts c3 | head -1)] Control Center: MDS and Kafka identity from svc-c3 certificate, no MDS password" \
     verify::cert_identity "$(inv::hosts c3 | head -1)" "$C3_CONF"
+
+  verify::check "cpctl manages the brokers as svc-cpctl (MDS token on the TOKEN listener, not the internal certificate)" \
+    kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" --list
+  verify::check "break-glass kafka-admin (SCRAM, no MDS needed) can administer the cluster" \
+    kafka::admin kafka-topics --bootstrap-server "$boot_client" --command-config "$(verify::breakglass_config)" --list
 
   log::step "---- Humans over LDAP (AD) + group RBAC"
   local pw
@@ -336,7 +357,7 @@ verify::run_all() {
     verify::check_not "plain HTTP does not serve the repo ($plain answers 403 or nothing)" \
       bash -c '[[ $(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$1") == 200 ]]' _ "$plain"
   fi
-  verify::check "audit log topic $AUDIT_TOPIC exists" kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" --describe --topic "$AUDIT_TOPIC"
+  verify::check "audit log topic $AUDIT_TOPIC exists" kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" --describe --topic "$AUDIT_TOPIC"
   # earlier checks: alice produced to payments.events (allowed), app-orders tried (denied) -> routed to the sensitive topic
   verify::check "audit: allowed produce of User:alice on payments.* is in $AUDIT_SENSITIVE_TOPIC" verify::audit_has "$AUDIT_SENSITIVE_TOPIC" User:alice true "^kafka.Produce$"
   verify::check "audit: denied access of User:app-orders to payments.* is in $AUDIT_SENSITIVE_TOPIC" verify::audit_has "$AUDIT_SENSITIVE_TOPIC" User:app-orders false

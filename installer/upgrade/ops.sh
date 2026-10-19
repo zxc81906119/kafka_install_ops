@@ -10,10 +10,10 @@
 [[ -n ${_OPS_LOADED:-} ]] && return 0
 _OPS_LOADED=1
 
-ops::_admin() { kafka::admin "$@" --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)"; }
+ops::_admin() { kafka::admin "$@" --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)"; }
 
 ops::_registered() { # <broker id> -> registered and not fenced
-  [[ $(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_internal)" \
+  [[ $(kafka::admin kafka-broker-api-versions --bootstrap-server "$(kafka::bootstrap_admin)" \
     --command-config "$(kafka::admin_config)" 2>/dev/null) == *"(id: $1 rack"*"isFenced: false"* ]]
 }
 
@@ -200,7 +200,7 @@ ops::health() {
   done
 
   log::step "---- KRaft quorum"
-  out=$(kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(kafka::admin_config)" describe --replication 2>/dev/null) ||
+  out=$(kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(kafka::controller_config)" describe --replication 2>/dev/null) ||
     ops::_crit "quorum not reachable at $CONTROLLER_BOOTSTRAP"
   if [[ -n $out ]]; then
     awk 'NR > 1 {printf "    node %-4s %-9s lag %s\n", $1, $NF, $4}' <<<"$out"

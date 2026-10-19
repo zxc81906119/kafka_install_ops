@@ -8,7 +8,7 @@ _CONTROLLER_LOADED=1
 
 ctl::quorum() { # describe --replication | --status
   kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" \
-    --command-config "$(kafka::admin_config)" describe "$1" 2>/dev/null
+    --command-config "$(kafka::controller_config)" describe "$1" 2>/dev/null
 }
 
 ctl::is_voter() { ctl::quorum --replication | awk -v id="$1" '$1 == id && ($NF == "Leader" || $NF == "Follower") {f=1} END {exit f ? 0 : 1}'; }
@@ -35,7 +35,7 @@ ctl::remove() { # <host>
   dir=$(ctl::dir_id "$id")
   log::changed "[$h] remove-controller id=$id dir=$dir"
   step::mutating || return 0
-  kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(kafka::admin_config)" \
+  kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" --command-config "$(kafka::controller_config)" \
     remove-controller --controller-id "$id" --controller-directory-id "$dir"
   health::wait 120 "node $id no longer a voter" ctl::not_voter "$id"
   role::controller::stop "$h"

@@ -6,14 +6,14 @@ step_inputs() { cat "$CONF_DIR/apps.env" "$CONF_DIR/audit.env"; }
 security::scram_user() { # <user> <password>
   local u=$1 pw=$2 cfg
   cfg=$(kafka::admin_config)
-  if grep -q 'SCRAM-SHA-512' <<<"$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" \
+  if grep -q 'SCRAM-SHA-512' <<<"$(kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_admin)" \
     --command-config "$cfg" --describe --entity-type users --entity-name "$u" 2>/dev/null)"; then
     log::ok "SCRAM user $u"
     return 0
   fi
   log::changed "SCRAM user $u"
   step::mutating || return 0
-  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" \
+  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" \
     --alter --entity-type users --entity-name "$u" --add-config "SCRAM-SHA-512=[iterations=8192,password=$pw]" >/dev/null
 }
 
@@ -21,7 +21,7 @@ readonly QUOTA_KEYS="producer_byte_rate consumer_byte_rate request_percentage co
 
 # security::quota_now <entity args...> -> "key=value" per line, values as integers (describe prints 1.048576E7)
 security::quota_now() {
-  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     --describe --entity-type users "$@" 2>/dev/null |
     sed -n 's/.* are //p' | tr ',' '\n' | sed 's/^ *//' |
     awk -F= 'NF == 2 {printf "%s=%.0f\n", $1, $2}' | sort
@@ -49,21 +49,21 @@ security::quota() {
   local args=()
   ((${#add[@]})) && args+=(--add-config "$(core::join , "${add[@]}")")
   ((${#del[@]})) && args+=(--delete-config "$(core::join , "${del[@]}")")
-  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  kafka::admin kafka-configs --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     --alter --entity-type users "$@" "${args[@]}" >/dev/null
 }
 
 security::topic() { # <name> [partitions]
   local t=$1 p=${2:-6} cfg
   cfg=$(kafka::admin_config)
-  if kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" \
+  if kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" \
     --describe --topic "$t" >/dev/null 2>&1; then
     log::ok "topic $t"
     return 0
   fi
   log::changed "topic $t (partitions=$p, RF=3, min.insync=2)"
   step::mutating || return 0
-  kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$cfg" \
+  kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$cfg" \
     --create --if-not-exists --topic "$t" --partitions "$p" --replication-factor 3 --config min.insync.replicas=2 >/dev/null
 }
 
@@ -106,6 +106,6 @@ step_apply() {
 }
 
 step_verify() {
-  kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_internal)" --command-config "$(kafka::admin_config)" \
+  kafka::admin kafka-topics --bootstrap-server "$(kafka::bootstrap_admin)" --command-config "$(kafka::admin_config)" \
     --describe --topic orders.events >/dev/null 2>&1
 }

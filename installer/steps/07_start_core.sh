@@ -16,7 +16,7 @@ step_verify() {
   role::common_vars
   local out
   out=$(kafka::admin kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_BOOTSTRAP" \
-    --command-config "$(kafka::admin_config)" describe --status 2>/dev/null) || return 1
+    --command-config "$(kafka::controller_config)" describe --status 2>/dev/null) || return 1
   grep -q 'LeaderId:' <<<"$out" || return 1
   local h
   for h in $(inv::hosts broker); do kafka::_broker_healthy "$h" || return 1; done

@@ -13,7 +13,7 @@ license::_jwt() {
     return 0
   fi
   KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS="$(install::tools_opts)" JAVA_HOME="$(install::java_home)" \
-    timeout 60 "$(install::bin kafka-console-consumer)" --bootstrap-server "$(kafka::bootstrap_internal)" \
+    timeout 60 "$(install::bin kafka-console-consumer)" --bootstrap-server "$(kafka::bootstrap_admin)" \
     --consumer.config "$(kafka::admin_config)" --topic _confluent-command --from-beginning --timeout-ms 20000 2>/dev/null |
     grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' | tail -1
 }
