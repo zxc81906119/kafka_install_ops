@@ -14,6 +14,7 @@ src=$(cd "$src" && pwd)
 # allowlist of what goes into the package
 files=(opmenu.sh lib README.md opmenu.conf.example)
 [[ -f $src/test-host-gate.sh ]] && files+=(test-host-gate.sh)
+[[ -f $src/test-menu-filter.sh ]] && files+=(test-menu-filter.sh)
 
 # CRLF check with perl (some Git Bash builds expand $'\r' to an empty pattern)
 if find "${files[@]/#/$src/}" -type f -print0 | xargs -0 perl -ne 'if (/\r$/) { print "$ARGV\n"; exit 1 }'; then :; else die "CRLF line endings in $src - fix before packaging"; fi

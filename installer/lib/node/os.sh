@@ -10,6 +10,19 @@ os_node::pkgs() {
   dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-os-deps' --setopt=install_weak_deps=False install "${missing[@]}"
 }
 
+# os_node::pkgs_unlocked <pkg>... -> installed, any version from the OS repo, and NOT version-locked:
+#   OS libraries follow the bank's patching (a locked openssl-devel would block openssl-libs security updates)
+os_node::pkgs_unlocked() {
+  local p
+  for p in "$@"; do
+    if dnf versionlock list 2>/dev/null | grep -q "^$p-[0-9]*:"; then
+      _mark changed "versionlock removed: $p (follows OS patching)"
+      _checking || dnf versionlock delete "$p" >/dev/null 2>&1 || true
+    fi
+  done
+  os_node::pkgs "$@"
+}
+
 # os_node::thp_report -> current THP mode (the unit itself is skipped by systemd inside containers)
 os_node::thp_report() {
   local cur

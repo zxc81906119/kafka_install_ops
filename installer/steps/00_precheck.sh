@@ -40,6 +40,13 @@ precheck::host() {
     fq=$(inv::fqdn "$other")
     remote::exec "$h" "getent hosts $fq >/dev/null" || { log::error "[$h] cannot resolve $fq"; return 1; }
   done
+  # packages cpctl needs before it can install anything (conf/versions.env PKGS_PREREQ_*; customer checklist);
+  # --whatprovides: RHEL 9 minimal ships curl-minimal, which provides curl
+  local want=$PKGS_PREREQ_NODE missing
+  if inv::roles "$h" | grep -qx ops; then want+=" $PKGS_PREREQ_OPS"; fi
+  missing=$(remote::exec "$h" "for p in $want; do rpm -q --whatprovides \$p >/dev/null 2>&1 || printf '%s ' \$p; done")
+  if [[ -z $missing ]]; then log::ok "[$h] prerequisite packages installed"
+  else log::error "[$h] missing prerequisite packages: ${missing% } (install from the RHEL BaseOS/AppStream repo)"; rc=1; fi
   log::ok "[$h] resolves all cluster FQDNs; facts: $(grep -E '^(cpus|mem_mb|container|systemd)=' <<<"$facts" | paste -sd' ' -)"
   return "$rc"
 }

@@ -73,6 +73,14 @@ d OPMENU_SYSLOG          1           # 1 = 每筆紀錄同時送 syslog(logger -
 d OPMENU_TMPDIR          "$(_t=$(mktemp -p /dev/shm 2>/dev/null) && { rm -f "$_t"; echo /dev/shm; } || echo "${TMPDIR:-/tmp}")"   # 暫存連線檔放記憶體檔案系統;真的能在 /dev/shm 建檔才用(Git Bash 有這個路徑但不能用)
 d OPMENU_HOST_ACTION_AUTHZ 'Topic:__opmenu-host-ops:Describe'   # 主機類動作(重啟、日誌、磁碟、診斷)前向 MDS 確認的權限 <資源類型>:<名稱>:<操作>;預設等於「叢集層級可 describe 所有 topic」(Operator 以上),只有個別 topic 權限的人會被拒。node 用共用維運帳號時一定要設;空 = 不檢查
 d OPMENU_TOKEN_TTL       3600       # MDS token 壽命(秒,依 MDS 設定);超過後遇到 401 會提示重新登入而不是密碼錯
+# ── 動態選單(2026-10-19):登入後用本人的 token 一次問 MDS,只顯示有權限的項目;MDS 會展開 AD 群組,所以「依 AD 群組不同」
+# 而且只有 RBAC 一份設定。只影響「看得到什麼」:執行時 Kafka / MDS / 主機閘門照樣檢查,直接輸入隱藏的編號一樣會被擋。
+d OPMENU_MENU_FILTER     1           # 1 = 依權限顯示;0 = 全部顯示(舊行為)
+d OPMENU_ADMIN_AUTHZ     'Cluster:kafka-cluster:Alter'               # ADMIN:變更、權限管理、緊急模式(SystemAdmin / ClusterAdmin 才有)
+d OPMENU_AUDIT_AUTHZ     'Topic:confluent-audit-log-events:Read'     # AUDIT:匯出、查詢 audit 紀錄
+# 每個項目要什麼權限:<編號或第幾層*>=<HOST | ADMIN | AUDIT | - | 資源類型:名稱:操作>;沒列到的 = 不限制(查看類,Kafka 只回你看得到的)。
+# HOST = OPMENU_HOST_ACTION_AUTHZ(碰主機:重啟、日誌、磁碟、診斷、告警靜音)。後面的設定覆蓋前面的(例 "3*=ADMIN 31=-")。
+d OPMENU_MENU_AUTHZ      '16=HOST 18=HOST 2*=HOST 3*=ADMIN 41=ADMIN 42=ADMIN 43=AUDIT 44=ADMIN 45=AUDIT 91=ADMIN'
 
 # ── 批 B、C、D(2026-10-06) ──
 d OPMENU_LOCK_DIR        "$OPMENU_OUT_DIR/opmenu.lock.d"                # 並行鎖:同一時間只允許一個人做需 ticket 的變更項目(只在同一台跳板機有效;所在目錄要讓所有操作員可寫、不能有 sticky bit)

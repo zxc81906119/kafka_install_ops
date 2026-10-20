@@ -100,6 +100,8 @@ verify::opmenu() {
   remote::run "$j" opmenu_test::run "$conf" "$OPMENU_OS_USER" "$u" "$pw" "$@" 2>/dev/null || true
 }
 # verify::opmenu_result <output> -> the RESULT field of the logged line (OK / DENIED / AUTH_FAIL / FAIL ...)
+# verify::opmenu_menu <user> <password> -> " id id ... " the items that user's menu shows (dynamic menu, by MDS permission)
+verify::opmenu_menu() { printf ' %s ' "$(sed -n 's/^@@MENU@@ //p' <<<"$(verify::opmenu /etc/opmenu/opmenu-test.conf "$1" "$2" menu)")"; }
 verify::opmenu_result() { sed -n 's/^@@LOG@@ //p' <<<"$1" | awk -F' [|] ' '{print $7}'; }
 verify::opmenu_user() { sed -n 's/^@@LOG@@ //p' <<<"$1" | awk -F' [|] ' '{print $3}'; }
 
@@ -111,6 +113,20 @@ verify::opmenu_section() {
   out=$(verify::opmenu "$t" alice "$pw" 12)
   verify::check "alice (kafka-admins) lists topics through the menu" test "$(verify::opmenu_result "$out")" = OK
   verify::check "the menu logs the AD identity (alice), not the shared OS account $OPMENU_OS_USER" test "$(verify::opmenu_user "$out")" = alice
+  # dynamic menu: what each person sees follows their AD group's RBAC permissions (one MDS authorize call at login)
+  local m
+  m=$(verify::opmenu_menu carol "$pw")
+  verify::check "dynamic menu: carol (kafka-devs) sees view items only (12, no 21 / 31 / 91)" \
+    bash -c '[[ $1 == *" 12 "* && $1 != *" 21 "* && $1 != *" 31 "* && $1 != *" 91 "* ]]' _ "$m"
+  m=$(verify::opmenu_menu bob "$pw")
+  verify::check "dynamic menu: bob (kafka-operators) also sees host actions (21), not changes (31) or admin (42)" \
+    bash -c '[[ $1 == *" 21 "* && $1 != *" 31 "* && $1 != *" 42 "* ]]' _ "$m"
+  m=$(verify::opmenu_menu alice "$pw")
+  verify::check "dynamic menu: alice (kafka-admins) sees everything (31, 42, 91)" \
+    bash -c '[[ $1 == *" 31 "* && $1 == *" 42 "* && $1 == *" 91 "* ]]' _ "$m"
+  out=$(verify::opmenu "$t" carol "$pw" 31 dummy.topic)
+  verify::check "dynamic menu: carol typing a hidden item (31) is refused and logged" \
+    bash -c '[[ $1 == *"不在你的選單內"* ]]' _ "$out"
   out=$(verify::opmenu "$t" alice wrong-password 12)
   verify::check "wrong AD password is rejected at menu login" test "$(verify::opmenu_result "$out")" = AUTH_FAIL
   out=$(verify::opmenu "$t" bob "$pw" 23 "$(inv::fqdn "$(inv::hosts broker | head -1)"):confluent-server" 20)
@@ -190,6 +206,18 @@ verify::mds_cert_sub() {
   p=$(cut -d. -f2 <<<"$t" | tr '_-' '/+')
   while ((${#p} % 4)); do p+='='; done
   [[ $(base64 -d <<<"$p" 2>/dev/null | jq -r .sub) == "$1" ]]
+}
+
+# verify::jdk_ok -> on every Java host: the configured JDK package is installed, every retired one is gone
+verify::jdk_ok() {
+  local h p rc=0
+  for h in $(install::jdk_hosts); do
+    [[ -n $(remote::run "$h" rpm_node::installed "$JDK_PACKAGE") ]] || { log::error "[$h] $JDK_PACKAGE not installed"; rc=1; }
+    for p in ${JDK_RETIRED:-}; do
+      [[ -z $(remote::run "$h" rpm_node::installed "$p") ]] || { log::error "[$h] retired JDK $p still installed"; rc=1; }
+    done
+  done
+  return "$rc"
 }
 
 # verify::cert_identity <host> <config file> -> the component gets its MDS token from its certificate:
@@ -378,7 +406,14 @@ verify::run_all() {
     install::pinned "$(inv::hosts broker | head -1)"
   for h in $(inv::hosts c3); do
     verify::check_not "[$h] has no Confluent Platform packages (C3 host must stay clean)" remote::exec "$h" "rpm -q confluent-server confluent-common >/dev/null 2>&1 || test -e /opt/confluent/current"
+    if [[ $INSTALL_METHOD == rpm ]]; then
+      verify::check_not "[$h] OS libraries ($PKGS_C3_OS) are not version-locked (they follow OS patching)" \
+        remote::exec "$h" "dnf versionlock list 2>/dev/null | grep -qE '^($(tr ' ' '|' <<<"$PKGS_C3_OS"))-[0-9]+:'"
+    fi
   done
+  if [[ $INSTALL_METHOD == rpm ]]; then
+    verify::check "every Java host runs $JDK_PACKAGE (JDK_SOURCE=${JDK_SOURCE:-vendor}); retired JDK (${JDK_RETIRED:-none}) removed" verify::jdk_ok
+  fi
 
   if [[ ${JMX_EXPORTER:-off} == on ]]; then
     log::step "---- External monitoring (JMX exporter)"
@@ -386,7 +421,7 @@ verify::run_all() {
   fi
 
   # OP menu: only once step 11 has run (fresh installs verify in step 10, before the bastion exists)
-  if jump::enabled && [[ -f $STAMP_DIR/11_opmenu ]]; then verify::opmenu_section; fi
+  if jump::enabled && [[ -f $STAMP_DIR/10_opmenu ]]; then verify::opmenu_section; fi
 
   log::step "---- Certificates"
   pki::status || true   # expiring soon / not yet switched = warning only (cpctl certs status shows served certs too)

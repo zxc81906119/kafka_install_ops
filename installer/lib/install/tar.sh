@@ -118,13 +118,6 @@ install::prepare() {
   esac
 }
 
-install::os_dep_version() {
-  local f
-  f=$(find "$REPO_LOCAL_ROOT/rpm/os-deps" -name "$1-[0-9]*.rpm" 2>/dev/null | sort -V | tail -1)
-  [[ -n $f ]] || core::die "OS dependency $1 not found in the internal repo"
-  rpm -qp --qf '%{VERSION}' "$f" 2>/dev/null
-}
-
 # install::ensure <host> <install|upgrade> <cp version> <role>
 install::ensure() {
   local host=$1 mode=$2 ver=$3 role=$4 top
@@ -132,15 +125,14 @@ install::ensure() {
   top=$(install::_fetch "$host" "$(install::_archive jdk)" /opt/java) || return 1
   [[ -n $top ]] && remote::apply "$host" tar_node::switch upgrade /opt/java/current "$top"
   # the repo server needs httpd's TLS module to serve the internal repo over HTTPS (OS package, os-deps repo)
+  # OS packages: any version the OS repo has, not locked (they follow the bank's OS patching)
   if repo::is_server "$host" && repo::tls && [[ -n ${PKGS_OPS_OS:-} ]]; then
-    local q qs=()
-    for q in $PKGS_OPS_OS; do qs+=("$q=$(install::os_dep_version "$q")"); done
-    remote::apply "$host" rpm_node::ensure install "${qs[@]}"
+    # shellcheck disable=SC2086
+    remote::apply "$host" os_node::pkgs_unlocked $PKGS_OPS_OS
   fi
   if [[ $role == c3 ]]; then
-    local p specs=()
-    for p in $PKGS_C3_OS; do specs+=("$p=$(install::os_dep_version "$p")"); done
-    remote::apply "$host" rpm_node::ensure install "${specs[@]}"
+    # shellcheck disable=SC2086
+    remote::apply "$host" os_node::pkgs_unlocked $PKGS_C3_OS
     top=$(install::_fetch "$host" "$(install::_archive c3 "$C3_VERSION")" "$TAR_BASE") || return 1
     [[ -n $top ]] || return 0
     remote::apply "$host" tar_node::switch "$mode" "$TAR_BASE/c3-current" "$top" || return 1
@@ -159,6 +151,8 @@ install::ensure() {
 }
 
 install::available() { [[ -f $REPO_LOCAL_ROOT/raw/tar/confluent-$1.tar.gz ]]; }
+# the tar strategy ships its own JDK archive (/opt/java/current): nothing to retire
+install::retire_jdk() { :; }
 
 # tar installs are outside the package manager: "pinned" = the current symlink is the only active version
 install::pinned() { [[ -n $(install::version "$1") ]]; }

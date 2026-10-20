@@ -15,7 +15,11 @@ step_apply() {
   for role in controller broker rest c3; do
     remote::parallel "role::$role::configure" $(inv::hosts "$role")
   done
-  # handler notifications were written by parallel jobs; flush restarts running services only
+  # handler notifications were written by parallel jobs; flush restarts running services only.
+  # Flushed here (not only by the step runner) so a retired JDK is removed only after every service was restarted
+  # onto the new JAVA_HOME and passed its health gate - a failed gate stops the step before anything is removed.
+  if step::mutating; then handler::flush; fi
+  install::retire_jdk
 }
 
 step_verify() {

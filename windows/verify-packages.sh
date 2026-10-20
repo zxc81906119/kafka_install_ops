@@ -3,8 +3,10 @@
 #   1. every file matches SHA256SUMS
 #   2. every RPM carries a valid vendor GPG signature
 #   3. optional scan hooks in windows/scan.d/*.sh (antivirus, Trivy/Grype SBOM, ...)
-# Writes packages/report/verify-<timestamp>.txt (kept with the import as audit evidence).
+# Writes <dir>/report/verify-<timestamp>.txt (kept with the import as audit evidence).
+#   verify-packages.sh [DIR]   DIR defaults to packages/; pass a delivery dir from make-delivery.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+PACKAGES_DIR=$(cd "${1:-$PACKAGES_DIR}" && pwd) || die "no such directory: $1"
 
 ensure_docker
 [[ -f $PACKAGES_DIR/SHA256SUMS ]] || die "no SHA256SUMS - run windows/download-packages.sh first"

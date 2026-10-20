@@ -62,7 +62,8 @@ sets=(
   "$(cp_set "$CP_VERSION")"
   "$(cp_set "$CP_UPGRADE_FROM")"
   "confluent-control-center-next-gen-$C3_VERSION $PKGS_C3_OS"
-  "$JDK_PACKAGE-$JDK_VERSION"
+  # JDK_SOURCE=os: the OS repo's OpenJDK (lands in os-deps, standing for the bank's RHEL repo); vendor: Temurin
+  "$([[ ${JDK_SOURCE:-vendor} == os ]] && printf '%s' "$JDK_PACKAGE" || printf '%s-%s' "$JDK_PACKAGE" "$JDK_VERSION")"
   "$PKGS_OS_BASELINE"
   "$PKGS_OPS_OS"
 )
@@ -119,7 +120,11 @@ for repo in ("confluent", "adoptium", "os-deps"):
         if not f.endswith(".rpm"):
             continue
         p = os.path.join(d, f)
-        h = hashlib.sha256(open(p, "rb").read()).hexdigest()
+        sha = hashlib.sha256()   # in 1 MiB chunks: the C3 RPM alone is over 1 GB
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                sha.update(chunk)
+        h = sha.hexdigest()
         nevra = subprocess.check_output(["rpm", "-qp", "--qf", "%{NAME}|%{VERSION}-%{RELEASE}|%{VENDOR}", p],
                                         stderr=subprocess.DEVNULL).decode().split("|")
         items.append({"repo": repo, "file": f, "name": nevra[0], "version": nevra[1],

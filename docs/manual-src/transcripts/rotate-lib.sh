@@ -98,7 +98,8 @@ push_all_ssl() {  # role-specific file sets (3.4.7)
   echo "pushed /etc/confluent/ssl to 10 hosts"
 }
 
-# trust_all -> OS trust anchor = bundle, JDK cacerts = exactly the bundle's CAs (3.4.8)
+# trust_all -> OS trust anchor = bundle (3.4.8). RHEL's OpenJDK reads the OS trust store (its cacerts is the file
+# update-ca-trust writes): nothing is imported into the JDK, only checked - every bundle CA by SHA-256 fingerprint
 trust_all() {
   local h
   for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 jump01; do
@@ -107,14 +108,14 @@ trust_all() {
 set -e
 sudo install -o root -g root -m 0644 /tmp/cp-internal-ca.pem /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem; rm -f /tmp/cp-internal-ca.pem
 sudo update-ca-trust extract
-JH=/usr/lib/jvm/temurin-21-jdk; d=$(mktemp -d); want=""
+JH=/usr/lib/jvm/jre-21-openjdk; d=$(mktemp -d); n=0; t=0
+list=$($JH/bin/keytool -list -cacerts -storepass changeit | tr -d ':' | tr 'A-F' 'a-f')
 awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
 for f in "$d"/ca-*.pem; do
-  fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f' | cut -c1-16); want="$want cp-ca-$fp"
-  sudo $JH/bin/keytool -list -cacerts -storepass changeit -alias cp-ca-$fp >/dev/null 2>&1 || sudo $JH/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias cp-ca-$fp -file "$f" >/dev/null
+  fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f'); t=$((t+1))
+  case "$list" in *"$fp"*) n=$((n+1)) ;; esac
 done; rm -rf "$d"
-for a in $(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -oE '^cp-ca-[0-9a-f]+'); do case " $want " in *" $a "*) ;; *) sudo $JH/bin/keytool -delete -cacerts -storepass changeit -alias $a ;; esac; done
-echo "$(hostname): OS anchors=$(trust list --filter=ca-anchors | grep -c -E 'label: PoC (Internal CA|Bank Root)') JDK=$(sudo $JH/bin/keytool -list -cacerts -storepass changeit | grep -c '^cp-ca-')"
+echo "$(hostname): OS anchors=$(trust list --filter=ca-anchors | grep -c -E 'label: PoC (Internal CA|Bank Root)') JDK trusts $n/$t bundle CAs (OS trust store)"
 EOS
   done
 }

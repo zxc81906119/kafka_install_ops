@@ -106,8 +106,8 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 | 07_start_core | 依序啟動 controller、broker,健康檢查 | kc、kb | 4.4 |
 | 08_security_bootstrap | SCRAM、RBAC role binding、稽核日誌 | ops01 | 5.1 |
 | 09_start_edge | REST Proxy、C3、Nginx | rest、c3、lb | 5.2 |
-| 10_verify | 整體驗收(48 項) | ops01 | 5.3 |
-| 11_opmenu | 堡壘機 OP menu | jump01、各節點 | 第 6 章 |
+| 10_opmenu | 堡壘機 OP menu | jump01、各節點 | 第 6 章 |
+| 11_verify | 整體驗收(最後一步，含 OP menu) | ops01 | 5.3 |
 | (維運)升級 | 新版本引進、滾動升級、回滾、finalize | 全部 | 第 8 章 |
 | (維運)憑證 / CA 輪替 | 重簽憑證;CA 三階段 add → switch → retire | 全部 | 第 9 章 |
 
@@ -118,7 +118,7 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 | 項目 | rpm | tar.gz |
 |---|---|---|
 | 程式位置 | `/usr/bin`、`/usr/share/java`(RPM 管理) | `/opt/confluent/confluent-8.3.2`,經 `/opt/confluent/current` |
-| JDK | `/usr/lib/jvm/temurin-21-jdk` | `/opt/java/jdk-21.0.12.1+1`,經 `/opt/java/current` |
+| JDK | `/usr/lib/jvm/jre-21-openjdk` | `/opt/java/jdk-21.0.12.1+1`,經 `/opt/java/current` |
 | systemd unit | RPM 附帶,加我們的 drop-in | 自己提供 unit,再加 drop-in |
 | 服務帳號 | RPM scriptlet 建立 | 手動 `useradd` |
 | 鎖版本 | `dnf versionlock` | current symlink 就是唯一的有效版本 |
@@ -150,8 +150,8 @@ cpctl 把整個安裝流程包成冪等的腳本,執行起來很方便,但看不
 ```
 /srv/repo/                       (repoadmin:repoadmin 0755，httpd :8080 DocumentRoot)
 ├── rpm/confluent/   *.rpm + repodata/   (21 個：CP 8.3.2 與 8.2.4 各 10 個 + C3 2.6.1)
-├── rpm/adoptium/    temurin-21-jdk-21.0.12.1.0.1-0.x86_64.rpm + repodata/
-├── rpm/os-deps/     43 個 OS 相依套件 (chrony, firewalld, cyrus-sasl, openssl-devel, fontconfig…) + repodata/
+├── rpm/adoptium/    temurin-21-jdk-*.rpm + repodata/   (只在 JDK_SOURCE=vendor 時使用；改用 RHEL OpenJDK 後保留供回退)
+├── rpm/os-deps/     OS 相依套件，模擬銀行 RHEL repo (java-21-openjdk-headless, chrony, firewalld, cyrus-sasl, openssl-devel…) + repodata/
 ├── raw/tar/         confluent-8.3.2.tar.gz, confluent-8.2.4.tar.gz,
 │                    confluent-control-center-next-gen-2.6.1.tar.gz,
 │                    OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz
@@ -176,8 +176,12 @@ CP_RELEASE=8.3                 # repo 路徑段與 finalize 的 metadata 版本
 CP_UPGRADE_FROM=8.2.4          # 為升級演練保留在內部 repo 的舊版
 CP_UPGRADE_FROM_RELEASE=8.2
 C3_VERSION=2.6.1
-JDK_PACKAGE=temurin-21-jdk
-JDK_VERSION=21.0.12.1.0.1      # RPM version（不含 -release）
+JDK_SOURCE=os                  # os = 銀行 RHEL repo 的 OpenJDK（預設）；vendor = Temurin（原廠 RPM）
+JDK_MAJOR=21
+JDK_PACKAGE=java-21-openjdk-headless
+JDK_HOME=/usr/lib/jvm/jre-21-openjdk    # alternatives 連結：OpenJDK 小版本更新後路徑不變
+JDK_VERSION=$JDK_MAJOR         # os：只寫主版本，實際版本 = OS repo 裡的版本
+JDK_RETIRED="temurin-21-jdk"   # 換 JDK 時，全部服務改用新 JDK 並通過健康檢查後才移除
 
 CONFLUENT_RPM_BASE=https://packages.confluent.io/rpm
 CONFLUENT_GPG_KEY=https://packages.confluent.io/rpm/8.3/archive.key
@@ -215,11 +219,11 @@ grep -E '^(CP_VERSION|C3_VERSION|JDK_VERSION|JMX_EXPORTER_VERSION|OPMENU_VERSION
 
 **注意事項／陷阱**：
 - 只能是 bash 可 source 的 `KEY=VALUE`；不可有 CRLF（`windows/lib.sh` 的 `check_crlf` 會擋）。
-- `JDK_VERSION` 是 RPM 的 version 欄位（`dnf repoquery temurin-21-jdk` 查得），**不含** `-0` release；tar 策略則用 `JDK_TAR_MAJOR=21` 自動取該主版最新 GA，兩者可能不是同一小版。
+- JDK 預設由**銀行的 RHEL repo** 提供（`JDK_SOURCE=os`，Red Hat build of OpenJDK）：和其他 OS 套件一樣跟著行內的修補流程，也在 RHEL 訂閱的支援範圍內；cpctl 安裝的是 OS repo 裡的那個版本，並用 versionlock 鎖住。PoC 用 os-deps（Rocky 的同名套件）模擬銀行 RHEL repo。要改回原廠 Temurin：`JDK_SOURCE=vendor`、`JDK_PACKAGE=temurin-21-jdk`、`JDK_VERSION=<RPM version>`、`JDK_HOME=/usr/lib/jvm/temurin-21-jdk`。tar 策略另用 `JDK_TAR_MAJOR=21` 的 Temurin 壓縮檔，不受影響。
 - `OPMENU_VERSION` 由 `windows/package-opmenu.sh` 自動改寫（2.5），手動流程需自行更新。
 - 演練時可用環境變數 `CPCTL_CP_VERSION=8.2.4` 暫時安裝舊版而不改檔；手動流程請直接以 8.2.4 套件名稱操作。
 
-## 2.2 外網下載：RPM（Confluent / C3 / Temurin / OS 相依）
+## 2.2 外網下載：RPM（Confluent / C3 / OpenJDK / OS 相依）
 
 **目的**：在「與目標主機同一個基底映像」的乾淨 Rocky 9 上用 `dnf download --resolve`，一次取得目標主機缺少的所有相依套件，並依來源 repo 分類成 `confluent / adoptium / os-deps` 三個內部 repo。
 
@@ -278,7 +282,7 @@ dnf -q makecache
 dnf -q download --resolve --arch x86_64 --arch noarch --destdir /tmp/stage confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2
 dnf -q download --resolve --arch x86_64 --arch noarch --destdir /tmp/stage confluent-server-8.2.4 confluent-security-8.2.4 confluent-kafka-rest-8.2.4 confluent-cli-8.2.4
 dnf -q download --resolve --arch x86_64 --arch noarch --destdir /tmp/stage confluent-control-center-next-gen-2.6.1 cyrus-sasl openssl-devel
-dnf -q download --resolve --arch x86_64 --arch noarch --destdir /tmp/stage temurin-21-jdk-21.0.12.1.0.1
+dnf -q download --resolve --arch x86_64 --arch noarch --destdir /tmp/stage java-21-openjdk-headless     # JDK_SOURCE=os：OS repo 的 OpenJDK（落在 os-deps；正式環境由銀行 RHEL repo 提供，不必下載）
 dnf -q download --resolve --arch x86_64 --arch noarch --destdir /tmp/stage chrony firewalld
 ```
 
@@ -312,7 +316,7 @@ for f in /out/rpm/*/*.rpm; do printf '%s|%s|%s\n' "$(basename "$(dirname "$f")")
 
 ```bash
 ls /out/rpm/confluent | wc -l     # 預期 21（只下載 8.3.2、不含升級演練用的 8.2.4 時為 11）
-ls /out/rpm/adoptium              # 預期 temurin-21-jdk-21.0.12.1.0.1-0.x86_64.rpm
+ls /out/rpm/os-deps | grep openjdk # 預期 java-21-openjdk-headless-21.0.12.1.1-…el9_8.x86_64.rpm（adoptium/ 只在 JDK_SOURCE=vendor 時使用）
 ls /out/rpm/os-deps | wc -l       # 預期 43（隨 Rocky 9 更新而變）
 find /out/rpm -name '*.rpm' -print0 | xargs -0 rpm -K | grep -vc 'digests signatures OK'   # 預期 0
 ```
@@ -515,6 +519,31 @@ confluent-ce-kafka-http-server           8.2.4-1                Confluent, Inc.
 `== gpg ==` 下方不應出現任何 `BAD:` 行。
 
 **對應 cpctl**：`windows/verify-packages.sh`（寫 `packages/report/verify-<時間>.txt`）。
+
+**行內掃描平台與開單**（客戶端流程，PoC 以 `scan.d` 模擬）：
+1. 驗證通過後，把**要送進內網的檔案**上傳到行內的「檔案惡意程式掃描檢測平台（Core）」（COEIP 網頁連結），取得掃描 OK 報告。
+2. 開單時附上：安裝檔、掃描 OK 報告、本節的驗證報告、`SHA256SUMS`。
+3. 核准後送進內網的必須是**掃描過的同一批檔案**；2.10 在內網會再以同一份 `SHA256SUMS` 比對，可證明內容和掃描時相同。
+4. 只送這次要裝的檔案，可減少掃描量：例如不需要升級演練就不送舊版（8.2.4）套件；OS 相依與 JDK 由行內 RHEL repo 提供時，`rpm/os-deps/`、`rpm/adoptium/` 不送。`confluent-security`（1.13 GB）與 C3（1.0 GB）兩個 RPM 單檔都超過 1 GB，要先向行內確認平台的檔案大小上限。
+
+**產生交付目錄**：從 `packages/` 挑出要送的檔案，另放一個目錄，並產生只涵蓋這些檔案的 `SHA256SUMS`、`manifest-rpm.json` 與給開單用的 `DELIVERY.txt`（檔案、大小、未包含的項目）。挑選依 `manifest-rpm.json`（不靠檔名猜），並檢查每個 RPM 需要的 `confluent-*` 相依都在目錄內。手動做法（下載機）：
+
+```bash
+d=/out/delivery/cp-8.3.2 && mkdir -p $d/rpm/confluent $d/gpg-keys $d/tools
+cp /out/rpm/confluent/*-8.3.2-*.rpm /out/rpm/confluent/confluent-control-center-next-gen-2.6.1-*.rpm $d/rpm/confluent/
+cp /out/gpg-keys/confluent.asc /out/gpg-keys/confluent-c3.asc $d/gpg-keys/
+cp /out/tools/jmx_prometheus_javaagent-1.0.1.jar /out/tools/opmenu-<版本>.tar.gz $d/tools/
+rpm -qp --requires $d/rpm/confluent/*.rpm | awk '$1 ~ /^confluent-/ {print $1}' | sort -u > /tmp/req
+rpm -qp --provides $d/rpm/confluent/*.rpm | awk '{print $1}' | sort -u > /tmp/prov
+comm -23 /tmp/req /tmp/prov          # 預期無輸出：相依都在目錄內
+(cd $d && find rpm tools gpg-keys -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+```
+
+預期 8.3.2 為 15 個檔案、約 2.9 GB：11 個 Confluent RPM（5 個直接安裝 + 6 個相依）、2 把公鑰、JMX exporter、OP menu。
+
+**對應 cpctl**：`windows/make-delivery.sh [--with-upgrade] [--with-tar] [--with-os-deps]` → `delivery/cp-<版本>-<時間>/`；再跑 `windows/verify-packages.sh <該目錄>`，報告寫在該目錄的 `report/`。送掃描、開單、搬進內網都用這個目錄。
+
+待和行內確認：平台的單檔大小上限；報告是否列出檔案雜湊；核准後由誰、經什麼管道搬進內網；安裝檔是附在單上還是放到指定位置。
 
 **注意事項／陷阱**：
 - tar.gz 與 jar 不是 RPM，**沒有 GPG 驗證**，只靠 SHA256SUMS（以及 2.3/2.4 的廠商 checksum）。
@@ -770,7 +799,7 @@ repo os-deps served at http://ops01.poc.lab:8080/rpm/os-deps
 **對應 cpctl**：`cpctl repo verify` → `repo::verify()`；`cpctl repo list` → `repo::list()`。`cpctl install` 開頭也會先跑 `repo::verify`。
 
 **注意事項／陷阱**：
-- `repo verify` 只檢查三個 RPM repo 的 `repomd.xml`，**不檢查** raw 的 tar/jar/opmenu；這些在對應步驟（tar 安裝、JMX exporter、11_opmenu）才會以 `... not in the internal repo` 失敗。手動時請一併確認：`raw/tar/confluent-8.3.2.tar.gz`（tar 策略）、`raw/tools/jmx_prometheus_javaagent-1.0.1.jar`、`raw/tools/opmenu-$OPMENU_VERSION.tar.gz` 存在。
+- `repo verify` 只檢查三個 RPM repo 的 `repomd.xml`，**不檢查** raw 的 tar/jar/opmenu；這些在對應步驟（tar 安裝、JMX exporter、10_opmenu）才會以 `... not in the internal repo` 失敗。手動時請一併確認：`raw/tar/confluent-8.3.2.tar.gz`（tar 策略）、`raw/tools/jmx_prometheus_javaagent-1.0.1.jar`、`raw/tools/opmenu-$OPMENU_VERSION.tar.gz` 存在。
 - 節點端使用此 repo 的 `/etc/yum.repos.d/cp-internal.repo`（`[cp-internal-confluent]`、`[cp-internal-adoptium]`、`[cp-internal-os-deps]`，`gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cp-<key>`）由後續步驟（`install::prepare`，01/02 步）佈署，不在本章範圍。
 
 ## 2.15 內部 repo 放在另一台 web server（銀行管理，`REPO_WEB_HOST`）
@@ -1632,54 +1661,66 @@ sudo firewall-cmd --list-ports     # 8443/tcp 在、8080/tcp 不在（新環境 
 
 ### 3.3.1.3 依角色安裝精確版本 + versionlock
 
-- **套件**（`versions.env`；JDK 一律 `temurin-21-jdk-21.0.12.1.0.1`）：
+- **套件**（`versions.env`；JDK 一律是 OS repo 的 `java-21-openjdk-headless`，版本取 repo 裡的那一版，PoC 為 `21.0.12.1.1`）：
 
 | 主機 | 安裝規格 |
 |---|---|
-| ops01 | `temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2 confluent-cli-8.3.2` |
-| kc01 kc02 kc04、kb01–kb04、jump01 | `temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2` |
-| rest01 rest02 | `temurin-21-jdk-21.0.12.1.0.1 confluent-kafka-rest-8.3.2 confluent-security-8.3.2` |
-| c3-01 | `temurin-21-jdk-21.0.12.1.0.1 confluent-control-center-next-gen-2.6.1 cyrus-sasl-2.1.27 openssl-devel-3.5.8` |
+| ops01 | `java-21-openjdk-headless-21.0.12.1.1 confluent-server-8.3.2 confluent-security-8.3.2 confluent-cli-8.3.2` |
+| kc01 kc02 kc04、kb01–kb04、jump01 | `java-21-openjdk-headless-21.0.12.1.1 confluent-server-8.3.2 confluent-security-8.3.2` |
+| rest01 rest02 | `java-21-openjdk-headless-21.0.12.1.1 confluent-kafka-rest-8.3.2 confluent-security-8.3.2` |
+| c3-01 | `java-21-openjdk-headless-21.0.12.1.1 confluent-control-center-next-gen-2.6.1`，另裝 `cyrus-sasl openssl-devel`（不指定版本、不鎖） |
 
-  （c3 的 OS 依賴版本取自 `/srv/repo/rpm/os-deps` 內最新的 RPM：cyrus-sasl-2.1.27-22.el9_7、openssl-devel-3.5.8-2.el9_8。jump01 只需 Kafka CLI 工具，不跑服務。）
+  （**只鎖 Confluent 與 JDK**：JDK 換版要安排滾動重啟，所以鎖住。C3 的 OS 依賴 `cyrus-sasl`、`openssl-devel` 用 OS repo 裡的版本、**不鎖**，跟著行內 OS 修補更新：`openssl-devel` 要求 `openssl-libs` 同版本，鎖住它會擋掉 openssl 的安全修補。jump01 只需 Kafka CLI 工具，不跑服務。）
 
 - **手動指令**（以 broker 為例）：
   ```bash
   # 1) 先確認沒有裝錯版本（install 模式下若已有其他版本應停止，改走升級程序）
-  rpm -q --qf '%{NAME} %{VERSION}\n' temurin-21-jdk confluent-server confluent-security
+  rpm -q --qf '%{NAME} %{VERSION}\n' java-21-openjdk-headless confluent-server confluent-security
   # 2) 安裝
-  sudo dnf -y -q --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False \
-       install temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2
+  sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False \
+       install java-21-openjdk-headless-21.0.12.1.1 confluent-server-8.3.2 confluent-security-8.3.2
   # 3) 鎖版本:直接指定的套件,加上一起被拉進來的 confluent-* 相依套件(與 cpctl 相同)
-  for p in temurin-21-jdk-21.0.12.1.0.1 confluent-server-8.3.2 confluent-security-8.3.2; do
+  for p in java-21-openjdk-headless-21.0.12.1.1 confluent-server-8.3.2 confluent-security-8.3.2; do
     sudo dnf versionlock add "$p"
   done
   for p in $(rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 'confluent-*'); do sudo dnf versionlock add "$p"; done
   ```
   c3-01：
   ```bash
-  sudo dnf -y -q --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False \
-       install temurin-21-jdk-21.0.12.1.0.1 confluent-control-center-next-gen-2.6.1 cyrus-sasl-2.1.27 openssl-devel-3.5.8
-  for p in temurin-21-jdk-21.0.12.1.0.1 confluent-control-center-next-gen-2.6.1 cyrus-sasl-2.1.27 openssl-devel-3.5.8; do
+  sudo dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False \
+       install java-21-openjdk-headless-21.0.12.1.1 confluent-control-center-next-gen-2.6.1
+  for p in java-21-openjdk-headless-21.0.12.1.1 confluent-control-center-next-gen-2.6.1; do
     sudo dnf versionlock add "$p"
   done
+  # OS 依賴：不指定版本、不鎖（若之前鎖過，先解鎖）
+  sudo dnf versionlock delete cyrus-sasl openssl-devel 2>/dev/null || true
+  sudo dnf -y -q --refresh install cyrus-sasl openssl-devel
   ```
 - **驗證**：
   ```bash
   rpm -q --qf '%{VERSION}\n' confluent-server        # 8.3.2（controller/broker 必須相符；這是 cpctl step_verify）
   sudo dnf -q versionlock list
   # kb01 期望：
-  # temurin-21-jdk-0:21.0.12.1.0.1-0.*
-  # confluent-server-1:8.3.2-1.*
+  # java-21-openjdk-headless-1:21.0.12.1.1-1.2.el9_8.*
+  # confluent-ce-kafka-http-server-0:8.3.2-1.*   ← 以下是一起被拉進來的 confluent-* 相依，同樣鎖住
+  # confluent-common-0:8.3.2-1.*
+  # confluent-kafka-rest-0:8.3.2-1.*
+  # confluent-metadata-service-0:8.3.2-1.*
+  # confluent-rest-utils-0:8.3.2-1.*
   # confluent-security-0:8.3.2-1.*
-  # rest01：temurin-21-jdk…、confluent-kafka-rest-0:8.3.2-1.*、confluent-security-0:8.3.2-1.*
-  # c3-01 ：temurin-21-jdk…、cyrus-sasl-0:2.1.27-22.el9_7.*、openssl-devel-1:3.5.8-2.el9_8.*、confluent-control-center-next-gen-0:2.6.1-1.*
+  # confluent-server-1:8.3.2-1.*
+  # confluent-server-rest-0:8.3.2-1.*
+  # confluent-telemetry-1:8.3.2-1.*
+  # rest01：java-21-openjdk-headless…、confluent-kafka-rest-0:8.3.2-1.*、confluent-security-0:8.3.2-1.*
+  # c3-01 ：java-21-openjdk-headless…、confluent-control-center-next-gen-0:2.6.1-1.*（沒有 cyrus-sasl、openssl-devel）
   # ops01 ：多一行 confluent-cli-0:8.3.2-1.*
   getent passwd cp-kafka cp-kafka-rest ; getent group confluent     # RPM scriptlet 建立的服務帳號
-  ls -l /usr/lib/jvm/temurin-21-jdk/bin/java
+  ls -l /usr/lib/jvm/jre-21-openjdk/bin/java
   ```
 - **對應 cpctl**：`distribute::host` → `install::prepare` + `install::ensure` → `rpm_node::ensure install <name=ver>...`；`step_verify` → `install::version`。
 - **注意事項**：
+  - `--refresh`：repo 剛重新發佈時，主機上快取的 metadata 可能還沒過期，會出現 `Unable to find a match`（2026-10-19 實測遇到）；cpctl 每次安裝都帶 `--refresh`。
+  - 移除套件（例如換 JDK 後移除 Temurin）時，`dnf versionlock delete` 會連 confluent-* 一起解鎖才移得掉；移除後要再跑一次上面第 3) 段把 confluent-* 鎖回去（cpctl 的 `rpm_node::remove` 會自動做）。
   - 需要 `python3-dnf-plugin-versionlock`（PoC image 已預裝；RHEL 最小安裝要先從 os-deps 裝）。
   - `confluent-server-8.3.2` 會拉入相依（confluent-common、rest-utils、ce-kafka-http-server、kafka-rest、server-rest、metadata-service、telemetry），這些相依套件也要鎖(上面第 3 步的第二個迴圈),否則 OS 修補時可能被單獨升級。升級時先 `dnf versionlock delete` 所有 confluent-* 再安裝新版、再重新鎖定。cpctl 自 2026-10-16 起也會鎖定相依套件(`rpm_node::lock_deps`)。
   - RPM 的 JDK `cacerts` 是 symlink → `/etc/pki/ca-trust/extracted/java/cacerts`（由 `update-ca-trust` 產生），與 3.8 有關。
@@ -1782,8 +1823,7 @@ sudo ln -sfn /opt/confluent/confluent-control-center-next-gen-2.6.1 /opt/conflue
 ### 3.3.2.6 c3：OS 依賴 + 預設設定檔
 
 ```bash
-sudo dnf -y -q --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False install cyrus-sasl-2.1.27 openssl-devel-3.5.8
-sudo dnf versionlock add cyrus-sasl-2.1.27 openssl-devel-3.5.8
+sudo dnf -y -q --refresh --setopt=install_weak_deps=False install cyrus-sasl openssl-devel   # OS repo 的版本，不鎖（跟著 OS 修補）
 # 只補缺少的預設檔，絕不覆蓋既有檔
 sudo install -d -m 0755 /etc/confluent-control-center
 for f in /opt/confluent/confluent-control-center-next-gen-2.6.1/etc/confluent-control-center/*; do
@@ -1919,7 +1959,7 @@ WantedBy=multi-user.target
   cpctl 的版本判斷就是 `basename $(readlink /opt/confluent/current)` 去掉 `confluent-` 前綴。
 - **對應 cpctl**：`install::prepare`（tar.sh）、`tar_node::account`、`ensure::dir`、`install::_archive`、`install::_sha`、`install::_fetch` → `tar_node::fetch_extract`、`tar_node::switch`、`tar_node::seed_dir`、`install::_units`、`svc::daemon_reload`。
 - **注意事項（tar）**：
-  - 工具路徑變成 `/opt/confluent/current/bin/...`，不在 PATH；JAVA_HOME = `/opt/java/current`。step 05 之後的手動指令要用這些路徑（RPM 為 `/usr/bin`、`/usr/lib/jvm/temurin-21-jdk`）。
+  - 工具路徑變成 `/opt/confluent/current/bin/...`，不在 PATH；JAVA_HOME = `/opt/java/current`。step 05 之後的手動指令要用這些路徑（RPM 為 `/usr/bin`、`/usr/lib/jvm/jre-21-openjdk`）。
   - `tar -tzf | head -1` 會讓 tar 收到 SIGPIPE（rc 141），在 `set -o pipefail` 下別誤判為錯誤。
   - archive 約 1.1–1.3 GB，`/var/cache/cp-installer` 需預留空間；快取檔 sha 正確時 cpctl 不重抓。
   - tar 策略的 JDK `cacerts` 是 JDK 目錄內的**實體檔**；切換 JDK 版本後要重做 3.4.8 的匯入。
@@ -1930,14 +1970,14 @@ WantedBy=multi-user.target
 
 - **主機 / 帳號**：3.4.1–3.4.6 在 **ops01 以 cpadmin（不加 sudo）** 執行，工作目錄 `PKI_DIR=/var/lib/cp-installer/pki`；3.4.7（派送）與 3.4.8（信任）在各節點 cpadmin + sudo。
 - **參數**（`inventory.env`）：`PKI_MODE=internal|external`（誰簽發，external = 銀行 CA，見 3.4.9）、`PKI_KEY_BITS=3072`、`PKI_CA_DAYS=3650`、`PKI_CERT_DAYS=365`、`PKI_RENEW_BEFORE_DAYS=30`；subject 後綴 `/OU=Confluent/O=PoC Bank/C=TW`；密碼 `STORE_PASSWORD`、`MDS_TOKEN_PASSPHRASE`（`conf/secrets.env`，Secret Protection 管理）。
-- **keytool**：`/usr/lib/jvm/temurin-21-jdk/bin/keytool`（RPM）或 `/opt/java/current/bin/keytool`（tar）——所以 ops01 必須先完成 step 02。
+- **keytool**：`/usr/lib/jvm/jre-21-openjdk/bin/keytool`（RPM）或 `/opt/java/current/bin/keytool`（tar）——所以 ops01 必須先完成 step 02。
 
 準備（ops01，cpadmin）：
 ```bash
 install -d -m 0700 /var/lib/cp-installer/pki      # 父目錄 /var/lib/cp-installer 為 cpadmin:cpadmin 0750
 cd /var/lib/cp-installer/pki
 umask 077
-KT=/usr/lib/jvm/temurin-21-jdk/bin/keytool        # tar 策略：/opt/java/current/bin/keytool
+KT=/usr/lib/jvm/jre-21-openjdk/bin/keytool        # tar 策略：/opt/java/current/bin/keytool
 # 密碼放環境變數，不要出現在指令列 / history：
 read -rsp 'STORE_PASSWORD: ' STORE_PASSWORD; echo; export STORE_PASSWORD
 read -rsp 'MDS_TOKEN_PASSPHRASE: ' MDS_TOKEN_PASSPHRASE; echo; export MDS_TOKEN_PASSPHRASE
@@ -2105,7 +2145,7 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
 | rest | `ca.pem truststore.p12 cp-server.p12 svc-rest.p12 mds-public.pem`（svc-rest.p12：REST Proxy 向 MDS / Kafka 的身分） |
 | c3 | `ca.pem truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12 mds-public.pem`（svc-c3.p12：C3 向 MDS / Kafka 的身分） |
 
-  （jump01 的 opmenu truststore / break-glass keystore 由 step 11 處理，不在此範圍。）
+  （jump01 的 opmenu truststore / break-glass keystore 由 step 10 處理，不在此範圍。）
 - **權限**：`/etc/confluent` root:root 0755、`/etc/confluent/ssl` root:confluent 0750、檔案 root:confluent 0640（`confluent` 群組由 step 02 建立）。
 - **手動指令**（以 kb01 為例）：
   ```bash
@@ -2130,7 +2170,7 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
 - **對應 cpctl**：`role::push_ssl`（`roles/_role.sh`），呼叫端 `kafka::_configure`、`rest`、`c3` 角色；`ensure::absent /etc/confluent/ssl/mds-token-keypair.pem`。
 - **注意事項**：私鑰與 keystore(`*.p12`、`*.key`、`*keypair*.pem`)換新時**不要在節點上留舊檔備份**,舊私鑰應從節點上消失;操作機的 PKI 目錄已有歸檔。清除舊備份時 glob 要由 root 展開:`sudo find /etc/confluent/ssl -name '*.bak.*' -delete`。cpctl 自 2026-10-16 起不再為這類檔案留備份,03 步驟也會刪掉舊版留下的備份。
 
-### 3.4.8 主機信任內部 CA（OS trust anchors + JDK cacerts）
+### 3.4.8 主機信任內部 CA（OS trust anchors；JDK 跟著 OS）
 
 - **目的**：讓 curl/openssl/ldap 工具（OS store）以及自行建立 HTTPS/LDAPS client 的 Java 元件（JDK 預設 truststore）信任內部 CA，而不必在指令列傳 truststore 密碼。
 - **主機 / 帳號**：ops01、kc01 kc02 kc04、kb01–kb04、rest01–02、c3-01、jump01；cpadmin + sudo。
@@ -2140,8 +2180,21 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
   sudo install -o root -g root -m 0644 /tmp/cp-internal-ca.pem /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
   sudo update-ca-trust extract
 
-  # 2) JDK cacerts：bundle 中每張 CA 一個 alias cp-ca-<SHA256 指紋前 16 碼小寫>
-  JH=/usr/lib/jvm/temurin-21-jdk            # tar 策略：/opt/java/current
+  # 2) JDK：RHEL 的 OpenJDK 直接讀 OS trust store（它的 cacerts 就是 update-ca-trust 產生的檔案），不必也不應該再匯入。
+  #    只確認 bundle 裡每張 CA 都在（以 SHA-256 指紋比對）：
+  JH=/usr/lib/jvm/jre-21-openjdk
+  readlink -f $JH/lib/security/cacerts            # /etc/pki/ca-trust/extracted/java/cacerts
+  list=$($JH/bin/keytool -list -cacerts -storepass changeit | tr -d ':' | tr 'A-F' 'a-f')
+  d=$(mktemp -d)
+  awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
+  for f in "$d"/ca-*.pem; do
+    fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
+    case "$list" in *"$fp"*) echo "JDK trusts $(openssl x509 -in "$f" -noout -subject)";; *) echo "MISSING - run update-ca-trust extract";; esac
+  done
+  rm -rf "$d"
+
+  # tar 策略（JDK 在 /opt/java/current，cacerts 是 JDK 目錄內的實體檔）才要匯入：每張 CA 一個 alias cp-ca-<SHA256 指紋前 16 碼小寫>
+  JH=/opt/java/current
   d=$(mktemp -d)
   awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
   for f in "$d"/ca-*.pem; do
@@ -2159,14 +2212,14 @@ subjectAltName=DNS:kb01,DNS:kb01.poc.lab,DNS:kb02,DNS:kb02.poc.lab,DNS:kb03,DNS:
   ```bash
   openssl x509 -in /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem -noout -fingerprint -sha256
   # sha256 Fingerprint=31:6E:D0:E1:06:2C:C9:5C:...   （PoC 現行 CA）
-  sudo /usr/lib/jvm/temurin-21-jdk/bin/keytool -list -cacerts -storepass changeit | grep cp-ca
-  # cp-ca-316ed0e1062cc95c, Oct 15, 2026, trustedCertEntry,
+  /usr/lib/jvm/jre-21-openjdk/bin/keytool -list -cacerts -storepass changeit | tr -d ':' | grep -ci 316ed0e1062cc95c
+  # 1   （JDK 透過 OS trust store 信任這張 CA；別名是 OS 產生的，不是 cp-ca-*）
   trust list --filter=ca-anchors | grep -A3 'PoC Internal'
   curl -sS -o /dev/null -w '%{http_code}\n' https://kb01.poc.lab:8090/      # step 07 之後：不出現憑證錯誤
   ```
 - **對應 cpctl**：`step_apply`（03_pki.sh）中的 `remote::put … anchors/cp-internal-ca.pem` + `update-ca-trust extract`，以及 `java_node::trust_ca`（`lib/node/kafka.sh`）。
 - **注意事項**：
-  - RPM 版 Temurin 的 `lib/security/cacerts` 是 symlink → `/etc/pki/ca-trust/extracted/java/cacerts`；`keytool -cacerts` 實際寫到 OS 產生的檔案，**下一次 `update-ca-trust extract` 會覆蓋掉 `cp-ca-*` alias**。因 CA 已在 anchors，Java 仍然信任（以 OS 產生的 alias），只是 `cp-ca-*` 標記消失；cpctl 每次重跑 03 都會補回。手動的順序一定是**先 update-ca-trust，再 keytool**。
+  - RPM 方式的 JDK（RHEL 的 OpenJDK，以前的 Temurin RPM 也一樣）`lib/security/cacerts` 是 symlink → `/etc/pki/ca-trust/extracted/java/cacerts`，也就是 `update-ca-trust` 產生的檔案。舊版 cpctl 會用 keytool 再寫一次 `cp-ca-*`，但下一次 `update-ca-trust extract` 就被覆蓋、cpctl 重跑又補回，來回變動；2026-10-19 起 cpctl 偵測到這種 cacerts 時**只檢查、不寫入**（`java_node::trust_ca`）。
   - tar 版 JDK 的 cacerts 是 JDK 目錄內實體檔，不受 update-ca-trust 影響，但 JDK 版本切換後要重做。
   - **不要在 `/etc/pki/ca-trust/source/anchors/` 留備份檔**：p11-kit 會讀取 anchors 內的**所有檔案**(不只 `.pem`),留在這裡的 `cp-internal-ca.pem.bak.<ts>` 會讓已退役的 CA 繼續被信任。撰寫本手冊時在 kb01 發現這個問題(`trust list` 同時列出現行 CA 與已退役的 `PoC Internal CA`),cpctl 已修正:anchors 的備份改放 `/var/backups/cp-installer/`,03 步驟也會把舊版本留下的備份移出並重跑 `update-ca-trust extract`。手動輪替 CA 時,備份請放在 anchors 目錄以外。
   - CA 輪替期間 `ca.pem` 是多張 CA 的 bundle，上述 awk 切檔即為此設計。
@@ -2312,7 +2365,7 @@ $ export CB=kc01.poc.lab:9093,kc02.poc.lab:9093,kc04.poc.lab:9093      # control
 $ export BI=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094  # broker TOKEN listener(管理用)
 $ export ADMIN_CFG=$S/client/admin-token.properties   # 管理 broker:svc-cpctl 憑證 → MDS token(super user)
 $ export CCFG=$S/client/internal.properties           # 管理 controller:共用內部憑證(controller 沒有 TOKEN listener)
-$ export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+$ export JAVA_HOME=/usr/lib/jvm/jre-21-openjdk KAFKA_HEAP_OPTS=-Xmx256m \
          KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 ```
 
@@ -2360,7 +2413,7 @@ $ install -m 0600 /dev/null $ADMIN_CFG && vi $ADMIN_CFG     # 先建 0600 的空
 $ install -m 0600 /dev/null $CCFG && vi $CCFG
 ```
 
-> 路徑以 RPM 安裝方式為準(`/usr/bin`、`/etc/kafka`、`/usr/lib/jvm/temurin-21-jdk`)。tar.gz 方式請把 `/usr/bin/kafka-*` 換成 `/opt/confluent/current/bin/kafka-*`、`/etc/kafka` 換成 tar 的 `etc/kafka`、JAVA_HOME 換成 `/opt/java/current`(見第 7 章)。
+> 路徑以 RPM 安裝方式為準(`/usr/bin`、`/etc/kafka`、`/usr/lib/jvm/jre-21-openjdk`)。tar.gz 方式請把 `/usr/bin/kafka-*` 換成 `/opt/confluent/current/bin/kafka-*`、`/etc/kafka` 換成 tar 的 `etc/kafka`、JAVA_HOME 換成 `/opt/java/current`(見第 7 章)。
 
 ## 4.1 步驟 04:Active Directory(04_ad_bootstrap)
 
@@ -3110,7 +3163,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' --cacert $PKI/ca.pem https://kb01.poc
 [Service]
 ExecStart=
 ExecStart=/usr/bin/kafka-server-start /etc/confluent/kafka/server.properties
-Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"
+Environment="JAVA_HOME=/usr/lib/jvm/jre-21-openjdk"
 Environment="KAFKA_HEAP_OPTS=-Xms512m -Xmx512m"
 Environment="KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile=/etc/kafka/log4j2.yaml"
 Environment="LOG_DIR=/var/log/kafka"
@@ -3214,7 +3267,7 @@ $ ssh kc01.poc.lab "sudo cat /var/lib/kafka/data/meta.properties 2>/dev/null || 
 NOT-FORMATTED
 $ ssh kc01.poc.lab "sudo install -d -o cp-kafka -g confluent -m 0750 /var/lib/kafka/data"
 $  ssh kc01.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
-    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/jre-21-openjdk KAFKA_HEAP_OPTS=-Xmx256m \
     KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
     /usr/bin/kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties \
       --initial-controllers '$INITIAL' \
@@ -3234,7 +3287,7 @@ kc02、kc04 用**完全相同**的 `$CLUSTER_ID`、`$INITIAL` 與 `--add-scram`�
 
 ```bash
 $ ssh kb01.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
-    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/jre-21-openjdk KAFKA_HEAP_OPTS=-Xmx256m \
     KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
     /usr/bin/kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers\""
 ```
@@ -3418,7 +3471,7 @@ Enter host password for user 'alice': <password>
 
 ```bash
 $ ssh kc03.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
-    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/jre-21-openjdk KAFKA_HEAP_OPTS=-Xmx256m \
     KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
     kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers\""
 Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
@@ -3440,7 +3493,7 @@ $ ssh kc03.poc.lab "sudo cp /etc/confluent/kafka/server.properties /etc/confluen
     sudo chown root:confluent /etc/confluent/kafka/add-controller.properties && \
     sudo chmod 0640 /etc/confluent/kafka/add-controller.properties"
 $ ssh kc03.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
-    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/jre-21-openjdk KAFKA_HEAP_OPTS=-Xmx256m \
     KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
     kafka-metadata-quorum --command-config /etc/confluent/kafka/add-controller.properties \
       --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc04.poc.lab:9093 add-controller\""
@@ -3524,7 +3577,7 @@ $ ssh kc03.poc.lab "sudo systemctl disable -q --now confluent-server"
 
 ```bash
 # ops01, cpadmin
-export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk
+export JAVA_HOME=/usr/lib/jvm/jre-21-openjdk
 export KAFKA_HEAP_OPTS=-Xmx256m
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml   # 工具專用 log4j，避免寫進 broker log
 export B=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094    # broker TOKEN listener
@@ -3932,7 +3985,7 @@ consumer.instance.timeout.ms=300000
 [Service]
 ExecStart=
 ExecStart=/usr/bin/kafka-rest-start /etc/confluent/kafka-rest/kafka-rest.properties
-Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"
+Environment="JAVA_HOME=/usr/lib/jvm/jre-21-openjdk"
 Environment="KAFKAREST_HEAP_OPTS=-Xms512m -Xmx512m"
 Environment="KAFKAREST_OPTS=-javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar=7071:/etc/confluent/kafka-rest/jmx-exporter.yml"
 EnvironmentFile=-/etc/confluent/kafka-rest/service.env
@@ -4029,7 +4082,7 @@ ExecStartPre=/bin/sh -c 'for i in $$(seq 1 60); do for u in $$(echo "https://kb0
 TimeoutStartSec=420
 ExecStart=
 ExecStart=/usr/bin/control-center-start /etc/confluent/control-center/control-center.properties
-Environment="JAVA_HOME=/usr/lib/jvm/temurin-21-jdk"
+Environment="JAVA_HOME=/usr/lib/jvm/jre-21-openjdk"
 Environment="CONTROL_CENTER_HEAP_OPTS=-Xms1536m -Xmx1536m"
 EnvironmentFile=-/etc/confluent/control-center/service.env
 LimitNOFILE=65536
@@ -4164,7 +4217,7 @@ timeout 3 bash -c '</dev/tcp/lb01.poc.lab/9021' && echo OPEN || echo closed     
 
 `step_verify`：每台 REST 回 200/401/403；每台 C3 `https://c3-01.poc.lab:9021/` = 200。
 
-## 5.3 步驟 10:端對端驗證（`steps/10_verify.sh` + `lib/verify.sh`）
+## 5.3 步驟 11:端對端驗證（`steps/11_verify.sh` + `lib/verify.sh`）
 
 - **目的**：唯讀檢查整個平台（不改任何設定），任一項失敗就以 `E_GATE` 結束。`--check` 模式下跳過（需要真的叢集）。
 - **主機/帳號**：ops01 / cpadmin。
@@ -4324,7 +4377,12 @@ R() { ssh cpadmin@jump01.poc.lab "sudo -n -u opuser env OPMENU_CONF=${CONF:-/etc
 R alice '<password>' 12                                            # #37 RESULT=OK；#38 第 3 欄=alice（不是 opuser）
 R alice wrong-password 12                                          # #39 AUTH_FAIL
 R bob   '<password>' 23 kb01.poc.lab:confluent-server 20           # #40 OK（經 ssh kafkaops 看 broker log）
-R carol '<password>' 23 kb01.poc.lab:confluent-server 20           # #41 DENIED（MDS authorize 擋下主機操作）
+R carol '<password>' 23 kb01.poc.lab:confluent-server 20           # #41 DENIED（23 不在 carol 的選單內；就算放進來，MDS authorize 也會擋下主機操作）
+# 動態選單（6.11）：--run menu 印出這個人看得到的項目編號（@@MENU@@ 那一行）
+R carol '<password>' menu                                          # 只有查看類：有 12，沒有 21、31、91
+R bob   '<password>' menu                                          # 多了主機操作：有 21，沒有 31、42
+R alice '<password>' menu                                          # 全部：有 31、42、91
+R carol '<password>' 31 dummy.topic                                # 看不到的項目直接輸入：「不在你的選單內」，紀錄 DENIED | not in menu
 R carol '<password>' 22 rest01.poc.lab:confluent-kafka-rest        # #42 DENIED（不能重啟 REST）
 # #43 item 21 安全檢查無法執行時必須拒絕（fail closed）
 ssh cpadmin@jump01.poc.lab "printf '. /etc/opmenu/opmenu-test.conf\nOPMENU_BOOTSTRAP=nowhere.invalid:9096\n' | sudo -n tee /tmp/opmenu-broken.conf >/dev/null; sudo -n chmod 0644 /tmp/opmenu-broken.conf"
@@ -4391,7 +4449,7 @@ done
   - consumer lag 不是 broker JMX 指標：用 C3 或另外的 lag exporter。
   - salt 固定是為了冪等（同輸入 → 同檔案 → 不重啟）；換 salt 或換密碼都會觸發滾動重啟。
 
-# 6. 堡壘機 OP menu(步驟 11)
+# 6. 堡壘機 OP menu(步驟 10)
 
 ## 6.0 概要
 
@@ -4464,7 +4522,7 @@ cd /var/lib/cp-installer/pki
 d=$(mktemp -d); awk -v d="$d" '/BEGIN CERT/{n++} {print > (d "/ca-" n ".pem")}' ca.pem
 rm -f opmenu-truststore.p12; i=0
 for f in "$d"/ca-*.pem; do i=$((i+1))
-  /usr/lib/jvm/temurin-21-jdk/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" \
+  /usr/lib/jvm/jre-21-openjdk/bin/keytool -importcert -noprompt -alias internal-ca-$i -file "$f" \
     -keystore opmenu-truststore.p12 -storetype PKCS12 -storepass '<password>'
 done; rm -rf "$d"
 # jump01（root）
@@ -4511,7 +4569,7 @@ OPMENU_CHANGE_WINDOW=''                         # 空＝不限制
 OPMENU_IDLE_TIMEOUT=900
 OPMENU_AUDIT_TOPIC=confluent-audit-log-events
 OPMENU_BREAKGLASS_BOOTSTRAP='kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092'   # INTERNAL（mTLS）
-export PATH="/usr/bin:$PATH" JAVA_HOME="/usr/lib/jvm/temurin-21-jdk"
+export PATH="/usr/bin:$PATH" JAVA_HOME="/usr/lib/jvm/jre-21-openjdk"
 ```
 - **驗證**：`ls -la /etc/opmenu /etc/opmenu/certs`（certs 為 `root:opmenu 0750`；truststore.p12、truststore_creds 為 0640）。
 - **對應 cpctl**：`jump::vars`、`pki::truststore_named`、`role::push_rendered opmenu/opmenu.conf.tpl`。
@@ -4693,7 +4751,45 @@ cfl iam rbac role-binding create --principal User:opmenu-breakglass --role Syste
 ```bash
 ssh cpadmin@jump01.poc.lab 'test -x /opt/opmenu/opmenu.sh && sudo -n -u opuser /opt/opmenu/opmenu.sh --list >/dev/null && echo ok'
 ```
-完整功能測試見 5.3.9（`cpctl verify` 在 11 的 stamp 存在後才會跑選單相關 11 項）。
+完整功能測試見 5.3.9（`cpctl verify` 在 11 的 stamp 存在後才會跑選單相關 15 項）。
+
+## 6.11 依權限顯示的選單（動態選單）
+
+- **目的**：每個人登入後只看到自己有權限的項目。判斷依據是 **RBAC**：登入時用本人的 token 一次問 MDS，MDS 會展開這個人的 AD 群組，所以結果自然「依 AD 群組不同」，而且權限只有 RBAC 一份設定，不必另外維護「哪個群組看哪些項目」。
+- **只影響看得到什麼**：執行時 Kafka、MDS 與主機權限閘門照樣檢查；**直接輸入看不到的編號會被擋下**，紀錄為 `DENIED | not in menu`。
+- **MDS 一時問不到**（回應錯誤或看不懂）：全部顯示並提示「無法取得你的權限清單」，執行時仍會檢查（顯示寬鬆、執行嚴格）。
+- **設定**（`/etc/opmenu/opmenu.conf`，預設值見 `lib/defaults.sh`）：
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `OPMENU_MENU_FILTER` | `1` | `0` = 全部顯示（舊行為） |
+| `OPMENU_MENU_AUTHZ` | `16=HOST 18=HOST 2*=HOST 3*=ADMIN 41=ADMIN 42=ADMIN 43=AUDIT 44=ADMIN 45=AUDIT 91=ADMIN` | 每個項目需要的權限；`2*` = 第 2 層全部；後面的覆蓋前面的；`-` = 不限制；沒列到的（查看類）不限制，Kafka 只回傳你看得到的資料 |
+| `OPMENU_HOST_ACTION_AUTHZ` | `Topic:__opmenu-host-ops:Describe` | HOST：碰主機的項目（重啟、日誌、磁碟、診斷、告警靜音） |
+| `OPMENU_ADMIN_AUTHZ` | `Cluster:kafka-cluster:Alter` | ADMIN：變更、權限管理、緊急模式（SystemAdmin / ClusterAdmin） |
+| `OPMENU_AUDIT_AUTHZ` | `Topic:confluent-audit-log-events:Read` | AUDIT：匯出、查詢 audit 紀錄（可單獨給稽核人員） |
+
+- **手動確認某人看得到什麼**（ops01，cpadmin；等於選單登入時問的那一次）：
+```bash
+P=/var/lib/cp-installer/pki; M=https://kb01.poc.lab:8090
+CID=$(grep -h '^CLUSTER_ID=' /var/lib/cp-installer/kraft.env | cut -d= -f2)
+read -r -p 'AD 帳號: ' U; read -r -s -p 'AD 密碼: ' PW; echo
+T=$(printf 'user = "%s:%s"\n' "$U" "$PW" | curl -s -K - --cacert $P/ca.pem $M/security/1.0/authenticate | jq -r .auth_token); unset PW
+a() { printf '{"resourceType":"%s","resourceName":"%s","operation":"%s","scope":{"clusters":{"kafka-cluster":"%s"}}}' "$1" "$2" "$3" "$CID"; }
+curl -s --cacert $P/ca.pem -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -X PUT $M/security/1.0/authorize \
+  -d "{\"userPrincipal\":\"User:$U\",\"actions\":[$(a Topic __opmenu-host-ops Describe),$(a Cluster kafka-cluster Alter),$(a Topic confluent-audit-log-events Read)]}"; echo
+```
+  預期（PoC，順序 = HOST / ADMIN / AUDIT）：
+
+| 使用者（AD 群組） | 回應 | 看得到的項目 |
+|---|---|---|
+| alice（kafka-admins，SystemAdmin） | `["ALLOWED","ALLOWED","ALLOWED"]` | 全部 |
+| bob（kafka-operators，Operator） | `["ALLOWED","DENIED","DENIED"]` | 查看類、16、18、第 2 層 |
+| carol（kafka-devs，DeveloperRead） | `["DENIED","DENIED","DENIED"]` | 只有查看類 |
+
+- **對應 cpctl / opmenu**：`core_menu_permissions`、`core_item_authz`（`opmenu/lib/core.sh`）；單元測試 `opmenu/test-menu-filter.sh`；`cpctl verify` 的 4 項動態選單檢查（5.3.9）。
+- **注意事項**：
+  - 緊急模式（91）預設只有 ADMIN 看得到，看不到的人直接輸入 91 也會被擋。這代表管理員自己的 RBAC 綁定壞掉時，選單裡的緊急模式也用不了；那種情況要由主機管理員在操作機上直接處理。若要讓所有人都能用（舊行為），設 `91=-`。
+  - 調整權限只改 RBAC（AD 群組 → 角色），選單下次登入就跟著變，不必改選單設定。
 
 # 7. tar.gz 安裝方式
 
@@ -5244,7 +5340,7 @@ $ restart_all
 **驗證**:
 
 ```bash
-$ for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab "sudo /usr/lib/jvm/temurin-21-jdk/bin/keytool -list -keystore /etc/confluent/ssl/truststore.p12 -storepass <store-password> | grep -c trustedCertEntry"; done
+$ for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab "sudo /usr/lib/jvm/jre-21-openjdk/bin/keytool -list -keystore /etc/confluent/ssl/truststore.p12 -storepass <store-password> | grep -c trustedCertEntry"; done
 2   (每台)
 # trust_all 的輸出:每台 "OS anchors=2 JDK=2"
 $ served          # 仍是舊 CA 簽的憑證(這個階段不換憑證)
@@ -5536,7 +5632,7 @@ MDS 這一項不需要任何密碼：`svc-cpctl` 用憑證認證。
   # 2) 設定檔同 4.2（node.id=104、broker.rack=rack-b），以 --no-initial-controllers 格式化（4.3），啟動（4.4）
   #    格式化同 4.3.3：Secret Protection 的 master key 從 root 才能讀的 service.env 經環境變數傳給 kafka-storage
   ssh kb04.poc.lab "sudo bash -c \"set -a; . /etc/confluent/kafka/service.env; set +a; \
-    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/temurin-21-jdk KAFKA_HEAP_OPTS=-Xmx256m \
+    sudo -u cp-kafka --preserve-env=CONFLUENT_SECURITY_MASTER_KEY env JAVA_HOME=/usr/lib/jvm/jre-21-openjdk KAFKA_HEAP_OPTS=-Xmx256m \
     KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
     /usr/bin/kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers\""
   ssh kb04.poc.lab 'sudo systemctl enable --now confluent-server'
@@ -6226,7 +6322,7 @@ trust_all() {
 set -e
 sudo install -o root -g root -m 0644 /tmp/cp-internal-ca.pem /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem; rm -f /tmp/cp-internal-ca.pem
 sudo update-ca-trust extract
-JH=/usr/lib/jvm/temurin-21-jdk; d=$(mktemp -d); want=""
+JH=/usr/lib/jvm/jre-21-openjdk; d=$(mktemp -d); want=""
 awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' /etc/pki/ca-trust/source/anchors/cp-internal-ca.pem
 for f in "$d"/ca-*.pem; do
   fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f' | cut -c1-16); want="$want cp-ca-$fp"

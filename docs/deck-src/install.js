@@ -155,7 +155,7 @@ async function main() {
 
   // ================================================================ 3 architecture
   {
-    const s = plainSlide("安裝範圍：一套高可用的 Kafka 平台", "畫面上每個方塊都是一台或一組主機。核心是 Kafka 叢集：3 台 controller 管理叢集、4 台 broker 存放資料，壞一台不影響服務。應用程式直連 Kafka，或經負載平衡使用兩台 REST 介面。維運人員經跳板機或 VDI 直接連 Control Center，不經負載平衡：它只有一台，放在負載平衡後面並不會更可靠。周邊還有三台：操作機（安裝作業與套件庫建置）、行內的套件 web server、行內 AD。");
+    const s = plainSlide("安裝範圍：一套高可用的 Kafka 平台", "畫面上每個方塊都是一台或一組主機。核心是 Kafka 叢集：3 台 controller 管理叢集、4 台 broker 存放資料，壞一台不影響服務。應用程式直連 Kafka（用專屬帳號密碼），或經負載平衡使用兩台 REST 介面。維運人員經 VDI 進來，有兩條路：用瀏覽器直接連 Control Center（不經負載平衡：它只有一台，放在負載平衡後面並不會更可靠），或登入操作機使用 OP 選單做日常維運。OP 選單和 C3 一樣用自己的 AD 帳號登入，權限依 AD 群組決定，紀錄寫的是本人而不是共用帳號；AD 或權限服務故障時，另有緊急模式可用，使用時會特別標記並記下操作人員。操作機同時是安裝作業的起點與維運人員執行 OP 選單的主機。周邊還有兩項行內既有的服務：套件庫（Satellite、Artifactory、Nexus，沒有才用 web server）與 AD。人員的權限綁在 AD 群組上，不綁個人：人員異動只要調整 AD 群組成員，平台的權限設定不用改。使用者不會直接登入 AD：帳密是輸入在 C3 或 OP 選單，由 Kafka 叢集上的權限服務向 AD 驗證、查詢所屬群組。");
     // applications -> load balancer -> REST; applications -> Kafka directly
     await badge(s, 1.25, 2.8, 0.85, "LuBot", C.ink);
     under(s, 1.25, 3.3, 1.8, "應用程式", null, { headSize: 16 });
@@ -163,20 +163,24 @@ async function main() {
     txt(s, "負載平衡", { x: 2.6, y: 2.3, w: 1.7, h: 1.0, fontSize: 16, bold: true, align: "center", valign: "middle" });
     arrow(s, 1.75, 2.8, 2.6, 2.8);
     arrow(s, 4.3, 2.8, 4.9, 2.8);
-    // operators -> Control Center directly (bastion / VDI)
-    await badge(s, 1.25, 4.6, 0.85, "LuUsers", C.ink);
-    under(s, 1.25, 5.1, 1.8, "維運人員", null, { headSize: 16 });
-    txt(s, "經跳板機 / VDI 直連", { x: 1.85, y: 4.12, w: 2.9, h: 0.38, fontSize: 14, color: C.body, align: "center" });
-    arrow(s, 1.75, 4.6, 4.9, 4.6);
+    // operators (via bastion / VDI) -> Control Center (browser) and the OP menu on the bastion (AD login)
+    await badge(s, 1.25, 4.85, 0.85, "LuUsers", C.ink);
+    under(s, 1.25, 5.35, 1.8, "維運人員", null, { headSize: 16 });
+    txt(s, "經 VDI", { x: 1.9, y: 4.6, w: 2.4, h: 0.38, fontSize: 14, color: C.body, align: "center" });
+    arrow(s, 1.75, 4.65, 4.9, 4.25);
+    arrow(s, 1.75, 5.05, 4.9, 5.45);
     // edge services
     panel(s, 4.9, 2.15, 2.4, 1.3, C.tealSoft);
     await badge(s, 5.4, 2.8, 0.6, "LuNetwork", C.teal);
     txt(s, "REST 介面\n×2", { x: 5.8, y: 2.15, w: 1.45, h: 1.3, fontSize: 15, bold: true, valign: "middle", color: C.teal });
-    panel(s, 4.9, 4.0, 2.4, 1.15, C.tealSoft);
-    await badge(s, 5.4, 4.575, 0.6, "LuMonitor", C.teal);
-    txt(s, "Control\nCenter", { x: 5.8, y: 4.0, w: 1.45, h: 1.15, fontSize: 15, bold: true, valign: "middle", color: C.teal });
+    panel(s, 4.9, 3.75, 2.4, 1.0, C.tealSoft);
+    await badge(s, 5.4, 4.25, 0.6, "LuMonitor", C.teal);
+    txt(s, "Control\nCenter", { x: 5.8, y: 3.75, w: 1.45, h: 1.0, fontSize: 15, bold: true, valign: "middle", color: C.teal });
+    panel(s, 4.9, 4.95, 2.4, 1.0, C.tealSoft);
+    await badge(s, 5.4, 5.45, 0.6, "LuSquareTerminal", C.teal);
+    txt(s, "操作機\nOP 選單", { x: 5.8, y: 4.95, w: 1.45, h: 1.0, fontSize: 15, bold: true, valign: "middle", color: C.teal });
     // kafka cluster
-    const kx = 7.9, ky = 1.95, kw = W - M - kx, kh = 3.6;
+    const kx = 7.9, ky = 1.95, kw = W - M - kx, kh = 3.7;
     panel(s, kx, ky, kw, kh, C.accentSoft);
     txt(s, "Kafka 叢集", { x: kx + 0.25, y: ky + 0.15, w: 3, h: 0.45, fontSize: 18, bold: true, color: C.accent });
     for (let i = 0; i < 3; i++) await badge(s, kx + 0.65 + i * 0.78, ky + 1.15, 0.62, "LuServerCog", C.accent);
@@ -184,24 +188,29 @@ async function main() {
     for (let i = 0; i < 4; i++) await badge(s, kx + 0.65 + i * 0.78, ky + 2.45, 0.62, "LuServer", C.accent);
     txt(s, "Broker ×4\n存放資料", { x: kx + 3.45, y: ky + 2.05, w: 1.3, h: 0.8, fontSize: 14, bold: true, color: C.ink, valign: "middle" });
     arrow(s, 7.3, 2.8, kx, 2.8);
-    arrow(s, 7.3, 4.575, kx, 4.575);
+    arrow(s, 7.3, 4.25, kx, 4.25);
+    arrow(s, 7.3, 5.45, kx, 5.45);
     arrow(s, 1.6, 3.25, kx, 3.75, C.mute, 1.5, "dash");
     // support hosts
-    const sup = [["LuLaptop", "操作機：安裝作業"], ["LuDatabase", "套件 web server"], ["LuIdCard", "行內 AD：人員身分"]];
+    // the 操作機 is already drawn above (OP menu; it also runs the installation): only the other support hosts here
+    const sup = [["LuDatabase", "行內套件庫"], ["LuIdCard", "行內 AD：權限綁群組"]];
     for (let i = 0; i < sup.length; i++) {
-      await badge(s, 2.4 + i * 3.6, 6.2, 0.6, sup[i][0], C.mute);
-      txt(s, sup[i][1], { x: 2.8 + i * 3.6, y: 6.0, w: 3.0, h: 0.4, fontSize: 14, color: C.body, valign: "middle" });
+      await badge(s, 6.0 + i * 3.6, 6.45, 0.56, sup[i][0], C.mute);
+      txt(s, sup[i][1], { x: 6.4 + i * 3.6, y: 6.25, w: 3.0, h: 0.4, fontSize: 14, color: C.body, valign: "middle" });
     }
+    // people log in with AD credentials through C3 / the OP menu; the cluster's permission service checks them in AD
+    arrow(s, 9.6, ky + kh + 0.02, 9.6, 6.15, C.mute, 1.5, "dash");
+    txt(s, "登入時向 AD 驗證帳密、查群組", { x: 9.75, y: ky + kh + 0.04, w: 3.0, h: 0.42, fontSize: 12, color: C.body, valign: "middle" });
   }
 
   // ================================================================ 4 prerequisites
   {
-    const s = plainSlide("開始前，銀行需備妥六件事", "這六項是銀行端要先準備的。最常卡關的是第二項：主機要能從行內的 RHEL 套件來源安裝作業系統套件，Satellite、內部鏡像或安裝光碟都可以。AD 只需要人員群組，加上一個沒有任何管理權限的唯讀查詢帳號；平台內部的服務一律用憑證識別，不在 AD 建帳號。套件 web server 由銀行管理，只需給我們一個能寫入網站目錄的部署帳號，並以銀行 CA 簽發的憑證提供 HTTPS。");
+    const s = plainSlide("開始前，銀行需備妥六件事", "這六項是銀行端要先準備的。最常卡關的是第二項：主機要能從行內的 RHEL 套件來源安裝作業系統套件與 Java（RHEL 自帶的 OpenJDK 21），Satellite、內部鏡像或安裝光碟都可以。AD 只需要人員群組，加上一個沒有任何管理權限的唯讀查詢帳號；平台內部的服務一律用憑證識別，不在 AD 建帳號。Confluent 套件要放進行內的內部套件庫：優先沿用行內既有的 Red Hat Satellite、JFrog Artifactory 或 Nexus 的 yum repo；行內沒有這類平台時，才另外準備一台 web server 提供。");
     const items = [
       ["LuServer", "RHEL 9 主機", "依元件準備\n規格與數量"],
-      ["LuDatabase", "OS 套件來源", "Satellite、鏡像\n或安裝光碟"],
+      ["LuDatabase", "OS 套件來源", "含 Java\nSatellite、鏡像\n或安裝光碟"],
       ["LuIdCard", "AD", "人員群組\n＋唯讀查詢帳號"],
-      ["LuServer", "套件伺服器", "web server\n部署帳號＋HTTPS"],
+      ["LuServer", "內部套件庫", "Satellite、\nArtifactory、Nexus\n無則用 web server"],
       ["LuStamp", "憑證窗口", "由銀行 CA\n簽發憑證"],
       ["LuFileText", "授權檔", "Confluent\n企業版授權"],
     ];
@@ -222,7 +231,7 @@ async function main() {
     const s = plainSlide("分工：銀行備妥環境，我方執行安裝", "實心圓是主要負責，空心圓是協助。銀行端主要負責提供環境：檔案交換、主機、OS 套件來源、AD 帳號與憑證簽發；其餘由我方執行，最後雙方共同驗收。");
     // [我方, 銀行, 銀行說明]  2 = 主責, 1 = 協助, 0 = 無
     const R = [
-      [2, 0, ""], [2, 1, "資安掃描"], [2, 2, "交換、web"], [2, 2, "提供主機"], [2, 1, "OS 套件"],
+      [2, 0, ""], [2, 1, "資安掃描"], [2, 2, "交換、套件庫"], [2, 2, "提供主機"], [2, 1, "OS、Java"],
       [1, 2, "CA 簽發"], [2, 0, ""], [2, 1, "AD 群組"], [2, 2, "共同驗收"],
     ];
     const lx = M, lw = 1.5, cx0 = lx + lw, cw = (W - M - cx0) / 9, top = 1.95;

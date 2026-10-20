@@ -3,7 +3,7 @@ STEP_DESC="OP menu on the bastion: fixed accounts (identity = own AD login via M
 
 step_inputs() {
   printf '%s\n' "${OPMENU:-off}" "${OPMENU_VERSION:-}" "${OPMENU_OS_USER:-}" "${OPMENU_NODE_USER:-}" \
-    "${OPMENU_TICKET_MODE:-}" "${OPMENU_CHANGE_WINDOW:-}" "$PROFILE"
+    "${OPMENU_TICKET_MODE:-}" "${OPMENU_CHANGE_WINDOW:-}" "$PROFILE" "$(install::java_home)"
   inv::hosts jump; jump::node_hosts
   find "$CPCTL_HOME/templates/default/opmenu" -type f -exec cat {} +
   cat "$PKI_DIR/ca.pem" "$PKI_DIR/${OPMENU_BREAKGLASS:-none}.crt" 2>/dev/null || true

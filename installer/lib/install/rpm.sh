@@ -61,19 +61,20 @@ install::packages_for() {
 
 # install::ensure <host> <install|upgrade> <cp version> <role>
 install::ensure() {
-  local host=$1 mode=$2 ver=$3 role=$4 specs=() p
-  specs+=("$JDK_PACKAGE=$JDK_VERSION")
+  local host=$1 mode=$2 ver=$3 role=$4 specs=() os=() p
+  # exact versions + versionlock: Confluent and the JDK (a JDK change means a planned rolling restart)
+  specs+=("$JDK_PACKAGE=$(install::jdk_version)")
   if [[ $role == c3 ]]; then
     specs+=("confluent-control-center-next-gen=$C3_VERSION")
-    for p in $PKGS_C3_OS; do specs+=("$p=$(install::os_dep_version "$p")"); done
+    os+=($PKGS_C3_OS)
   else
     for p in $(install::packages_for "$role"); do specs+=("$p=$ver"); done
   fi
   # the repo server needs httpd's TLS module to serve the internal repo over HTTPS
-  if repo::is_server "$host" && repo::tls; then
-    for p in ${PKGS_OPS_OS:-}; do specs+=("$p=$(install::os_dep_version "$p")"); done
-  fi
+  if repo::is_server "$host" && repo::tls; then os+=(${PKGS_OPS_OS:-}); fi
   remote::apply "$host" rpm_node::ensure "$mode" "${specs[@]}"
+  # other OS packages: any version the OS repo has, not locked (they follow the bank's OS patching)
+  if [[ ${#os[@]} -gt 0 ]]; then remote::apply "$host" os_node::pkgs_unlocked "${os[@]}"; fi
 }
 
 # OS dependencies are pinned to whatever version was imported into the internal repo.
@@ -99,7 +100,24 @@ install::bin() { printf '%s/%s' "$(install::bin_dir)" "$1"; }
 install::kafka_etc() { printf '/etc/kafka'; }            # shipped log4j2.yaml / tools-log4j2.yaml
 install::c3_bin_dir() { printf '/usr/bin'; }
 install::cli() { printf '/usr/bin/confluent'; }
-install::java_home() { printf '/usr/lib/jvm/temurin-21-jdk'; }
+install::java_home() { printf '%s' "${JDK_HOME:-/usr/lib/jvm/temurin-21-jdk}"; }
+
+# install::jdk_version -> exact JDK version to install: the OS repo's (JDK_SOURCE=os) or the pinned vendor one
+install::jdk_version() {
+  if [[ ${JDK_SOURCE:-vendor} == os ]]; then install::os_dep_version "$JDK_PACKAGE"; else printf '%s' "$JDK_VERSION"; fi
+}
+
+# install::jdk_hosts -> every host that runs Java (the hosts step 02 installs)
+install::jdk_hosts() { inv::hosts ops; inv::hosts controller; inv::hosts broker; inv::hosts rest; inv::hosts c3; inv::hosts jump; }
+
+# install::retire_jdk -> remove the JDK packages nothing runs on any more (JDK_RETIRED). Called by step 05 only
+# after every restart with the new JAVA_HOME passed its health gate.
+install::retire_jdk() {
+  [[ -n ${JDK_RETIRED:-} ]] || return 0
+  local h old=()
+  read -ra old <<<"$JDK_RETIRED"
+  for h in $(install::jdk_hosts); do remote::apply "$h" rpm_node::remove "${old[@]}"; done
+}
 install::tools_opts() { printf -- '-Dlog4j2.configurationFile=%s/tools-log4j2.yaml' "$(install::kafka_etc)"; }
 
 # install::unit <role> -> systemd unit shipped by the RPM

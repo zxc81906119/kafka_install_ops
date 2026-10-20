@@ -268,12 +268,12 @@ section("03", "離線軟體引進", "外網下載、驗證、交換、內部 rep
 
 {
   const s = base("03 離線引進");
-  title(s, "安裝包清單：Confluent、JDK、OS 相依與周邊元件全部離線帶入", "版本集中在 versions.env，下載腳本與安裝腳本讀同一份");
+  title(s, "安裝包清單：Confluent 離線帶入，JDK 與 OS 由行內提供", "版本集中在 versions.env，下載腳本與安裝腳本讀同一份");
   table(s, [
     ["套件", "版本", "來源", "完整性驗證", "安裝到"],
     ["Confluent Platform（RPM）", "8.3.2、8.2.4", "packages.confluent.io/rpm", "原廠 GPG", "controller、broker、REST、ops"],
     ["Control Center Next Gen", "2.6.1", "Confluent C3 repo", "原廠 GPG", "c3-01（不裝任何 CP 套件）"],
-    ["Temurin JDK", "21", "packages.adoptium.net", "原廠 GPG", "所有 Java 節點"],
+    ["OpenJDK（RHEL 自帶）", "21", "銀行的 RHEL repo（PoC：os-deps 模擬）", "OS 廠商 GPG", "所有 Java 節點"],
     ["OS 相依（含 chrony、firewalld）", "Rocky 9", "Rocky BaseOS / AppStream", "Rocky GPG", "依相依關係"],
     ["Prometheus JMX exporter", "1.0.1", "Maven Central", "官方 sha1 + sha256", "controller、broker、REST"],
     ["tar.gz 替代策略", "CP 8.3.2 / 8.2.4、C3 2.6.1、JDK", "Confluent archive、Adoptium", "sha256（JDK 有原廠 checksum）", "INSTALL_METHOD=tar 時"],
@@ -338,7 +338,7 @@ section("04", "自動化安裝", "cpctl：單一入口、冪等、可續跑、�
   title(s, "PKI：一個內部 CA、兩張共用憑證，legacy app 各一張 client 憑證", "正式環境改用行內 CA 簽發時，派送與輪替流程完全相同");
   card(s, M, 1.9, 3.9, 3.55, "內部 CA", "RSA 3072、效期 10 年\n\n簽發所有 leaf 憑證（1 年）\n\n信任庫是 bundle：輪替期間同時信任新舊 CA", { bar: C.accent, bodySize: 14 });
   card(s, M + 4.15, 1.9, 3.9, 3.55, "共用憑證", "kafka-internal：controller 與 broker 之間的 mTLS\n\ncp-server：所有對外 listener、MDS、REST、C3、LDAPS\n\nSAN 預先包含替換用的 kc04", { bar: C.teal, bodySize: 14 });
-  card(s, M + 8.3, 1.9, 3.83, 3.55, "派送與信任", "PKCS12 keystore / truststore\n\nOS 與 JDK 信任庫依 CA 指紋同步增刪\n\nMDS token 私鑰只派送加密版", { bar: C.teal, bodySize: 14 });
+  card(s, M + 8.3, 1.9, 3.83, 3.55, "派送與信任", "PKCS12 keystore / truststore\n\nOS 信任庫依 CA 指紋同步增刪；RHEL 的 JDK 直接沿用\n\nMDS token 私鑰只派送加密版", { bar: C.teal, bodySize: 14 });
   band(s, "共用內部憑證是需求指定；風險與輪替機制見「營運強化」與「上線準備」");
   s.addNotes("controller 與 broker 共用一張內部憑證是需求指定的；風險在後面的風險頁說明，並已提供輪替機制。正式環境改用行內 CA 時流程不變。");
 }

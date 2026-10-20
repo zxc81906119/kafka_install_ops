@@ -46,6 +46,21 @@ java_node::trust_ca() {
   local jh=$1 bundle=$2 cacerts kt d f fp alias want=() have
   kt=("$jh/bin/keytool" -cacerts -storepass changeit)
   cacerts=$(readlink -f "$jh/lib/security/cacerts")
+  # RHEL's OpenJDK reads the OS trust store (update-ca-trust writes it from the anchors cpctl already installs):
+  # never write into that generated file - check that every CA of the bundle is in it, by SHA-256 fingerprint
+  if [[ $cacerts == /etc/pki/ca-trust/extracted/* ]]; then
+    local list missing=0
+    list=$("${kt[0]}" -list "${kt[@]:1}" 2>/dev/null | tr -d ':' | tr 'A-F' 'a-f')
+    d=$(mktemp -d)
+    awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' "$bundle"
+    for f in "$d"/ca-*.pem; do
+      fp=$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
+      if [[ $list == *"$fp"* ]]; then _mark ok "JDK trusts $(openssl x509 -in "$f" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p') (OS trust store)"
+      else _mark warn "JDK (OS trust store $cacerts) lacks a CA of the bundle - run update-ca-trust"; missing=1; fi
+    done
+    rm -rf "$d"
+    return "$missing"
+  fi
   d=$(mktemp -d)
   awk -v d="$d" '/BEGIN CERTIFICATE/ {n++} {print > (d "/ca-" n ".pem")}' "$bundle"
   for f in "$d"/ca-*.pem; do

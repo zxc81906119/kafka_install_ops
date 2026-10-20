@@ -109,6 +109,11 @@ core_confirm() { # core_confirm "<將做什麼>"
 _core_run() { # 固定流程(外面包一層 core_run 負責放掉並行鎖)
   local id="$1"; shift
   [ -n "${ACT_TITLE[$id]:-}" ] || { echo "沒有這個項目:$id"; return 1; }
+  # 選單上看不到的項目(你的權限不足)不能執行:直接輸入編號一樣擋下並記錄
+  if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then
+    echo "${CR}項目 $id 不在你的選單內(你的 AD 群組沒有這項權限),請依 ticket 申請。${C0}"
+    core_log DENIED "$id ${ACT_TITLE[$id]}" "not in menu"; return 1
+  fi
   echo; echo "${CB}[$id] ${ACT_TITLE[$id]}${C0}  (${TIER_NAME[${ACT_TIER[$id]}]})"
   [ -n "${ACT_DESC[$id]}" ] && echo "  ${ACT_DESC[$id]}"
   OP_TICKET=""
@@ -143,13 +148,58 @@ _core_run() { # 固定流程(外面包一層 core_run 負責放掉並行鎖)
   return $rc
 }
 
+# ── 動態選單(2026-10-19)──
+# core_item_authz <id> -> 這個項目需要的權限 <資源類型>:<名稱>:<操作>;空 = 不限制。設定見 OPMENU_MENU_AUTHZ(後面的覆蓋前面的)
+core_item_authz() {
+  local id="$1" tok k v spec=""
+  for tok in $OPMENU_MENU_AUTHZ; do
+    k="${tok%%=*}"; v="${tok#*=}"
+    if [ "$k" = "$id" ] || { [[ "$k" == *'*' ]] && [ "${ACT_TIER[$id]}" = "${k%\*}" ]; }; then spec="$v"; fi
+  done
+  case "$spec" in
+    HOST) spec="$OPMENU_HOST_ACTION_AUTHZ";; ADMIN) spec="$OPMENU_ADMIN_AUTHZ";; AUDIT) spec="$OPMENU_AUDIT_AUTHZ";; -) spec="";;
+  esac
+  printf '%s' "$spec"
+}
+
+# core_menu_permissions -> OP_VISIBLE[<id>] = 1 / 0。登入後只問一次:每種權限一個 action,一個請求,用本人的 token
+# (MDS 會展開 AD 群組,只能問自己)。問不到或回應看不懂 = 全部顯示並提示:顯示寬鬆,執行時照樣檢查。
+core_menu_permissions() {
+  declare -gA OP_VISIBLE=(); OP_MENU_NOTE=""
+  local id spec i rt rn op actions="" out answer
+  for id in "${ACT_IDS[@]}"; do OP_VISIBLE[$id]=1; done
+  [ "${OPMENU_MENU_FILTER:-1}" = 1 ] || return 0
+  local specs=(); declare -A seen=() ok=()
+  for id in "${ACT_IDS[@]}"; do
+    spec=$(core_item_authz "$id")
+    [ -n "$spec" ] && [ -z "${seen[$spec]:-}" ] && { seen[$spec]=1; specs+=("$spec"); }
+  done
+  [ ${#specs[@]} -gt 0 ] || return 0
+  for spec in "${specs[@]}"; do
+    IFS=: read -r rt rn op <<< "$spec"
+    actions+=$(printf '%s{"resourceType":"%s","resourceName":"%s","operation":"%s","scope":{"clusters":{"kafka-cluster":"%s"}}}' \
+      "${actions:+,}" "$rt" "$rn" "$op" "${OPMENU_KAFKA_CLUSTER_ID:-}")
+  done
+  out=$(be_mds PUT /security/1.0/authorize "$(printf '{"userPrincipal":"User:%s","actions":[%s]}' "$OP_USER" "$actions")" 2>/dev/null)
+  answer=$(printf '%s\n' "$out" | grep -o '^\[.*\]' | head -1 | tr -d '[]" ')
+  local res=(); IFS=, read -ra res <<< "$answer"
+  if [[ "$out" != *'HTTP 200'* ]] || [ ${#res[@]} -ne ${#specs[@]} ]; then
+    OP_MENU_NOTE="無法取得你的權限清單,先顯示全部項目(執行時仍會檢查權限)"; core_log MENU_ALL "menu" "authorize failed"; return 0
+  fi
+  for i in "${!specs[@]}"; do [ "${res[$i]}" = ALLOWED ] && ok[${specs[$i]}]=1; done
+  for id in "${ACT_IDS[@]}"; do
+    spec=$(core_item_authz "$id"); [ -z "$spec" ] || [ -n "${ok[$spec]:-}" ] || OP_VISIBLE[$id]=0
+  done
+}
+
 core_menu() {
   while true; do
     echo; echo "${CB}=== Kafka 維運操作選單  [${CR}${OPMENU_ENV_LABEL}${C0}${CB}]  後端:$(be_name)  操作者:${OP_USER} ===${C0}"
+    [ -n "${OP_MENU_NOTE:-}" ] && echo "${CY}${OP_MENU_NOTE}${C0}"
     local t
     for t in 1 2 3 4; do
       local any=0
-      for id in "${ACT_IDS[@]}"; do [ "${ACT_TIER[$id]}" = "$t" ] || continue; [ $any = 0 ] && { echo "${CC}-- ${TIER_NAME[$t]} --${C0}"; any=1; }
+      for id in "${ACT_IDS[@]}"; do [ "${ACT_TIER[$id]}" = "$t" ] || continue; [ "${OP_VISIBLE[$id]:-1}" = 1 ] || continue; [ $any = 0 ] && { echo "${CC}-- ${TIER_NAME[$t]} --${C0}"; any=1; }
         printf '  %s  %s%s\n' "$id" "${ACT_TITLE[$id]}" "$([ "${ACT_TICKET[$id]}" = y ] && [ "$OPMENU_TICKET_MODE" != none ] && echo '  (需 ticket)')"; done
     done
     echo "  0  離開"
@@ -165,11 +215,16 @@ core_menu() {
 
 core_init() {
   if [ "${1:-}" = --list ]; then for id in "${ACT_IDS[@]}"; do printf '%s\t%s\t%s\t%s\t%s\n' "$id" "${TIER_NAME[${ACT_TIER[$id]}]}" "${ACT_TICKET[$id]}" "${ACT_CONFIRM[$id]}" "${ACT_TITLE[$id]}"; done; exit 0; fi
-  if [ "${1:-}" = --run ]; then shift; core_identity; core_run "$@"; exit $?; fi
+  if [ "${1:-}" = --run ]; then
+    shift; core_identity; core_menu_permissions
+    # --run menu:只印出這個人看得到的項目編號(驗收用)
+    if [ "${1:-}" = menu ]; then local id v=""; for id in "${ACT_IDS[@]}"; do [ "${OP_VISIBLE[$id]}" = 1 ] && v+="$id "; done; printf '@@MENU@@ %s\n' "${v% }"; exit 0; fi
+    core_run "$@"; exit $?
+  fi
   # 閒置逾時用 read -t;Git Bash(MSYS/Cygwin)的 read -t 對終端機會立刻回傳 EOF(實測 bash 5.3.15),所以那裡不用;OPMENU_IDLE_TIMEOUT=0 也可關閉
   OP_READ_TIMEOUT=(); if [ "${OPMENU_IDLE_TIMEOUT:-0}" -gt 0 ] && [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* ]]; then OP_READ_TIMEOUT=(-t "$OPMENU_IDLE_TIMEOUT"); fi
   OP_READ_EDIT=(); [ -t 0 ] && OP_READ_EDIT=(-e)   # 終端機互動時用行編輯(方向鍵不會變成亂碼進到輸入裡)
-  core_identity; core_log LOGIN "login" ""; core_menu; core_log LOGOUT "logout" ""
+  core_identity; core_log LOGIN "login" ""; core_menu_permissions; core_menu; core_log LOGOUT "logout" ""
 }
 
 # 登入後推算沒填的設定(opmenu.conf 有填的一律優先,不覆蓋)。推算不出來就明確報錯,不猜。

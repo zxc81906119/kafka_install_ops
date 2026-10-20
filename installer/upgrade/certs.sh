@@ -27,7 +27,7 @@ certs::rollout() {
   step::run 04_ad_bootstrap
   step::run 05_configure
   # bastion: truststore of the new bundle, re-issued break-glass certificate
-  if jump::enabled; then step::run 11_opmenu; fi
+  if jump::enabled; then step::run 10_opmenu; fi
 }
 
 # certs::served -> every TLS endpoint presents the certificate currently on the ops host

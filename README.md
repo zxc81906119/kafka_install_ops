@@ -7,7 +7,7 @@
 | Confluent Platform (Confluent Server, KRaft) | 8.3.2（升級演練起點 8.2.4） | controller ×3（動態 quorum）、broker ×4 |
 | REST Proxy | 8.3.2 | ×2，前置 Nginx L4 負載平衡 |
 | Control Center Next Gen（內建 Prometheus / Alertmanager） | 2.6.1 | ×1 |
-| Eclipse Temurin JDK | 21 | 所有 Java 節點 |
+| OpenJDK（RHEL 自帶 `java-21-openjdk-headless`） | 21 | 所有 Java 節點；由銀行的 RHEL repo 提供（`JDK_SOURCE=os`；tar 方式另用 Temurin 壓縮檔） |
 | 模擬 AD（Samba AD DC） | Debian 12 | ×1（環境周邊） |
 
 ## 架構
@@ -49,7 +49,7 @@ cpnet (internal, 無外網) ─────────────────�
 ```
 windows/        Git Bash：環境控制 poc.sh、外網下載 download-packages.sh、驗證 verify-packages.sh、掃描 hook scan.d/、
                 OP menu 打包 package-opmenu.sh
-opmenu/         堡壘機上的維運操作選單（OP menu）原始碼；經離線引進流程打包、由 cpctl step 11 部署
+opmenu/         堡壘機上的維運操作選單（OP menu）原始碼；經離線引進流程打包、由 cpctl step 10 部署
 docker/         模擬主機 image（node / ops / ad / lb）與 compose.yml（jump01 = 模擬堡壘機）
 packages/       落地區（不進版控）：RPM、GPG key、SHA256SUMS、manifest、驗證報告
 installer/      掛載到 ops01:/opt/cp-installer
@@ -64,7 +64,7 @@ installer/      掛載到 ops01:/opt/cp-installer
   upgrade/      升級、controller 替換、uninstall
   templates/    設定檔模板（依版本 templates/<major.minor>/，無則 default/）
   tools/        lint.sh（shellcheck + shfmt）、load.sh（演練用持續流量）
-docs/           全流程簡報（deck-src/ 產生）、手動安裝手冊 Confluent-手動安裝手冊.docx（manual-src/ 產生）
+docs/           全流程簡報（deck-src/ 產生）、手動安裝手冊 Confluent-手動安裝手冊.docx（manual-src/ 產生）、給客戶的主機準備清單 Confluent-主機準備清單.xlsx（checklist-src/ 由 versions.env 產生：cd docs/checklist-src && npm ci && node build.js）
 ```
 
 想知道 cpctl 每一步實際做了什麼，請看 `docs/Confluent-手動安裝手冊.docx`：離線引進、步驟 00–11、tar.gz 安裝方式都拆成不經 cpctl 的手動指令（指令、設定檔內容、驗證、對應的 cpctl 函式），並附在備用節點 kc03 上實際手動跑過的紀錄。
@@ -155,7 +155,7 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 |---|---|---|
 | Secret Protection | 所有 `.properties` 的密碼（含 JAAS 內的 password）以 `confluent secret file encrypt` 加密成 `${securepass:...}`；master key 只存在操作機（0600）與各節點 root-only 的 `service.env` | 全節點掃描 0 筆明文密碼；重跑 changed=0 |
 | MDS token 私鑰 | 節點只拿到 PKCS#8 AES-256 加密版，passphrase 本身也經 Secret Protection | 舊的明文私鑰會被自動移除 |
-| 憑證輪替 | leaf：`certs rotate`；CA：三階段（add → switch → retire），過程中所有節點同時信任新舊 CA；JDK / OS trust store 依 bundle 指紋同步 | 2026-10-17 以修正後的負載工具量測：銀行 root 三階段輪替（cpctl）**4,530 筆 0 遺失、REST 817 次 0 失敗**；手動程序的結果與重新核對見手冊附錄 A.3、A.4（舊版負載報告無法區分各次執行，早先的數字不再引用） |
+| 憑證輪替 | leaf：`certs rotate`；CA：三階段（add → switch → retire），過程中所有節點同時信任新舊 CA；OS trust store 依 bundle 指紋同步（RHEL 的 JDK 直接讀 OS trust store，cpctl 只檢查） | 2026-10-17 以修正後的負載工具量測：銀行 root 三階段輪替（cpctl）**4,530 筆 0 遺失、REST 817 次 0 失敗**；手動程序的結果與重新核對見手冊附錄 A.3、A.4（舊版負載報告無法區分各次執行，早先的數字不再引用） |
 | 銀行 CA | `PKI_MODE=external`：CSR 交銀行簽、回覆經檢查才匯入（缺 clientAuth、缺中繼、SAN 不符、私鑰不符都拒絕且什麼都不換）；`.crt` / `.p12` 帶中繼 CA；信任錨點 `cpctl certs trust` | cp-poc 自建 CA → 銀行 CA 三階段遷移；銀行換 root（G1 → G2）三階段：4,530 筆 0 遺失、REST 817 次 0 失敗；舊 CA 簽的憑證被拒（exit 56） |
 | License 監控 | 從 `conf/license.txt` 或 `_confluent-command` 讀 JWT 解出到期日；30 天內警告、過期即 verify 失敗 | `cpctl license status` |
 | Log 保留 | log4j2 只輪替不刪除 → `systemd-tmpfiles` 每日刪除 `LOG_RETENTION_DAYS`（預設 14 天）前的檔案；journald 上限 1G | step 01 |
@@ -192,7 +192,7 @@ packages.sh   packages.sh     唯讀掛載到 ops01）   import          + versi
 - 主機動作：碰 node 之前，選單以本人 token 呼叫 MDS `PUT /security/1.0/authorize`（預設要求叢集層級的 Topic Describe，即 Operator 以上）。MDS 會展開 AD 群組，而且只能問自己。
 - 紀錄同時送 syslog（共用帳號改得到本機檔案，改不到 SIEM）。
 
-**部署（離線引進）**：`windows/package-opmenu.sh` 打包 `opmenu/` → `packages/tools/opmenu-<日期>.<sha8>.tar.gz`（版本由內容決定，內容不同就不會覆蓋）→ `verify-packages.sh` → `cpctl repo import` → `cpctl step 11_opmenu`。版本切換是 `/opt/opmenu` symlink，舊版保留可切回。
+**部署（離線引進）**：`windows/package-opmenu.sh` 打包 `opmenu/` → `packages/tools/opmenu-<日期>.<sha8>.tar.gz`（版本由內容決定，內容不同就不會覆蓋）→ `verify-packages.sh` → `cpctl repo import` → `cpctl step 10_opmenu`。版本切換是 `/opt/opmenu` symlink，舊版保留可切回。
 
 **對 opmenu 的修補（2026-10-16，原始專案同步修改）**：主機類動作的權限閘門；item 21（重啟單一 broker）的前置檢查失敗時拒絕（原本會放行）。
 

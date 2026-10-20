@@ -1,7 +1,7 @@
 # Kafka 維運操作選單(OP menu)
 
 > **在本專案中的位置(2026-10-16 起)**:這個目錄是 OP menu 的正式來源,和安裝工具 cpctl 放在同一個專案。
-> - 部署走離線引進流程:`windows/package-opmenu.sh` 打包成 `packages/tools/opmenu-<日期>.<sha8>.tar.gz` → `cpctl repo import` → `cpctl step 11_opmenu` 安裝到堡壘機(`/opt/opmenu`),設定檔 `/etc/opmenu/opmenu.conf` 由 cpctl 依 inventory 產生。
+> - 部署走離線引進流程:`windows/package-opmenu.sh` 打包成 `packages/tools/opmenu-<日期>.<sha8>.tar.gz` → `cpctl repo import` → `cpctl step 10_opmenu` 安裝到堡壘機(`/opt/opmenu`),設定檔 `/etc/opmenu/opmenu.conf` 由 cpctl 依 inventory 產生。
 > - 下文提到的 `demo/rocky/`、`test-all.sh` 等,是原始開發專案(docker demo 叢集)的整合測試,不在本專案;本專案以 `test-host-gate.sh`(不需叢集)與 `cpctl verify` 的「OP menu」段落驗證。
 
 給操作員(OP)用的文字選單:登入後只能從選單執行審核過的作業,每次執行留紀錄。

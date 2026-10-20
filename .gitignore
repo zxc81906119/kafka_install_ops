@@ -29,3 +29,6 @@ docker/manual/secrets.env
 
 # Simulated bank PKI (windows/bank-ca.sh): CA private keys
 bank-ca/
+
+# Delivery sets built by windows/make-delivery.sh (copies of packages/)
+delivery/

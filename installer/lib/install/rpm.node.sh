@@ -39,7 +39,8 @@ rpm_node::ensure() {
     [[ -n $cur ]] && unlock+=("$name")
   done
   if [[ ${#todo[@]} -gt 0 && ${CPCTL_CHECK:-0} != 1 ]]; then
-    local dnf=(dnf -y -q --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False)
+    # --refresh: the repo may have been republished minutes ago, within the cached metadata's lifetime
+    local dnf=(dnf -y -q --refresh --disablerepo='*' --enablerepo='cp-internal-*' --setopt=install_weak_deps=False)
     # the pulled-in confluent-* packages are locked too (see rpm_node::lock_deps): unlock them for the move
     local deps=()
     mapfile -t deps < <(rpm_node::_confluent_installed | sed 's/-[^-]*-[^-]*$//')
@@ -89,4 +90,6 @@ rpm_node::remove() {
   mapfile -t deps < <(rpm_node::_confluent_installed | sed 's/-[^-]*-[^-]*$//')
   dnf versionlock delete "${present[@]}" "${deps[@]}" >/dev/null 2>&1 || true
   dnf -y -q remove "${present[@]}"
+  # removing something else (e.g. the retired JDK) must not leave the remaining confluent-* unpinned
+  rpm_node::lock_deps
 }
