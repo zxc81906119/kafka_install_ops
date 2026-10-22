@@ -104,6 +104,8 @@
 | 15 Conjur（延伸） | 40 分 | 下載機建 jar 要 15–20 分；之後是改設定與滾動重啟 |
 | 16 Secret Protection（延伸） | 20 分 | 加密、派送、兩次滾動重啟 |
 | 17 OP menu（延伸） | 20 分 | 保管庫加身分、裝選單、改 sudoers、三種身分試跑 |
+| 18 JMX exporter（延伸） | 20 分 | 派送、滾動重啟、行內 Prometheus 驗證 |
+| 19 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
 
 ## 0.5 自己把 lab 建起來
 
@@ -2077,7 +2079,7 @@ Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~
 
 # 14. 終點：小安的檢查清單
 
-到這裡平台已經能用。後面是**延伸站**：第 15、16 站把密碼搬進銀行的 CyberArk（二選一，看銀行有沒有 Conjur）；第 17 站裝維運選單。
+到這裡平台已經能用。後面是**延伸站**：第 15、16 站把密碼搬進銀行的 CyberArk（二選一，看銀行有沒有 Conjur）；第 17 站裝維運選單；第 18 站讓行內 Prometheus 抓指標；第 19 站稽核日誌。
 
 @role 小安 | ops02 | cpadmin
 
@@ -3079,3 +3081,440 @@ kb04 full sudo restored for the rest of the lab
 ```
 
 > 最後一行只是 lab 的事：後面的章節還需要 cpadmin 的全權。正式環境各主機只留 `cpadmin-ops` 那份窄規則。
+
+# 18. 第十八站：讓行內的 Prometheus 抓指標（JMX exporter）
+
+![jmx]
+
+C3 有自己的 Prometheus，但那是給 C3 用的。銀行的監控中心要自己的 Prometheus 抓每台 controller、broker、REST Proxy 的指標，再接自己的告警。做法是在每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），在 7071 開一個 HTTPS 端點，basic auth 保護；行內 Prometheus 拿我們產生的 scrape 設定與告警規則去接。
+
+| 誰 | 做什麼 |
+|---|---|
+| 小安 | exporter jar 已在第 1.4 站帶進來；產抓取密碼、設定檔，派送、滾動重啟；產給銀行的 scrape 設定、告警規則、根憑證 |
+| 銀行監控團隊 | 把三個檔放進自己的 Prometheus，確認 9 個 target 都是 up |
+
+## 18.1 抓取密碼與設定檔
+
+@role 小安 | ops02 | cpadmin
+
+exporter 的設定檔只存密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼則只能明文寫在這個 YAML 裡（exporter 不支援 Secret Protection），所以檔案一律 root:confluent 0640。controller 沒有 cp-server.p12，用 kafka-internal.p12：
+
+```bash
+install -d -m 0700 ~/monitoring && (umask 077; [ -s ~/secrets/jmx-scrape.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/jmx-scrape.pass; [ -s ~/secrets/jmx-scrape.salt ] || openssl rand -hex 16 > ~/secrets/jmx-scrape.salt) && SALT=$(cat ~/secrets/jmx-scrape.salt) && HASH=$(printf '%s:%s' "$SALT" "$(cat ~/secrets/jmx-scrape.pass)" | sha256sum | cut -d' ' -f1) && for ks in cp-server kafka-internal; do (umask 077; cat > ~/monitoring/jmx-header-$ks.yml <<EOF
+# Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256 (no plaintext scrape password here)
+httpServer:
+  ssl:
+    keyStore:
+      filename: /etc/confluent/ssl/$ks.p12
+      password: $(cat ~/pki/store.pass)
+      type: PKCS12
+    certificate:
+      alias: $ks
+  authentication:
+    basic:
+      username: prometheus
+      passwordHash: $HASH
+      algorithm: SHA-256
+      salt: $SALT
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+EOF
+); done; unset SALT HASH; echo "headers: $(ls ~/monitoring | tr '
+' ' ')"
+```
+
+```out
+headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml 
+```
+
+要抓哪些 MBean、改成什麼名字，controller／broker 一份、REST Proxy 一份。**整段貼到 EOF**：
+
+```bash
+cat > ~/monitoring/rules-kafka.yml <<'EOF'
+# Confluent Server (controllers + brokers): only the MBean domains alerting and capacity planning need
+# (JVM metrics jvm_* come from the exporter's built-in collectors)
+includeObjectNames:
+  - "kafka.server:*"
+  - "kafka.controller:*"
+  - "kafka.network:type=RequestMetrics,name=RequestsPerSec,*"
+  - "kafka.network:type=RequestMetrics,name=TotalTimeMs,*"
+  - "kafka.network:type=SocketServer,*"
+  - "kafka.log:type=LogFlushStats,*"
+excludeObjectNames:
+  - "kafka.server:type=*,clientId=*,*"
+rules:
+  # ...PerSec meters -> counters
+  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)PerSec\w*, (.+)=(.+), (.+)=(.+)><>Count'
+    name: kafka_$1_$2_$3_total
+    type: COUNTER
+    labels: { "$4": "$5", "$6": "$7" }
+  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)PerSec\w*, (.+)=(.+)><>Count'
+    name: kafka_$1_$2_$3_total
+    type: COUNTER
+    labels: { "$4": "$5" }
+  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)PerSec\w*><>Count'
+    name: kafka_$1_$2_$3_total
+    type: COUNTER
+  # meters without PerSec: RequestHandlerAvgIdlePercent (0..1, one-minute rate)
+  - pattern: 'kafka.server<type=KafkaRequestHandlerPool, name=RequestHandlerAvgIdlePercent><>OneMinuteRate'
+    name: kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent
+    type: GAUGE
+  # request latency percentiles
+  - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(.+)><>(\d+)thPercentile'
+    name: kafka_network_requestmetrics_totaltimems
+    type: GAUGE
+    labels: { request: "$1", quantile: "0.$2" }
+  # gauges: UnderReplicatedPartitions, ActiveControllerCount, OfflinePartitionsCount, ...
+  - pattern: 'kafka.(\w+)<type=(.+), name=(.+), (.+)=(.+)><>Value'
+    name: kafka_$1_$2_$3
+    type: GAUGE
+    labels: { "$4": "$5" }
+  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)><>Value'
+    name: kafka_$1_$2_$3
+    type: GAUGE
+  - pattern: 'kafka.network<type=SocketServer><>([a-z-]+): (.+)'
+    name: kafka_network_socketserver_$1
+    type: GAUGE
+EOF
+cat > ~/monitoring/rules-rest.yml <<'EOF'
+# REST Proxy: Jetty / REST request metrics + JVM
+includeObjectNames:
+  - "kafka.rest:type=jetty-metrics,*"
+  - "kafka.rest:type=jersey-metrics,*"
+rules:
+  - pattern: 'kafka.rest<type=jetty-metrics><>([a-z-]+): (.+)'
+    name: kafka_rest_jetty_$1
+    type: GAUGE
+  - pattern: 'kafka.rest<type=jersey-metrics><>([a-z0-9.-]+): (.+)'
+    name: kafka_rest_jersey_$1
+    type: GAUGE
+EOF
+echo "rules: kafka $(grep -c pattern ~/monitoring/rules-kafka.yml) patterns, rest $(grep -c pattern ~/monitoring/rules-rest.yml) patterns"
+```
+
+```out
+rules: kafka 8 patterns, rest 2 patterns
+```
+
+## 18.2 派送 jar 與設定、掛上 javaagent
+
+@role 小安 | ops02 | cpadmin
+
+每台：jar 到 `/opt/jmx-exporter/`、設定檔 = 標頭 + 規則、第四個 drop-in 把 `-javaagent` 放進 `KAFKA_OPTS`（REST Proxy 是 `KAFKAREST_OPTS`）。7071 在第 7 站的防火牆已經開了：
+
+```bash
+JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do case $h in kc*) ks=kafka-internal; rules=rules-kafka; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; kb*) ks=cp-server; rules=rules-kafka; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; rest*) ks=cp-server; rules=rules-rest; cfg=/etc/confluent/kafka-rest/jmx-exporter.yml; u=confluent-kafka-rest; var=KAFKAREST_OPTS;; esac; cat ~/monitoring/jmx-header-$ks.yml ~/monitoring/$rules.yml > /tmp/jmx-$h.yml && scp -q ~/landing/tools/$JAR /tmp/jmx-$h.yml $h.poc.lab:/tmp/ && rm -f /tmp/jmx-$h.yml && ssh $h.poc.lab "sudo install -d -m 0755 /opt/jmx-exporter && sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-$h.yml $cfg && rm -f /tmp/$JAR /tmp/jmx-$h.yml && printf '[Service]\nEnvironment=\"$var=-javaagent:/opt/jmx-exporter/$JAR=7071:$cfg\"\n' | sudo tee /etc/systemd/system/$u.service.d/40-jmx.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\\n' | grep -o 'javaagent:[^ =]*' | head -1) \$(sudo wc -l $cfg | cut -d' ' -f1) lines\""; done
+```
+
+```out
+kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 61 lines
+（9 行；REST Proxy 是 28 lines）
+```
+
+> 陷阱：落地區的檔案是唯讀的（第 2 站 `chmod a-w`），`scp` 到 `/tmp` 會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
+
+## 18.3 滾動重啟、驗證端點
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"; done
+```
+
+```out
+kc01 active
+（3 行）
+kb01 MDS=200
+（4 行）
+rest01 REST=200
+rest02 REST=200
+```
+
+沒帶帳密要被拒（401），帶了要看到指標；憑證鏈用銀行根憑證驗（不用 -k）：
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do u=https://$h.poc.lab:7071/metrics; a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert $CA $u); m=$(curl -s --max-time 20 --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" $u | grep -cE '^(kafka_|jvm_)'); printf '%-7s anon=%s metrics=%s\n' $h $a $m; done
+```
+
+```out
+kc01    anon=401 metrics=681
+kb01    anon=401 metrics=1054
+rest01  anon=401 metrics=920
+（9 行，anon 都是 401；controller 約 680、broker 約 1000、REST 約 920 個指標）
+```
+
+## 18.4 給銀行監控團隊的三個檔
+
+@role 小安 | ops02 | cpadmin
+
+scrape 設定（三個 job、HTTPS、basic auth 的密碼放檔案不放設定裡）、告警規則、根憑證；抓取密碼另外經保管庫交付（lab 直接給檔）：
+
+```bash
+cat > ~/monitoring/prometheus-scrape.yml <<'EOF'
+# Confluent Platform targets for the bank's Prometheus (merge under scrape_configs)
+# Files next to prometheus.yml: confluent/ca.pem (bank root CA), confluent/scrape.pass (basic-auth password, 0600)
+scrape_configs:
+  - job_name: confluent-controller
+    scheme: https
+    scrape_interval: 30s
+    tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
+    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
+    static_configs: [ { targets: [ "kc01.poc.lab:7071", "kc02.poc.lab:7071", "kc03.poc.lab:7071" ] } ]
+  - job_name: confluent-broker
+    scheme: https
+    scrape_interval: 30s
+    tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
+    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
+    static_configs: [ { targets: [ "kb01.poc.lab:7071", "kb02.poc.lab:7071", "kb03.poc.lab:7071", "kb04.poc.lab:7071" ] } ]
+  - job_name: confluent-rest
+    scheme: https
+    scrape_interval: 30s
+    tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
+    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
+    static_configs: [ { targets: [ "rest01.poc.lab:7071", "rest02.poc.lab:7071" ] } ]
+rule_files: [ /etc/prometheus/confluent/alert-rules.yml ]
+EOF
+cat > ~/monitoring/alert-rules.yml <<'EOF'
+# alert rules for the bank's Prometheus (metrics from the JMX exporter javaagent).
+# Thresholds follow Confluent's monitoring guidance; tune "for:" to the bank's paging policy.
+# Consumer-group lag is not a broker JMX metric: use Control Center (built in) or a lag exporter.
+groups:
+  - name: confluent-platform
+    rules:
+      - alert: KafkaTargetDown
+        expr: up{job=~"confluent-.*"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }} ({{ $labels.job }}) cannot be scraped"
+      - alert: KafkaUnderReplicatedPartitions
+        expr: sum by (instance) (kafka_server_replicamanager_underreplicatedpartitions) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: {{ $value }} under-replicated partitions"
+      - alert: KafkaUnderMinIsrPartitions
+        expr: sum by (instance) (kafka_server_replicamanager_underminisrpartitioncount) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }}: partitions below min.insync.replicas (producers with acks=all fail)"
+      - alert: KafkaOfflinePartitions
+        expr: max(kafka_controller_kafkacontroller_offlinepartitionscount) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $value }} partitions have no leader"
+      - alert: KafkaActiveControllerCount
+        expr: sum(kafka_controller_kafkacontroller_activecontrollercount{job="confluent-controller"}) != 1
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "KRaft active controller count is {{ $value }} (expected exactly 1)"
+      - alert: KafkaRequestHandlerSaturated
+        expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent) < 0.3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: request handler threads less than 30% idle"
+      - alert: KafkaNetworkProcessorSaturated
+        expr: avg by (instance) (kafka_network_socketserver_networkprocessoravgidlepercent) < 0.3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: network threads less than 30% idle"
+      - alert: KafkaProduceLatencyHigh
+        expr: max by (instance) (kafka_network_requestmetrics_totaltimems{request="Produce",quantile="0.99"}) > 500
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: produce p99 {{ $value }} ms"
+      - alert: JvmHeapHigh
+        expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.9
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: JVM heap above 90%"
+EOF
+cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/ca.pem && (umask 077; cp ~/secrets/jmx-scrape.pass ~/monitoring/scrape.pass) && echo "for the bank: $(ls ~/monitoring | grep -vE 'jmx-header|rules-' | tr '\n' ' ')"
+```
+
+```out
+for the bank: alert-rules.yml ca.pem prometheus-scrape.yml scrape.pass
+```
+
+## 18.5 銀行的 Prometheus 接上來
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+lab 用一個 Prometheus 容器當「行內 Prometheus」，接在 labnet（這個容器不在 compose 裡，主機名要用 `--add-host` 給它），載入小安給的三個檔，等一輪抓取後看 9 個 target 的狀態與規則是否載入：
+
+```bash
+cd ~/kafka-lab && mkdir -p bank-prometheus/confluent && for f in prometheus-scrape.yml alert-rules.yml ca.pem scrape.pass; do docker cp lab-ops02-1:/home/cpadmin/monitoring/$f "$(cygpath -m "$PWD/bank-prometheus/confluent/$f")"; done && mv bank-prometheus/confluent/prometheus-scrape.yml bank-prometheus/prometheus.yml && MSYS_NO_PATHCONV=1 docker run -d --name bank-prometheus --network lab_labnet --add-host kc01.poc.lab:172.35.0.21 --add-host kc02.poc.lab:172.35.0.22 --add-host kc03.poc.lab:172.35.0.23 --add-host kb01.poc.lab:172.35.0.31 --add-host kb02.poc.lab:172.35.0.32 --add-host kb03.poc.lab:172.35.0.33 --add-host kb04.poc.lab:172.35.0.34 --add-host rest01.poc.lab:172.35.0.41 --add-host rest02.poc.lab:172.35.0.42 -v "$(cygpath -m "$PWD/bank-prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(cygpath -m "$PWD/bank-prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 >/dev/null && sleep 45 && docker run --rm --network lab_labnet lab-node:1 bash -c 'curl -s http://bank-prometheus:9090/api/v1/targets | python3 -c "import json,sys; t=json.load(sys.stdin)[\"data\"][\"activeTargets\"]; print(\"targets up:\", sum(1 for x in t if x[\"health\"]==\"up\"), \"/\", len(t)); [print(\"  down:\", x[\"labels\"][\"instance\"], x[\"lastError\"][:80]) for x in t if x[\"health\"]!=\"up\"]"; curl -s http://bank-prometheus:9090/api/v1/rules | python3 -c "import json,sys; g=json.load(sys.stdin)[\"data\"][\"groups\"]; print(\"alert rules:\", sum(len(x[\"rules\"]) for x in g))"; curl -s "http://bank-prometheus:9090/api/v1/query?query=kafka_server_replicamanager_underreplicatedpartitions" | python3 -c "import json,sys; r=json.load(sys.stdin)[\"data\"][\"result\"]; print(\"under-replicated per broker:\", [x[\"value\"][1] for x in r])"'
+```
+
+```out
+targets up: 9 / 9
+alert rules: 9
+under-replicated per broker: ['0', '0', '0', '0']
+```
+
+看完就收掉（正式環境這台是銀行的，不會收）：
+
+```bash
+docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
+```
+
+```out
+bank-prometheus removed
+```
+
+> 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3 或另外接 lag exporter。
+
+# 19. 第十九站：稽核日誌（audit log）
+
+![audit]
+
+Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了什麼、准還是拒，每一筆都是一個事件，寫進 Kafka 自己的 topic。預設是用 broker 自己的身分寫、全部塞同一個 topic。銀行要的是：用一個**專用的低權限帳號**寫、**敏感 topic 的事件分開放、留久一點**、排除平台自己的雜訊。這一站把這三件事做上去，密碼一樣進 Secret Protection。
+
+| 誰 | 做什麼 |
+|---|---|
+| 小安 | 建寫入帳號與權限、改 controller／broker 的設定（加密、派送）、滾動重啟、製造允許與拒絕的事件來驗證 |
+| 銀行稽核 | 之後用 OP menu 的 43／45，或自己的 SIEM 讀這兩個 topic |
+
+## 19.1 專用的寫入帳號
+
+@role 小安 | ops02 | cpadmin
+
+`confluent-audit` 是 SCRAM 帳號，只能寫與管理 `confluent-audit-log-events` 開頭的 topic（prefix 同時涵蓋 `_sensitive`），不是 super user：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && BS=kb01.poc.lab:9094 && (umask 077; [ -s ~/secrets/confluent-audit.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/confluent-audit.pass) && P=$(cat ~/secrets/confluent-audit.pass) && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name confluent-audit --add-config "SCRAM-SHA-512=[iterations=8192,password=$P]" >/dev/null && unset P && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null 2>&1 && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && for r in DeveloperWrite DeveloperManage; do confluent iam rbac role-binding create --principal User:confluent-audit --role $r --resource Topic:confluent-audit-log-events --prefix --kafka-cluster "$CID" >/dev/null 2>&1; done; confluent iam rbac role-binding list --principal User:confluent-audit --kafka-cluster "$CID" 2>/dev/null | tail -n +3
+```
+
+```out
+  User:confluent-audit | DeveloperManage | Topic         | confluent-audit-log-events | PREFIXED
+  User:confluent-audit | DeveloperWrite  | Topic         | confluent-audit-log-events | PREFIXED
+```
+
+## 19.2 設定片段：寫入者、路由、保留天數
+
+@role 小安 | ops02 | cpadmin
+
+接在 `common.tpl`（controller 與 broker 共用）後面。路由規則是一行 JSON：`payments.*` 的 produce／consume（允許與拒絕）和被拒絕的 describe 送到 `_sensitive`（留 365 天），其他送預設 topic（留 90 天），`kafka-internal`、`svc-c3` 的事件不記：
+
+```bash
+cd ~/conf && cp common.tpl common.tpl.plain.pre-audit && cat >> common.tpl <<'EOF'
+
+############################# Audit log: dedicated low-privilege writer, sensitive topics routed separately #############################
+confluent.security.event.logger.enable=true
+confluent.security.event.logger.exporter.kafka.bootstrap.servers=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095
+confluent.security.event.logger.exporter.kafka.security.protocol=SASL_SSL
+confluent.security.event.logger.exporter.kafka.sasl.mechanism=SCRAM-SHA-512
+confluent.security.event.logger.exporter.kafka.sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="confluent-audit" password="${AUDIT_PASSWORD}";
+confluent.security.event.logger.exporter.kafka.ssl.truststore.type=PKCS12
+confluent.security.event.logger.exporter.kafka.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
+confluent.security.event.logger.exporter.kafka.ssl.truststore.password=${STORE_PASSWORD}
+confluent.security.event.logger.exporter.kafka.topic.replicas=3
+confluent.security.event.logger.exporter.kafka.topic.retention.ms=7776000000
+confluent.security.event.router.config={"destinations":{"topics":{"confluent-audit-log-events":{"retention_ms":7776000000},"confluent-audit-log-events_sensitive":{"retention_ms":31536000000}}},"default_topics":{"allowed":"confluent-audit-log-events","denied":"confluent-audit-log-events"},"excluded_principals":["User:kafka-internal","User:svc-c3"],"routes":{"crn:///kafka=*/topic=payments.*":{"produce":{"allowed":"confluent-audit-log-events_sensitive","denied":"confluent-audit-log-events_sensitive"},"consume":{"allowed":"confluent-audit-log-events_sensitive","denied":"confluent-audit-log-events_sensitive"},"describe":{"allowed":"","denied":"confluent-audit-log-events_sensitive"}}}}
+EOF
+grep -c 'security.event' common.tpl
+```
+
+```out
+11
+```
+
+重新產生 7 台的 `server.properties`（第 16 站的流程：明文渲染 → Secret Protection 加密，新增的兩個密碼欄位會被一起加密進同一份 `security.properties`）、派送、滾動重啟。REST Proxy 與 C3 不受影響：
+
+```bash
+cd ~/conf && export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) AUDIT_PASSWORD=$(cat ~/secrets/confluent-audit.pass) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD} ${AUDIT_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties; do keys=$(grep -E '^[^#].*(password|credentials|jaas.config)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do scp -q $h.server.properties ~/secrets/security.properties $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -o root -g confluent -m 0640 /tmp/$h.server.properties /etc/confluent/kafka/server.properties && sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/$h.server.properties /tmp/security.properties && printf '%s ' \$(hostname)"; done; echo
+```
+
+```out
+kb01.server.properties: 22 encrypted, plaintext=0
+（7 個檔；broker 22、controller 13）
+kc01 kc02 kc03 kb01 kb02 kb03 kb04
+```
+
+```bash
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; sleep 20; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list | grep audit
+```
+
+```out
+kc01 active
+（3 行）
+kb01 MDS=200
+（4 行）
+confluent-audit-log-events
+confluent-audit-log-events_sensitive
+```
+
+## 19.3 製造事件、讀回來
+
+@role 小安 | ops02 | cpadmin
+
+alice（SystemAdmin）往 `payments.events` 寫一筆（允許、敏感 → `_sensitive`）；`app-orders` 想讀 `payments.events`（它只有 orders.* 的權限 → 拒絕、敏感 → `_sensitive`）；`app-orders` 讀自己的 `orders.events`（允許、不敏感 → 預設 topic）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && (umask 077; cat > ~/conf/client-alice.properties <<EOF
+security.protocol=SASL_SSL
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="alice" password="$(cat ~/secrets/ad-test-users.pass)";
+ssl.truststore.type=PKCS12
+ssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12
+ssl.truststore.password=$(cat ~/pki/store.pass)
+EOF
+) && echo "audit-test-$(date +%s)" | kafka-console-producer --bootstrap-server kb01.poc.lab:9096 --producer.config ~/conf/client-alice.properties --topic payments.events >/dev/null 2>&1 && echo "alice: produced to payments.events"; kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic payments.events --group orders-sneak --max-messages 1 --timeout-ms 10000 2>&1 | grep -o 'TopicAuthorizationException\|not authorized' | head -1 | sed 's/^/app-orders on payments.events: /'; kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events --group orders-audit-check --from-beginning --max-messages 1 --timeout-ms 15000 2>/dev/null | wc -l | sed 's/^/app-orders on orders.events: read /'
+```
+
+```out
+alice: produced to payments.events
+app-orders on payments.events: TopicAuthorizationException
+app-orders on orders.events: read 2
+```
+
+等幾秒讓事件寫進去，再用 alice 讀兩個 audit topic，按「主體／方法／資源／准拒」統計（只列這幾個測試身分）：
+
+```bash
+sleep 10; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for t in confluent-audit-log-events_sensitive confluent-audit-log-events; do echo "== $t"; kafka-console-consumer --bootstrap-server kb01.poc.lab:9096 --consumer.config ~/conf/client-alice.properties --topic $t --from-beginning --timeout-ms 20000 2>/dev/null | python3 -c '
+import sys, json, collections
+c = collections.Counter(); tot = 0
+for line in sys.stdin:
+    try: e = json.loads(line)["data"]
+    except Exception: continue
+    tot += 1
+    p = e.get("authenticationInfo", {}).get("principal", "?"); m = e.get("methodName", "?").split(".")[-1]
+    a = e.get("authorizationInfo", {}); g = a.get("granted"); r = a.get("resourceName", "")
+    if p in ("User:alice", "User:app-orders", "User:bob", "User:carol"): c[(p, m, r[:28], "ALLOWED" if g else "DENIED")] += 1
+print("  total events:", tot)
+for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1], k[2], k[3], v))
+'; done
+```
+
+```out
+== confluent-audit-log-events_sensitive
+  total events: 2
+  User:alice       Produce    payments.events              ALLOWED  x1
+  User:app-orders  Metadata   payments.events              DENIED   x1
+== confluent-audit-log-events
+  total events: 247
+  User:alice       Authorize  __opmenu-host-ops            ALLOWED  x28
+  User:alice       Authorize  kafka-cluster                ALLOWED  x26
+  User:bob         Authorize  kafka-cluster                DENIED   x27
+  User:carol       Authorize  __opmenu-host-ops            DENIED   x12
+  （… 第 17 站 OP menu 問 MDS 留下的授權事件）
+```
+
+> 三件事值得看清楚：(1) 敏感 topic 的事件在 `_sensitive`：alice 的 produce（允許）和 app-orders 想讀時的 Metadata（describe 被拒）。(2) **一般 topic 的 produce／consume 不會被記**：app-orders 讀 orders.events 沒有出現在任何 topic，因為 Confluent 預設只記「管理類」與「授權類」事件（例如上面 MDS 的 Authorize，那是第 17 站 OP menu 問權限留下的），produce／consume 只在路由裡明確列出的 topic 才記。要記全部就把 `crn:///kafka=*/topic=*` 的 produce／consume 也寫進 routes，量會很大。(3) `kafka-internal`、`svc-c3` 完全不出現。OP menu 的 43（匯出）、45（查詢）讀的就是這兩個 topic。
+
+## 19.4 要跟稽核單位說清楚的事
+
+| 項目 | 說明 |
+|---|---|
+| 寫入者 | `confluent-audit`（SCRAM，只有 audit topic 的 Write／Manage），不是 super user；密碼在 Secret Protection 裡 |
+| 保留 | 預設 topic 90 天、`_sensitive` 365 天，都是 topic 的 retention；要更久就外送 SIEM |
+| 誰能讀 | 綁了 audit topic DeveloperRead 的群組（lab 是 SystemAdmin 直接讀）；稽核群組用 OP menu 43／45 匯出與查詢 |
+| 量 | `kafka-internal`、`svc-c3` 已排除；只有路由列出的 topic 才記 produce／consume，要擴大範圍前先估磁碟 |
+| 改規則 | 改 `common.tpl` 的 router JSON → 重新加密派送 → 滾動重啟（和這一站一樣） |

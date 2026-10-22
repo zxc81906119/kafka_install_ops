@@ -10,13 +10,13 @@ Updated: 2026-10-22 (session in C:/Users/user/IdeaProjects/untitled7, no worktre
 - 手動安裝：第 1–19 項完成（下載 → 驗證 → 進內網 → 銀行準備 → 上架 → JDK → 檢查 → OS 調校 → 套件 →
   憑證 → controller/broker → 帳號權限 → REST Proxy → C3），全部驗證通過。第 20 項 OP 選單不納入。
 - 第 21 驗收、第 22 收尾：未做。延後：Secret Protection、audit log 路由、JMX exporter。
-- 文件：`docs/Confluent-安裝旅程-手把手.docx`：第 0–17 章全部從零實跑通過（15 Conjur、16 Secret Protection＋Summon、17 OP menu 為延伸站），docx 已重建。
+- 文件：`docs/Confluent-安裝旅程-手把手.docx`：第 0–19 章全部從零實跑通過（15–19 為延伸站：Conjur、Secret Protection＋Summon、OP menu、JMX exporter、稽核日誌），docx 已重建。
   已自檢一輪（名詞小抄、排錯表、重來指引已補）；第 0–14 章已全部從零實跑通過（2026-10-22），預期輸出已同步。
 - CyberArk 整合設計討論完成（見 log 2026-10-21-cyberark）；兩份給客戶／原廠的問題已整理。
 - `CLAUDE.md` 與 `.claude/skills/*` 已建立；`.claude/state/` 交接機制剛建立。
 
 ## 下一步（2026-10-22 使用者定案順序）
-1. audit log 路由 ＋ JMX exporter 離線引進（HTTPS + basic auth + 產 scrape 設定）→ 寫成 journey 第 18、19 站。
+1. （已完成）audit log 路由 ＋ JMX exporter → journey 第 18、19 站。
 2. 驗收清單（平台健康、安全正反向、應用程式端、維運：OP menu 重啟、輪替演練、冷開機）＋ 收尾 → journey 第 20 站。
 3. 安裝腳本重寫：照手把手文件一章一支（steps/NN-*.sh），共用只有 ssh、渲染、紀錄；銀行的步驟只印「請銀行做」。
 4. 每個里程碑 commit（已養成）；從未 push。

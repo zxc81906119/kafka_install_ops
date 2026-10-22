@@ -260,4 +260,32 @@ D.opmenu = () => svg(800, 310, [
   arrow(420, 256, 468, 256),
 ].join(""));
 
+// 15. JMX exporter for the bank's Prometheus
+D.jmx = () => svg(800, 250, [
+  region(20, 28, 300, 200, "每台 controller / broker / REST", "blue"),
+  box(40, 60, 260, 62, "Java 程序 + javaagent", ["-javaagent:jmx_prometheus_javaagent.jar", "讀 /etc/confluent/<元件>/jmx-exporter.yml"], "blue"),
+  box(40, 140, 260, 62, ":7071 HTTPS + basic auth", ["憑證 = 這台的 keystore", "密碼只存加鹽 SHA-256"], "blue"),
+  arrow(170, 122, 170, 138),
+  box(380, 60, 180, 62, "操作機產三個檔", ["prometheus-scrape.yml", "alert-rules.yml、ca.pem"], "gray"),
+  box(600, 60, 180, 62, "行內 Prometheus", ["三個 job、HTTPS、密碼檔", "9 條告警規則"], "amber"),
+  arrow(560, 91, 598, 91, "交付"),
+  arrow(690, 122, 302, 171, "每 30 秒抓 /metrics", { via: [[690, 136], [340, 136], [340, 171]], lx: 515, ly: 131 }),
+  box(600, 165, 180, 62, "Alertmanager / SIEM", ["銀行既有", "lag 另看 C3"], "amber"),
+  arrow(740, 122, 740, 163, null, { dash: true }),
+].join(""));
+
+// 16. Audit log routing
+D.audit = () => svg(800, 260, [
+  box(20, 40, 170, 62, "每個 broker / controller", ["security event logger", "寫入者 User:confluent-audit"], "blue"),
+  box(260, 40, 200, 62, "router(一行 JSON)", ["payments.* 的 produce/consume", "與被拒的 describe → sensitive"], "blue"),
+  arrow(190, 71, 258, 71),
+  box(540, 30, 240, 50, "預設 topic", ["confluent-audit-log-events,留 90 天"], "amber"),
+  box(540, 100, 240, 50, "敏感 topic 的事件", ["…-log-events_sensitive,留 365 天"], "coral"),
+  arrow(460, 60, 538, 55), arrow(460, 82, 538, 125),
+  box(20, 150, 170, 62, "排除", ["User:kafka-internal", "User:svc-c3(雜訊)"], "gray"),
+  box(260, 150, 200, 62, "密碼", ["confluent-audit 的 SCRAM 密碼", "進 Secret Protection"], "gray"),
+  box(540, 180, 240, 50, "誰讀", ["稽核群組 / OP menu 43、45 / SIEM"], "gray"),
+  arrow(660, 150, 660, 178, null, { dash: true }),
+].join(""));
+
 module.exports = D;
