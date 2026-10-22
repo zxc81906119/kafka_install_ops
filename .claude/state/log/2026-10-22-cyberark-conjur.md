@@ -31,3 +31,7 @@
   踩到：kb04 的全權 sudoers 在第 17 站演練後沒還原（已修：lab 每台保留 cpadmin 全權 + cpadmin-ops 窄規則）；落地區檔案唯讀，scp 到 /tmp 失敗殘留會擋下一次；
   Prometheus 容器不在 compose 要 --add-host；預設只記管理／授權事件，produce/consume 只在路由列出的 topic 才記。
   diagrams 加 jmx、audit；docx 重建。待辦下一個：驗收清單（第 20 站）→ 安裝腳本重寫。
+- 2026-10-22 深夜 3：journey 第 20 站「驗收與收尾」實跑通過並併入：平台健康 21/21、安全正反向 15/15、應用程式端（SCRAM 直連寫讀、REST mTLS 經 LB 寫、alice 讀到）、維運（OP menu 重啟 kb03、整套含 Conjur 冷開機：broker 90s、C3 154s、broker 因 Conjur 晚起重試 2 次）、收尾檢查。
+  真問題：C3 比 MDS 先起來或 broker 全部重啟過一輪後會卡住（Failed to fetch MDS URLs / Client has already been closed，不自癒）→ 第 13 站 drop-in 加 ExecStartPre 等 MDS（lab 已套用：冷開機從 12 分鐘降到 154 秒），14.1 加排錯列。
+  測試本身修正：函式要 export -f 才能進 bash -c；carol 在自己 prefix 能建 topic（DeveloperManage）；OS 已信任銀行根憑證所以「不帶 CA」不會失敗，改用無關 CA；SBC 用 kafka-rebalance-cluster --status；/tmp 檢查排除 JVM 的 lib*.so。
+  diagrams 加 acceptance；docx 重建。下一個：安裝腳本重寫（照手把手一章一支）。

@@ -288,4 +288,12 @@ D.audit = () => svg(800, 260, [
   arrow(660, 150, 660, 178, null, { dash: true }),
 ].join(""));
 
+// 17. Acceptance: four groups of checks
+D.acceptance = () => svg(800, 230, [
+  box(20, 40, 180, 150, "平台健康", ["quorum、broker、MDS", "REST 經 LB、C3", "partition、Self-Balancing", "JMX exporter"], "blue"),
+  box(220, 40, 180, 150, "安全(正向 + 反向)", ["AD 帳密對 / 錯", "RBAC 拒絕", "mTLS 無憑證 / 錯憑證", "主機無明文密碼"], "coral"),
+  box(420, 40, 180, 150, "應用程式端", ["app-orders SCRAM 寫讀", "app-legacy-billing", "經 LB + REST(mTLS)寫"], "amber"),
+  box(620, 40, 160, 150, "維運", ["OP menu 重啟 broker", "冷開機:全關全開", "收尾清單"], "gray"),
+].join(""));
+
 module.exports = D;
