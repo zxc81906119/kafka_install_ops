@@ -20,7 +20,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 1 download
     {
       const s = stepSlide(0, "只帶 Confluent 原廠套件，OS 與 Java 由行內提供",
-        "第一步在可以連外的下載機進行。只下載版本清單上指定的 Confluent 原廠套件（含 Control Center），連同原廠的簽章公鑰一起保存。下載環境用和正式主機同版的精簡系統，算出來的相依才會正確。作業系統需要的套件和 Java 都不帶進去：Java 用 RHEL 自帶的 OpenJDK 21，和其他 OS 套件一樣只列出名稱，交給行內 OS 團隊從既有來源提供，修補也跟著行內的 OS 修補流程。每個檔案都記下來源、版本、雜湊值與下載時間；舊版本也保留，回滾或原廠下架時才有得用。");
+        "第一步在可以連外的下載機進行。只下載版本清單上指定的 Confluent 原廠套件（含 Control Center），連同原廠的簽章公鑰一起保存。下載環境用和正式主機同版的精簡系統，算出來的相依才會正確。作業系統需要的套件和 Java 都不帶進去：Java 21 由行內直接提供壓縮檔，其他 OS 套件只列出名稱，交給行內 OS 團隊從既有來源提供，修補也跟著行內的 OS 修補流程。每個檔案都記下來源、版本、雜湊值與下載時間；舊版本也保留，回滾或原廠下架時才有得用。");
       await badge(s, 1.35, 2.85, 1.0, "LuGlobe", C.teal);
       under(s, 1.35, 3.42, 2.0, "外網下載機", null, { headSize: 15 });
       arrow(s, 1.9, 2.85, 2.95, 2.85, C.mute, 2);
@@ -42,7 +42,7 @@ module.exports = function makeSteps(ctx) {
         ["LuKeyRound", "保存原廠公鑰", "之後每一關都用它驗簽"],
         ["LuFingerprint", "記錄每個檔案", "來源、版本、雜湊、時間"],
         ["LuArchive", "保留舊版本", "回滾、原廠下架時仍可用"],
-        ["LuFileText", "OS 與 Java 清單", "RHEL 自帶 OpenJDK 21"],
+        ["LuFileText", "OS 與 Java 清單", "Java 21 由行內提供壓縮檔"],
       ]);
     }
 
@@ -131,7 +131,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 5 install packages
     {
       const s = stepSlide(4, "先試算，通過才安裝，裝完鎖定版本",
-        "Confluent 套件從內部套件庫安裝，作業系統套件與 Java 從行內的 RHEL 套件來源安裝；連線都用 HTTPS 並驗證伺服器憑證，安裝時逐一驗證簽章。正式安裝前先試算：確認不缺任何套件，也不會順帶升級其他系統套件。依主機上的元件只裝需要的套件和指定版本，裝完鎖定版本，日後例行更新不會誤升級。Control Center 主機不裝其他平台套件，避免衝突。");
+        "Confluent 套件從內部套件庫安裝，作業系統套件從行內的 RHEL 套件來源安裝，Java 用行內提供的壓縮檔裝到統一路徑；連線都用 HTTPS 並驗證伺服器憑證，安裝時逐一驗證簽章。正式安裝前先試算：確認不缺任何套件，也不會順帶升級其他系統套件。依主機上的元件只裝需要的套件和指定版本，裝完鎖定版本，日後例行更新不會誤升級。Control Center 主機不裝其他平台套件，避免衝突。");
       const steps = [["LuDatabase", "內部套件庫", C.teal], ["LuCalculator", "試算", C.accent], ["LuPackage", "安裝", C.teal], ["LuLock", "鎖定版本", C.teal]];
       const sx = 1.9, step = (W - 2 * sx) / 3, cy = 2.75;
       for (let i = 0; i < steps.length; i++) {

@@ -1,0 +1,222 @@
+# 安裝流程重新設計（討論紀錄）
+
+從下載到交付，一項一項討論：每一項記錄「要做什麼／誰做／怎麼確認／對應」。
+討論以使用者說明為主；這份文件只記錄已確認的決定與待確認的問題，不放未經討論的方案。
+
+## 流程總表
+
+| # | 階段 | 項目 | 狀態 |
+|---|---|---|---|
+| 1 | 外網 | 下載套件 | 討論中 |
+| 2 | 外網 | 驗證（雜湊、簽章） | |
+| 3 | 外網 | 產生交付目錄 | |
+| 4 | 引進 | 掃描平台、開單 | |
+| 5 | 引進 | 搬進內網 | |
+| 6 | 引進 | 上架內部套件庫 | |
+| 7 | 行內準備 | 主機、OS、DNS、NTP、OS 套件來源 | |
+| 8 | 行內準備 | JDK 21 | |
+| 9 | 行內準備 | AD 群組與查詢帳號 | |
+| 10 | 行內準備 | 負載平衡、網路防火牆 | |
+| 11 | 行內準備 | 安裝帳號、SSH、sudo 開放時段 | 已整理（CyberArk） |
+| 12 | 憑證 | 申請（CSR）、銀行 CA 簽發、匯入檢查 | |
+| 13 | 安裝 | 安裝前檢查 | |
+| 14 | 安裝 | OS 調校 | |
+| 15 | 安裝 | 安裝套件 | |
+| 16 | 安裝 | 派送憑證、產生設定 | |
+| 17 | 安裝 | 初始化、啟動 controller 與 broker | |
+| 18 | 安裝 | SCRAM 帳號、RBAC、topic | |
+| 19 | 安裝 | 啟動 REST Proxy、C3 | |
+| 20 | 安裝 | OP 選單 | 不納入這次流程（2026-10-20 決定） |
+| 21 | 驗收 | 端對端驗收 | |
+| 22 | 收尾 | 移交、收回 sudo、文件 | |
+
+維運（升級、換憑證、擴充、移除）在安裝流程之後討論。lab 模擬環境暫不討論。
+
+---
+
+## 1. 下載套件
+
+### 已確認
+
+| 項目 | 決定 |
+|---|---|
+| Confluent 套件 | RPM 格式（不用 tar.gz） |
+| 非 RPM 檔案（JMX exporter jar、OP 選單 tar.gz） | 維持原格式 |
+| JDK | 不在我們的下載與交付範圍，由客戶安裝（RPM 或 tar 皆可） |
+| 客戶對 JDK 要做的事 | 把 tar 交給我們（lab：放在操作機 `~/jdk/` 附 sha256）；主機上的安裝由我們做 |
+| 安裝位置 | `/opt/java/<版本目錄>`，`JAVA_HOME=/opt/java/jdk-21.0.12.1+1` |
+| 全域設定 | **用 alternatives** 登記 `java`、`keytool`（RHEL 標準做法，與 RPM 版 JDK 相容、OS 管理員熟悉）＋ `/etc/profile.d/java.sh` 設 `JAVA_HOME`；服務另在 systemd drop-in 明確寫 `JAVA_HOME` 鎖定版本 |
+
+### 套件相依與分工（已確認）
+
+| 類別 | 說明 | 誰準備 |
+|---|---|---|
+| A. Confluent 依賴 Confluent | RPM 宣告的相依，dnf 自動帶入（例：`confluent-server` → `confluent-telemetry`） | **我們帶入** |
+| B. Confluent 依賴非 Confluent | RPM 宣告、來自 OS 的相依（`rpm -qpR` 查得只有 `/usr/bin/bash`、`confluent-cli` 需要的 glibc） | 客戶放入套件庫 |
+| C. 官方文件要求、RPM 未宣告 | 原廠文件要求各主機安裝的 OS 套件（例：C3 的 `cyrus-sasl`、`openssl-devel`） | 客戶放入套件庫 |
+
+- 範圍涵蓋 controller、broker、REST Proxy、C3，以及操作機。
+- 我們帶入的只有 Confluent 相關套件；其他套件由客戶準備，放入行內某個套件庫，供之後安裝使用。
+- 安裝時由我們用 dnf 一併安裝：
+  - B 類：dnf 依 RPM 的 `Requires` 自動帶入，不必寫在指令裡。
+  - C 類：RPM 沒宣告，dnf 不會自動帶，安裝指令必須明確列出（例：`dnf install confluent-control-center-next-gen cyrus-sasl openssl-devel`）。
+- 前提：執行 dnf 時客戶的套件庫必須啟用。目前程式用 `--disablerepo='*' --enablerepo='cp-internal-*'` 會擋掉客戶套件庫，第 15 項要調整。
+
+### JDK 相關說明（已確認的事實）
+
+- 需要 JDK 21 的主機：controller、broker、REST Proxy、C3、操作機。套件 web server、負載平衡不需要。
+- RPM 裝的 JDK 有 `/usr/bin/java`（alternatives），不設 `JAVA_HOME` 也找得到；tar 裝的必須告訴程式路徑。
+- `JAVA_HOME` 要設在三個地方，各給不同對象：
+
+| 設定 | 給誰用 | 主機 |
+|---|---|---|
+| `/etc/profile.d/java.sh`（`JAVA_HOME`、`PATH`） | 人登入後手動下指令 | 五種要裝 JDK 的主機 |
+| systemd drop-in 的 `Environment=JAVA_HOME=…` | 服務（systemd 不讀 `/etc/profile.d`） | controller、broker、REST、C3 |
+| 腳本與 OP 選單設定檔明確寫 `JAVA_HOME` | 自動化程式（ssh 執行的非登入 shell 不讀 `/etc/profile.d`） | 操作機 |
+
+- 哪些情況讀得到 `/etc/profile.d`（RHEL 9）：login shell、interactive non-login（`/etc/bashrc` 補讀）、`ssh host 'cmd'`（sshd 啟動的 bash 讀 `~/.bashrc`）都讀得到；**systemd 服務、cron、sudo** 讀不到。`/usr/bin` 在所有情況的 PATH 裡，所以 alternatives（或 symlink）是唯一能涵蓋全部的方式；但服務仍在 unit 內明確寫 `JAVA_HOME`，避免 OS 團隊切換 alternatives 時服務跟著變。
+- 2026-10-20 決定：改用 alternatives（原先「裝好即可、不設全域」的決定作廢）。
+
+### 教訓（lab 實測）
+
+- 給銀行的 OS 套件清單若用 `dnf download --resolve` 算，下載容器必須是乾淨的最小安裝，且**先下載、再安裝工具**：先裝了 `createrepo_c` 再下載，它的相依 `createrepo_c-libs` 就被當成已存在而漏掉（操作機安裝時才發現）。
+
+### 影響（之後討論到時處理）
+
+- 交付目錄、客戶主機準備清單：JDK 改為「客戶提供」。
+- 安裝前檢查：確認每台的 `JAVA_HOME` 存在、版本為 21。
+- 目前程式中的 tar 安裝方式、JDK 安裝與移除（`JDK_SOURCE`、`JDK_RETIRED`）在新設計中不需要。
+
+---
+
+## 11. 安裝帳號、SSH、sudo（行內有 CyberArk 的情況）
+
+客戶有 CyberArk，分兩種用法：代登（PSMP）、用 SSH 定期換密碼（CPM）。套到我們的流程會是這樣：
+
+### 1. 操作人員用 CyberArk 代登進操作機
+
+- 操作人員用自己的 AD 帳號登入 CyberArk。
+- CyberArk（PSMP）代登進操作機，身分是 cpadmin（安裝用帳號），全程錄影。
+- 人不會知道 cpadmin 的密碼，也不用知道。
+
+### 2. 操作機對各主機的 SSH 金鑰，交給 CyberArk 管
+
+- 金鑰對由 CyberArk（CPM）產生，不是我們自己 `ssh-keygen`。私鑰只放 Vault。
+- 公鑰由 CPM 自己 SSH 進每一台主機，寫進 cpadmin 的 `authorized_keys`（包含操作機自己，因為迴圈裡會 `ssh` 到自己）。輪替的時候也是它去換。
+- 作業當天，人進操作機後到 PVWA 網頁取私鑰（要填變更單號，會留紀錄），放到操作機 cpadmin 的 `~/.ssh/` 底下，權限 0600。作業結束把副本刪掉。
+- 行內如果願意在操作機裝 Credential Provider（CP agent），腳本可以直接跟 CyberArk 要私鑰，人就不用手動取。
+- 2026-10-21 整理：私鑰怎麼到操作機有三種，CPM 只推公鑰、不會把私鑰放到操作機。
+  A. 操作機裝 CP（或打 CCP）：腳本啟動時拉、用完丟，私鑰不落地（正式上線建議）。
+     做法：`clipasswordsdk GetPassword … -o Password | ssh-add -`（CP）或 `curl --cert … AIMWebService/api/Accounts?AppID=…&Safe=…&Object=… | jq -r .Content | ssh-add -`（CCP），
+     鑰匙只進 ssh-agent（可 `-t 4h`），作業結束 `ssh-agent -k`；第 3.1 站之後的 ssh／scp 指令都不用改。
+  B. 操作機到各主機也走 PSMP：最乾淨，但 scp／批次 ssh 都要改寫，不建議。
+  C. 人從 PVWA 取私鑰放 `~/.ssh`（上一點的作法）：和 lab 手動安裝完全相同（PoC 先用這個）。
+  **2026-10-22 定案（客戶正式環境）：走 A 的 CCP 版**。操作機不裝 agent，安裝腳本開頭以 HTTPS 打 CCP（client 憑證＋來源 IP 驗身分）取 cpadmin 私鑰，直接 `ssh-add -` 進 ssh-agent，作業結束 `ssh-agent -k`。
+  要請銀行準備：CCP 的 AppID（例如 confluent-ops，允許來源 = 操作機 IP、要求 client 憑證）、把 cpadmin 的 SSH key 帳號放進該 AppID 可讀的 safe、給操作機一張打 CCP 用的 client 憑證（可沿用 svc-ops 或另簽）。
+  CCP 不需要 Conjur；Conjur 是 K8s／pipeline 用的另一條線。
+- 2026-10-22 原廠回覆「CCP 是 for Conjur」的釐清：Confluent 自家的 csid-secrets-providers 裡 CyberArk provider **只接 Conjur API**，不接 PAM 的 CCP。
+  CCP 本身是 PAM 元件，應用程式直接打 CCP 拿 SCRAM 密碼不受影響；受影響的是平台端 properties 的密碼：
+  銀行只有 PAM 時用不了該 provider → 維持 Secret Protection（master key 交 CyberArk 保管）。有 Conjur Enterprise ＋ Vault Synchronizer 才可能用。
+  再問原廠：(a) provider 是否只支援 Conjur；(b) 只有 PAM＋CCP 時官方建議是否就是 Secret Protection；(c) Conjur provider 密碼輪替後要不要滾動重啟。
+- 若銀行有 Conjur、走 csid-secrets-providers，每台主機啟動前的前置：Conjur policy（variables、host 身分、授權）；host 的 API key／憑證（secret zero，0600 落地）；
+  信任 Conjur TLS；provider jar 進 classpath（配 Kafka 版本）；properties 改 `${cyberark:…}`；主機到 Conjur 443 通且 Conjur 高可用（連不到就起不來）。
+  與 Secret Protection 的差別：落地的是每台一把 host key 而非一把 master key；啟動依賴外部系統在線。
+- 2026-10-22 lab 實作結果（journey 第 15、16 章）：
+  - Conjur provider 可用：五個範本的密碼欄位改 `${cyberark:<變數>:<變數>}`（key 必須等於路徑）；只帶 4 個 jar（common、annotations、cyberark、conjur-api），其餘相依主機已有；
+    Kafka／REST 用 `CLASSPATH`，C3 要用 `CONTROL_CENTER_CLASSPATH`；provider 每個設定物件都重新初始化（啟動一次上千行日誌）；host API key 以明文落在 properties（secret zero）。
+  - Secret Protection 可用：同一份 security.properties 發所有主機，master key 走 `EnvironmentFile=/etc/confluent/service.env`（0600）；master key 輪替 = rotate → 重派兩個檔 → 滾動重啟，全程 20 分鐘內。
+  - 兩者都是啟動時讀一次，密碼輪替都要滾動重啟。
+- 只有 PAM 又想不落地：方案 A = FileConfigProvider ＋ systemd ExecStartPre 以 client 憑證打 CCP REST 寫到 tmpfs（/run，0700）；方案 B = 自寫 CCP ConfigProvider jar。PoC 先用 Secret Protection。
+
+### 3. 操作機 ssh 進各主機的 cpadmin
+
+- 有了私鑰，操作機就能 ssh 到 controller、broker、REST Proxy、C3 各台的 cpadmin，指令和今天做的一模一樣。
+- 這是機器對機器的連線，不走 PSMP。PSMP 是給人用的，一條連線一個錄影 session，安裝迴圈幾十條連線走它不實際。
+
+### 4. sudo 要另外談（CyberArk 金鑰解決不了這個）
+
+- 安裝要 root 權限，cpadmin 是靠 sudo。兩種做法：
+  - 行內 OS 團隊依變更單在各主機開 cpadmin 的 sudo，有時限，做完收回。
+  - 行內有 OPM 的話，cpadmin 提權的每條指令經 OPM 授權跟記錄，不用改 sudoers。
+
+### 5. 操作機上的帳號（2026-10-22 定案）
+
+> 這是客戶正式環境的長相，**不改 lab 與手把手文件的設計**：lab 維持 cpadmin 直接登入操作機、自己 ssh-keygen。
+
+- **安裝期**：工程師經 PSMP **直接以 cpadmin 登入操作機**（`ssh <本人 Vault 帳號>@cpadmin@ops@psmp`）。cpadmin@操作機是 CyberArk 納管的帳號（金鑰在 Vault、CPM 輪替、PSMP 代登），人的身分由 PSMP 錄影與 Vault 稽核記錄，不另外切帳號。
+  安裝期間 cpadmin 在操作機有 sudo（變更單時段內開、做完收回）；安裝腳本開頭打 CCP 取「操作機 → 各主機」的 cpadmin 私鑰進 ssh-agent。
+- **維運期**：維運人員用自己的 opxx 個人帳號（本機帳號，OS 團隊建）登入，跑銀行自己的 OP menu／維運腳本；不切 cpadmin、沒有 sudo。
+- 不需要 spxx 這類平台工程師個人帳號；不需要「sudo -u cpadmin」的切換規則。
+- 工作目錄就是 cpadmin 的家目錄（`~/pki`、`~/conf`、`~/secrets`…，0600／0700），和 lab 完全一致。
+- 各主機（kc、kb、rest、c3）只有 cpadmin（只收 CPM 推的公鑰）。
+- CyberArk 要管的 SSH key 帳號：cpadmin@操作機（PSMP 進操作機用）＋ cpadmin@各主機（操作機經 CCP 取、ssh 出去用）＋ 每個 opxx 一組（PSMP 進操作機用）。
+- **第二跳（操作機 → 各主機 cpadmin）是唯一沒有 PSMP 記人的一段**：追溯靠時間對齊 PSMP session（誰在操作機的 cpadmin）＋ CCP 取用紀錄（AppID 幾點取私鑰）＋ 各主機 sshd／sudo 日誌（SIEM）。
+  強化：cpadmin@操作機 在 PSMP 設 exclusive（同時只准一條 session）；各主機 authorized_keys 加 `from="操作機 IP"`；sshd `LogLevel VERBOSE` 記公鑰指紋；ssh-add -t 4h、作業結束 ssh-agent -k；主機日誌送 SIEM。
+  資安若仍不接受，備案是第二跳也走 PSMP（方案 B），代價是安裝腳本的 ssh／scp 全部改寫。
+
+### 和今天 lab 的差別
+
+就兩個：金鑰不是你在 ops02 產生的，是從 Vault 取的；公鑰不是我（扮演銀行）手動放的，是 CPM 推的。其他指令都一樣。
+
+### 問客戶「有哪些 CyberArk 元件」的問法（2026-10-22）
+
+不問元件名稱，照功能問；答得出來就代表元件在：
+
+| # | 問法 | 對應元件 | 沒有時的替代 |
+|---|---|---|---|
+| 1 | 人員 ssh 到 Linux 是否一律經 CyberArk 代登？格式 `ssh 帳號@目標@哪台`？有錄影？ | PSMP | 人直接 ssh，靠 OS 日誌 |
+| 2 | root 密碼與服務帳號 SSH 金鑰是否由 CyberArk 產生／輪替並推公鑰到主機？週期？ | CPM + SSH Key Manager | OS 團隊手動 |
+| 3 | 應用程式／腳本能否用 HTTPS 向 CyberArk 要密碼？AppID 怎麼申請、IP 還是憑證驗？URL？ | CCP | CP agent 或 PVWA 手動 |
+| 4 | 有沒有 Conjur（Enterprise／Cloud）？PAM safe 有沒有同步過去？ | Conjur + Vault Synchronizer | Secret Protection |
+| 5 | Linux sudo 提權是否經 CyberArk？ | OPM | OS 團隊依變更單開 sudo |
+| 6 | 申請帳號／取密碼／看紀錄的網頁？要變更單號？ | PVWA | — |
+| 7 | 誰管 CyberArk？safe 誰建、AppID 誰核？ | 組織 | 決定申請單送誰 |
+| 8 | 操作機可否有本機個人帳號 spxx／opxx？還是主機一律接 AD？ | — | — |
+| 9 | 操作機到 CCP／Conjur 的 443 是否開放？ | 網路 | — |
+
+### 要跟客戶確認（細項）
+
+1. 操作機可以持有受 CyberArk 管理的金鑰去連各主機嗎？還是每條連線都要走 PSMP？（後者安裝時間會拉很長）
+2. cpadmin 的 sudo 怎麼開：OS 團隊依變更單開，還是走 OPM？
+3. 請銀行開 CCP 的 AppID 給操作機（來源 IP＋client 憑證驗證），並把 cpadmin 的 SSH key 帳號放進對應 safe；CCP 的 URL 與憑證要求是什麼？（已不考慮裝 CP agent）
+4. 唯讀的 AD 查詢帳號（svc-mds-bind）要不要納入 CPM 輪替？不輪替最省事，輪替就要配合 broker 滾動重啟。
+   2026-10-22 建議：正式環境用**兩組帳號 A／B 交替**（svc-mds-bind-a／-b，同 OU、同唯讀權限）：CPM 只改閒置的那組 → 平台切換 bind 設定並滾動重啟 → 驗證後 CPM 再改原本在用的那組。零中斷，節奏由平台控制；CyberArk 端設為手動觸發輪替。單一帳號直接改密碼會讓新登入／新 token 失敗到 broker 重啟完成為止。
+5. 經 PSMP 進操作機時，OS 帳號是共用的 cpadmin（人的身分只在 PSMP 錄影與 Vault 稽核裡）。銀行接受嗎？
+   若要求 OS 層看到個人，操作機就得加入 AD、每人一個 OS 帳號再 sudo -u cpadmin，會改掉「主機不接 AD」的前提。
+8. 應用程式 SCRAM 密碼輪替：Kafka 同帳號同 mechanism 只有一組密碼，`kafka-configs --alter` 是直接覆蓋；已建立的連線不受影響（除非設 `connections.max.reauth.ms`），新連線即失敗。
+   建議和 AD 一樣用 **兩個帳號 A／B**（`<app>-a`／`<app>-b`，同 SHA-512、同 role binding 與配額）交替；不建議「SHA-256／SHA-512 各一組密碼」的技巧（要永久開 SHA-256、app 要同時改 mechanism）。
+   要問 app 團隊：client 收到 SaslAuthenticationException 後會不會重新向 CCP／Conjur 取密碼再重連？會的話單帳號即可。
+7. 行內的 CyberArk 是只有 PAM，還是 PAM＋Conjur（Secrets Manager）？兩者各有自己的保管庫；Confluent 的 config provider 只接 Conjur，應用程式拿 SCRAM 密碼則 CCP 或 Conjur 都可。
+   有 Conjur 的話再問：Vault Synchronizer（PAM safe → Conjur 單向同步，只支援 Conjur Enterprise）有沒有部署、哪個 safe 可以給 Confluent 用；有的話平台密碼放 PAM safe 由 CPM 管，Conjur 變數路徑會是 `<policy>/<safe>/<帳號>/password` 的固定格式。
+6. CyberArk 要管兩組 SSH key 帳號：cpadmin@ops02（PSMP 進操作機用）與 cpadmin@各主機（操作機出去用，公鑰可加 from="操作機 IP"）。
+
+### 備註：C3 和操作機同台
+
+技術上可以，但先想兩件事：C3 很吃資源（heap 數 GB 加內建 Prometheus），會跟操作機上的作業互相影響；操作機原本只開 ssh，同台後要多開 9021 給瀏覽器。建議維持分開，真要合併主機規格要按 C3 來。
+
+---
+
+## 手動實測進度（cp-man，2026-10-20）
+
+全程由使用者在操作機 ops02 手動下指令，不用 cpctl。lab 由 Claude 扮演銀行（AD、CA 簽發、repo01 的 OS 套件庫與 NTP、LB、主機帳號開通）。
+
+| 項目 | 狀態 |
+|---|---|
+| 1–6 下載、驗證、搬進內網、上架 repo01（httpd + createrepo_c） | 完成 |
+| 8 JDK 21（銀行給 tar；`/opt/java`、alternatives、`/etc/profile.d/java.sh`） | 完成 |
+| 13 安裝前檢查、14 OS 調校、15 套件安裝 + versionlock | 完成 |
+| 12 憑證（7 張 CSR → 銀行 CA → 匯入前檢查 → PKCS12、truststore、MDS token 金鑰） | 完成 |
+| 16–17 controller/broker 設定、格式化、啟動 | 完成 |
+| 18 SCRAM、RBAC、配額、topic；alice/carol AD 登入驗證 | 完成 |
+| 19 REST Proxy ×2（經 LB）、C3（Prometheus/Alertmanager mTLS） | 完成 |
+| 20 OP 選單 | 不納入 |
+| 21 端對端驗收、22 收尾 | 待做 |
+| 延後：Secret Protection、audit log 路由、JMX exporter | 待做 |
+
+### 踩到的坑（新腳本一定要處理）
+
+1. **RPM 服務用預設設定啟動**：`systemctl start` 前若 drop-in 沒生效，服務會讀 RPM 預設的 properties（REST Proxy 變成無加密 HTTP、C3 連不上 Kafka）。腳本在 start 前必須檢查 `systemctl show <unit> -p ExecStart` 指向我們的設定檔；而且 `enable --now` 對已在跑的服務不重啟，設定變更要明確 `restart`。
+2. **C3 要能寫 `/etc/confluent-control-center/*-generated.yml`**（alertmanager、trigger_rules、recording_rules、prometheus-generated-local）：擁有者要是 `cp-control-center:confluent`，不能全部設成 root。
+3. **確認用的指令要 `sudo`**：`/etc/confluent/ssl`、`/var/lib/kafka` 是 0750，cpadmin 直接 `ls`/`stat` 會 Permission denied，誤以為步驟失敗。
+4. **下載機**：先下載再裝工具（見上方教訓）；lab 用 9p 掛載時 `dnf download` 的 checksum 核對會非常慢，應先下載到容器內磁碟再複製出來。
+5. **lab 環境問題（非設定）**：Docker Desktop VM 的 netlink 卡死，所有容器 `ip addr` 掛住 → Java 名稱解析卡在原生呼叫 → broker TOKEN listener 執行緒全部排隊、9094 堆滿 CLOSE-WAIT。重啟 broker 無效，只能重啟 Docker Desktop。判斷方式：任一容器 `timeout 5 ip addr` 卡住。

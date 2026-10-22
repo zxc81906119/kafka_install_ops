@@ -205,10 +205,10 @@ async function main() {
 
   // ================================================================ 4 prerequisites
   {
-    const s = plainSlide("開始前，銀行需備妥六件事", "這六項是銀行端要先準備的。最常卡關的是第二項：主機要能從行內的 RHEL 套件來源安裝作業系統套件與 Java（RHEL 自帶的 OpenJDK 21），Satellite、內部鏡像或安裝光碟都可以。AD 只需要人員群組，加上一個沒有任何管理權限的唯讀查詢帳號；平台內部的服務一律用憑證識別，不在 AD 建帳號。Confluent 套件要放進行內的內部套件庫：優先沿用行內既有的 Red Hat Satellite、JFrog Artifactory 或 Nexus 的 yum repo；行內沒有這類平台時，才另外準備一台 web server 提供。");
+    const s = plainSlide("開始前，銀行需備妥六件事", "這六項是銀行端要先準備的。最常卡關的是第二項：主機要能從行內的 RHEL 套件來源安裝作業系統套件，Satellite、內部鏡像或安裝光碟都可以；Java 21 由行內直接提供壓縮檔（tar）即可，我方安裝到各主機的統一路徑。AD 只需要人員群組，加上一個沒有任何管理權限的唯讀查詢帳號；平台內部的服務一律用憑證識別，不在 AD 建帳號。Confluent 套件要放進行內的內部套件庫：優先沿用行內既有的 Red Hat Satellite、JFrog Artifactory 或 Nexus 的 yum repo；行內沒有這類平台時，才另外準備一台 web server 提供。");
     const items = [
       ["LuServer", "RHEL 9 主機", "依元件準備\n規格與數量"],
-      ["LuDatabase", "OS 套件來源", "含 Java\nSatellite、鏡像\n或安裝光碟"],
+      ["LuDatabase", "OS 套件來源", "Satellite、鏡像\n或安裝光碟\n＋ Java 21 壓縮檔"],
       ["LuIdCard", "AD", "人員群組\n＋唯讀查詢帳號"],
       ["LuServer", "內部套件庫", "Satellite、\nArtifactory、Nexus\n無則用 web server"],
       ["LuStamp", "憑證窗口", "由銀行 CA\n簽發憑證"],

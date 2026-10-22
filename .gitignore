@@ -32,3 +32,4 @@ bank-ca/
 
 # Delivery sets built by windows/make-delivery.sh (copies of packages/)
 delivery/
+packages-manual.old/

@@ -13,8 +13,8 @@ x-hosts: &hosts
   - "lb01=172.32.0.12"
   - "rest.poc.lab=172.32.0.12"
   - "c3.poc.lab=172.32.0.12"
-  - "jump01.poc.lab=172.32.0.13"
-  - "jump01=172.32.0.13"
+  - "repo01.poc.lab=172.32.0.14"
+  - "repo01=172.32.0.14"
   - "kc01.poc.lab=172.32.0.21"
   - "kc01=172.32.0.21"
   - "kc02.poc.lab=172.32.0.22"
@@ -66,9 +66,21 @@ services:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - ssh-keys:/etc/ssh/authorized_keys.d
       - ../../packages-manual:/mnt/exchange:ro      # landing zone, read-only
-      - ops-state:/var/lib/cp-installer
-      - ops-repo:/srv/repo
       - ops-home:/home/cpadmin
+
+  # The bank's package web server (stands in for Satellite / Nexus): HTTPS with a bank-CA certificate.
+  #   /os/   OS packages the bank provides (JDK, chrony, firewalld, C3 prerequisites, tools) - maintained by the bank
+  #   the Confluent packages are uploaded by the deploy account repodeploy (no root, no createrepo_c here)
+  repo01:
+    <<: *node
+    image: cp-web:poc
+    hostname: repo01
+    networks: { mannet: { ipv4_address: 172.32.0.14 } }
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ssh-keys:/etc/ssh/authorized_keys.d:ro
+      - ../web/tls:/etc/pki/repo-tls:ro
+      - repo-web:/var/www/repo
 
   ad01:
     image: cp-ad:poc
@@ -105,7 +117,6 @@ services:
       - ssh-keys:/etc/ssh/authorized_keys.d:ro
     restart: unless-stopped
 
-  jump01: { <<: *node, hostname: jump01, networks: { mannet: { ipv4_address: 172.32.0.13 } } }
   kc01: { <<: *node, hostname: kc01, networks: { mannet: { ipv4_address: 172.32.0.21 } } }
   kc02: { <<: *node, hostname: kc02, networks: { mannet: { ipv4_address: 172.32.0.22 } } }
   kc03: { <<: *node, hostname: kc03, networks: { mannet: { ipv4_address: 172.32.0.23 } } }
@@ -131,8 +142,7 @@ networks:
 
 volumes:
   ssh-keys:
-  ops-state:
-  ops-repo:
   ops-home:
+  repo-web:
   ad-data:
   ad-etc:
