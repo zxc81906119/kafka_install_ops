@@ -235,3 +235,16 @@
 | CyberArk | 元件清單（照功能問）；CCP AppID 申請與驗身分；CPM 管 cpadmin 金鑰與 from= 限制；Conjur 有無與型態、host 身分、policy 誰載、443 通否；只有 PAM 時 master key 放哪個 safe；保管庫故障時平台能否重啟 |
 | 應用程式 | 直連 SCRAM 或經 REST 各幾個；app 怎麼拿密碼、認證失敗會否重取；topic 命名與配額；client 語言與 SCRAM-SHA-512 支援 |
 | 監控維運 | 日誌送 SIEM 方式與保留；行內 Prometheus 抓 JMX exporter；稽核日誌保留與去向；變更時段；冷開機順序 |
+
+## 13. OP menu（第 20 項）定案（2026-10-22）
+
+- **不在主機放任何 agent／forced-command 程式**；主機端只靠 sudoers。
+- 跑在操作機，維運人員用自己的 opxx 本機帳號執行；Kafka 身分用本人 AD 帳密向 MDS 換 token（現有機制不變）。
+- 主機類動作（重啟、看日誌）：選單啟動時經 CCP 取「和安裝同一把」cpadmin 私鑰進 ssh-agent，普通 ssh 到各主機 cpadmin 執行 `sudo systemctl restart`／`sudo journalctl`；結束 `ssh-agent -k`。
+- 各主機 cpadmin 的 sudoers 分兩段：**永久窄規則**（`systemctl restart/status confluent-*`、`journalctl -u confluent-*`）＋ **變更時段全權**（安裝、升級時 OS 團隊依變更單開 ALL，做完收回）。
+- 保留：第 1 層值班查看、第 3 層變更作業、第 4 層授權與稽核、91 緊急模式；第 2 層只留重啟與看日誌。
+- 拿掉：ticket 機制、清理日誌（由第 7 站的 tmpfiles 處理）、docker 後端、雙人確認（早已移除）。
+- 91 緊急模式的 opmenu-breakglass 憑證放 CyberArk，執行時經 CCP 取，不落地。
+- 紀錄：本機檔（opxx 本人、項目、時間、結果）；是否送 SIEM 待問客戶（總問題清單第 9 組）。
+- 追溯：選單紀錄（人）＋ CCP 取用紀錄（AppID、時間）＋ 主機 sshd／sudo 日誌（cpadmin 從操作機 IP）。
+- 程式面：`lib/backend/vm.sh` 改成 ssh cpadmin（拿掉 kafkaops 與清日誌）、tier2 只留 21–23、拿掉 ticket 相關；其餘結構不動。尚未改程式，先記錄。
