@@ -23,3 +23,6 @@
   lab 實測（ops02 建 op01、/etc/opmenu/*、Conjur host kafka/opmenu）：三身分動態選單、23/16/21/22/27/91 成功、kb04 窄 sudoers 下重啟與看日誌可、無殘留。
   RBAC 發現：kafka-topics --describe 需 DescribeConfigs → 維運群組加 DeveloperManage Topic:*；kafka-devs 加 DeveloperManage Topic:orders.*（lab 綁好）。
   lab 現況：`lab` 在跑（含 Conjur、dl01），平台 Secret Protection + Summon 模式，op01/opmenu 已部署在 ops02。
+- 2026-10-22 深夜：journey 第 17 站「維運選單」實跑通過並併入（保管庫身分與兩個值、裝選單、兩段式 sudoers、bob/carol/alice 試跑、收尾檢查）；diagrams 加 opmenu；docx 重建。
+  OP menu 打包：windows/package-opmenu.sh → packages/tools/opmenu-20261022.5b4cdd00.tar.gz（landing/tools/opmenu）。
+  待辦順序（使用者定）：2 audit log 路由 + JMX exporter（HTTPS + basic auth + scrape 設定）→ 1 驗收清單（平台健康、安全、應用程式端、維運）＋ 22 收尾 → 4 安裝腳本重寫（照手把手一章一支）。

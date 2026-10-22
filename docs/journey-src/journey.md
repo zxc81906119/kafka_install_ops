@@ -78,6 +78,7 @@
 | CyberArk PAM／Conjur／CCP | 銀行的特權帳號與機敏資料系統：PAM 管人與帳號（Vault、PVWA、CPM、PSMP），Conjur 給程式拿 secret，CCP 是 PAM 給程式拿密碼的 REST 入口 |
 | config provider | Kafka 的擴充點：properties 裡寫 `${provider:路徑:key}`，啟動時由 provider 去外面取值 |
 | Secret Protection | Confluent 的密碼加密功能：密文留在 `security.properties`，master key 以環境變數給服務 |
+| OP menu | 給維運人員的文字選單：用本人 AD 身分做 Kafka 類作業，主機類作業以 cpadmin ssh、金鑰從保管庫取 |
 
 ### 操作機上的檔案放哪
 
@@ -102,6 +103,7 @@
 | 10–13 設定、啟動、權限、REST、C3 | 40 分 | 每段啟動要等健康檢查；C3 第一次起來 1–2 分鐘 |
 | 15 Conjur（延伸） | 40 分 | 下載機建 jar 要 15–20 分；之後是改設定與滾動重啟 |
 | 16 Secret Protection（延伸） | 20 分 | 加密、派送、兩次滾動重啟 |
+| 17 OP menu（延伸） | 20 分 | 保管庫加身分、裝選單、改 sudoers、三種身分試跑 |
 
 ## 0.5 自己把 lab 建起來
 
@@ -2075,7 +2077,7 @@ Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~
 
 # 14. 終點：小安的檢查清單
 
-到這裡平台已經能用。後面第 15、16 站是**延伸站**：把密碼搬進銀行的 CyberArk，兩站二選一，看銀行有沒有 Conjur。
+到這裡平台已經能用。後面是**延伸站**：第 15、16 站把密碼搬進銀行的 CyberArk（二選一，看銀行有沒有 Conjur）；第 17 站裝維運選單。
 
 @role 小安 | ops02 | cpadmin
 
@@ -2872,3 +2874,208 @@ kb01 main pid 7764 = summon; java child has MASTER_KEY in env: 1 ; on disk: 0 fi
 主程序是 Summon，Java 是它的子程序，`systemctl stop` 送的訊號 Summon 會轉給子程序，停機和原本一樣。現在主機上和 master key 有關的只剩 `/etc/conjur.identity`（主機的 Conjur 身分）：這就是 secret zero，和第 15 站的 host API key 是同一把。
 
 > 什麼時候不要用 Summon：如果銀行要求「保管庫故障時平台仍能重啟」，就留在 16.4 的 `service.env` 作法。兩者的差別只有啟動時要不要連得到保管庫。
+
+# 17. 第十七站：維運選單（OP menu）
+
+![opmenu]
+
+平台交給維運之後，日常作業不該靠人記指令。小安帶了一個文字選單：維運人員用自己的本機帳號登入操作機，輸入 AD 帳密，選單只顯示他有權限的項目，每一步留紀錄。重啟、看日誌這類要碰主機的動作，選單以 cpadmin ssh 過去做，私鑰在選單啟動時從銀行的保管庫取進 ssh-agent，不落地；主機上不放任何代理程式，只靠 sudoers 限制 cpadmin 能跑的指令。
+
+| 誰 | 做什麼 |
+|---|---|
+| 銀行 Secrets 團隊 | 在保管庫開一個給選單用的身分，放兩個值：cpadmin 的 SSH 私鑰、緊急模式用的憑證 |
+| 銀行 OS 團隊 | 操作機上建維運人員的本機帳號（lab 用 op01）；各主機 cpadmin 的 sudo 改成兩段式 |
+| 小安 | 把值寫進保管庫、裝選單、派送設定、綁緊急身分的權限、試跑 |
+
+lab 一樣用第 15 站的 Conjur 扮演 CyberArk；正式環境把 `lib/secrets/conjur.sh` 換成 `ccp.sh`（PAM 的 CCP），其他不變。
+
+## 17.1 銀行開保管庫身分與兩個變數
+
+@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+cd ~/kafka-lab && cat > conjur/opmenu-policy.yml <<'EOF'
+- !host opmenu
+- !variable ssh/cpadmin
+- !variable breakglass/pem
+- !permit
+  role: !host opmenu
+  privileges: [ read, execute ]
+  resources: [ !variable ssh/cpadmin, !variable breakglass/pem ]
+- !permit
+  role: !user ops
+  privileges: [ read, execute, update ]
+  resources: [ !variable ssh/cpadmin, !variable breakglass/pem ]
+EOF
+docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/opmenu-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka > /c/keys/opmenu-policy.json; umask 077; python3 - <<PY
+import json; r=json.load(open("/c/keys/opmenu-policy.json"))
+for k,v in r["created_roles"].items(): open("/c/keys/kafka_opmenu.key","w").write(v["api_key"]); print(k)
+PY
+rm -f /c/keys/opmenu-policy.json' && docker cp "$(cygpath -m "$PWD/conjur/keys/kafka_opmenu.key")" lab-ops02-1:/root/opmenu.key && echo "opmenu host key delivered to ops02 (root)"
+```
+
+```out
+poc:host:kafka/opmenu
+opmenu host key delivered to ops02 (root)
+```
+
+> 重複載入同一份 policy 是安全的：已存在的身分不會重發 API key（`created_roles` 會是空的），要重發用 Conjur 的 rotate API。
+
+## 17.2 小安把值寫進保管庫、綁緊急身分的權限
+
+@role 小安 | ops02 | cpadmin
+
+兩個值：操作機 → 各主機的 cpadmin 私鑰（第 3.1 站那把；正式環境是 CPM 產生的那把），以及第 9 站簽好備用的 `opmenu-breakglass` 憑證（私鑰 + 憑證鏈，PEM）。然後把 `User:opmenu-breakglass` 綁成 SystemAdmin，這就是 91 緊急模式用的身分：
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @$HOME/.ssh/id_ed25519 https://conjur.poc.lab/secrets/poc/variable/kafka%2Fssh%2Fcpadmin && echo "ssh key stored" && cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && echo "breakglass pem stored"; unset T; export JAVA_HOME=/opt/java/current && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null 2>&1 && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal User:opmenu-breakglass --role SystemAdmin --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal User:opmenu-breakglass --kafka-cluster "$CID" 2>/dev/null | tail -1
+```
+
+```out
+ssh key stored
+breakglass pem stored
+  User:opmenu-breakglass | SystemAdmin | Cluster       |      |
+```
+
+維運群組要能跑健康檢查與重啟前的檢查（`kafka-topics --describe` 對每個 topic 都要 DescribeConfigs），只有 Operator 不夠；開發群組在自己的 prefix 上也要 DescribeConfigs 才看得到 topic 明細：
+
+```bash
+export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperManage --resource 'Topic:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Group:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-devs --role DeveloperManage --resource Topic:orders. --prefix --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal Group:kafka-operators --kafka-cluster "$CID" 2>/dev/null | tail -n +3
+```
+
+```out
+  Group:kafka-operators | DeveloperManage | Topic         | *    | LITERAL
+  Group:kafka-operators | DeveloperRead   | Group         | *    | LITERAL
+  Group:kafka-operators | Operator        | Cluster       |      |
+```
+
+> `DeveloperManage Topic:*` 同時給了建刪 topic 的能力。銀行若不接受，改給 ClusterAdmin，或規定健康檢查由管理員做。
+
+## 17.3 裝選單
+
+@role 銀行 OS 團隊（lab 由小安用 sudo 代勞） | ops02 | cpadmin
+
+維運人員的本機帳號（op01）與 `opmenu` 群組；選單從落地區解開到 `/opt/opmenu`（唯讀）；`/etc/opmenu/` 放設定、保管庫身分、truststore、主機金鑰清單；`/var/log/opmenu/` 給紀錄與匯出檔：
+
+```bash
+cd ~/landing/tools/opmenu && sha256sum -c --quiet SHA256SUMS && sudo groupadd -f opmenu && (id op01 >/dev/null 2>&1 || sudo useradd -m -s /bin/bash -G opmenu op01) && sudo rm -rf /opt/opmenu && sudo tar -xzf opmenu-*.tar.gz -C /opt && sudo chown -R root:root /opt/opmenu && sudo chmod -R a+rX /opt/opmenu && sudo install -d -m 0755 /etc/opmenu /etc/opmenu/ssl && sudo bash -c 'printf "login=host/kafka/opmenu\napi_key=%s\n" "$(cat /root/opmenu.key)" | install -m 0640 -o root -g opmenu /dev/stdin /etc/opmenu/conjur.identity && rm -f /root/opmenu.key' && sudo install -m 0644 ~/pki/certs/truststore.p12 /etc/opmenu/ssl/truststore.p12 && sudo install -m 0640 -g opmenu ~/pki/store.pass /etc/opmenu/ssl/truststore.pass && sudo install -m 0644 /etc/pki/ca-trust/source/anchors/bank-root.pem /etc/opmenu/ssl/ca.pem && ssh-keyscan -t ed25519 kc01.poc.lab kc02.poc.lab kc03.poc.lab kb01.poc.lab kb02.poc.lab kb03.poc.lab kb04.poc.lab rest01.poc.lab rest02.poc.lab c3-01.poc.lab 2>/dev/null | sort | sudo install -m 0644 /dev/stdin /etc/opmenu/known_hosts && sudo install -d -m 2775 -o root -g opmenu /var/log/opmenu && echo "opmenu $(ls /opt/opmenu/items | wc -l) items; known_hosts $(wc -l < /etc/opmenu/known_hosts) keys; $(id op01)"
+```
+
+```out
+opmenu 27 items; known_hosts 20 keys; uid=1001(op01) gid=1002(op01) groups=1002(op01),1001(opmenu)
+```
+
+設定檔只填無法推算的值（連線位址、可重啟的服務清單、保管庫）。`OPMENU_ALLOW_ENV_OVERRIDE=1` 只為了下面能非互動試跑，正式環境拿掉：
+
+```bash
+sudo tee /etc/opmenu/opmenu.conf >/dev/null <<'EOF'
+OPMENU_ENV_LABEL=LAB
+OPMENU_BOOTSTRAP=kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096
+OPMENU_CERT_DIR=/etc/opmenu/ssl
+OPMENU_BROKER_SERVICES="kb01.poc.lab:confluent-server kb02.poc.lab:confluent-server kb03.poc.lab:confluent-server kb04.poc.lab:confluent-server"
+OPMENU_AUX_SERVICES="rest01.poc.lab:confluent-kafka-rest rest02.poc.lab:confluent-kafka-rest c3-01.poc.lab:confluent-control-center"
+OPMENU_CONTROLLER_HOSTS="kc01.poc.lab kc02.poc.lab kc03.poc.lab"
+OPMENU_SSH_USER=cpadmin
+OPMENU_USER_FROM_OS=0
+OPMENU_SECRETS=conjur
+OPMENU_CONJUR_URL=https://conjur.poc.lab
+OPMENU_CONJUR_ACCOUNT=poc
+OPMENU_CONJUR_IDENTITY=/etc/opmenu/conjur.identity
+OPMENU_SSH_KEY_SECRET=kafka/ssh/cpadmin
+OPMENU_BREAKGLASS_SECRET=kafka/breakglass/pem
+OPMENU_LOG=/var/log/opmenu/opmenu.log
+OPMENU_SYSLOG=0
+OPMENU_ALLOW_ENV_OVERRIDE=1
+EOF
+sudo chmod 0644 /etc/opmenu/opmenu.conf && sudo runuser -u op01 -- /opt/opmenu/opmenu.sh --list | awk -F'\t' '{print $1, $5}' | head -8
+```
+
+```out
+10 查看 leader 與 partition 分布(balance report)
+11 cluster 與身分鏈健康檢查
+12 列出 topic 與 partition 狀態
+13 查看 consumer lag
+14 查看某個 topic 的設定
+15 查看 application 連線狀況
+16 查看磁碟與 data directory 用量
+17 查看 certificate 到期日
+```
+
+## 17.4 各主機 cpadmin 的 sudo 改成兩段式
+
+@role 銀行 OS 團隊（lab 由小安用 sudo 代勞） | ops02 | cpadmin
+
+永久只開重啟、查狀態、看日誌三件事；安裝、升級時 OS 團隊依變更單另開全權、做完收回。lab 為了之後還要做別的章節，全權那份先留著，用 kb04 證明「只剩窄規則時選單仍能重啟」：
+
+```bash
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'printf "cpadmin ALL=(root) NOPASSWD: /usr/bin/systemctl restart confluent-*, /usr/bin/systemctl status confluent-*, /usr/bin/journalctl -u confluent-*\n" | sudo install -m 0440 /dev/stdin /etc/sudoers.d/cpadmin-ops && sudo visudo -cf /etc/sudoers.d/cpadmin-ops >/dev/null && printf "%s " $(hostname)'; done; echo; ssh kb04.poc.lab 'sudo mv /etc/sudoers.d/cpadmin /root/cpadmin.sudoers.full; sudo -n ls /root >/dev/null 2>&1 && echo "kb04: full sudo STILL on" || echo "kb04: only the narrow rules now (sudo ls denied)"'
+```
+
+```out
+kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
+kb04: only the narrow rules now (sudo ls denied)
+```
+
+## 17.5 試跑：三種身分看到的選單不一樣
+
+@role 小安（代打 bob、carol、alice；以 sudo 切成 op01 執行） | ops02 | cpadmin
+
+互動模式就是 `op01` 登入後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 只印這個人看得到的編號：
+
+```bash
+P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 17 站試跑" JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; for u in bob carol alice; do printf '%-6s ' $u; op $u menu | grep '@@MENU@@' | cut -d' ' -f2-; done; unset P
+```
+
+```out
+bob    10 11 12 13 14 15 16 17 18 19 21 22 23 27 43 45
+carol  10 11 12 13 14 15 17 19
+alice  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 44 45 91
+```
+
+bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；23 只列含 error／warn 字樣的行，INFO 裡有 errors 字眼也會被列出）、重啟 kb04；直接輸入他看不到的 31 會被擋：
+
+```bash
+P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 23 kb04.poc.lab:confluent-server 10 | tail -1 | cut -c1-80; op bob 21 kb04.poc.lab:confluent-server | tail -1; for i in $(seq 1 24); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"; op bob 31 orders.x 1 | tail -1; unset P
+```
+
+```out
+-- 你的 MDS token:已用 3s,剩約 3597s
+-- broker 在線:4 / 4(設定的 broker 數)
+Oct 22 22:40:15 kb04 summon[1078]: [2026-10-22 22:40:15,683] INFO Updated lag of 0 groups, …
+已重啟 kb04.poc.lab 的 confluent-server
+kb04 MDS=200 after ~20s
+項目 31 不在你的選單內(你的 AD 群組沒有這項權限),請依變更單申請。
+```
+
+alice（SystemAdmin）：建 topic、91 緊急模式（憑證從保管庫取、用完即丟）、刪 topic：
+
+```bash
+P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 17 站試跑" JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; op alice 31 orders.optest 1 | tail -1; op alice 91 kafka-topics --list | grep -c '^[a-z_]'; op alice 33 orders.optest | grep 將執行; unset P
+```
+
+```out
+Created topic orders.optest.
+14
+將執行:刪除 topic orders.optest,資料不可復原
+```
+
+## 17.6 收尾檢查
+
+@role 小安 | ops02 | cpadmin
+
+選單結束後不留東西：沒有 ssh-agent、磁碟上沒有私鑰；op01 讀得到保管庫身分檔（0640 root:opmenu）、讀不到 cpadmin 的檔案；紀錄每行有 AD 帳號、作業系統帳號、項目、結果：
+
+```bash
+echo "ssh-agent: $(pgrep -x ssh-agent | wc -l); private keys on disk: $(sudo grep -rls 'PRIVATE KEY' /home/op01 /dev/shm /tmp 2>/dev/null | grep -v runner.sh | wc -l); op01 reads identity: $(sudo runuser -u op01 -- cat /etc/opmenu/conjur.identity >/dev/null 2>&1 && echo yes || echo no); op01 reads cpadmin secrets: $(sudo runuser -u op01 -- ls ~/secrets >/dev/null 2>&1 && echo YES || echo no)"; sudo tail -4 /var/log/opmenu/opmenu.log | cut -c1-120; ssh kb04.poc.lab 'sudo mv /root/cpadmin.sudoers.full /etc/sudoers.d/cpadmin 2>/dev/null; echo "kb04 full sudo restored for the rest of the lab"'
+```
+
+```out
+ssh-agent: 0; private keys on disk: 0; op01 reads identity: yes; op01 reads cpadmin secrets: no
+2026-10-22 22:40:47 +0800 | LAB | alice | os=op01 | 91 breakglass | sid=1792680046-22240 | EMERGENCY | kafka-topics --li
+2026-10-22 22:40:49 +0800 | LAB | alice | os=op01 | 91 緊急模式(以保管庫的備用憑證執行一個指令) | sid
+2026-10-22 22:40:50 +0800 | LAB | alice | os=op01 | login | sid=1792680050-22629 | SSH_KEY_LOADED | kafka/ssh/cpadmin tt
+2026-10-22 22:40:56 +0800 | LAB | alice | os=op01 | 33 刪除 topic | sid=1792680050-22629 | OK | orders.optest [rc=0 6s
+kb04 full sudo restored for the rest of the lab
+```
+
+> 最後一行只是 lab 的事：後面的章節還需要 cpadmin 的全權。正式環境各主機只留 `cpadmin-ops` 那份窄規則。

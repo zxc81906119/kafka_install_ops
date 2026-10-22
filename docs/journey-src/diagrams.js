@@ -241,4 +241,23 @@ D.secretprotection = () => svg(800, 300, [
   arrow(532, 71, 578, 71, "派送"), arrow(532, 161, 578, 161, "派送"), arrow(532, 246, 578, 246, "派送"),
 ].join(""));
 
+// 14. OP menu: who runs what, where the secrets come from
+D.opmenu = () => svg(800, 310, [
+  box(20, 50, 150, 62, "維運人員", ["本機帳號 op01 登入操作機", "輸入自己的 AD 帳密"], "gray"),
+  box(220, 50, 200, 62, "OP menu(操作機)", ["只顯示本人有權限的項目", "每步留紀錄:AD 帳號 + os 帳號"], "blue"),
+  arrow(170, 81, 218, 81),
+  box(470, 50, 150, 62, "MDS", ["AD 帳密換 token", "問:這個人能做什麼?"], "blue"),
+  arrow(420, 81, 468, 81),
+  box(650, 50, 130, 62, "CyberArk", ["cpadmin SSH 私鑰", "breakglass 憑證"], "amber"),
+  arrow(650, 60, 320, 48, "啟動時取 SSH 私鑰進 ssh-agent;91 時取憑證,用完即丟", { via: [[635, 60], [635, 22], [320, 22]], lx: 478, ly: 16, dash: true }),
+  box(220, 140, 200, 62, "Kafka 類項目", ["以本人身分走 LDAP listener", "RBAC 依 AD 群組決定"], "blue"),
+  arrow(320, 112, 320, 138),
+  box(470, 140, 150, 62, "broker", ["topic、權限、lag、稽核"], "gray"),
+  arrow(420, 171, 468, 171),
+  box(220, 225, 200, 62, "主機類項目(需 Operator)", ["ssh cpadmin@主機", "sudo 只開 restart / journalctl"], "blue"),
+  arrow(320, 202, 320, 223),
+  box(470, 225, 150, 62, "各主機", ["cpadmin,無 agent", "sudoers 兩段式"], "gray"),
+  arrow(420, 256, 468, 256),
+].join(""));
+
 module.exports = D;
