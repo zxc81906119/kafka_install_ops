@@ -10,3 +10,4 @@
 - 冪等重跑驗證通過（同一 lab `install.sh --from 02` 到 14：0 FAIL、0 WARN 除第 6 站刻意的「不是全新主機」）。重跑才會出現、已修：
   第 4 站 `dnf list available` 在已裝主機只剩沒裝的套件 → 改 `repoquery`；第 8 站 `versionlock add` 對已鎖套件會加重複行 → 先查清單再加（手把手第 8 站的指令也有同樣行為，14.2「裝套件可重跑」那列待補一句，docx 未重建）。
   格式化、CSR、mds-token、密碼檔、cluster id 都正確略過；服務 restart 後 quorum／MDS／REST／C3 全部回 200。
+- 收尾：journey 14.2 補 versionlock 重跑註記、docx 重建；lab 全部 stop。

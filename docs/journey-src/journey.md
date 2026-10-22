@@ -2130,7 +2130,7 @@ metrics in prometheus: 111 kinds
 | 派送憑證、設定檔、drop-in（10–13 站） | 可以，重跑就是覆蓋成一樣的內容 | 改完記得 `sudo systemctl restart <unit>` |
 | 格式化儲存（10.4） | **不能**，`meta.properties` 存在就會拒絕 | 真要重來：停服務、`sudo rm -rf /var/lib/kafka/data/*`，所有 controller 和 broker 一起重做 |
 | 憑證（9 站） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留 |
-| 裝套件（8 站） | 可以，dnf 看到已安裝就略過 | — |
+| 裝套件（8 站） | 可以，dnf 看到已安裝就略過 | `versionlock add` 對已鎖的套件會再加一筆重複，重跑前先 `sudo dnf versionlock list` 看一下，已鎖的不要再加 |
 | 整台主機重置 | lab 可以 | `docker compose -f compose.yml rm -sf <host> && docker compose -f compose.yml up -d <host>`，再從第 3.2 站的「根憑證信任」對那台重做一次 |
 
 ## 14.3 小安踩過的坑

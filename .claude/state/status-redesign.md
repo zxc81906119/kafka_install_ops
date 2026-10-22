@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-23 (session in C:/Users/user/IdeaProjects/untitled7, no worktree)
+Updated: 2026-10-23 上午（session 收尾，lab 已 stop）
 
 ## 現在在做什麼
 安裝流程重新設計：由使用者主導逐項討論，Claude 記錄；同時用 cp-man lab 手動（不用 cpctl）走完整個安裝，
@@ -18,10 +18,10 @@ Updated: 2026-10-23 (session in C:/Users/user/IdeaProjects/untitled7, no worktre
 ## 下一步（2026-10-22 使用者定案順序）
 1. （已完成）audit log 路由 ＋ JMX exporter → journey 第 18、19 站。
 2. （已完成）驗收清單＋收尾 → journey 第 20 站。
-3. **已完成（2026-10-23）**：安裝腳本重寫 → `install/`（installer/ 保留對照）：核心第 1–14 章一章一支 `steps/NN-*.sh`，共用只有 `lib/{ssh,render,log}.sh`，站點設定 `conf/site.env`，銀行步驟印「請銀行做」後驗證（rc 2＝等銀行）；lab 扮演銀行 `install/lab/bank-sim.sh`、從零全自動 `install/lab/run-all.sh`。**lab `down -v` 從零驗證通過（24 分鐘，0 FAIL）**；**冪等重跑也通過**（--from 02，0 FAIL）。候選下一步：install/ 延伸站（15–19）、驗收（20）腳本化；或回到客戶問題清單。
+3. **已完成（2026-10-23）**：安裝腳本重寫 → `install/`（installer/ 保留對照）：核心第 1–14 章一章一支 `steps/NN-*.sh`，共用只有 `lib/{ssh,render,log}.sh`，站點設定 `conf/site.env`，銀行步驟印「請銀行做」後驗證（rc 2＝等銀行）；lab 扮演銀行 `install/lab/bank-sim.sh`、從零全自動 `install/lab/run-all.sh`。**lab `down -v` 從零驗證通過（24 分鐘，0 FAIL）**；**冪等重跑也通過**（--from 02，0 FAIL）。journey 14.2 已補 versionlock 重跑註記、docx 已重建。候選下一步：install/ 延伸站（15–19）、驗收（20）腳本化；或回到客戶問題清單。
 4. 每個里程碑 commit（已養成）；從未 push。
 
 ## 環境狀態
-- lab: `lab` 專案 **在跑**（本 session 2026-10-23：已由 install/ 從零重裝到第 14 章；Conjur／OP menu／JMX／audit 的 lab 狀態已清掉，第 15–20 章要再演練用 docs/journey-src/tools/run-chapter.js 重跑）。cp-man、cp-poc 是 stop。
+- lab: 全部 **已 stop**（`lab` 專案 14 台＋dl01；狀態＝install/ 從零裝到第 14 章，無 Conjur／OP menu／JMX／audit）。重開：`cd ~/kafka-lab && docker compose -f compose.yml start && docker start dl01`。cp-man、cp-poc 也是 stop。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
