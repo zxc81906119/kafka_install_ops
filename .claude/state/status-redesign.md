@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-22 (session in C:/Users/user/IdeaProjects/untitled7, no worktree)
+Updated: 2026-10-23 (session in C:/Users/user/IdeaProjects/untitled7, no worktree)
 
 ## 現在在做什麼
 安裝流程重新設計：由使用者主導逐項討論，Claude 記錄；同時用 cp-man lab 手動（不用 cpctl）走完整個安裝，
@@ -18,10 +18,10 @@ Updated: 2026-10-22 (session in C:/Users/user/IdeaProjects/untitled7, no worktre
 ## 下一步（2026-10-22 使用者定案順序）
 1. （已完成）audit log 路由 ＋ JMX exporter → journey 第 18、19 站。
 2. （已完成）驗收清單＋收尾 → journey 第 20 站。
-3. 安裝腳本重寫：照手把手文件一章一支（steps/NN-*.sh），共用只有 ssh、渲染、紀錄；銀行的步驟只印「請銀行做」。
+3. **下一個**：安裝腳本重寫，照手把手文件一章一支（steps/NN-*.sh），共用只有 ssh／渲染／紀錄，銀行的步驟只印「請銀行做」。動手前先問三題：涵蓋哪些章（核心 1–13／延伸 15–19／verify／lab）、放 install/ 還是取代 installer/、是否從零重建 lab 驗證。可用 docs/journey-src/tools/run-chapter.js 當起點。
 4. 每個里程碑 commit（已養成）；從未 push。
 
 ## 環境狀態
-- lab: **`lab` 專案在跑**（`~/kafka-lab` + `conjur.yml`：14 台、Conjur 三容器、dl01；平台 Secret Protection + Summon 模式；ops02 已部署 OP menu 與 op01）。cp-man、cp-poc 已 stop。Docker Desktop 重啟後要確認別的 lab 沒自己起來。
+- lab: 全部 **已 stop**（`lab` 專案 14 台 + Conjur 三容器 + dl01；資料在 volume；平台 Secret Protection + Summon 模式，含 OP menu、JMX exporter、audit log）。重開：`cd ~/kafka-lab && docker compose -f compose.yml -f conjur.yml start && docker start dl01`；C3 冷開機約 2.5 分鐘。cp-man、cp-poc 也是 stop。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。

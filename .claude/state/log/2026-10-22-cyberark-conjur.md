@@ -35,3 +35,6 @@
   真問題：C3 比 MDS 先起來或 broker 全部重啟過一輪後會卡住（Failed to fetch MDS URLs / Client has already been closed，不自癒）→ 第 13 站 drop-in 加 ExecStartPre 等 MDS（lab 已套用：冷開機從 12 分鐘降到 154 秒），14.1 加排錯列。
   測試本身修正：函式要 export -f 才能進 bash -c；carol 在自己 prefix 能建 topic（DeveloperManage）；OS 已信任銀行根憑證所以「不帶 CA」不會失敗，改用無關 CA；SBC 用 kafka-rebalance-cluster --status；/tmp 檢查排除 JVM 的 lib*.so。
   diagrams 加 acceptance；docx 重建。下一個：安裝腳本重寫（照手把手一章一支）。
+- 2026-10-23 00:xx 收 session：lab 全部 stop（lab 專案 14 台 + Conjur 三容器 + dl01；資料在 volume）。
+  下一個是第 4 項「安裝腳本重寫（照手把手一章一支）」，三個範圍問題尚未回答：涵蓋哪些章（核心 1–13／延伸 15–19／verify／lab）、放 install/ 還是取代 installer/、要不要從零重建 lab 驗證。
+  把實跑用的執行器收進 docs/journey-src/tools/run-chapter.js（README 說明用法）。
