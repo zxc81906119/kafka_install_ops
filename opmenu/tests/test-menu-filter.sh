@@ -2,13 +2,13 @@
 # 測動態選單(core_menu_permissions):依 MDS 回答只顯示有權限的項目;看不到的項目直接輸入編號也會被擋並記錄;
 # MDS 問不到時全部顯示(執行時仍會檢查)。不需要叢集:MDS 以假的函式代替。
 #   ./test-menu-filter.sh      全部通過印 "ALL PASS",有失敗回傳 1
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 OPMENU_LOG="$(mktemp)"
 export OPMENU_HOME="$PWD" OPMENU_LOG OPMENU_SYSLOG=0 OPMENU_YES=1 OPMENU_ALLOW_ENV_OVERRIDE=1
-export OPMENU_BROKER_SERVICES='kb01:confluent-server' OPMENU_HOSTS='kb01' OPMENU_KAFKA_CLUSTER_ID=test-cluster OPMENU_TICKET_MODE=none
-. lib/defaults.sh; . lib/validate.sh; . lib/core.sh
+export OPMENU_BROKER_SERVICES='kb01:confluent-server' OPMENU_HOSTS='kb01' OPMENU_KAFKA_CLUSTER_ID=test-cluster
+. lib/defaults.sh; . lib/common.sh
 # shellcheck source=/dev/null
-for f in lib/actions/*.sh; do . "$f"; done
+load_items items
 OP_USER=tester OP_LAST_RAW="$(mktemp)"
 
 # 假 MDS:依請求裡的資源回答;HOST / ADMIN / AUDIT 三種權限各自由變數決定
@@ -37,7 +37,7 @@ check "開發:只看到查看類(1x、沒有 16、18)" '[[ " $v " == *" 12 "* &&
 check "開發:只問 MDS 一次" '[ "$(wc -l < "$CALLS_FILE")" = 1 ]'
 out=$(core_run 23 kb01:confluent-server); rc=$?
 check "開發:直接輸入看不到的 23 → 擋下、不執行" '[ $rc -ne 0 ] && [[ "$out" != *"ran 23"* && "$out" == *"不在你的選單內"* ]]'
-check "開發:擋下有記錄 DENIED / not in menu" 'grep -q "| tester | 23 .*| DENIED | not in menu" "$OPMENU_LOG"'
+check "開發:擋下有記錄 DENIED / not in menu" 'grep -q "| tester | os=.* | 23 .*| DENIED | not in menu" "$OPMENU_LOG"'
 out=$(core_run 12); check "開發:看得到的 12 照常執行" '[[ "$out" == *"ran 12"* ]]'
 
 # 維運(bob):多了碰主機的項目,沒有變更與稽核

@@ -18,3 +18,8 @@
   踩到：master.key 檔尾換行會被一起存進 Conjur → 值不符；寫入前 `tr -d '\n'`。
 - 1.4 給銀行的 OS 套件清單補 gettext、createrepo_c（操作機要用）。
 - lab 現況：平台在 **Secret Protection + Summon 模式**（沒有 service.env）。
+- 2026-10-22 晚：OP menu 依第 13 節定案改寫並重排（opmenu/）：無主機 agent、cpadmin ssh（私鑰從 Conjur 進 ssh-agent）、兩段式 sudoers、91 用保管庫 PEM 憑證、known_hosts 唯讀；
+  結構：opmenu.sh（選單）＋ lib/{common,kafka,hosts}.sh ＋ lib/secrets/{conjur,ccp}.sh ＋ items/ 一項一檔 ＋ tests/。
+  lab 實測（ops02 建 op01、/etc/opmenu/*、Conjur host kafka/opmenu）：三身分動態選單、23/16/21/22/27/91 成功、kb04 窄 sudoers 下重啟與看日誌可、無殘留。
+  RBAC 發現：kafka-topics --describe 需 DescribeConfigs → 維運群組加 DeveloperManage Topic:*；kafka-devs 加 DeveloperManage Topic:orders.*（lab 綁好）。
+  lab 現況：`lab` 在跑（含 Conjur、dl01），平台 Secret Protection + Summon 模式，op01/opmenu 已部署在 ops02。

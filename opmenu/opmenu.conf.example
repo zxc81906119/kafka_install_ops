@@ -1,44 +1,53 @@
-# opmenu.conf.example — 正式環境(RHEL 9 VM)的設定範本。複製成 opmenu.conf 後填入實際值。
+# opmenu.conf.example — 正式環境(操作機 + RHEL 9 主機)的設定範本。複製成 /etc/opmenu/opmenu.conf 後填入實際值。
 # 只需要填「無法推算」的值;沒有列在這裡的項目,用 lib/defaults.sh 的預設值或登入後自動推算。
 # 登入後可在選單項目 19 查看每個值實際用了什麼、來源是 conf、derived(推算)或 default(預設)。
-OPMENU_BACKEND=vm
 OPMENU_ENV_LABEL=PROD
 
-# 連線:只要填 bootstrap。以下由它推算(可用同名設定覆蓋):
-#   OPMENU_MDS_URL         = bootstrap 每台主機 + https + OPMENU_MDS_PORT(預設 8091);bootstrap 若是 VIP 或 DNS 別名、或 MDS 只開在部分 broker,請直接填 OPMENU_MDS_URL
-#   OPMENU_KAFKA_CLUSTER_ID= 向 MDS 查 /v1/metadata/id
-#   OPMENU_HOSTS           = BROKER_SERVICES、AUX_SERVICES 的主機 + CONTROLLER_HOSTS(它是 ssh 的允許清單,不從 cluster 推算)
-OPMENU_BOOTSTRAP='kafka1.bank.local:9094,kafka2.bank.local:9094,kafka3.bank.local:9094'
+# 連線:只要填 bootstrap(broker 的 LDAP listener,人員用 AD 帳密)。以下由它推算(可用同名設定覆蓋):
+#   OPMENU_MDS_URL              = bootstrap 每台主機 + https + OPMENU_MDS_PORT(預設 8090)
+#   OPMENU_BREAKGLASS_BOOTSTRAP = bootstrap 每台主機 + OPMENU_TOKEN_PORT(預設 9094;91 緊急模式用憑證換 token 走這個 listener)
+#   OPMENU_KAFKA_CLUSTER_ID     = 向 MDS 查 /v1/metadata/id
+#   OPMENU_HOSTS                = BROKER_SERVICES、AUX_SERVICES 的主機 + CONTROLLER_HOSTS(它是 ssh 的允許清單,不從 cluster 推算)
+OPMENU_BOOTSTRAP='kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096'
 
-# certificate 目錄:truststore(truststore.p12)、truststore 密碼檔(truststore_creds)、CA(ca.pem)預設都在這裡;檔名不同才需要個別設定
-# OPMENU_CERT_DIR='/etc/kafka/secrets'
+# certificate 目錄:truststore(truststore.p12,只放銀行根憑證)、truststore 密碼檔(truststore.pass)、CA(ca.pem)預設都在這裡
+OPMENU_CERT_DIR='/etc/opmenu/ssl'
 
 # 必須填:可重啟的服務與 controller。這些是重啟與 ssh 的允許清單,要經變更管理審過,不從 cluster 推算(broker 掛掉後就不在 cluster 的清單裡,正是需要重啟的那台)
-OPMENU_BROKER_SERVICES='kafka1.bank.local:confluent-server kafka2.bank.local:confluent-server kafka3.bank.local:confluent-server'   # 主機:systemd 服務名
-OPMENU_AUX_SERVICES='rest1.bank.local:confluent-kafka-rest c3.bank.local:confluent-control-center'   # 主機:systemd 服務名
-OPMENU_CONTROLLER_HOSTS='ctl1.bank.local ctl2.bank.local ctl3.bank.local'   # 獨立的 KRaft controller 主機;沒有就不填
+OPMENU_BROKER_SERVICES='kb01.poc.lab:confluent-server kb02.poc.lab:confluent-server kb03.poc.lab:confluent-server kb04.poc.lab:confluent-server'   # 主機:systemd 服務名
+OPMENU_AUX_SERVICES='rest01.poc.lab:confluent-kafka-rest rest02.poc.lab:confluent-kafka-rest c3-01.poc.lab:confluent-control-center'
+OPMENU_CONTROLLER_HOSTS='kc01.poc.lab kc02.poc.lab kc03.poc.lab'
 
-# data directory:預設 /var/lib/kafka;各 broker 的 log.dirs 不同時請填
-# OPMENU_DATA_DIR='/data/kafka'
+# 主機登入:操作機以 cpadmin ssh 到各主機(和安裝同一個帳號);私鑰在選單啟動時從保管庫取進 ssh-agent,不落地
+OPMENU_SSH_USER=cpadmin
+# 主機上 cpadmin 的 sudo 永久只開(安裝、升級時才由 OS 團隊依變更單開全權):
+#   cpadmin ALL=(root) NOPASSWD: /usr/bin/systemctl restart confluent-*, /usr/bin/systemctl status confluent-*, /usr/bin/journalctl -u confluent-*
 
-# node 登入方式
-OPMENU_SSH_USER=''                 # 空 = 操作員本人帳號(node 接 AD);否則填共用維運帳號
-OPMENU_SSH_AUTH=key                # key = 金鑰 | password = 用登入選單的 AD 密碼 ssh 到 node(jump host 與 node 都接 AD;需安裝 sshpass)
-OPMENU_USER_FROM_OS=1              # jump host 接 AD:操作者帳號固定為作業系統登入者(只輸入 AD 密碼);jump host 不接 AD 時設 0
-# jump host 與 node 都是「共用固定帳號」(都不接 AD)時:
-#   OPMENU_USER_FROM_OS=0               作業系統帳號大家共用,不能當身分;改由操作者輸入自己的 AD 帳密(MDS 驗證)
-#   OPMENU_SSH_USER=<node 的共用維運帳號> node 的 sudo 分不出是誰,所以主機類動作改由下面的閘門依 AD 群組控管
-#   OPMENU_HOST_ACTION_AUTHZ 保持預設   (預設 Topic:__opmenu-host-ops:Describe = Operator 以上才可碰 node)
-#   OPMENU_SYSLOG=1 並轉送 SIEM         共用帳號改得到本機的 opmenu.log,要以 syslog 那份為準
+# 操作者身分:操作機是本機個人帳號(opxx),所以操作者自己輸入 AD 帳號與密碼(Kafka 身分);作業系統帳號只在紀錄裡附註
+OPMENU_USER_FROM_OS=0
+
+# 機敏資料來源(lib/secrets/):conjur = Conjur REST(lab 用它扮演 CyberArk)| ccp = PAM 的 Central Credential Provider(範本,依行內調整)
+OPMENU_SECRETS=conjur
+OPMENU_CONJUR_URL='https://conjur.poc.lab'
+OPMENU_CONJUR_ACCOUNT=poc
+OPMENU_CONJUR_IDENTITY='/etc/opmenu/conjur.identity'   # 兩行 login=host/kafka/opmenu、api_key=…;0640 root:opmenu
+OPMENU_SSH_KEY_SECRET='kafka/ssh/cpadmin'               # 保管庫裡的 cpadmin 私鑰(CPM 管理、推公鑰到各主機的那把)
+OPMENU_BREAKGLASS_SECRET='kafka/breakglass/pem'         # 91 緊急模式憑證(私鑰 + 憑證鏈 PEM),身分 User:opmenu-breakglass 在 MDS 綁 SystemAdmin
+# 用 CCP 時改成:
+# OPMENU_SECRETS=ccp
+# OPMENU_CCP_URL='https://ccp.bank.local/AIMWebService/api/Accounts'
+# OPMENU_CCP_APPID=opmenu
+# OPMENU_CCP_SAFE=Confluent
+# OPMENU_CCP_CERT=/etc/opmenu/ssl/opmenu-ccp.crt     # AppID 用 client 憑證 + 操作機 IP 驗身分
+# OPMENU_CCP_KEY=/etc/opmenu/ssl/opmenu-ccp.key
+# OPMENU_SSH_KEY_SECRET='cpadmin-ssh-key'            # CCP 的 object 名稱
+# OPMENU_BREAKGLASS_SECRET='opmenu-breakglass-pem'
 
 # 規範(依客戶規定)
-OPMENU_TICKET_MODE=required        # required 必填 ticket | optional 可填可不填 | none 不問 ticket
-OPMENU_TICKET_CHECK=format         # format 只檢查格式 | http 向開單系統查(lib/ticket/http.sh,依客戶 API 調整)
-OPMENU_TICKET_PATTERN='^[A-Z]{2,5}-[0-9]{4}-[0-9]{3,6}$'
-# OPMENU_TICKET_URL='https://itsm.bank.local/api/changes'   # http 時用
 OPMENU_TOPIC_PATTERN='^[a-z][a-z0-9]+\.[a-z0-9.-]+$'
-OPMENU_SVC_PATTERN='^svc-[a-z][a-z0-9-]+$'
+OPMENU_SVC_PATTERN='^[a-z][a-z0-9-]+$'
 # OPMENU_REPLICATION=3             # 建 topic 的 replication factor;預設 3,broker 少於 3 台時自動降到 broker 數
-OPMENU_MIN_LOG_KEEP_DAYS=7
 OPMENU_IDLE_TIMEOUT=900
 OPMENU_AUDIT_GROUP_PREFIX='audit-' # 43 讀 audit 用的 consumer group prefix(audit 群組要有它的 DeveloperRead)
+# OPMENU_CHANGE_WINDOW='Mon-Fri 22:00-06:00;Sat,Sun 00:00-23:59'   # 變更類項目的時窗;空 = 不限制
+OPMENU_LOG=/var/log/opmenu/opmenu.log   # 程式目錄唯讀,紀錄與匯出檔放這裡(目錄要讓 opmenu 群組可寫);OPMENU_SYSLOG=1 另送 syslog

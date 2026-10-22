@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # 測主機類動作的權限閘門(core_host_gate)與 21 重啟前檢查「失敗即拒絕」;不需要叢集:後端以假的函式代替。
 #   ./test-host-gate.sh      全部通過印 "ALL PASS",有失敗回傳 1
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.." || exit 1
 OPMENU_LOG="$(mktemp)"
 export OPMENU_HOME="$PWD" OPMENU_LOG OPMENU_SYSLOG=0 OPMENU_YES=1 OPMENU_ALLOW_ENV_OVERRIDE=1
 export OPMENU_BROKER_SERVICES='kb01:confluent-server' OPMENU_HOSTS='kb01' OPMENU_KAFKA_CLUSTER_ID=test-cluster
-. lib/defaults.sh; . lib/validate.sh; . lib/core.sh
+. lib/defaults.sh; . lib/common.sh
 # shellcheck source=/dev/null
-for f in lib/actions/*.sh; do . "$f"; done
-OP_USER=tester OP_TICKET=CHG-2026-0001 OP_LAST_RAW="$(mktemp)"
+load_items items
+OP_USER=tester OP_LAST_RAW="$(mktemp)"
 
 # 假後端:MDS authorize 的回應、kafka 工具的成敗由變數控制;重啟只留紀錄
 MDS_REPLY='["ALLOWED"]'; MDS_RC=0; KAFKA_RC=0; RESTARTED=""

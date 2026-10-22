@@ -247,4 +247,8 @@
 - 91 緊急模式的 opmenu-breakglass 憑證放 CyberArk，執行時經 CCP 取，不落地。
 - 紀錄：本機檔（opxx 本人、項目、時間、結果）；是否送 SIEM 待問客戶（總問題清單第 9 組）。
 - 追溯：選單紀錄（人）＋ CCP 取用紀錄（AppID、時間）＋ 主機 sshd／sudo 日誌（cpadmin 從操作機 IP）。
-- 程式面：`lib/backend/vm.sh` 改成 ssh cpadmin（拿掉 kafkaops 與清日誌）、tier2 只留 21–23、拿掉 ticket 相關；其餘結構不動。尚未改程式，先記錄。
+- 2026-10-22 已改程式並在 lab 實測（opmenu/，commit 待）：拿掉 docker 後端、ticket、清日誌、維護模式；新增 lib/secrets/{conjur,ccp}.sh；
+  登入後 `secret_get` 取 cpadmin 私鑰 `ssh-add -` 進選單自己的 ssh-agent（TTL）、離開時 agent 結束；91 用保管庫的 PEM 憑證（TokenCertificateLoginCallbackHandler、PEM keystore）換 token；
+  ssh 只信管理員建的 /etc/opmenu/known_hosts。lab 實測：bob/carol/alice 三種身分的動態選單、隱藏項目直接輸入被擋、23/16/22/21/27 經 cpadmin ssh 成功、kb04 換成兩段式 sudoers 後重啟與看日誌仍可、91 經 Conjur 取憑證成功、離開後無 agent 殘留、磁碟無私鑰。
+  踩到：Conjur 身分檔最後一行沒換行 read 失敗；`kafka-topics --describe` 需要 DescribeConfigs → 維運群組要 Operator＋DeveloperManage Topic:*（見 opmenu/README）。
+- 2026-10-22 重排：opmenu.sh 只管登入與選單；lib/common.sh、kafka.sh、hosts.sh、secrets/；items/<編號>-<名稱>.sh 一項一檔（item 宣告 + run）；tests/。重排後單元測試 3/3、lab smoke 12 項通過，行為不變。

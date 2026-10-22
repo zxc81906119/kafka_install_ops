@@ -22,6 +22,6 @@ Updated: 2026-10-22 (session in C:/Users/user/IdeaProjects/untitled7, no worktre
 4. commit：目前 `redesign` 分支上的 `.claude/`、`CLAUDE.md`、`redesign/`、`docs/journey-src/`、deck 修改都未 commit。
 
 ## 環境狀態
-- lab: 全部 **已 stop**（`lab` 專案 14 台 + Conjur 三容器 + dl01；資料都在 volume，平台在 Secret Protection + Summon 模式）。重開：`cd ~/kafka-lab && docker compose -f compose.yml -f conjur.yml start && docker start dl01`。cp-man、cp-poc 也是 stop。
+- lab: **`lab` 專案在跑**（`~/kafka-lab` + `conjur.yml`：14 台、Conjur 三容器、dl01；平台 Secret Protection + Summon 模式；ops02 已部署 OP menu 與 op01）。cp-man、cp-poc 已 stop。Docker Desktop 重啟後要確認別的 lab 沒自己起來。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
