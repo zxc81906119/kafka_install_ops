@@ -27,7 +27,7 @@ done
 
 section "鎖版本（只鎖 Confluent；C3 的 cyrus-sasl、openssl-devel 跟著 OS 修補）"
 for h in $ALL_HOSTS; do
-  r=$(rsh "$h" 'sudo dnf -q -y install python3-dnf-plugin-versionlock >/dev/null && for p in $(rpm -qa "confluent-*"); do sudo dnf -q versionlock add "$p" >/dev/null; done; echo "$(sudo dnf -q versionlock list | grep -c confluent) locked / $(rpm -qa "confluent-*" | wc -l) installed"')
+  r=$(rsh "$h" 'sudo dnf -q -y install python3-dnf-plugin-versionlock >/dev/null && L=$(sudo dnf -q versionlock list); for p in $(rpm -qa "confluent-*"); do grep -q "^${p%-*-*}-[0-9]*:" <<<"$L" || sudo dnf -q versionlock add "$p" >/dev/null; done; echo "$(sudo dnf -q versionlock list | grep -c confluent) locked / $(rpm -qa "confluent-*" | wc -l) installed"')
   [ "$(awk '{print $1}' <<<"$r")" = "$(awk '{print $4}' <<<"$r")" ] && ok "$h: $r" || fail "$h: $r"
 done
 

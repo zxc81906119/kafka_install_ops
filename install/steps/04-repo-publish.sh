@@ -18,6 +18,6 @@ tar -C "$REPO_DIR" -cf - . | rsh_as "$REPO_DEPLOY_USER" "$REPO_HOST" 'tar -C /va
 ok "$REPO_HOST:/var/www/repo：$(rsh_as "$REPO_DEPLOY_USER" "$REPO_HOST" 'ls /var/www/repo | paste -sd" "; ls /var/www/repo/confluent | wc -l' | paste -sd' ') 個檔"
 
 section "從操作機用 HTTPS 讀回來"
-n=$(dnf -q --repofrompath=cp-test,"$REPO_URL/confluent/" --repo=cp-test --setopt=cp-test.gpgcheck=0 list available 2>/dev/null | grep -c confluent)
+n=$(dnf -q repoquery --repofrompath=cp-test,"$REPO_URL/confluent/" --repo=cp-test --setopt=cp-test.gpgcheck=0 --qf '%{name}' 2>/dev/null | grep -c confluent)   # repoquery：不管本機裝了沒都列
 [ "$n" -ge 11 ] && ok "套件庫看得到 $n 個 confluent 套件" || die "套件庫只看到 $n 個套件（預期 11）"
 finish
