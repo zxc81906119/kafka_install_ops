@@ -221,3 +221,17 @@
 3. **確認用的指令要 `sudo`**：`/etc/confluent/ssl`、`/var/lib/kafka` 是 0750，cpadmin 直接 `ls`/`stat` 會 Permission denied，誤以為步驟失敗。
 4. **下載機**：先下載再裝工具（見上方教訓）；lab 用 9p 掛載時 `dnf download` 的 checksum 核對會非常慢，應先下載到容器內磁碟再複製出來。
 5. **lab 環境問題（非設定）**：Docker Desktop VM 的 netlink 卡死，所有容器 `ip addr` 掛住 → Java 名稱解析卡在原生呼叫 → broker TOKEN listener 執行緒全部排隊、9094 堆滿 CLOSE-WAIT。重啟 broker 無效，只能重啟 Docker Desktop。判斷方式：任一容器 `timeout 5 ip addr` 卡住。
+
+## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
+
+| 組 | 題目 |
+|---|---|
+| 離線引進 | 下載機由誰提供、能否跑 Maven／git；落地區交換方式與大小上限；掃描放行標準（RPM GPG＋SHA256 夠嗎？jar／tar 怎麼放行）；後續補帶檔案的流程與時程 |
+| 套件來源與 JDK | OS 套件來源型態（Satellite／制品庫／mirror／媒體）與 .repo 由誰配；清單套件是否都在、版本是否鎖；Confluent RPM 上架到行內制品庫還是操作機自架、誰上架；JDK 21 誰提供、tar 或 RPM、路徑、誰更新 |
+| 主機與帳號 | 11 台規格、/tmp noexec；主機接不接 AD；cpadmin 誰建、sudo 怎麼開與收回；opxx 維運帳號與指令範圍；SELinux／THP／sysctl 變更單 |
+| 網路 | port 清單誰開、主機 firewalld 可否由我們管；DNS 或 /etc/hosts、FQDN；NTP 來源；REST 前的 LB 型態與 VIP；C3 9021 從哪個網段連 |
+| 憑證 | CA 申請流程與時程；會不會改 SAN／EKU、serverAuth＋clientAuth 同一張可否；回覆格式；效期與輪替；根憑證進 OS trust store／JDK cacerts 由誰 |
+| AD | svc-mds-bind 誰建、可否兩組 A／B；群組命名與管理；LDAPS 用哪台 DC、憑證、備援；人員 AD 帳密登入 C3 可否、MFA |
+| CyberArk | 元件清單（照功能問）；CCP AppID 申請與驗身分；CPM 管 cpadmin 金鑰與 from= 限制；Conjur 有無與型態、host 身分、policy 誰載、443 通否；只有 PAM 時 master key 放哪個 safe；保管庫故障時平台能否重啟 |
+| 應用程式 | 直連 SCRAM 或經 REST 各幾個；app 怎麼拿密碼、認證失敗會否重取；topic 命名與配額；client 語言與 SCRAM-SHA-512 支援 |
+| 監控維運 | 日誌送 SIEM 方式與保留；行內 Prometheus 抓 JMX exporter；稽核日誌保留與去向；變更時段；冷開機順序 |
