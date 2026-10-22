@@ -1,0 +1,4 @@
+# 應用程式：名稱  認證(scram=直連 Kafka；cert=走 REST Proxy，憑證在 certs.txt)  配額 producer_byte_rate,consumer_byte_rate,request_percentage
+app-orders          scram  5242880,10485760,50
+app-payments        scram  5242880,10485760,50
+app-legacy-billing  cert   1048576,2097152,25

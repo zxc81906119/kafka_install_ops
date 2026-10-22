@@ -1,0 +1,8 @@
+[Service]
+ExecStart=
+ExecStart=/usr/bin/kafka-rest-start /etc/confluent/kafka-rest/kafka-rest.properties
+Environment="JAVA_HOME=/opt/java/current"
+Environment="KAFKAREST_HEAP_OPTS=-Xms${HEAP} -Xmx${HEAP}"
+LimitNOFILE=65536
+Restart=on-failure
+RestartSec=10

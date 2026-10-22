@@ -1,0 +1,11 @@
+[Service]
+ExecStart=
+ExecStart=/usr/bin/kafka-server-start /etc/confluent/kafka/server.properties
+Environment="JAVA_HOME=/opt/java/current"
+Environment="KAFKA_HEAP_OPTS=-Xms${HEAP} -Xmx${HEAP}"
+Environment="KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile=/etc/kafka/log4j2.yaml"
+Environment="LOG_DIR=/var/log/kafka"
+LimitNOFILE=128000
+TimeoutStopSec=180
+Restart=on-failure
+RestartSec=10

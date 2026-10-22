@@ -1,0 +1,22 @@
+# KRaft controller ${HOST_FQDN}
+process.roles=controller
+node.id=${NODE_ID}
+controller.quorum.bootstrap.servers=${CONTROLLER_QUORUM}
+controller.listener.names=CONTROLLER
+listeners=CONTROLLER://${HOST_FQDN}:9093
+advertised.listeners=CONTROLLER://${HOST_FQDN}:9093
+listener.security.protocol.map=CONTROLLER:SSL,INTERNAL:SSL
+inter.broker.listener.name=INTERNAL
+log.dirs=/var/lib/kafka/data
+
+############################# MDS on KRaft controllers #############################
+confluent.metadata.server.kraft.controller.enabled=true
+confluent.metadata.bootstrap.servers=${BROKER_INTERNAL}
+confluent.metadata.security.protocol=SSL
+confluent.metadata.ssl.keystore.type=PKCS12
+confluent.metadata.ssl.keystore.location=/etc/confluent/ssl/kafka-internal.p12
+confluent.metadata.ssl.keystore.password=${STORE_PASSWORD}
+confluent.metadata.ssl.key.password=${STORE_PASSWORD}
+confluent.metadata.ssl.truststore.type=PKCS12
+confluent.metadata.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
+confluent.metadata.ssl.truststore.password=${STORE_PASSWORD}

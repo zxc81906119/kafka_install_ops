@@ -1,0 +1,4 @@
+[Service]
+Environment="METRICS_RETENTION_DAYS=2d"
+Environment="PROMETHEUS_HOST=0.0.0.0"
+Environment="PROMETHEUS_PORT=9090"

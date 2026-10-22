@@ -1,0 +1,4 @@
+# 範例 topic：名稱  分割數（replication 3、min.insync.replicas 2）
+orders.events    6
+payments.events  6
+billing.events   3

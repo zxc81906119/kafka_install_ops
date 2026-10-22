@@ -1,0 +1,10 @@
+[Service]
+TimeoutStartSec=420
+ExecStartPre=/bin/bash -c "until curl -sk -o /dev/null https://${MDS_FIRST}:8090/v1/metadata/id; do sleep 5; done"
+ExecStart=
+ExecStart=/usr/bin/control-center-start /etc/confluent/control-center/control-center.properties
+Environment="JAVA_HOME=/opt/java/current"
+Environment="CONTROL_CENTER_HEAP_OPTS=-Xms${HEAP} -Xmx${HEAP}"
+LimitNOFILE=65536
+Restart=on-failure
+RestartSec=10
