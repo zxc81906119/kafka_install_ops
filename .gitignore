@@ -33,3 +33,7 @@ bank-ca/
 # Delivery sets built by windows/make-delivery.sh (copies of packages/)
 delivery/
 packages-manual.old/
+
+# hand-off state is meant to be in git (CLAUDE.md); the state/ rule above is for installer/state
+!.claude/state/
+!.claude/state/**
