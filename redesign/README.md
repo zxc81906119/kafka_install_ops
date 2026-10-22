@@ -126,6 +126,7 @@
     Kafka／REST 用 `CLASSPATH`，C3 要用 `CONTROL_CENTER_CLASSPATH`；provider 每個設定物件都重新初始化（啟動一次上千行日誌）；host API key 以明文落在 properties（secret zero）。
   - Secret Protection 可用：同一份 security.properties 發所有主機，master key 走 `EnvironmentFile=/etc/confluent/service.env`（0600）；master key 輪替 = rotate → 重派兩個檔 → 滾動重啟，全程 20 分鐘內。
   - 兩者都是啟動時讀一次，密碼輪替都要滾動重啟。
+  - Summon（CyberArk 開源）可讓 Secret Protection 的 master key 不落地：`ExecStart=summon -p summon-conjur -f secrets.yml <原啟動腳本>`，值只在子程序環境變數；代價是啟動時保管庫要在線；主機上剩 /etc/conjur.identity（host 身分）。接 PAM 的 CCP 沒有官方 provider，可自寫（stdin 給 id、stdout 回值）。
 - 只有 PAM 又想不落地：方案 A = FileConfigProvider ＋ systemd ExecStartPre 以 client 憑證打 CCP REST 寫到 tmpfs（/run，0700）；方案 B = 自寫 CCP ConfigProvider jar。PoC 先用 Secret Protection。
 
 ### 3. 操作機 ssh 進各主機的 cpadmin

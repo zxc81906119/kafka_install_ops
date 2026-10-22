@@ -617,14 +617,16 @@ jar-sha1-ok
 平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行：
 
 ```bash
-dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock | sort -u | tee /out/os-packages.txt
+dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u | tee /out/os-packages.txt
 ```
 
 ```out
 chrony	4.8-1.el9	baseos
+createrepo_c	0.20.1-4.el9	appstream
 cyrus-sasl	2.1.27-22.el9_7	appstream
 cyrus-sasl	2.1.27-22.el9_7	baseos
 firewalld	1.3.4-20.el9_8	baseos
+gettext	0.21-8.el9	baseos
 openssl-devel	3.5.8-2.el9_8	appstream
 python3-dnf-plugin-versionlock	4.3.0-26.el9	baseos
 ```
@@ -2763,3 +2765,110 @@ alice login after master key rotation: 200
 | 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 16.6，CyberArk 負責保管、版本與取用紀錄 |
 | 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟。與 master key 輪替無關 |
 | 和第 15 站的差別 | 不依賴外部系統在線、原廠正式支援、不用 jar；但密碼是加密落地而不是啟動時取 |
+
+## 16.8 選配：用 Summon 讓 master key 不落地
+
+@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+16.4 的 `service.env` 是整個方案裡唯一落地的 master key。CyberArk 的開源工具 **Summon** 可以把它拿掉：服務啟動時 Summon 先向保管庫取值、塞進子程序的環境變數，再執行真正的啟動腳本，磁碟上只剩「主機向保管庫認證用的身分」。代價是服務啟動時保管庫要在線。
+
+銀行先在保管庫加一個放 master key 的變數（passphrase 和 master key 分開放，輪替時兩個都更新）：
+
+```bash
+cd ~/kafka-lab && cat > conjur/mk-policy.yml <<'EOF'
+- !variable secret-protection/master-key
+- !permit
+  role: !user ops
+  privileges: [ read, execute, update ]
+  resource: !variable secret-protection/master-key
+- !permit
+  role: !layer hosts
+  privileges: [ read, execute ]
+  resource: !variable secret-protection/master-key
+EOF
+docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/mk-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: variable kafka/secret-protection/master-key added"'
+```
+
+```out
+policy: variable kafka/secret-protection/master-key added
+```
+
+@role 小安 | dl01 | root
+
+Summon 和它的 Conjur provider 都是單一執行檔，從 GitHub release 抓並核對原廠的 SHA256，放進落地區：
+
+```bash
+mkdir -p /out/tools/summon && cd /out/tools/summon && curl -fsSL -o summon-linux-amd64.tar.gz https://github.com/cyberark/summon/releases/download/v0.13.1/summon-linux-amd64.tar.gz && curl -fsSL https://github.com/cyberark/summon/releases/download/v0.13.1/SHA256SUMS.txt | grep -F summon-linux-amd64.tar.gz | sha256sum -c - && curl -fsSL -o summon-conjur-linux-amd64.tar.gz https://github.com/cyberark/summon-conjur/releases/download/v0.9.3/summon-conjur-linux-amd64.tar.gz && curl -fsSL https://github.com/cyberark/summon-conjur/releases/download/v0.9.3/SHA256SUMS.txt | grep -F summon-conjur-linux-amd64.tar.gz | sha256sum -c - && sha256sum *.tar.gz > SHA256SUMS && ls
+```
+
+```out
+summon-linux-amd64.tar.gz: OK
+summon-conjur-linux-amd64.tar.gz: OK
+SHA256SUMS
+summon-conjur-linux-amd64.tar.gz
+summon-linux-amd64.tar.gz
+```
+
+@role 小安 | ops02 | cpadmin
+
+把現行的 master key 寫進保管庫（之後輪替時，16.6 的流程多一步：新 master key 也寫進來）：
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '
+' < ~/secrets/master.key | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fmaster-key && unset T && echo "master key stored in conjur"
+```
+
+```out
+master key stored in conjur
+```
+
+> `tr -d '
+'` 是必要的：`master.key` 檔尾有換行，直接送進去的話 Summon 取回的值會多一個換行字元，和 `service.env` 裡的不一樣，服務就解不開密文。密碼類的值寫進保管庫前都要確認沒有多餘的換行。
+
+每台 Java 主機：裝兩個執行檔、寫 Conjur 的設定與身分（身分檔就是第 15 站發的 host API key，0640 root:confluent，服務帳號讀得到）、寫 `secrets.yml`（哪個環境變數對應哪個變數），然後以服務帳號試跑一次 Summon，確認取得到值而且和 `service.env` 裡的一樣：
+
+```bash
+cd ~/landing/tools/summon && sha256sum -c --quiet SHA256SUMS && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in rest*) svc=cp-kafka-rest;; c3*) svc=cp-control-center;; *) svc=cp-kafka;; esac; scp -q *.tar.gz $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -d -m 0755 /usr/local/lib/summon && sudo tar -xzf /tmp/summon-linux-amd64.tar.gz -C /usr/local/bin summon && sudo tar -xzf /tmp/summon-conjur-linux-amd64.tar.gz -C /usr/local/lib/summon summon-conjur && rm -f /tmp/summon*.tar.gz && sudo chmod 0755 /usr/local/bin/summon /usr/local/lib/summon/summon-conjur && printf 'appliance_url: https://conjur.poc.lab\naccount: poc\ncert_file: /etc/pki/ca-trust/source/anchors/bank-root.pem\nnetrc_path: /etc/conjur.identity\n' | sudo tee /etc/conjur.conf >/dev/null && printf 'machine https://conjur.poc.lab/authn\n  login host/kafka/$h\n  password %s\n' \"\$(sudo cat /etc/confluent/conjur/host.key)\" | sudo install -m 0640 -o root -g confluent /dev/stdin /etc/conjur.identity && printf 'CONFLUENT_SECURITY_MASTER_KEY: !var kafka/secret-protection/master-key\n' | sudo tee /etc/confluent/secrets.yml >/dev/null && a=\$(sudo -u $svc /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml printenv CONFLUENT_SECURITY_MASTER_KEY | sha256sum | cut -c1-12) && b=\$(sudo sed -n s/^CONFLUENT_SECURITY_MASTER_KEY=//p /etc/confluent/service.env | sha256sum | cut -c1-12) && echo \"\$(hostname): summon \$(/usr/local/bin/summon --version | awk '{print \$3}' | cut -d- -f1) as $svc: \$([ \$a = \$b ] && echo key-matches || echo MISMATCH)\""; done
+```
+
+```out
+kc01: summon 0.13.1 as cp-kafka: key-matches
+（10 行）
+```
+
+換啟動方式：第三個 drop-in 把 `ExecStart` 改成「Summon 包住原本的啟動腳本」，拿掉 16.4 的 `EnvironmentFile` drop-in，刪掉 `service.env`：
+
+```bash
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in rest*) u=confluent-kafka-rest; cmd="/usr/bin/kafka-rest-start /etc/confluent/kafka-rest/kafka-rest.properties";; c3*) u=confluent-control-center; cmd="/usr/bin/control-center-start /etc/confluent/control-center/control-center.properties";; *) u=confluent-server; cmd="/usr/bin/kafka-server-start /etc/confluent/kafka/server.properties";; esac; ssh $h.poc.lab "sudo tee /etc/systemd/system/$u.service.d/30-summon.conf >/dev/null <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml $cmd
+EOF
+sudo rm -f /etc/systemd/system/$u.service.d/20-secret-protection.conf /etc/confluent/service.env && sudo systemctl daemon-reload && echo \"\$(hostname): exec=\$(systemctl show $u -p ExecStart --value | grep -o 'path=[^ ]*' | head -1 | cut -d= -f2) service.env=\$(sudo test -e /etc/confluent/service.env && echo present || echo gone)\""; done
+```
+
+```out
+kc01: exec=/usr/local/bin/summon service.env=gone
+（10 行）
+```
+
+滾動重啟，然後從程序的環境變數證明 master key 在那裡、磁碟上卻沒有：
+
+```bash
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 main pid $p = $(ps -o comm= -p $p); java child has MASTER_KEY in env: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^CONFLUENT_SECURITY_MASTER_KEY=") ; on disk: $(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l) files"'
+```
+
+```out
+kc01 active
+（3 行）
+kb01 MDS=200
+（4 行）
+rest01 REST=200
+rest02 REST=200
+c3 ui=200
+kb01 main pid 7764 = summon; java child has MASTER_KEY in env: 1 ; on disk: 0 files
+```
+
+主程序是 Summon，Java 是它的子程序，`systemctl stop` 送的訊號 Summon 會轉給子程序，停機和原本一樣。現在主機上和 master key 有關的只剩 `/etc/conjur.identity`（主機的 Conjur 身分）：這就是 secret zero，和第 15 站的 host API key 是同一把。
+
+> 什麼時候不要用 Summon：如果銀行要求「保管庫故障時平台仍能重啟」，就留在 16.4 的 `service.env` 作法。兩者的差別只有啟動時要不要連得到保管庫。
