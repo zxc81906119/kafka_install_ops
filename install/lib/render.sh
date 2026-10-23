@@ -9,6 +9,9 @@
 #   encrypt_passwords <設定檔> <本機密文檔> <主機上密文檔路徑>   Secret Protection：明文密碼欄位 → ${securepass:…}
 #   ldap_password_from_env <設定檔>                            AD 查詢密碼改由環境變數提供（手把手 16.9）
 #   count_plaintext_passwords <設定檔>                         還剩幾個明文密碼欄位（驗收用，應為 0）
+#   sp_encrypt_props <設定檔>                                  第 16 站的加密（含 16.9 AD 查詢密碼走 env）；要 CONFLUENT_SECURITY_MASTER_KEY
+#   secrets_mode_in_use                                        目前的密碼放法：plain／sp／conjur（15、16 站留下的 conf/secrets.mode）
+#   protect_rendered_props <設定檔>                            第 10／12／13 站重跑時用：依目前的放法處理剛產生的明文設定
 
 # envsubst 要的變數清單格式："${A} ${B} …"
 _envsubst_names() {
@@ -83,4 +86,36 @@ count_plaintext_passwords() {
     grep -E '^[^#=]*(password|credentials) *= *[^$ ]' "$props_file" | grep -v 'jaas.config'
     grep -E '^[^#=]*jaas.config *=' "$props_file" | grep -E 'password="[^$]'
   } | wc -l
+}
+
+# 第 16 站對一個剛產生的明文設定檔做的事：
+#   16.9（LDAP_PASSWORD_VIA_ENV=1、而且這個檔有 AD 查詢密碼）：那一欄先換成 ${env:…}，加密時就不會被收進密文
+#   其他密碼欄位 → ${securepass:…}，密文寫進 $SECRETS_DIR/security.properties（所有主機共用的那份）
+sp_encrypt_props() {
+  local props_file=$1 with_ldap_env=0
+  if [ "$LDAP_PASSWORD_VIA_ENV" = 1 ] && grep -q '^ldap.java.naming.security.credentials' "$props_file"; then
+    with_ldap_env=1
+    sed -i 's|^ldap.java.naming.security.credentials=.*|ldap.java.naming.security.credentials=${env:LDAP_BIND_PASSWORD}|' "$props_file"
+  fi
+  encrypt_passwords "$props_file" "$SECRETS_DIR/security.properties" /etc/confluent/secrets/security.properties || return 1
+  [ "$with_ldap_env" = 1 ] && ldap_password_from_env "$props_file"
+  return 0
+}
+
+secrets_mode_in_use() { cat "$CONF_DIR/secrets.mode" 2>/dev/null || echo plain; }
+
+# 第 15／16 站做過以後，重跑第 10／12／13 站產生的設定是明文的；直接派送會把主機上的設定寫回明文。
+#   plain   不用處理
+#   sp      照第 16 站加密；呼叫的站要把 $SECRETS_DIR/security.properties 一起派送
+#   conjur  不自動處理（參照要從改寫過的範本產生）：回 1，請改跑第 15 站
+protect_rendered_props() {
+  local props_file=$1 mode
+  mode=$(secrets_mode_in_use)
+  case $mode in
+    plain) return 0;;
+    sp) ;;
+    *) echo "密碼放法是 $mode：這一站不自動改寫，請改跑第 15 站" >&2; return 1;;
+  esac
+  CONFLUENT_SECURITY_MASTER_KEY=$(cat "$SECRETS_DIR/master.key") sp_encrypt_props "$props_file" || return 1
+  [ "$(count_plaintext_passwords "$props_file")" = 0 ]
 }

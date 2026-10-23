@@ -105,16 +105,10 @@ export CONFLUENT_SECURITY_MASTER_KEY
 CONFLUENT_SECURITY_MASTER_KEY=$(cat "$MASTER_KEY_FILE")
 for host in $CLUSTER_HOSTS; do
   props_file=$SP_CONF_DIR/$host.properties
+  # 16.9 的 AD 查詢密碼走 env 也在 sp_encrypt_props 裡（lib/render.sh；第 10／12／13 站重跑時用同一個）
+  sp_encrypt_props "$props_file" || { fail "$host: encrypt"; continue; }
   ldap_note=""
-  if [ "$LDAP_PASSWORD_VIA_ENV" = 1 ] && grep -q '^ldap.java.naming.security.credentials' "$props_file"; then
-    # 16.9：先把 AD 查詢密碼換成 ${env:…}，encrypt_passwords 就不會把它加密進密文；加密完再補上 env provider
-    sed -i 's|^ldap.java.naming.security.credentials=.*|ldap.java.naming.security.credentials=${env:LDAP_BIND_PASSWORD}|' "$props_file"
-    encrypt_passwords "$props_file" "$LOCAL_SECRETS_FILE" "$REMOTE_SECRETS_PATH" || { fail "$host: encrypt"; continue; }
-    ldap_password_from_env "$props_file"
-    ldap_note="，AD 查詢密碼走 env"
-  else
-    encrypt_passwords "$props_file" "$LOCAL_SECRETS_FILE" "$REMOTE_SECRETS_PATH" || { fail "$host: encrypt"; continue; }
-  fi
+  grep -q 'credentials *= *${env:LDAP_BIND_PASSWORD}' "$props_file" && ldap_note="，AD 查詢密碼走 env"
   encrypted_count=$(grep -c '\${securepass:' "$props_file")
   plaintext_count=$(count_plaintext_passwords "$props_file")
   if [ "$plaintext_count" = 0 ]; then ok "$host: $encrypted_count 個欄位加密，明文 0$ldap_note"

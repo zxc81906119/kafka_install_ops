@@ -34,3 +34,6 @@
 - install/tools/lint.sh（shellcheck＋遠端 heredoc 抽出檢查＋pipefail 下禁 `| grep -q`；沒 shellcheck 時用 docker image cp-ops:poc）。修掉：install.sh 站號字串比較（`--from 9` 一站都不跑 → 改 10# 數字比）、01／19 的 `| grep -q`、rest_app_curl 包裝、13／20 遠端片段、測試腳本的 check 字串。
   21 站 promote 也換 requests/、incoming/（否則輪替後重跑 09 判成私鑰不符；lab 的 incoming 已用現行憑證補回）。lab 重跑 09、12、13、14、17、19 0 FAIL；16＋20 → 39/39。
   發現：在 sp 模式下重跑 12／13（或 10）會把設定檔寫回明文，要接著重跑 16（20 會抓到：明文密碼 2 項）。處理方式待使用者決定。
+- 使用者定案（單選）：sp 模式下重跑 10／12／13 要自動接著加密。做法：lib/render.sh 加 sp_encrypt_props（16 也改用它）、secrets_mode_in_use、protect_rendered_props；10／12／13 派送前呼叫並帶上 security.properties；遠端 unresolved 檢查不算 provider 參照；conjur 模式這幾站停下請改跑 15。
+  同類問題一起修：19 之後重跑 10 會把稽核設定蓋掉 → 10 也帶 audit.rendered.tpl。
+  lab（不跑 16）：10 → 滾動重啟 → 12 → 13 → 20：39/39；10 台 plaintext=0、kc/kb audit 設定都在。注意：10 重跑只寫檔不重啟（enable --now），要生效需滾動重啟。

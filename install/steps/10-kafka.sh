@@ -9,6 +9,7 @@
 #   10.4 產生 cluster id → controller 以動態 quorum 格式化（順便寫入緊急用的 kafka-admin SCRAM）→ broker 格式化 → 啟動
 # 產出：~/conf/<主機>.server.properties、~/conf/kraft.env（cluster id）、~/conf/client-internal.properties
 # 重跑：安全。格式化看到 meta.properties 就略過；cluster id 與 kafka-admin 密碼只在不存在時產生。
+#       第 16 站做過（Secret Protection）就照樣加密；第 19 站做過就帶上稽核設定。第 15 站（Conjur）做過的話這一站會停下，改跑第 15 站。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
@@ -42,22 +43,40 @@ STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 LDAP_BIND_PASSWORD=$(cat "$SECRETS_DIR/ldap-bind.pass")
 export CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN
 TEMPLATE_VARS="HOST_FQDN NODE_ID RACK STORE_PASSWORD LDAP_BIND_PASSWORD CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN"
+# 第 19 站做過的話，稽核日誌的設定片段要一起帶上（否則重跑這一站會把稽核設定蓋掉）
+audit_fragment=""
+if [ -f "$CONF_DIR/audit.rendered.tpl" ]; then
+  audit_fragment=$CONF_DIR/audit.rendered.tpl
+  export AUDIT_PASSWORD; AUDIT_PASSWORD=$(cat "$SECRETS_DIR/confluent-audit.pass")
+  TEMPLATE_VARS="$TEMPLATE_VARS AUDIT_PASSWORD"
+fi
+# 第 16 站做過的話（Secret Protection），產生的明文設定先照第 16 站加密，共用的密文檔一起派送
+secrets_mode=$(secrets_mode_in_use)
+extra_files=(); [ "$secrets_mode" = sp ] && extra_files=("$SECRETS_DIR/security.properties")
+log "密碼放法：$secrets_mode$([ -n "$audit_fragment" ] && echo '；帶上第 19 站的稽核設定')"
 for host in $KAFKA_HOSTS; do
   export HOST_FQDN NODE_ID RACK
   HOST_FQDN=$(fqdn "$host"); NODE_ID=$(node_id_of "$host"); RACK=$(rack_of "$host")
   case $host in kc*) role_template=$TEMPLATE_DIR/controller.tpl;; *) role_template=$TEMPLATE_DIR/broker.tpl;; esac
   props_file=$CONF_DIR/$host.server.properties
   # shellcheck disable=SC2086
-  render_templates "$props_file" $TEMPLATE_VARS -- "$role_template" "$TEMPLATE_DIR/common.tpl" || { fail "$host: render"; continue; }
-  copy_to_tmp "$host" "$props_file" || { fail "$host: scp"; continue; }
+  render_templates "$props_file" $TEMPLATE_VARS -- "$role_template" "$TEMPLATE_DIR/common.tpl" $audit_fragment || { fail "$host: render"; continue; }
+  protect_rendered_props "$props_file" || { fail "$host: 密碼處理（$secrets_mode）"; continue; }
+  copy_to_tmp "$host" "$props_file" "${extra_files[@]}" || { fail "$host: scp"; continue; }
+  # unresolved：還留著 ${…} 的行，config provider 的參照（securepass／env／cyberark）不算
   result=$(ssh_script "$host" UPLOADED="/tmp/$host.server.properties" <<'EOF'
-sudo install -o root -g confluent -m 0640 "$UPLOADED" /etc/confluent/kafka/server.properties && rm -f "$UPLOADED"
-echo "$(sudo grep -c . /etc/confluent/kafka/server.properties) lines, unresolved=$(sudo grep -c '${' /etc/confluent/kafka/server.properties)"
+props=/etc/confluent/kafka/server.properties
+sudo install -o root -g confluent -m 0640 "$UPLOADED" $props && rm -f "$UPLOADED"
+if [ -f /tmp/security.properties ]; then
+  sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets
+  sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties
+fi
+echo "$(sudo grep -c . $props) lines, unresolved=$(sudo grep '\${' $props | grep -vc '\${\(securepass\|env\|cyberark\):')"
 EOF
 )
   case $result in *"unresolved=0") ok "$host: $result";; *) fail "$host: $result";; esac
 done
-unset STORE_PASSWORD LDAP_BIND_PASSWORD
+unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD
 
 section "10.3 systemd drop-in 與目錄（ExecStart 若還是 /etc/kafka/server.properties，服務會用 RPM 預設設定起來：沒加密、沒認證）"
 for host in $KAFKA_HOSTS; do

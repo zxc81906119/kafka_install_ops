@@ -4,7 +4,7 @@
 #
 # 做什麼：派送憑證 → kafka-rest.tpl 產生設定（principal 規則由 conf/apps.txt 的 cert 類 app 組成）
 #         → drop-in → 啟動並測三種情況：legacy app 憑證 200、其他憑證 401、沒憑證 TLS 就拒絕（000）→ 經負載平衡 200。
-# 重跑：安全。
+# 重跑：安全。第 16 站做過（Secret Protection）就照樣加密；第 15 站（Conjur）做過的話會停下，改跑第 15 站。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
@@ -33,21 +33,31 @@ section "設定檔與 drop-in"
 export STORE_PASSWORD HOST_FQDN REST_ID HEAP=$HEAP_REST
 STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 export BROKER_TOKEN MDS_URLS REST_VIP REST_APPS
+# 第 16 站做過的話（Secret Protection），產生的明文設定先照第 16 站加密，共用的密文檔一起派送
+secrets_mode=$(secrets_mode_in_use)
+extra_files=(); [ "$secrets_mode" = sp ] && extra_files=("$SECRETS_DIR/security.properties")
+log "密碼放法：$secrets_mode"
 for host in $RESTS; do
   HOST_FQDN=$(fqdn "$host"); REST_ID=$host
   render_template "$TEMPLATE_DIR/kafka-rest.tpl" "$CONF_DIR/$host.kafka-rest.properties" \
     HOST_FQDN REST_ID STORE_PASSWORD BROKER_TOKEN MDS_URLS REST_VIP REST_APPS || { fail "$host: render"; continue; }
+  protect_rendered_props "$CONF_DIR/$host.kafka-rest.properties" || { fail "$host: 密碼處理（$secrets_mode）"; continue; }
   render_template "$TEMPLATE_DIR/kafka-rest.dropin" "$CONF_DIR/$host.dropin" HEAP || { fail "$host: render dropin"; continue; }
-  copy_to_tmp "$host" "$CONF_DIR/$host.kafka-rest.properties" "$CONF_DIR/$host.dropin" || { fail "$host: scp"; continue; }
+  copy_to_tmp "$host" "$CONF_DIR/$host.kafka-rest.properties" "$CONF_DIR/$host.dropin" "${extra_files[@]}" || { fail "$host: scp"; continue; }
+  # unresolved：還留著 ${…} 的行，config provider 的參照（securepass／env／cyberark）不算
   result=$(ssh_script "$host" HOST="$host" <<'EOF'
 sudo install -o root -g confluent -m 0640 /tmp/$HOST.kafka-rest.properties /etc/confluent/kafka-rest/kafka-rest.properties
+if [ -f /tmp/security.properties ]; then
+  sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets
+  sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties
+fi
 sudo install -d -m 0755 /etc/systemd/system/confluent-kafka-rest.service.d
 sudo install -m 0644 /tmp/$HOST.dropin /etc/systemd/system/confluent-kafka-rest.service.d/10-override.conf
 rm -f /tmp/$HOST.kafka-rest.properties /tmp/$HOST.dropin
 sudo systemctl daemon-reload
 props=/etc/confluent/kafka-rest/kafka-rest.properties
 exec_file=$(systemctl show confluent-kafka-rest -p ExecStart --value | grep -o '/etc/[^ ]*properties')
-echo "unresolved=$(sudo grep -c '${' $props) exec=$exec_file"
+echo "unresolved=$(sudo grep '\${' $props | grep -vc '\${\(securepass\|env\|cyberark\):') exec=$exec_file"
 EOF
 )
   if [ "$result" = "unresolved=0 exec=/etc/confluent/kafka-rest/kafka-rest.properties" ]; then ok "$host: $result"; else fail "$host: $result"; fi

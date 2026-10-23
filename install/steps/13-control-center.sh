@@ -5,7 +5,7 @@
 # 做什麼：派送憑證 → Prometheus／Alertmanager 的 TLS 與設定（*-generated.yml 要給 C3 自己能寫）
 #         → control-center.tpl 產生設定 → drop-in（含「等 MDS 起來才啟動」：C3 比 MDS 先起來會卡住不開 9021）
 #         → 依序啟動 prometheus、alertmanager、C3，等 UI 回 200。
-# 重跑：安全。
+# 重跑：安全。第 16 站做過（Secret Protection）就照樣加密；第 15 站（Conjur）做過的話會停下，改跑第 15 站。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
@@ -57,18 +57,28 @@ STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 render_template "$TEMPLATE_DIR/control-center.tpl" "$CONF_DIR/$C3_HOST.control-center.properties" STORE_PASSWORD BROKER_TOKEN MDS_URLS C3_FQDN \
   || die "render control-center.properties"
 unset STORE_PASSWORD
+# 第 16 站做過的話（Secret Protection），產生的明文設定先照第 16 站加密，共用的密文檔一起派送
+secrets_mode=$(secrets_mode_in_use)
+extra_files=(); [ "$secrets_mode" = sp ] && extra_files=("$SECRETS_DIR/security.properties")
+log "密碼放法：$secrets_mode"
+protect_rendered_props "$CONF_DIR/$C3_HOST.control-center.properties" || die "密碼處理（$secrets_mode）"
 render_template "$TEMPLATE_DIR/control-center.dropin" "$CONF_DIR/$C3_HOST.dropin" HEAP MDS_FIRST || die "render dropin"
-copy_to_tmp "$C3_HOST" "$CONF_DIR/$C3_HOST.control-center.properties" "$CONF_DIR/$C3_HOST.dropin" || die "scp"
+copy_to_tmp "$C3_HOST" "$CONF_DIR/$C3_HOST.control-center.properties" "$CONF_DIR/$C3_HOST.dropin" "${extra_files[@]}" || die "scp"
+# unresolved：還留著 ${…} 的行，config provider 的參照（securepass／env／cyberark）不算
 result=$(ssh_script "$C3_HOST" HOST="$C3_HOST" <<'EOF'
 props=/etc/confluent/control-center/control-center.properties
 sudo install -o root -g confluent -m 0640 /tmp/$HOST.control-center.properties $props
+if [ -f /tmp/security.properties ]; then
+  sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets
+  sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties
+fi
 sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/confluent/control-center
 sudo install -d -m 0755 /etc/systemd/system/confluent-control-center.service.d
 sudo install -m 0644 /tmp/$HOST.dropin /etc/systemd/system/confluent-control-center.service.d/10-override.conf
 rm -f /tmp/$HOST.control-center.properties /tmp/$HOST.dropin
 sudo systemctl daemon-reload
 exec_file=$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties')
-echo "unresolved=$(sudo grep -c '${' $props) exec=$exec_file"
+echo "unresolved=$(sudo grep '\${' $props | grep -vc '\${\(securepass\|env\|cyberark\):') exec=$exec_file"
 EOF
 )
 if [ "$result" = "unresolved=0 exec=/etc/confluent/control-center/control-center.properties" ]; then ok "$C3_HOST: $result"; else die "$C3_HOST: $result"; fi
