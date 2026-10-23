@@ -11,7 +11,8 @@ OP_USER=tester
 # 假保管庫:回一把臨時產生的私鑰;SECRET_OK=0 時模擬取不到
 KEYDIR="$(mktemp -d)"; ssh-keygen -q -t ed25519 -N '' -f "$KEYDIR/k" >/dev/null
 SECRET_OK=1
-secret_get() { [ "$SECRET_OK" = 1 ] || { echo "fake: denied" >&2; return 1; }; cat "$KEYDIR/k"; }
+SECRET_CALLS="$KEYDIR/calls"; : > "$SECRET_CALLS"   # 記錄假保管庫被要了幾次（secret_get 在管線裡跑，用檔案計數）
+secret_get() { echo x >> "$SECRET_CALLS"; [ "$SECRET_OK" = 1 ] || { echo "fake: denied" >&2; return 1; }; cat "$KEYDIR/k"; }
 
 fails=0
 check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fails=$((fails+1)); fi; }
@@ -35,6 +36,23 @@ check "取不到有記錄 SSH_KEY_FAIL" 'grep -q "SSH_KEY_FAIL" "$OPMENU_LOG"'
 
 OPMENU_SSH_KEY_SECRET=''; core_load_ssh_key; rc=$?
 check "沒設定 SSH_KEY_SECRET:不取、回傳 0" '[ $rc -eq 0 ] && [ -z "${OP_SSH_AGENT_PID:-}" ]'
+
+# ── on-demand：manual 來源預設等到要碰主機才取，而且只取一次 ──
+OPMENU_SSH_KEY_SECRET="kafka/ssh/cpadmin"; SECRET_OK=1; : > "$SECRET_CALLS"
+OPMENU_SSH_KEY_LOAD=auto; OPMENU_SECRETS=manual
+check "manual + auto：登入時不取（on-demand）" "core_ssh_key_on_demand"
+OPMENU_SECRETS=conjur
+check "conjur + auto：登入就取" "! core_ssh_key_on_demand"
+OPMENU_SECRETS=manual
+core_ensure_ssh_key >/dev/null; rc=$?
+check "第一次碰主機：取到金鑰" '[ $rc -eq 0 ] && [ "$(ssh-add -l 2>/dev/null | wc -l)" = 1 ]'
+core_ensure_ssh_key >/dev/null
+check "第二次碰主機：不再向保管庫要（只要了 1 次）" '[ "$(wc -l < "$SECRET_CALLS")" = 1 ]'
+core_unload_ssh_key
+declare -A ACT_TIER=([21]=2 [12]=1 [16]=1); OPMENU_MENU_AUTHZ="16=HOST 2*=HOST 3*=ADMIN"
+check "21（第 2 層）算碰主機" "core_item_touches_host 21"
+check "16 算碰主機" "core_item_touches_host 16"
+check "12（看 topic）不算碰主機" "! core_item_touches_host 12"
 
 rm -rf "$KEYDIR" "$OPMENU_LOG"
 [ $fails -eq 0 ] && echo "ALL PASS" || { echo "$fails 項失敗"; exit 1; }

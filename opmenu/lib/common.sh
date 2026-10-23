@@ -85,6 +85,26 @@ core_load_ssh_key() {
   core_log SSH_KEY_LOADED login "$OPMENU_SSH_KEY_SECRET ttl=${OPMENU_SSH_KEY_TTL:-14400}"
 }
 core_unload_ssh_key() { [ -n "${OP_SSH_AGENT_PID:-}" ] || return 0; ssh-agent -k >/dev/null 2>&1; kill "$OP_SSH_AGENT_PID" 2>/dev/null; unset OP_SSH_AGENT_PID SSH_AUTH_SOCK SSH_AGENT_PID; return 0; }
+# 私鑰什麼時候取：auto 時，manual（人工從 PVWA 貼上）等到真的要碰主機才取，其他來源登入就取
+core_ssh_key_on_demand() {
+  case "${OPMENU_SSH_KEY_LOAD:-auto}" in on-demand) return 0;; login) return 1;; *) [ "${OPMENU_SECRETS:-}" = manual ];; esac
+}
+# 這個項目會不會碰主機：OPMENU_MENU_AUTHZ 裡標成 HOST 的（重啟、日誌、磁碟、診斷）
+core_item_touches_host() {
+  local id="$1" tok k v spec=""
+  for tok in $OPMENU_MENU_AUTHZ; do
+    k="${tok%%=*}"; v="${tok#*=}"
+    if [ "$k" = "$id" ] || { [[ "$k" == *'*' ]] && [ "${ACT_TIER[$id]}" = "${k%\*}" ]; }; then spec="$v"; fi
+  done
+  [ "$spec" = HOST ]
+}
+# 確保 ssh-agent 裡有私鑰：已經有就不再取；沒有就取一次（manual 會提示從 PVWA 貼上）
+core_ensure_ssh_key() {
+  [ -n "${OPMENU_SSH_KEY_SECRET:-}" ] || return 0
+  if [ -n "${OP_SSH_AGENT_PID:-}" ] && ssh-add -l >/dev/null 2>&1; then return 0; fi
+  core_unload_ssh_key
+  core_load_ssh_key
+}
 
 # ── 執行一個項目的固定流程:看得到嗎 → 時窗 → 並行鎖 → 執行 → 依輸出判斷結果 → 記錄 ──
 _core_run() {
@@ -101,6 +121,12 @@ _core_run() {
       echo "${CR}目前不在允許變更的時窗內(OPMENU_CHANGE_WINDOW=$OPMENU_CHANGE_WINDOW)${C0}"; core_log BLOCKED "$id ${ACT_TITLE[$id]}" "outside change window"; return 1
     fi
     core_lock_acquire "$id ${ACT_TITLE[$id]}" || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "lock held"; return 1; }
+  fi
+  # 碰主機的項目：先過權限閘門，再確保私鑰在 ssh-agent 裡。要在這裡（主 shell）做：
+  # 項目本身在管線裡執行（子 shell），在那裡載入的 ssh-agent 下一個項目就看不到了
+  if core_item_touches_host "$id"; then
+    core_host_gate || { core_log DENIED "$id ${ACT_TITLE[$id]}" "host gate"; return 1; }
+    core_ensure_ssh_key || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "no ssh key"; return 1; }
   fi
   local rc shown t0; shown="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"; t0=$(date +%s)
   : > "$OP_LAST_RAW"

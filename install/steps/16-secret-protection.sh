@@ -124,6 +124,12 @@ if [ "$SUMMON" = 1 ]; then
   vault_login_as_ops || die "ops 身分登入失敗"
   if tr -d '\n' < "$MASTER_KEY_FILE" | vault_set secret-protection/master-key; then ok "set $VAULT_POLICY/secret-protection/master-key"
   else die "寫 master key 失敗"; fi
+  if [ "$LDAP_PASSWORD_VIA_ENV" = 1 ]; then
+    # 16.9：Summon 啟動時要取這個值；只要 secrets.yml 裡有一個變數取不到，Summon 就整個失敗（連 master key 也拿不到）
+    # 正式環境這個值由 CPM 換密碼時一併更新；這裡寫入目前在用的那組
+    if tr -d '\n' < "$SECRETS_DIR/ldap-bind.pass" | vault_set ldap-bind-password; then ok "set $VAULT_POLICY/ldap-bind-password（AD 查詢密碼，Summon 注入用）"
+    else die "寫 ldap-bind-password 失敗（policy 裡要有這個變數）"; fi
+  fi
   vault_logout
 fi
 

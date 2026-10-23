@@ -46,6 +46,7 @@ d OPMENU_BREAKGLASS_SECRET 'kafka/breakglass/pem'                       # 91 緊
 d OPMENU_BREAKGLASS_BOOTSTRAP ''                                        # 91 連的 TOKEN listener(主機:9094,逗號分隔);空 = 由 OPMENU_BOOTSTRAP 的主機 + OPMENU_TOKEN_PORT 推算
 d OPMENU_TOKEN_PORT      9094
 d OPMENU_SSH_KEY_TTL     14400                                          # 取回的 SSH 私鑰在 ssh-agent 裡最多留幾秒(保險:選單被強制終止時 agent 也會到期)
+d OPMENU_SSH_KEY_LOAD    auto                                           # 主機用的 SSH 私鑰何時取：login（登入就取）| on-demand（第一次做主機類項目、過了權限閘門才取）| auto（manual 來源用 on-demand，其他用 login）
 # conjur:設定檔與身分檔(身分 = 這台操作機給選單用的 host 身分,正式環境換成 CCP 的 AppID)
 d OPMENU_CONJUR_URL      'https://conjur.example.com'
 d OPMENU_CONJUR_ACCOUNT  poc

@@ -7,6 +7,8 @@ OPMENU_LOG="$(mktemp)"
 export OPMENU_HOME="$PWD" OPMENU_LOG OPMENU_SYSLOG=0 OPMENU_YES=1 OPMENU_ALLOW_ENV_OVERRIDE=1
 export OPMENU_BROKER_SERVICES='kb01:confluent-server' OPMENU_HOSTS='kb01' OPMENU_KAFKA_CLUSTER_ID=test-cluster
 . lib/defaults.sh; . lib/common.sh
+# 這個測試只測選單過濾與權限閘門，不測私鑰：主機類項目要的 ssh 私鑰關掉（私鑰另有 test-ssh-key.sh）
+OPMENU_SSH_KEY_SECRET=""
 # shellcheck source=/dev/null
 load_items items
 OP_USER=tester OP_LAST_RAW="$(mktemp)"

@@ -58,7 +58,8 @@ EOC
   derive || { core_log DERIVE_FAIL login ""; exit 1; }
   unset pass
   export OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_TOKEN OP_SID
-  core_load_ssh_key || true   # 取不到金鑰不擋登入:Kafka 類項目照常,主機類項目執行時才失敗
+  # 主機用的私鑰：login 模式登入就取（取不到不擋登入，Kafka 類項目照常）；on-demand 模式第一次做主機類項目才取（core_ensure_ssh_key）
+  core_ssh_key_on_demand || core_load_ssh_key || true
 }
 
 # 登入後推算沒填的設定(opmenu.conf 有填的一律優先)。刻意不從 cluster 推算 broker 與主機清單:它們是重啟、ssh 的允許清單,必須是審過的固定設定
