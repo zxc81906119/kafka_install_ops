@@ -39,7 +39,7 @@ echo "== B. bob 看 kb04 的日誌（主機類），貼上私鑰"
 check "提示到 PVWA 取私鑰" "grep -q '請到 CyberArk PVWA 取出：Safe KAFKA-OPS / cpadmin-hosts' '$OUT/b.txt'"
 check "貼上的私鑰沒有出現在畫面" "! grep -q 'PRIVATE KEY' '$OUT/b.txt'"
 # 畫面內容會隨 kb04 最近的日誌而變，改看選單自己的紀錄：bob 這次的 23 號結果是 OK
-check "項目照常執行（選單紀錄：bob 的 23 號 OK）" "sudo tail -10 /var/log/opmenu/opmenu.log | grep 'bob' | grep '23 查看服務日誌' | grep -q '| OK |'"
+check "項目照常執行（選單紀錄：bob 的 23 號 OK）" "grep -q '| bob | .*23 查看服務日誌 .* | OK |' <<<\"\$(sudo tail -10 /var/log/opmenu/opmenu.log)\""
 
 echo "== C. bob 看日誌，但什麼都不貼"
 { sleep 8; printf '\004'; } | menu_in_terminal bob "$OUT/c.txt" 23 "kb04.$DOMAIN:confluent-server" 5
@@ -55,6 +55,6 @@ echo "== 收尾"
 sleep 2
 check "沒有殘留的 ssh-agent" "[ \"\$(pgrep -x ssh-agent | wc -l)\" = 0 ]"
 check "磁碟上沒有私鑰（op01 家目錄、/dev/shm、選單暫存）" "[ \"\$(sudo grep -rls 'PRIVATE KEY' /home/$MENU_USER /dev/shm /var/log/opmenu 2>/dev/null | wc -l)\" = 0 ]"
-check "選單紀錄有 SSH_KEY_LOADED（B）與 SSH_KEY_FAIL（C）" "sudo tail -30 /var/log/opmenu/opmenu.log | grep -q SSH_KEY_LOADED && sudo tail -30 /var/log/opmenu/opmenu.log | grep -q SSH_KEY_FAIL"
+check "選單紀錄有 SSH_KEY_LOADED（B）與 SSH_KEY_FAIL（C）" "recent=\$(sudo tail -30 /var/log/opmenu/opmenu.log); grep -q SSH_KEY_LOADED <<<\"\$recent\" && grep -q SSH_KEY_FAIL <<<\"\$recent\""
 sudo rm -f "$MANUAL_CONF"
 echo "人工模式：$PASS_COUNT 項通過、$FAIL_COUNT 項失敗（畫面輸出在 $OUT/）"

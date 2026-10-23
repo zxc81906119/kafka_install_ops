@@ -114,7 +114,7 @@ CONJUR_ADMIN_TOKEN='T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/ke
 conjur() {   # 15.1：銀行建 Conjur（扮演 CyberArk）、policy、每台 host 身分、ops 身分
   announce "15.1 Secrets 團隊：Conjur（conjur.poc.lab，憑證由銀行 CA 簽）、policy kafka、11 台 host 身分、ops 使用者"
   mkdir -p "$LAB/conjur/tls" "$LAB/conjur/keys"
-  if docker ps --format '{{.Names}}' | grep -q '^lab-conjur-1$' && [ -s "$LAB/conjur/keys/admin.key" ]; then echo "Conjur 已在跑，略過建置"; else
+  if grep -q '^lab-conjur-1$' <<<"$(docker ps --format '{{.Names}}')" &&[ -s "$LAB/conjur/keys/admin.key" ]; then echo "Conjur 已在跑，略過建置"; else
     (umask 077; docker run --rm cyberark/conjur data-key generate | tr -d '\r\n' > "$LAB/conjur/data_key"; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$LAB/conjur/db.pass")
     O=$(windows_path "$LAB/conjur/tls"); openssl req -new -newkey rsa:2048 -nodes -keyout "$O/conjur.key" -out "$O/conjur.csr" -subj "/CN=conjur.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:conjur.poc.lab,DNS:conjur" -addext "keyUsage=digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth" 2>/dev/null
     bash "$LAB/ca/sign.sh" "$LAB/conjur/tls/conjur.csr" "$LAB/conjur/tls/conjur.crt"

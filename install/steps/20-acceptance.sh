@@ -131,7 +131,7 @@ if [ -z "$wrong_permissions" ]; then ok "家目錄下的私鑰與密碼檔都是
 for host in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
   leftovers=$(ssh_script "$host" <<'EOF'
 # JVM 自己的暫存檔（hsperfdata、lib*.so、com_*）不算殘留
-tmp_leftovers=$(ls /tmp | grep -cv '^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.')
+tmp_leftovers=$(find /tmp -mindepth 1 -maxdepth 1 ! -name '.*' ! -name 'hsperfdata*' ! -name 'systemd-private*' ! -name 'lib*.so*' ! -name 'com_*' | wc -l)
 echo "/tmp 殘留 $tmp_leftovers 個；sudoers $(sudo ls /etc/sudoers.d | paste -sd,)"
 EOF
 )

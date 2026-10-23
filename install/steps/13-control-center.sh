@@ -33,7 +33,7 @@ export C3_FQDN
 render_template "$TEMPLATE_DIR/prometheus-generated.yml" "$CONF_DIR/prometheus-generated.yml" C3_FQDN || die "render prometheus-generated.yml"
 copy_to_tmp "$C3_HOST" "$TEMPLATE_DIR/web-config-prom.yml" "$CONF_DIR/prometheus-generated.yml" "$TEMPLATE_DIR/prometheus.dropin" || die "scp"
 generated_owner=$(ssh_script "$C3_HOST" <<'EOF'
-cd /etc/confluent-control-center
+cd /etc/confluent-control-center || exit 1
 sudo install -o root -g confluent -m 0640 /tmp/web-config-prom.yml web-config-prom.yml
 sudo install -o root -g confluent -m 0640 /tmp/web-config-prom.yml web-config-am.yml        # Alertmanager 用同一份 TLS 設定
 sudo install -o root -g confluent -m 0640 /tmp/prometheus-generated.yml prometheus-generated.yml

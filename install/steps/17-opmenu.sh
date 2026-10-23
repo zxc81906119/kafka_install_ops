@@ -93,7 +93,8 @@ fi
 sudo install -m 0644 "$CERTS_DIR/truststore.p12" /etc/opmenu/ssl/truststore.p12
 sudo install -m 0640 -g opmenu "$PKI_DIR/store.pass" /etc/opmenu/ssl/truststore.pass
 sudo install -m 0644 "$VAULT_CA" /etc/opmenu/ssl/ca.pem
-ssh-keyscan -t ed25519 $(for host in $CLUSTER_HOSTS; do fqdn "$host"; done) 2>/dev/null | sort | sudo install -m 0644 /dev/stdin /etc/opmenu/known_hosts
+cluster_fqdns=(); for host in $CLUSTER_HOSTS; do cluster_fqdns+=("$(fqdn "$host")"); done
+ssh-keyscan -t ed25519 "${cluster_fqdns[@]}" 2>/dev/null | sort | sudo install -m 0644 /dev/stdin /etc/opmenu/known_hosts
 # /var/log/opmenu：選單紀錄與匯出檔（opmenu 群組可寫）
 sudo install -d -m 2775 -o root -g opmenu /var/log/opmenu
 # 設定檔只填推算不出來的值：連線位址、可重啟的服務清單、保管庫

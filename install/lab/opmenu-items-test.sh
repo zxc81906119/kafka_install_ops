@@ -17,6 +17,7 @@ check() { if eval "$2"; then echo "ok   $1"; PASS_COUNT=$((PASS_COUNT + 1)); els
 run_item() {
   local person=$1 item=$2; shift 2
   local before; before=$(sudo wc -l /var/log/opmenu/opmenu.log | cut -d" " -f1)   # 用 root 讀（重導向不是 sudo 做的）
+  # shellcheck disable=SC2024  # 畫面輸出刻意由 cpadmin 寫進自己的目錄，不需要 root
   sudo env OPMENU_USER="$person" OPMENU_PASS="$TEST_PASSWORD" OPMENU_YES=1 OPMENU_REASON=regression JAVA_HOME=/opt/java/current HOME=/home/$MENU_USER \
        runuser -p -u "$MENU_USER" -- /opt/opmenu/opmenu.sh --run "$item" "$@" > "$OUT/$item.txt" 2>&1 </dev/null
   sed -i 's/\x1b\[[0-9;]*m//g' "$OUT/$item.txt"

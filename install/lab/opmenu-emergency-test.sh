@@ -22,6 +22,7 @@ sudo groupadd -f "$EMERGENCY_GROUP"
 # run_menu <AD 帳號> <輸出檔> <項目…>：非互動跑一次（OPMENU_YES=1 自動確認，原因由 OPMENU_REASON 給）
 run_menu() {
   local person=$1 out_file=$2; shift 2
+  # shellcheck disable=SC2024  # 畫面輸出刻意由 cpadmin 寫進自己的目錄，不需要 root
   sudo env OPMENU_CONF="$TEST_CONF" OPMENU_USER="$person" OPMENU_PASS="$(cat "$SECRETS_DIR/ad-test-users.pass")" OPMENU_YES=1 \
        OPMENU_REASON="INC-0001 MDS 無回應，lab 演練" JAVA_HOME=/opt/java/current HOME=/home/$MENU_USER \
        runuser -p -u "$MENU_USER" -- /opt/opmenu/opmenu.sh --run "$@" > "$out_file" 2>&1 </dev/null
@@ -45,7 +46,7 @@ check "Kafka 類（31 建 topic）不能做" "grep -q '不在你的選單內' '$
 
 echo "== 3. 主機類項目"
 run_menu bob "$OUT/3a.txt" 23 "kb04.$DOMAIN:confluent-server" 5
-check "23 看日誌照常" "sudo tail -20 /var/log/opmenu/opmenu.log | grep '23 查看服務日誌' | grep -q '| OK |'"
+check "23 看日誌照常" "grep -q '23 查看服務日誌 .* | OK |' <<<\"\$(sudo tail -20 /var/log/opmenu/opmenu.log)\""
 # 服務的啟動時間（systemd 記的）：重啟前後不同，才算真的重啟了
 started_before=$(ssh -o BatchMode=yes kb04.$DOMAIN "systemctl show confluent-server -p ActiveEnterTimestampMonotonic --value")
 run_menu bob "$OUT/3b.txt" 21 "kb04.$DOMAIN:confluent-server"
@@ -58,12 +59,12 @@ check "kb04 重啟後回來（MDS 200）" "[ $attempt -lt 30 ]"
 
 echo "== 4. 紀錄"
 recent_log=$(sudo tail -30 /var/log/opmenu/opmenu.log)
-check "有 EMERGENCY_HOST 與原因" "grep 'EMERGENCY_HOST' <<<\"\$recent_log\" | grep -q 'INC-0001'"
-check "操作者標成未經 AD 驗證" "grep '21 重啟單一 broker' <<<\"\$recent_log\" | grep -q 'bob(緊急,未經AD驗證)'"
+check "有 EMERGENCY_HOST 與原因" "grep -q 'EMERGENCY_HOST .*INC-0001' <<<\"\$recent_log\""
+check "操作者標成未經 AD 驗證" "grep -q 'bob(緊急,未經AD驗證) .*21 重啟單一 broker' <<<\"\$recent_log\""
 check "不在群組那次記為 DENIED" "grep -q 'emergency host mode | sid=.* | DENIED' <<<\"\$recent_log\""
 
 echo "== 收尾"
 sudo gpasswd -d "$MENU_USER" "$EMERGENCY_GROUP" >/dev/null 2>&1
 sudo rm -f "$TEST_CONF"
-check "$MENU_USER 已移出 $EMERGENCY_GROUP" "! id -nG $MENU_USER | grep -qw $EMERGENCY_GROUP"
+check "$MENU_USER 已移出 $EMERGENCY_GROUP" "! grep -qw $EMERGENCY_GROUP <<<\"\$(id -nG $MENU_USER)\""
 echo "緊急主機模式：$PASS_COUNT 項通過、$FAIL_COUNT 項失敗（畫面輸出在 $OUT/）"

@@ -18,8 +18,10 @@ install/
   templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、Prometheus 設定
   steps/01–14         核心：下載到 C3、總檢查
   steps/15–20         延伸：15 Conjur provider（含下載機建 jar 的 15-…-jar）、16 Secret Protection（+Summon、+AD 密碼注入）、17 OP menu、18 JMX exporter、19 稽核日誌、20 驗收
+  steps/21            隨時：21 憑證輪替（status｜leaf｜trust-sync；照順序安裝時略過）
   lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：conjur / sp / opmenu / prometheus / coldboot）
   lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動；EXT=1 再接 15–20
+  tools/lint.sh       靜態檢查：shellcheck（含送到遠端的 heredoc）＋「pipefail 下不准 | grep -q」；沒有 shellcheck 時用 docker image cp-ops:poc 跑
 ```
 
 ## 怎麼跑
@@ -50,6 +52,7 @@ install/
 6. **密碼**：從 0600 檔讀進變數、用完 `unset`；不放在 `ssh_script` 的參數（會出現在遠端的程序清單），不印出來。
 7. **只用 bash 與 RHEL 標準指令**：ssh、curl、openssl、sed、awk、grep、tar、dnf、systemctl，加上 Confluent 自己的 CLI。不用 python、node、jq；解析 JSON 用 grep／sed（例子：19 站稽核事件、opmenu/lib/secrets/ccp.sh）。
 8. **每支結尾 `finish_step`**：有 `fail` 就整站失敗；銀行還沒做完用 `wait_for_bank`（rc 2）。
+9. **改完先跑 `bash install/tools/lint.sh`**，乾淨了再上 lab。真的要例外時在那一行上面寫 `# shellcheck disable=SCxxxx  # 原因`。
 
 ## 延伸站的開關（conf/site.env）
 

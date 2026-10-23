@@ -66,7 +66,7 @@ section "三種情況：legacy app 憑證 200、其他憑證（svc-ops）401、�
 for host in $RESTS; do
   url=https://$(fqdn "$host"):8082/v3/clusters
   for attempt in 1 2 3 4 5 6; do
-    with_app_cert=$(curl -s -o /dev/null -m 30 -w '%{http_code}' $(rest_app_curl_options) "$url")
+    with_app_cert=$(rest_app_curl -s -o /dev/null -m 30 -w '%{http_code}' "$url")
     [ "$with_app_cert" = 200 ] && break
     sleep 10
   done
@@ -75,6 +75,6 @@ for host in $RESTS; do
   summary="legacy-app=$with_app_cert other-cert=$with_other_cert no-cert=$without_cert"
   if [ "$with_app_cert $with_other_cert $without_cert" = "200 401 000" ]; then ok "$host $summary"; else fail "$host $summary（預期 200 401 000）"; fi
 done
-via_lb=$(curl -s -o /dev/null -m 30 -w '%{http_code}' $(rest_app_curl_options) "https://$REST_VIP:8082/v3/clusters")
+via_lb=$(rest_app_curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters")
 if [ "$via_lb" = 200 ]; then ok "經負載平衡（$REST_VIP）: $via_lb"; else fail "經負載平衡: $via_lb"; fi
 finish_step

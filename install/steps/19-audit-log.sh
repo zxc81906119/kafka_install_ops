@@ -77,7 +77,7 @@ case $SECRETS_MODE_IN_USE in
     SOURCE_TEMPLATES=$CONF_DIR/conjur        # 第 15 站改成 ${cyberark:…} 的範本
     AUDIT_TEMPLATE=$CONF_DIR/conjur/audit.tpl;;
 esac
-[ "$SECRETS_MODE_IN_USE" = sp ] && export CONFLUENT_SECURITY_MASTER_KEY=$(cat "$SECRETS_DIR/master.key")
+if [ "$SECRETS_MODE_IN_USE" = sp ]; then CONFLUENT_SECURITY_MASTER_KEY=$(cat "$SECRETS_DIR/master.key"); export CONFLUENT_SECURITY_MASTER_KEY; fi
 
 for host in $KAFKA_HOSTS; do
   HOST_FQDN=$(fqdn "$host"); NODE_ID=$(node_id_of "$host"); RACK=$(rack_of "$host"); HOST_SHORT=$host
@@ -144,8 +144,9 @@ EOF
 fi
 if echo "audit-test-$(date +%s)" | kafka-console-producer --bootstrap-server "$FIRST_BROKER:9096" --producer.config "$ALICE_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" >/dev/null 2>&1
 then ok "alice 寫入 $SENSITIVE_TOPIC（允許，應記到 _sensitive）"; else fail "alice 寫入 $SENSITIVE_TOPIC 失敗"; fi
-if kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$APP_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" --group audit-sneak \
-     --max-messages 1 --timeout-ms 10000 2>&1 | grep -q 'TopicAuthorizationException'
+consumer_output=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$APP_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" \
+     --group audit-sneak --max-messages 1 --timeout-ms 10000 2>&1)
+if grep -q 'TopicAuthorizationException' <<<"$consumer_output"
 then ok "$FIRST_SCRAM_APP 讀 $SENSITIVE_TOPIC 被拒（拒絕，應記到 _sensitive）"; else fail "$FIRST_SCRAM_APP 讀 $SENSITIVE_TOPIC 沒被拒"; fi
 sleep 10   # 等事件寫進 audit topic
 # 每個事件是一行 JSON。只用 grep 數：同一行裡同時有「誰」「做什麼」「准或拒」的就算一筆

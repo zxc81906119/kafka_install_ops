@@ -42,7 +42,7 @@ producer_pid=$!
 (
   round=0
   while true; do
-    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' $(rest_app_curl_options) "https://$REST_VIP:8082/v3/clusters")
+    code=$(rest_app_curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters")
     echo "$(date +%s) rest $code" >> "$PROBE_LOG"
     if [ $((round % 5)) = 0 ]; then
       if timeout 30 kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --list >/dev/null 2>&1; then echo "$(date +%s) admin ok" >> "$PROBE_LOG"
@@ -87,4 +87,4 @@ log "切換後：alice 登入 MDS $alice_login、C3 UI $c3_ui"
 section "新金鑰成為正式的：更新操作機上的正本（舊的留一份 .old，確認後銷毀）"
 cp -p "$KEYS_DIR/mds-token.key" "$KEYS_DIR/mds-token.key.old"; cp -p "$CERTS_DIR/mds-token-public.pem" "$CERTS_DIR/mds-token-public.pem.old"
 install -m 0600 "$NEW_KEY" "$KEYS_DIR/mds-token.key"; install -m 0644 "$NEW_PUB" "$CERTS_DIR/mds-token-public.pem"
-ok "~/pki 已更新"
+ok "ops02 的 \/pki 已更新"

@@ -34,7 +34,7 @@ title_of() { sed -n '2s/^# //p' "$1" | sed 's/ ——.*//'; }
 if [ "$list_only" = 1 ]; then
   for step_file in "$INSTALL_DIR"/steps/[0-9][0-9]-*.sh; do
     step_name=$(basename "$step_file" .sh)
-    done_mark=$([ -f "$LOG_DIR/$step_name.done" ] && echo done || echo -)
+    done_mark=$([ -f "$LOG_DIR/$step_name.done" ] && echo "done" || echo "-")
     printf '%-24s %-6s %-6s %s\n' "$step_name" "$(where_of "$step_file")" "$done_mark" "$(title_of "$step_file")"
   done
   exit 0
@@ -44,8 +44,9 @@ this_host=$(hostname -s)
 for step_file in "$INSTALL_DIR"/steps/[0-9][0-9]-*.sh; do
   step_name=$(basename "$step_file" .sh)
   step_number=${step_name%%-*}
-  [[ "$step_number" < "$from_step" ]] && continue
-  [[ "$step_number" > "$to_step" ]] && continue
+  # 站號一律當十進位數字比（10# 讓 08、09 不被當成八進位）：--from 9 和 --from 09 一樣
+  (( 10#$step_number < 10#$from_step )) && continue
+  (( 10#$step_number > 10#$to_step )) && continue
   run_on=$(where_of "$step_file")
   if [ "$run_on" != "$this_host" ]; then   # --only 也一樣：不是這台的步驟（例如下載機那支）一律略過
     echo "== $step_name：請在 $run_on 執行 bash steps/$step_name.sh（這台是 $this_host，略過）"

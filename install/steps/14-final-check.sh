@@ -35,7 +35,7 @@ for topic in $(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}'); 
 done
 
 section "對外"
-via_lb=$(curl -s -o /dev/null -m 30 -w '%{http_code}' $(rest_app_curl_options) "https://$REST_VIP:8082/v3/clusters")
+via_lb=$(rest_app_curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters")
 if [ "$via_lb" = 200 ]; then ok "REST 經負載平衡: 200"; else fail "REST 經負載平衡: $via_lb"; fi
 c3_ui=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$C3_FQDN:9021/")
 if [ "$c3_ui" = 200 ]; then ok "C3 UI: 200"; else fail "C3 UI: $c3_ui"; fi

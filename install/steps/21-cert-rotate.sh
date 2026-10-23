@@ -146,14 +146,20 @@ EOF
 
 # ---- leaf 第四段：換成正本、交出去的那幾張 ----
 promote() {
-  local old_dir=$PKI_DIR/old-$(date +%Y%m%d-%H%M%S) cert_name
+  local old_dir cert_name
+  old_dir=$PKI_DIR/old-$(date +%Y%m%d-%H%M%S)
   section "21.2.5 換成正本（舊的移到 $old_dir）"
-  install -d -m 0700 "$old_dir/keys" "$old_dir/certs"
+  install -d -m 0700 "$old_dir/keys" "$old_dir/certs" "$old_dir/requests" "$old_dir/incoming"
   for cert_name in $(awk '{print $1}' "$REQUESTS_FILE"); do
     mv "$KEYS_DIR/$cert_name.key" "$old_dir/keys/"; mv "$CERTS_DIR/$cert_name.crt" "$CERTS_DIR/$cert_name.p12" "$old_dir/certs/"
     install -m 0600 "$NEXT_DIR/keys/$cert_name.key" "$KEYS_DIR/"
     install -m 0644 "$NEXT_DIR/certs/$cert_name.crt" "$CERTS_DIR/"
     install -m 0600 "$NEXT_DIR/certs/$cert_name.p12" "$CERTS_DIR/"
+    # CSR 與銀行回覆也換成這一輪的：第 9 站重跑時檢查的是「現在在用的」私鑰配回覆，不會拿上一輪的回覆來比而判成私鑰不符
+    mv "$PKI_DIR/requests/$cert_name.csr" "$old_dir/requests/" 2>/dev/null
+    mv "$PKI_DIR/incoming/$cert_name".* "$old_dir/incoming/" 2>/dev/null
+    install -m 0644 "$NEXT_DIR/requests/$cert_name.csr" "$PKI_DIR/requests/"
+    install -m 0644 "$NEXT_DIR/incoming/$cert_name.crt" "$PKI_DIR/incoming/"
   done
   rm -rf "$NEXT_DIR"
   ok "正本已換新"
@@ -172,7 +178,7 @@ promote() {
     ask_bank "Secrets 團隊：PVWA 裡的緊急憑證換成新的（$KEYS_DIR/opmenu-breakglass.key + $CERTS_DIR/opmenu-breakglass.crt）。"
   fi
   local rest_app_code
-  rest_app_code=$(curl -s -o /dev/null -m 30 -w '%{http_code}' $(rest_app_curl_options) "https://$REST_VIP:8082/v3/clusters")
+  rest_app_code=$(rest_app_curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters")
   if [ "$rest_app_code" = 200 ]; then ok "新的 $FIRST_REST_APP 憑證經負載平衡 200"; else fail "新的 $FIRST_REST_APP 憑證：$rest_app_code"; fi
   ask_bank "應用程式團隊：新的 $(tr '|' ' ' <<<"$REST_APPS") 憑證在 $CERTS_DIR／$KEYS_DIR，請在你們的時段換上（舊的到期前都有效；換 CA 階段三之前一定要換）。"
 }

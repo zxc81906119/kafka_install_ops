@@ -31,3 +31,6 @@
 - 收尾：OP menu 回歸第 3 輪 34/35 的 6 敗查明是測試腳本 glob 在 cpadmin 展開（看不到 op01 0700 目錄），改 `sudo sh -c`，未重跑；OP menu 本身交接檔已正確寫出（0600、目錄 0700）。
   install/README.md 被 JS replace 的 $＋反引號 替換符號重複插入的 39 行已刪除、第 3 點補回。lab stop。
 - OP menu 回歸重跑 37/37 全過；redesign 第 13 節、opmenu/README 補上 A／B、交接檔、17 看端點、回歸指令；redesign 憑證輪替標題改為已實作。
+- install/tools/lint.sh（shellcheck＋遠端 heredoc 抽出檢查＋pipefail 下禁 `| grep -q`；沒 shellcheck 時用 docker image cp-ops:poc）。修掉：install.sh 站號字串比較（`--from 9` 一站都不跑 → 改 10# 數字比）、01／19 的 `| grep -q`、rest_app_curl 包裝、13／20 遠端片段、測試腳本的 check 字串。
+  21 站 promote 也換 requests/、incoming/（否則輪替後重跑 09 判成私鑰不符；lab 的 incoming 已用現行憑證補回）。lab 重跑 09、12、13、14、17、19 0 FAIL；16＋20 → 39/39。
+  發現：在 sp 模式下重跑 12／13（或 10）會把設定檔寫回明文，要接著重跑 16（20 會抓到：明文密碼 2 項）。處理方式待使用者決定。

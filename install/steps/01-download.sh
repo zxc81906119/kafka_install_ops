@@ -21,7 +21,7 @@ curl -fsSL "https://packages.confluent.io/rpm/$CP_MAJOR/archive.key" -o "$DOWNLO
 curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key -o "$DOWNLOAD_DIR/gpg-keys/confluent-c3.asc" \
   || die "抓不到 C3 的 archive.key"
 rpm --import "$DOWNLOAD_DIR/gpg-keys/confluent.asc" "$DOWNLOAD_DIR/gpg-keys/confluent-c3.asc"
-if rpm -q gpg-pubkey --qf '%{SUMMARY}\n' | grep -qi confluent; then ok "原廠公鑰已匯入 rpm 資料庫"; else die "公鑰匯入失敗"; fi
+if grep -qi confluent <<<"$(rpm -q gpg-pubkey --qf '%{SUMMARY}\n')"; then ok "原廠公鑰已匯入 rpm 資料庫"; else die "公鑰匯入失敗"; fi
 
 cat > /etc/yum.repos.d/confluent.repo <<EOF
 [confluent-$CP_MAJOR]
@@ -49,7 +49,7 @@ dnf download --resolve --arch x86_64 --arch noarch --destdir "$DOWNLOAD_DIR/rpm"
   "confluent-server-$CP_VERSION" "confluent-security-$CP_VERSION" "confluent-kafka-rest-$CP_VERSION" \
   "confluent-cli-$CP_VERSION" "confluent-control-center-next-gen-$C3_VERSION" 2>&1 | grep -v '^\[SKIPPED\]' | tee -a "$LOG_FILE"
 rpm_count=$(ls "$DOWNLOAD_DIR"/rpm/*.rpm 2>/dev/null | wc -l)
-non_confluent_count=$(ls "$DOWNLOAD_DIR/rpm" | grep -vc '^confluent-' || true)
+non_confluent_count=$(find "$DOWNLOAD_DIR/rpm" -maxdepth 1 -type f ! -name "confluent-*" | wc -l)
 if [ "$rpm_count" -ge 11 ] && [ "$non_confluent_count" = 0 ]; then ok "$rpm_count 個 RPM，全部是 confluent-*"
 else die "RPM 數量 $rpm_count（預期 11）、非 confluent 的檔 $non_confluent_count 個"; fi
 
