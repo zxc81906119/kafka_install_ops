@@ -110,17 +110,50 @@ function table(rows) {
     new Paragraph({ spacing: { before: 0, after: 120 }, children: [] })];
 }
 
+// 每個 ```bash 指令塊上方的「在哪執行」：取自最近的 @role；換了主機（或每章第一塊）再附上 lab 裡切過去的指令
+const ENTER = {
+  'ops02|cpadmin': 'docker exec -it -u cpadmin -w /home/cpadmin lab-ops02-1 bash',
+  'ops02|root': 'docker exec -it lab-ops02-1 bash',
+  'dl01|root': 'docker exec -it dl01 bash',
+  'repo01|root': 'docker exec -it lab-repo01-1 bash',
+  'lb01|root': 'docker exec -it lab-lb01-1 bash',
+  'ad01|root': 'docker exec -it lab-ad01-1 bash',
+};
+function placeLine(roleText, changed, fromContainer) {
+  const [who, where = '', user = ''] = roleText.split('|').map(s => s.trim());
+  const bank = /銀行|行內|OS 團隊|AD 團隊|CA|套件庫/.test(who);
+  const ink = bank ? C.bankInk : C.usInk;
+  const windows = /^Windows/.test(where);
+  const children = [new TextRun({ text: windows ? '▶ 在 Windows 的 Git Bash 執行' : `▶ 在 ${where}（${user}）執行`, bold: true, color: ink, size: 18 })];
+  if (changed) {
+    const enter = ENTER[`${where}|${user}`];
+    if (windows) children.push(new TextRun({ text: '　換機器：還在容器裡的話先 exit，回到 Git Bash', color: ink, size: 18 }));
+    else if (enter) children.push(new TextRun({ text: fromContainer ? '　換機器：先 exit 回到 Git Bash，再執行 ' : '　換機器：在 Git Bash 執行 ', color: ink, size: 18 }),
+      new TextRun({ text: enter, font: 'Consolas', color: ink, size: 18 }));
+  }
+  return new Paragraph({ spacing: { before: 100, after: 40 }, keepNext: true, children });
+}
+
 function parse(md) {
   const lines = md.replace(/\r/g, '').split('\n');
   const out = []; let i = 0, numbered = 0;
+  let currentRole = '', lastPlace = '';
   while (i < lines.length) {
     const l = lines[i]; let m;
     if ((m = /^\s*```(\w*)/.exec(l))) {
       const kind = m[1] === 'out' ? 'out' : 'cmd';
+      if (m[1] === 'bash' && currentRole) {
+        const [, where = '', user = ''] = currentRole.split('|').map(s => s.trim());
+        const place = `${where}|${user}`;
+        out.push(placeLine(currentRole, place !== lastPlace, lastPlace !== '' && !/^Windows/.test(lastPlace)));
+        lastPlace = place;
+      }
       const ind = l.length - l.trimStart().length; const buf = []; i++;
       while (i < lines.length && !/^\s*```/.test(lines[i])) { const x = lines[i++]; buf.push(x.slice(Math.min(ind, x.length - x.trimStart().length))); }
       i++; out.push(...block(buf, kind)); continue;
     }
+    if (/^@role /.test(l)) currentRole = l.slice(6);
+    if (/^# /.test(l)) lastPlace = '';   // 每章第一塊都附上切換指令（讀者可能從這一章開始讀）
     if (l.startsWith('|')) { const buf = []; while (i < lines.length && lines[i].startsWith('|')) buf.push(lines[i++]); out.push(...table(buf)); continue; }
     if (l.trim() === '[[toc]]') { out.push(new TableOfContents('目錄', { hyperlink: true, headingStyleRange: '1-2' })); i++; continue; }
     if (l.trim() === '[[pagebreak]]') { out.push(new Paragraph({ children: [new PageBreak()] })); i++; continue; }

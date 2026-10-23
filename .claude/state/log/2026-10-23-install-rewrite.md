@@ -45,3 +45,4 @@
   install：VAULT_ACCESS=api|manual；16.2 產生後先交保管（api 寫保管庫；manual 停下等 PVWA、custody 檔「雜湊 單號」），確認後才派送。manual 用隔離複本驗 4 情況；api 重跑 16 → 20 驗收 39/39。
   手把手 16：intro、16.1 開兩個變數、16.2 更正錯誤說法＋存 master key、16.6 輪替後存新 key、16.7 CyberArk 角色／擋得住擋不住／遺失怎麼辦、16.8 只加 hosts 讀權（policy 在 lab Conjur 驗 201）；壞掉的 tr -d 換行修好。redesign 加定案段。docx 待使用者關閉 Word 後重建。
 - 使用者要求從第 0 章重頭驗證：lab 全刪（留 landing、images、docker image）。
+- 手把手：每個 bash 指令塊上方自動標在哪台執行、換機器附 docker exec（容器→容器先 exit）；移除 21 個對應腳本框與 0.6（之後另寫腳本文件），0.6 的陷阱搬到 16.7。

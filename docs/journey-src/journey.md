@@ -49,6 +49,7 @@
 ## 0.4 怎麼讀這本
 
 - 綠色標籤 **我方**：小安敲的指令。橘色標籤 **銀行**：銀行各團隊的事，lab 裡由你代勞。
+- 每個指令上方都有一行「▶ 在哪台（用哪個帳號）執行」。要換機器的那一個指令（以及每章第一個指令）會附上 lab 裡切過去的指令，例如 `docker exec -it -u cpadmin -w /home/cpadmin lab-ops02-1 bash`；從一台容器換到另一台時，先 `exit` 回到 Git Bash 再切。正式環境則是經 CyberArk 代登（PSMP）ssh 進那台主機。
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
 - 指令都是一行可以整段貼上的；多行的 `heredoc`（`<<'EOF' … EOF`）要整段一起貼。
 - 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。
@@ -497,40 +498,11 @@ docker exec -it lab-ops02-1 bash
 
 > 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：ops02 的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 3、9 站會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
-## 0.6 不想一行一行打：install/ 腳本
-
-這本的每一站都有一支對應的腳本，放在 repo 的 `install/`。腳本做的就是這一章的手打指令，順序、檢查點、預期結果都一樣，只是多了一層包裝：把重複的部分收成函式、把結果判成 ok／FAIL、留下紀錄。每一站開頭的「**對應腳本**」框寫著那一站要怎麼跑。
-
-**什麼時候手打、什麼時候用腳本**
-
-- 第一次學、要搞懂每一步在做什麼：照這本手打。
-- 正式環境、重建 lab、要重跑某一站：用腳本。看不懂腳本的某一段，翻到這本同一章。
-- 腳本**不代做銀行的事**：遇到要銀行做的地方，它只印出「請銀行做」清單，然後停下（結束碼 2）；銀行做完再跑同一站。
-
-**放到哪、怎麼跑**
-
-| 在哪 | 誰 | 指令 | 說明 |
-|---|---|---|---|
-| 下載機 | root | `bash install/steps/01-download.sh` | 第 1 站 |
-| 操作機 | cpadmin | `bash install/install.sh` | 從第 2 站依序跑到第 20 站；第 21 站（憑證輪替）照順序跑時略過 |
-| 操作機 | cpadmin | `bash install/install.sh --from 09` | 從某一站續跑（例如銀行簽好憑證之後） |
-| 操作機 | cpadmin | `bash install/install.sh --only 12` | 只跑一站 |
-| 操作機 | cpadmin | `bash install/install.sh --list` | 每一站在哪台跑、做完了沒 |
-
-- `install/` 和落地區的檔案一起走第 2 站的檔案交換送進銀行，放在 cpadmin 的家目錄（`~/install`）。lab 裡用 `bash install/lab/bank-sim.sh push` 送過去。
-- 換環境只改 `install/conf/site.env` 的上半段（主機名稱、版本、AD、heap、要不要做哪些延伸站）。
-- 每一站的紀錄在 `~/install-logs/`；結束碼 0 成功、2 等銀行、其他是失敗（看紀錄最後幾行）。
-- 重跑是安全的：已經做過的會沿用（私鑰、密碼檔、cluster id 不會重產），設定有變的服務才會重啟。
-
-> 陷阱：做過第 16 站（Secret Protection）之後，手打重跑第 10、12、13 站的「產生設定、派送」會把密碼寫回明文；要接著重跑第 16 站。用腳本重跑時會自動照第 16 站加密。
-
 # 1. 第一站：外網下載機
 
 ![download]
 
 小安的第一個任務：把 Confluent 的套件抓下來，而且只抓需要的。Java 和 OS 套件不下載，那是銀行的事。
-
-> **對應腳本**：下載機 dl01（root）`bash install/steps/01-download.sh`。落地區預設 `/out`（`OUT=` 可改）。這一章的指令就是腳本做的事，順序與檢查點相同。
 
 ## 1.1 設定 Confluent repo、匯入原廠公鑰
 
@@ -706,8 +678,6 @@ cd /out && find rpm tools gpg-keys -type f | LC_ALL=C sort | xargs sha256sum > S
 
 ![intake]
 
-> **對應腳本**：操作機 ops02（cpadmin）`bash install/install.sh --only 02`。掃描、開單、檔案交換是銀行的事，腳本只印出清單，送到後核對 SHA256SUMS 與原廠簽章。
-
 ## 2.1 掃描與開單
 
 @role 銀行 資安 | 行內掃描平台 | —
@@ -759,8 +729,6 @@ sudo rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-
 ![bankprep]
 
 小安在等的時候，銀行各團隊在做自己的事。這一章全部是銀行的工作，lab 裡由你扮演。正式環境只要確認結果（第 6 章的安裝前檢查會逐項看）。
-
-> **對應腳本**：`bash install/install.sh --only 03`。我方只產生 ssh 金鑰；其餘逐項確認（金鑰登入、根憑證、OS 套件庫、JDK、LDAPS、負載平衡），有一項沒好就印「請銀行做」、以 rc 2 停下，銀行做完再跑一次。
 
 ## 3.1 安裝帳號與 SSH 金鑰
 
@@ -975,8 +943,6 @@ C3 那段只是讓 Windows 瀏覽器透過 lab 的連接埠對應連到 C3；正
 
 repo01 只有 httpd，沒有 `createrepo_c`，所以索引在操作機建好，連 RPM 一起推上去。先從銀行套件庫裝工具：
 
-> **對應腳本**：`bash install/install.sh --only 04`。
-
 ```bash
 sudo dnf -q -y --refresh install createrepo_c && createrepo_c --version
 ```
@@ -1027,8 +993,6 @@ dnf -q --repofrompath=cp-test,https://repo01.poc.lab/confluent/ --repo=cp-test -
 
 銀行給的 tar 在 `~/landing/bank/`。決定：解壓到 `/opt/java/<版本目錄>`，再做一個固定的連結 `/opt/java/current` 指向它，所有設定一律寫 `/opt/java/current`，以後換版只改連結。`java`、`keytool` 用 alternatives 登記（RHEL 的標準做法），`/etc/profile.d/java.sh` 設 `JAVA_HOME`；服務自己的 systemd 設定還會再明確寫一次 `JAVA_HOME`，不受全域切換影響。
 
-> **對應腳本**：`bash install/install.sh --only 05`。
-
 先看壓縮檔的頂層目錄名稱，並準備 `profile.d` 的檔案：
 
 ```bash
@@ -1077,8 +1041,6 @@ kc01: openjdk version "21.0.x" … LTS JAVA_HOME=/opt/java/current
 @role 小安 | ops02 | cpadmin
 
 動任何東西之前，先確認銀行準備的環境符合條件。每一項不符都是要先回頭找銀行的事。
-
-> **對應腳本**：`bash install/install.sh --only 06`（只讀，不改任何東西）。
 
 **主機基本事實**（`/tmp` 不能 `noexec`、至少 2 GB）：
 
@@ -1133,8 +1095,6 @@ kc01: confluent_pkgs=0 data_dir=none
 @role 小安 | ops02 | cpadmin
 
 10 台叢集主機要做，操作機只做時間同步。lab 是容器，sysctl 有兩個網路參數設不進去、THP 的單元會自動跳過，正式 VM 不會有這個限制。
-
-> **對應腳本**：`bash install/install.sh --only 07`。
 
 **核心參數**：
 
@@ -1240,8 +1200,6 @@ c3-01: 9021/tcp 9090/tcp
 
 每台放原廠公鑰、寫 repo 設定（11 台含操作機，gpgcheck 開著）：
 
-> **對應腳本**：`bash install/install.sh --only 08`。
-
 ```bash
 for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -m 0644 /tmp/confluent.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent && sudo install -m 0644 /tmp/confluent-c3.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3 && rm -f /tmp/confluent*.asc && sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3 && sudo tee /etc/yum.repos.d/confluent-internal.repo >/dev/null <<EOF
 [confluent-internal]
@@ -1302,8 +1260,6 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 ![certs]
 
 平台內部所有連線都加密，而且用憑證識別身分。小安在操作機產生私鑰和 CSR（私鑰不離開行內），銀行 CA 簽完回來，小安逐張檢查後做成 Java 用的 keystore。
-
-> **對應腳本**：`bash install/install.sh --only 09`。第一次跑產生私鑰與 CSR 後停在「請銀行簽」（rc 2）；銀行回覆放進 `~/pki/incoming/` 後再跑同一站，做 9.3 的檢查與 keystore。
 
 ## 9.1 產生私鑰與 CSR
 
@@ -1406,8 +1362,6 @@ Certificate was added to keystore
 # 10. 第十站：controller 與 broker
 
 ![startup]
-
-> **對應腳本**：`bash install/install.sh --only 10`。重跑時：設定或 drop-in 有變、服務已在跑的主機會一台一台重啟；第 16 站做過會照樣加密，第 19 站做過會帶上稽核設定。
 
 ## 10.1 派送憑證
 
@@ -1762,8 +1716,6 @@ kb04 MDS=200
 
 操作機的管理 client：用 `svc-ops` 憑證向 MDS 換 token，走 TOKEN listener。`svc-ops` 是 super user。
 
-> **對應腳本**：`bash install/install.sh --only 11`。
-
 ```bash
 (umask 077; cat > ~/conf/client-admin.properties <<EOF
 security.protocol=SASL_SSL
@@ -1869,8 +1821,6 @@ carol: "role": "DeveloperRead"
 
 REST Proxy 只接受 client 憑證，憑證的 CN 對應到 principal 的規則只列出走 REST 的 app，故意不加 DEFAULT，其他憑證一律對不上。
 
-> **對應腳本**：`bash install/install.sh --only 12`。
-
 ```bash
 for h in rest01 rest02; do scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/svc-rest.p12 ~/pki/certs/mds-token-public.pem $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/kafka-rest && for f in truststore.p12 cp-server.p12 svc-rest.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12 /tmp/mds-token-public.pem; printf "%-7s %s files\n" "$(hostname)" "$(sudo ls /etc/confluent/ssl | wc -l)"'; done
 ```
@@ -1974,8 +1924,6 @@ via LB: 200
 @role 小安 | ops02 | cpadmin
 
 C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。
-
-> **對應腳本**：`bash install/install.sh --only 13`。
 
 ```bash
 scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-server.crt ~/pki/keys/cp-server.key ~/pki/certs/bank-root.pem ~/pki/certs/svc-c3.p12 ~/pki/certs/mds-token-public.pem c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center && for f in truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem; rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/bank-root.pem /tmp/mds-token-public.pem; echo "c3-01: $(sudo ls /etc/confluent/ssl | wc -l) files"'
@@ -2137,8 +2085,6 @@ Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~
 
 到這裡平台已經能用。後面是**延伸站**：第 15、16 站把密碼搬進銀行的 CyberArk（二選一，看銀行有沒有 Conjur）；第 17 站裝維運選單；第 18 站讓行內 Prometheus 抓指標；第 19 站稽核日誌。第 20 站是交付前一次跑完的驗收與收尾清單。第 21 站是之後每年都會用到的憑證輪替。
 
-> **對應腳本**：`bash install/install.sh --only 14`（只讀）。第 2 到 14 站可以一次跑：`bash install/install.sh --to 14`，遇到等銀行的地方會停下。
-
 @role 小安 | ops02 | cpadmin
 
 全部做完，用這幾條確認整套是健康的：
@@ -2213,8 +2159,6 @@ metrics in prometheus: 111 kinds
 ![conjur]
 
 到第 13 站為止，平台能跑，但 keystore 密碼和 AD 查詢帳號的密碼是以明文寫在各主機的 properties 裡（0640、只有 root 和 confluent 群組讀得到）。銀行的規範是機敏資料一律放 CyberArk。這一站把它們搬進銀行的 Conjur，properties 裡只留下「去 Conjur 拿哪一個值」的參照，服務啟動時才取回來。
-
-> **對應腳本**：`conf/site.env` 的 `SECRETS_MODE=conjur` 時才用（否則自動略過）。15.3 建 jar 在下載機 dl01（root）`bash install/steps/15-conjur-provider-jar.sh`；其餘在操作機 `bash install/install.sh --only 15`。15.7、15.8 的演練沒有包進腳本，照本章手打。
 
 | 誰 | 做什麼 |
 |---|---|
@@ -2648,8 +2592,6 @@ hello-via-provider-1792669189
 
 第 15 站需要 Conjur。銀行若只有 PAM（沒有 Conjur），broker 沒有原廠 provider 可以用，改走 Confluent 自己的 **Secret Protection**：密碼加密後留在主機上的 `security.properties`，解密用的 master key 由 CyberArk 保管，啟動時經環境變數給服務。它和第 15 站是**二選一**；這一站從第 10 站的明文範本（第 15 站留下的 `*.tpl.plain`）重新開始。
 
-> **對應腳本**：`SECRETS_MODE=sp` 時用：`bash install/install.sh --only 16`。16.2–16.9 一次做完、只滾動重啟一次；要不要 Summon（16.8）、AD 查詢密碼要不要改注入（16.9），由 `site.env` 的 `SUMMON`、`LDAP_PASSWORD_VIA_ENV` 決定。`VAULT_ACCESS=manual`（只有 PVWA）時：passphrase 由你從 PVWA 取出放進 `~/secrets/sp-passphrase.txt`；master key 產生後腳本會停下，Secrets 團隊存進 PVWA、你記下單號（`~/secrets/master-key.custody`）後再跑一次才會派送。16.6 輪替 master key 的演練沒有包進腳本。
-
 ```
 passphrase ──(＋隨機 salt)──▶ master key ──▶ data key ──▶ 各個密碼的密文（security.properties）
 （CyberArk 保管）              （CyberArk 保管）
@@ -2872,6 +2814,8 @@ alice login after master key rotation: 200
 | 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟。與 master key 輪替無關 |
 | 和第 15 站的差別 | 不依賴外部系統在線、原廠正式支援、不用 jar；但密碼是加密落地而不是啟動時取 |
 
+> 陷阱：做過這一站之後，若回頭照第 10、12、13 站重新產生設定並派送，會把明文密碼寫回主機；改了設定要照 16.3–16.5 重新加密、派送、重啟。
+
 ## 16.8 選配：用 Summon 讓 master key 不落地
 
 @role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
@@ -3057,8 +3001,6 @@ ops02: ldap-bind.pass refreshed from vault
 ![opmenu]
 
 平台交給維運之後，日常作業不該靠人記指令。小安帶了一個文字選單：維運人員用自己的本機帳號登入操作機，輸入 AD 帳密，選單只顯示他有權限的項目，每一步留紀錄。重啟、看日誌這類要碰主機的動作，選單以 cpadmin ssh 過去做，私鑰在選單啟動時從銀行的保管庫取進 ssh-agent，不落地；主機上不放任何代理程式，只靠 sudoers 限制 cpadmin 能跑的指令。
-
-> **對應腳本**：`OPMENU=1` 時用：`bash install/install.sh --only 17`。保管庫來源由 `OPMENU_SECRETS` 決定（conjur／ccp／manual）；17.5 的三種身分試跑也在腳本裡。
 
 | 誰 | 做什麼 |
 |---|---|
@@ -3264,8 +3206,6 @@ kb04 full sudo restored for the rest of the lab
 ![jmx]
 
 C3 有自己的 Prometheus，但那是給 C3 用的。銀行的監控中心要自己的 Prometheus 抓每台 controller、broker、REST Proxy 的指標，再接自己的告警。做法是在每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），在 7071 開一個 HTTPS 端點，basic auth 保護；行內 Prometheus 拿我們產生的 scrape 設定與告警規則去接。
-
-> **對應腳本**：`JMX_EXPORTER=1` 時用：`bash install/install.sh --only 18`。給銀行監控團隊的檔案（18.4）會產生在 `~/monitoring/`。
 
 | 誰 | 做什麼 |
 |---|---|
@@ -3558,8 +3498,6 @@ bank-prometheus removed
 
 Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了什麼、准還是拒，每一筆都是一個事件，寫進 Kafka 自己的 topic。預設是用 broker 自己的身分寫、全部塞同一個 topic。銀行要的是：用一個**專用的低權限帳號**寫、**敏感 topic 的事件分開放、留久一點**、排除平台自己的雜訊。這一站把這三件事做上去，密碼一樣進 Secret Protection。
 
-> **對應腳本**：`AUDIT_LOG=1` 時用：`bash install/install.sh --only 19`。密碼依第 15／16 站留下的放法處理（`~/conf/secrets.mode`）。
-
 | 誰 | 做什麼 |
 |---|---|
 | 小安 | 建寫入帳號與權限、改 controller／broker 的設定（加密、派送）、滾動重啟、製造允許與拒絕的事件來驗證 |
@@ -3708,8 +3646,6 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
 
 每一站結尾都有自己的檢查，但交付前要有一份**一次跑完、結果能附在驗收文件裡**的清單。四組：平台健康、安全（正向與反向都測）、應用程式端、維運。最後是收尾：安裝期間留在操作機與主機上的東西，哪些要留、哪些要收。
 
-> **對應腳本**：`bash install/install.sh --only 20`。四組檢查跑完印出「驗收：N / N 項通過」，可以直接附在驗收文件；冷開機（20.4）交給機房演練，不在腳本裡。
-
 ## 20.1 平台健康
 
 @role 小安 | ops02 | cpadmin
@@ -3826,8 +3762,6 @@ kc01: /tmp 殘留 0 個；sudoers cpadmin,cpadmin-ops,
 ![certrotate]
 
 第 9 站簽的憑證效期一年，到期前一定要換。這一站做兩件事：每年都會遇到的 **leaf 換發**（同一個銀行 CA 重簽），以及幾年一次、銀行決定的 **換 CA**（三階段：先加新根 → 換 leaf → 移除舊根）。MDS token 金鑰不是銀行 CA 簽的、沒有到期日，不在這一站（只在外洩時才換）。
-
-> **對應腳本**：不在安裝順序裡，要換時才跑：`bash install/steps/21-cert-rotate.sh status`（現況）、`leaf`（換發；第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑一次）、`trust-sync`（銀行換好 OS 的根憑證之後）。換 CA 三階段＝`trust-sync` → `leaf` → `trust-sync`。
 
 | 情境 | 多久一次 | 會不會斷線 |
 |---|---|---|
