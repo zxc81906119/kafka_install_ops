@@ -746,7 +746,14 @@ ssh-ed25519 AAAA…… cpadmin@ops02
 
 @role 銀行 OS 團隊 | ops02 | root
 
-用 root 進 ops02（`docker exec -it lab-ops02-1 bash`，不是 cpadmin 那條）。正式環境是 OS 團隊把公鑰放進每台主機 cpadmin 的 `authorized_keys`（或由 CyberArk 推）。lab 的所有主機共用一個 `authorized_keys.d` 目錄，寫一次全部生效；`repodeploy` 是套件庫的部署帳號，也用同一把：
+用 root 進 ops02（`docker exec -it lab-ops02-1 bash`，不是 cpadmin 那條）。正式環境是 OS 團隊把公鑰**逐台**放進每台主機 cpadmin 的 `~/.ssh/authorized_keys`（或由 CyberArk 的 SSH 金鑰管理推送）。
+
+lab 只要在 ops02 寫一次，11 台同時生效，靠的是第 0 章的兩個安排：
+
+- **同一個目錄掛在每台主機上**：`compose.yml` 把 volume `ssh-keys` 掛到每台的 `/etc/ssh/authorized_keys.d`，只有 ops02 可寫，其他主機唯讀（`:ro`）。
+- **sshd 會讀這個目錄**：每台的 sshd 設定 `AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys.d/%u`，cpadmin 登入時除了家目錄的 `authorized_keys`，也看 `/etc/ssh/authorized_keys.d/cpadmin`。
+
+所以下面寫進 `/etc/ssh/authorized_keys.d/cpadmin`，等於一次放進所有主機的 cpadmin；再下一步從 ops02 逐台 `ssh` 就是在驗證這件事。`repodeploy` 是套件庫（repo01）的部署帳號，也用同一把：
 
 ```bash
 k=$(cat /home/cpadmin/.ssh/id_ed25519.pub); install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/cpadmin <<<"$k"; install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/repodeploy <<<"$k"; ls -la /etc/ssh/authorized_keys.d/
