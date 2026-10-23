@@ -6,6 +6,7 @@ run() {
   [ -n "$prefix" ] || read -r -p "topic prefix（例 orders.）: " prefix
   v_svc_acct "$base" || return 1; v_prefix "$prefix" || return 1; v_in "$mode" "rw ro" "模式" || return 1
   local suffix accounts=""; for suffix in $OPMENU_SVC_PAIR; do accounts+="$base$suffix "; done; accounts="${accounts% }"
+  core_handover_ready || return 1
   core_confirm "建立帳號 $accounts，授權 $prefix* 的$([ "$mode" = ro ] && echo 讀取 || echo 讀寫)" || return 1
   local account role ok=1 created=""
   for account in $accounts; do
@@ -28,7 +29,8 @@ run() {
   for account in $accounts; do
     local password; password=$(k_gen_pw)
     be_kafka kafka-configs --alter --add-config "SCRAM-SHA-512=[password=$password]" --entity-type users --entity-name "$account" >/dev/null || return 1
-    core_handover_secret "$account" "$password"; unset password
+    core_handover_secret "$account" "$password" || { echo "$account 的新密碼交接失敗：用 35 重新產生"; return 1; }
+    unset password
   done
   echo "帳號 $accounts 已建立；應用程式先用 ${accounts%% *}"
 }

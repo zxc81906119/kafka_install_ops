@@ -42,45 +42,7 @@ install/
 
 1. **檔頭**：第 2 行是標題（install.sh --list 會顯示），`# where:` 一行寫在哪台跑，接著寫「做什麼／需要什麼／產出什麼／能不能重跑」。
 2. **段落 = 手把手的小節**：`section "10.2 …"` 對 `## 10.2`；每段前面一行註解說「為什麼這樣做」，不寫「做了什麼」（程式本身就是）。
-3. **遠端多行指令一律用 `ssh_script 主機 變數=值 <<EOF … EOF`**：heredoc 裡的 `# install/ — 照手把手文件一章一支的安裝腳本
-
-`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–20 章的每一章，對應一支 `steps/NN-*.sh`。
-腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
-
-```
-install/
-  install.sh          依序跑 steps/（--list / --from NN / --to NN / --only NN）
-  conf/site.env       站點設定：主機名稱、版本、AD、heap、目錄。每個環境只改這一個檔
-  conf/certs.txt      要請銀行 CA 簽的憑證（名稱、EKU、SAN 種類）
-  conf/apps.txt       應用程式：SCRAM 直連或憑證走 REST、配額
-  conf/rbac.txt       role binding（人員綁 AD 群組，服務與 app 綁最小權限）
-  conf/topics.txt     範例 topic
-  lib/ssh.sh          ssh_run / ssh_run_as / ssh_script（heredoc 原樣送過去）/ copy_to_tmp / restart_and_wait / rolling_restart
-  lib/render.sh       render_template / render_templates / encrypt_passwords / ldap_password_from_env / count_plaintext_passwords
-  lib/log.sh          section / log / ok / warn / fail / die / ask_bank / wait_for_bank / finish_step —— 畫面 + ~/install-logs/
-  lib/vault.sh        vault_login_as_ops / vault_login_as_host / vault_get / vault_set / vault_exists（Conjur 版；客戶只有 PAM／CCP 時換這一個檔）
-  templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、Prometheus 設定
-  steps/01–14         核心：下載到 C3、總檢查
-  steps/15–20         延伸：15 Conjur provider（含下載機建 jar 的 15-…-jar）、16 Secret Protection（+Summon、+AD 密碼注入）、17 OP menu、18 JMX exporter、19 稽核日誌、20 驗收
-  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：conjur / sp / opmenu / prometheus / coldboot）
-  lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動；EXT=1 再接 15–20
-```
-
-## 怎麼跑
-
-| 在哪 | 誰 | 指令 | 說明 |
-|---|---|---|---|
-| 下載機 | root | `bash install/steps/01-download.sh` | 第 1 站。落地區掛在 `/out`（可用 `OUT=` 改） |
-| 操作機 | cpadmin | `bash install/install.sh` | 第 2 站起依序跑；第 1 站只提示「請在 dl01 執行」 |
-| 操作機 | cpadmin | `bash install/install.sh --from 09` | 銀行做完後從某一站續跑 |
-| 操作機 | cpadmin | `bash install/install.sh --list` | 看每站是否 done（`~/install-logs/<step>.done`） |
-
-- 每一步 rc 0 成功、rc 2 **等銀行**（印出「請銀行做」清單；銀行做完後 `--from` 同一站重跑）、其他 rc 失敗（看 `~/install-logs/` 最新的 log）。
-- 銀行的事腳本**不代做**，只印清單並驗證結果：第 2 站的掃描與交換、第 3 站的公鑰／套件庫／根憑證／JDK／AD／NTP／LB、第 9 站的簽發。
-- 重跑是安全的：dnf、install、tee 都是覆蓋成一樣的內容；格式化看到 `meta.properties` 就略過；密碑檔、cluster id、MDS token 金鑰只在不存在時產生；topic 用 `--if-not-exists`。
-- 密碼不進畫面、不進 log：`~/pki/store.pass`、`~/secrets/*.pass`（0600）讀進變數後交給 envsubst 或指令。
-
-、引號都在那台主機展開，和手打一樣，不跳脫。
+3. **遠端多行指令一律用 `ssh_script 主機 變數=值 <<'EOF' … EOF`**：heredoc 裡的 `$`、引號都在那台主機展開，和手打一樣，不跳脫。
    同一段遠端指令要用好幾次（例如 16 站），先存成有名字的變數（`SETUP_SUMMON=$(cat <<EOF … EOF)`），再 `ssh_script 主機 … <<<"$SETUP_SUMMON"`。
 4. **名字寫完整**：路徑與常數用全大寫完整英文（`CERTS_DIR`、`FIRST_BROKER`、`ADMIN_CLIENT_CONF`），迴圈與暫存用小寫完整英文（`host`、`result`、`props_file`）；
    不用 `D`、`C`、`r`、`h` 這種單字母。各站共用的衍生值都在 `conf/site.env` 的下半段，先找那裡再自己取名。

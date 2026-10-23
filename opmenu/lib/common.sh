@@ -30,6 +30,12 @@ core_log() { # core_log <結果> <項目> <對象/備註>;每個欄位都先去�
 }
 core_log_pre_login() { OP_USER="$(id -un)" core_log "$@"; }   # 還沒登入時的紀錄(操作者欄填作業系統帳號)
 
+# core_handover_ready：交接檔的目錄建得起來、寫得進去才回 0。改密碼「之前」先檢查，免得密碼改了卻交不出去
+core_handover_ready() {
+  ( umask 077; mkdir -p "$OPMENU_HANDOVER_DIR" ) 2>/dev/null && [ -w "$OPMENU_HANDOVER_DIR" ] && return 0
+  echo "${CR}交接檔的目錄 $OPMENU_HANDOVER_DIR 建不起來或寫不進去，不改密碼${C0}"
+  return 1
+}
 # core_handover_secret <帳號> <密碼>：新密碼不印在畫面上，寫進操作者自己家目錄的交接檔（0600）；紀錄只記交接了哪個帳號
 core_handover_secret() {
   local account="$1" secret="$2" file

@@ -16,7 +16,7 @@ check() { if eval "$2"; then echo "ok   $1"; PASS_COUNT=$((PASS_COUNT + 1)); els
 # run_item <AD 帳號> <項目> [參數…]：非互動跑一次，畫面存在 $OUT/<項目>.txt；回傳選單紀錄裡這一筆的結果（OK／FAIL／DENIED…）
 run_item() {
   local person=$1 item=$2; shift 2
-  local before; before=$(sudo wc -l < /var/log/opmenu/opmenu.log)
+  local before; before=$(sudo wc -l /var/log/opmenu/opmenu.log | cut -d" " -f1)   # 用 root 讀（重導向不是 sudo 做的）
   sudo env OPMENU_USER="$person" OPMENU_PASS="$TEST_PASSWORD" OPMENU_YES=1 OPMENU_REASON=regression JAVA_HOME=/opt/java/current HOME=/home/$MENU_USER \
        runuser -p -u "$MENU_USER" -- /opt/opmenu/opmenu.sh --run "$item" "$@" > "$OUT/$item.txt" 2>&1 </dev/null
   sed -i 's/\x1b\[[0-9;]*m//g' "$OUT/$item.txt"
@@ -31,7 +31,9 @@ scram_login_works() {
      "$account" "$password" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$conf")
   timeout 60 kafka-topics --bootstrap-server "$FIRST_BROKER:9095" --command-config "$conf" --list >/dev/null 2>&1
 }
-latest_handover() { sudo ls -t "$HANDOVER_DIR"/"$1"-*.pass 2>/dev/null | head -1; }
+# 交接目錄是 op01 的 0700：glob 要由 root 展開（cpadmin 的 shell 看不到裡面，會把 * 原樣交給 sudo）
+latest_handover() { sudo sh -c "ls -t $HANDOVER_DIR/$1-*.pass 2>/dev/null | head -1"; }
+remove_test_handovers() { sudo sh -c "rm -f $HANDOVER_DIR/app-regtest-*.pass"; }
 
 echo "== 第 1 層：值班查看"
 item_ok alice 10
@@ -51,13 +53,18 @@ echo "== 第 2 層：服務操作"
 item_ok bob 21 "kb03.$DOMAIN:confluent-server"
 item_ok bob 22 "rest02.$DOMAIN:confluent-kafka-rest"
 item_ok bob 23 "kb01.$DOMAIN:confluent-server" 5
+# 27 開始前會檢查叢集健康（21 剛重啟 kb03，複本要一點時間追上）：等 under-replicated 回到 0 再跑
+for attempt in $(seq 1 36); do
+  under_replicated=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)
+  [ "$under_replicated" = 0 ] && break; sleep 5
+done
 item_ok bob 27
 
 echo "== 第 3 層：變更作業"
 item_ok alice 31 orders.regtest 1
 item_ok alice 32 orders.regtest 3600000
 item_ok alice 33 orders.regtest
-sudo rm -f "$HANDOVER_DIR"/app-regtest-*.pass
+remove_test_handovers
 item_ok alice 34 app-regtest regtest.
 password_a=$(sudo cat "$(latest_handover app-regtest-a)" 2>/dev/null); password_b=$(sudo cat "$(latest_handover app-regtest-b)" 2>/dev/null)
 check "34 兩個帳號的交接檔都在（0600）" "[ -n '$password_a' ] && [ -n '$password_b' ] && [ \"\$(sudo stat -c %a '$(latest_handover app-regtest-a)')\" = 600 ]"
@@ -86,6 +93,6 @@ item_ok alice 45 60 alice
 item_ok alice 91 kafka-topics --list
 
 echo "== 收尾"
-sudo rm -f "$HANDOVER_DIR"/app-regtest-*.pass "$OUT"/scram-*.properties
+remove_test_handovers; rm -f "$OUT"/scram-*.properties
 check "沒有殘留的 ssh-agent" "[ \"\$(pgrep -x ssh-agent | wc -l)\" = 0 ]"
 echo "全部項目：$PASS_COUNT 項通過、$FAIL_COUNT 項失敗（畫面輸出在 $OUT/）"

@@ -45,3 +45,13 @@ finish_step() {
   log "$STEP_NAME 完成；紀錄檔：$LOG_FILE"
   touch "$LOG_DIR/$STEP_NAME.done"
 }
+
+# retry <最多幾次> <間隔秒數> <指令…>：失敗就隔一下再試（例如剛滾動重啟完、MDS 還在暖機時建 role binding）
+retry() {
+  local tries=$1 wait_seconds=$2 attempt; shift 2
+  for attempt in $(seq 1 "$tries"); do
+    "$@" && return 0
+    [ "$attempt" -lt "$tries" ] && sleep "$wait_seconds"
+  done
+  return 1
+}

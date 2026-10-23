@@ -72,7 +72,7 @@ while read -r principal role resource pattern; do
   binding_args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID")
   [ "$resource" != - ] && binding_args+=(--resource "$resource")
   [ "$pattern" = PREFIXED ] && binding_args+=(--prefix)
-  if confluent iam rbac role-binding create "${binding_args[@]}" >/dev/null 2>&1 </dev/null; then ok "$principal $role ${resource#-} ${pattern#-}"
+  if retry 3 5 confluent iam rbac role-binding create "${binding_args[@]}" >/dev/null 2>&1 </dev/null; then ok "$principal $role ${resource#-} ${pattern#-}"
   else fail "$principal $role ${resource#-}"; fi
 done < <(grep -v '^#' "$INSTALL_DIR/conf/rbac-opmenu.txt")
 [ "$FAIL_COUNT" = 0 ] || die "17.2 失敗"

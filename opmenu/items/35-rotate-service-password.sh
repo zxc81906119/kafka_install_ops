@@ -4,6 +4,7 @@ run() {
   local base="${1:-}" in_use="${2:-}"
   [ -n "$base" ] || read -r -p "應用程式名稱（例 app-orders）: " base
   v_svc_acct "$base" || return 1
+  core_handover_ready || return 1
   local suffix pair=() account
   for suffix in $OPMENU_SVC_PAIR; do
     be_kafka kafka-configs --describe --entity-type users --entity-name "$base$suffix" 2>/dev/null | grep -q 'SCRAM-SHA-512=' && pair+=("$base$suffix")
@@ -14,7 +15,8 @@ run() {
     core_confirm "在中斷的情況下更換 $base 的密碼（應用程式要同時換）" || return 1
     local password; password=$(k_gen_pw)
     be_kafka kafka-configs --alter --add-config "SCRAM-SHA-512=[password=$password]" --entity-type users --entity-name "$base" >/dev/null || return 1
-    core_handover_secret "$base" "$password"; return 0
+    core_handover_secret "$base" "$password" || { echo "交接失敗：$base 的密碼已改，請再跑一次 35 重新產生"; return 1; }
+    return 0
   fi
   echo "-- 這組帳號上次輪替（選單紀錄）："
   for account in "${pair[@]}"; do
@@ -26,6 +28,7 @@ run() {
   core_confirm "更換 $rotate 的密碼（應用程式現在用 $in_use，不受影響）" || return 1
   local password; password=$(k_gen_pw)
   be_kafka kafka-configs --alter --add-config "SCRAM-SHA-512=[password=$password]" --entity-type users --entity-name "$rotate" >/dev/null || return 1
-  core_handover_secret "$rotate" "$password"; unset password
+  core_handover_secret "$rotate" "$password" || { echo "交接失敗：$rotate 的密碼已改，請再跑一次 35 重新產生"; return 1; }
+  unset password
   echo "下一步：請應用程式改用 $rotate 與新密碼；下次輪替時換 $in_use"
 }

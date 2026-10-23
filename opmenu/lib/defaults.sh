@@ -63,7 +63,7 @@ d OPMENU_CCP_KEY         '/etc/opmenu/ssl/opmenu-ccp.key'
 d OPMENU_TOPIC_PATTERN   '^[a-z][a-z0-9]+\.[a-z0-9.-]+$'                # topic 命名:<系統>.<名稱>
 d OPMENU_SVC_PATTERN     '^[a-z][a-z0-9-]+$'                            # service account:例 app-orders
 d OPMENU_SVC_PAIR        '-a -b'                                         # 34／35／37：一個應用程式兩個帳號（<名稱>-a、<名稱>-b，權限相同），輪替密碼時換「沒在用的那個」，不中斷
-d OPMENU_HANDOVER_DIR    "\$HOME/opmenu-handover"                       # 新密碼交接檔放哪（操作者自己的家目錄，0700／0600）；存進 PVWA 後刪掉
+d OPMENU_HANDOVER_DIR    "$HOME/opmenu-handover"                       # 新密碼交接檔放哪（操作者自己的家目錄，0700／0600）；存進 PVWA 後刪掉
 d OPMENU_REPLICATION     3                                              # 建 topic 的 replication factor(標準值);沒填且 broker 少於 3 台時,登入後自動降到 broker 數
 d OPMENU_EMERGENCY_TOOLS 'kafka-topics kafka-configs kafka-consumer-groups kafka-acls kafka-metadata-quorum'   # 91 允許的工具
 d OPMENU_AUDIT_TOPIC     confluent-audit-log-events                     # 43 匯出的 audit topic
