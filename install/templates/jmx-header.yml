@@ -1,0 +1,17 @@
+# Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256 (no plaintext scrape password here)
+httpServer:
+  ssl:
+    keyStore:
+      filename: /etc/confluent/ssl/${KS}.p12
+      password: ${STORE_PASSWORD}
+      type: PKCS12
+    certificate:
+      alias: ${KS}
+  authentication:
+    basic:
+      username: prometheus
+      passwordHash: ${HASH}
+      algorithm: SHA-256
+      salt: ${SALT}
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true

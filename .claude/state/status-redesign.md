@@ -18,10 +18,10 @@ Updated: 2026-10-23 上午（session 收尾，lab 已 stop）
 ## 下一步（2026-10-22 使用者定案順序）
 1. （已完成）audit log 路由 ＋ JMX exporter → journey 第 18、19 站。
 2. （已完成）驗收清單＋收尾 → journey 第 20 站。
-3. **已完成（2026-10-23）**：安裝腳本重寫 → `install/`（installer/ 保留對照）：核心第 1–14 章一章一支 `steps/NN-*.sh`，共用只有 `lib/{ssh,render,log}.sh`，站點設定 `conf/site.env`，銀行步驟印「請銀行做」後驗證（rc 2＝等銀行）；lab 扮演銀行 `install/lab/bank-sim.sh`、從零全自動 `install/lab/run-all.sh`。**lab `down -v` 從零驗證通過（24 分鐘，0 FAIL）**；**冪等重跑也通過**（--from 02，0 FAIL）。journey 14.2 已補 versionlock 重跑註記、docx 已重建。候選下一步：install/ 延伸站（15–19）、驗收（20）腳本化；或回到客戶問題清單。
+3. **進行中（2026-10-23 下午）**：`install/` 延伸站 steps/15–20（15 Conjur provider＋dl01 建 jar、16 Secret Protection 含 Summon 與 16.9、17 OP menu、18 JMX、19 audit、20 驗收）與 bank-sim 的 conjur/sp/opmenu/prometheus/coldboot 已寫好；核心 1–14 已從零驗證＋冪等驗證通過。現在：在現有 lab 煙霧測試 15–19 → `EXT=1 run-all.sh` 從零到 20 → SECRETS_MODE=conjur 單獨驗 15。
 4. 每個里程碑 commit（已養成）；從未 push。
 
 ## 環境狀態
-- lab: 全部 **已 stop**（`lab` 專案 14 台＋dl01；狀態＝install/ 從零裝到第 14 章，無 Conjur／OP menu／JMX／audit）。重開：`cd ~/kafka-lab && docker compose -f compose.yml start && docker start dl01`。cp-man、cp-poc 也是 stop。
+- lab: `lab` 專案 **在跑**（本 session）：第 16 章＋16.9 狀態、Conjur 三容器在跑、dl01 在跑；正在跑 install/ 延伸站煙霧測試。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。

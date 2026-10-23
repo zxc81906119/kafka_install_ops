@@ -1,0 +1,11 @@
+# REST Proxy: Jetty / REST request metrics + JVM
+includeObjectNames:
+  - "kafka.rest:type=jetty-metrics,*"
+  - "kafka.rest:type=jersey-metrics,*"
+rules:
+  - pattern: 'kafka.rest<type=jetty-metrics><>([a-z-]+): (.+)'
+    name: kafka_rest_jetty_$1
+    type: GAUGE
+  - pattern: 'kafka.rest<type=jersey-metrics><>([a-z0-9.-]+): (.+)'
+    name: kafka_rest_jersey_$1
+    type: GAUGE

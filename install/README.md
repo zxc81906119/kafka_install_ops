@@ -1,6 +1,6 @@
 # install/ — 照手把手文件一章一支的安裝腳本
 
-`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–14 章的每一章，對應一支 `steps/NN-*.sh`。
+`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–20 章的每一章，對應一支 `steps/NN-*.sh`。
 腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
 
 ```
@@ -14,10 +14,12 @@ install/
   lib/ssh.sh          rsh / rsh_as / rcp / each —— 操作機對各主機的 ssh、scp
   lib/render.sh       render / render_cat —— envsubst 只換列出來的 ${變數}
   lib/log.sh          log / ok / fail / die / bank / pending / finish —— 畫面 + ~/install-logs/
+  lib/vault.sh        保管庫：vault_login_ops / vault_login_host / vault_get / vault_set（Conjur 版；客戶只有 PAM／CCP 時換這一個檔）
   templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、Prometheus 設定
-  steps/01–14         一章一支
-  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換）
-  lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動
+  steps/01–14         核心：下載到 C3、總檢查
+  steps/15–20         延伸：15 Conjur provider（含下載機建 jar 的 15-…-jar）、16 Secret Protection（+Summon、+AD 密碼注入）、17 OP menu、18 JMX exporter、19 稽核日誌、20 驗收
+  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：conjur / sp / opmenu / prometheus / coldboot）
+  lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動；EXT=1 再接 15–20
 ```
 
 ## 怎麼跑
@@ -34,6 +36,18 @@ install/
 - 重跑是安全的：dnf、install、tee 都是覆蓋成一樣的內容；格式化看到 `meta.properties` 就略過；密碑檔、cluster id、MDS token 金鑰只在不存在時產生；topic 用 `--if-not-exists`。
 - 密碼不進畫面、不進 log：`~/pki/store.pass`、`~/secrets/*.pass`（0600）讀進變數後交給 envsubst 或指令。
 
+## 延伸站的開關（conf/site.env）
+
+| 開關 | 意思 |
+|---|---|
+| `SECRETS_MODE=conjur|sp|plain` | 密碼放法：15 站（有 Conjur）／16 站（只有 PAM）／不處理。15 與 16 互斥，不適用的那支直接略過 |
+| `SUMMON=1` | 16 站的 master key 不落地（16.8）；0 = 落地 `service.env` |
+| `LDAP_PASSWORD_VIA_ENV=1` | 16 站 AD 查詢密碼不進密文、由 Summon 注入 `${env:…}`（16.9，需 SUMMON=1） |
+| `OPMENU` `JMX_EXPORTER` `AUDIT_LOG` | 17／18／19 站要不要做 |
+| `VAULT_*` | 保管庫位置、policy、身分檔路徑 |
+
+16 站一次把 16.3–16.9 做完，只滾動重啟一次；19 站依 `~/conf/secrets.mode`（15／16 留下的）決定密碼怎麼放。
+
 ## 和文件的差異（刻意的）
 
 - 主機清單、版本、AD DN、heap 在 `conf/site.env`，範本裡用 `${CONTROLLER_QUORUM}` 這類變數；文件裡是寫死的 lab 名稱。
@@ -46,6 +60,7 @@ install/
 ```bash
 bash install/lab/run-all.sh            # down -v 從零；約 1.5–2 小時（下載機已有檔案時 dnf download 會 SKIPPED）
 bash install/lab/run-all.sh --no-reset # 用現有 lab 重跑（驗冪等）
+EXT=1 bash install/lab/run-all.sh      # 從零一路到第 20 站（約 1 小時）
 ```
 
 `lab/bank-sim.sh` 的每個子命令就是文件裡橘色「銀行」標籤的區塊，只是從 Windows 端對容器執行；正式環境沒有這支。
