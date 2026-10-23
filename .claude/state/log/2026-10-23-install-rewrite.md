@@ -30,3 +30,4 @@
 - lab 切回 Secret Protection＋Summon＋16.9（客戶的模式）：16、19、20 重跑 0 FAIL，驗收 39/39。修：「先 19 再重跑 16」時 16 沒把 AUDIT_PASSWORD 帶進稽核片段（正式環境換密碼重跑 16 會遇到）。
 - 收尾：OP menu 回歸第 3 輪 34/35 的 6 敗查明是測試腳本 glob 在 cpadmin 展開（看不到 op01 0700 目錄），改 `sudo sh -c`，未重跑；OP menu 本身交接檔已正確寫出（0600、目錄 0700）。
   install/README.md 被 JS replace 的 $＋反引號 替換符號重複插入的 39 行已刪除、第 3 點補回。lab stop。
+- OP menu 回歸重跑 37/37 全過；redesign 第 13 節、opmenu/README 補上 A／B、交接檔、17 看端點、回歸指令；redesign 憑證輪替標題改為已實作。

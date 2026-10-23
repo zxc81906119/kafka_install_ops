@@ -30,6 +30,7 @@
 | 操作者的 AD 密碼 | 操作者自己 | 登入時輸入,換到 MDS token 後丟掉;Kafka 工具用的連線檔放記憶體檔案系統、離開時刪 | 否 |
 | 操作機 → 各主機 cpadmin 的 SSH 私鑰(`OPMENU_SSH_KEY_SECRET`) | CyberArk(CPM 產生、推公鑰到各主機的那把) | conjur／ccp:登入後取一次;manual:第一次做主機類項目、過了權限閘門才提示從 PVWA 貼上(`OPMENU_SSH_KEY_LOAD`)。都只進選單自己的 ssh-agent(`OPMENU_SSH_KEY_TTL` 秒到期),離開時 agent 結束 | 否 |
 | 91 緊急模式的 client 憑證(`OPMENU_BREAKGLASS_SECRET`,PEM) | CyberArk | 執行 91 時取到記憶體檔案系統,用完即刪;身分 `User:opmenu-breakglass` 在 MDS 綁 SystemAdmin | 否 |
+| 34／35 產生的 service account 新密碼 | 操作者自己的交接檔 `OPMENU_HANDOVER_DIR`(預設 `$HOME/opmenu-handover`,目錄 0700、檔 0600) | 產生時寫入,不顯示在畫面;交給 Secrets 團隊存進 PVWA 後刪除。交接目錄寫不進去就不改密碼 | **是**(暫存,交接後刪) |
 | 選單向保管庫認證的身分(`OPMENU_CONJUR_IDENTITY` 或 CCP 的 client 憑證) | 操作機 `/etc/opmenu/`,0640 root:opmenu | — | **是**(secret zero:這是唯一落地的) |
 
 ## 換環境要做的事
@@ -68,6 +69,8 @@
 - **動態選單**:登入後用本人的 token 問 MDS 一次,只顯示有權限的項目;直接輸入隱藏的編號一樣被擋並記錄。
 - **主機閘門**:碰主機的介面先向 MDS 確認本人有 `OPMENU_HOST_ACTION_AUTHZ`(預設 Operator 以上),因為主機端的 cpadmin 是共用帳號。
 - **緊急主機模式**:MDS 連不上時,作業系統群組 `OPMENU_EMERGENCY_GROUP`(預設 opmenu-emergency,平常空)的人可以進入,只開放 `OPMENU_EMERGENCY_ITEMS`(16 18 21 22 23);必填原因,操作者標成「未經 AD 驗證」,紀錄 EMERGENCY_HOST;21 的叢集檢查做不了時改成警告＋確認。
+- **服務帳號 A／B**(`OPMENU_SVC_PAIR`,預設 `-a -b`):34 一次建兩個同權限的帳號,應用程式先用 -a;35 只換沒在用的那個,應用程式切過去後下次再換另一個,換密碼不停機;37 兩個一起下架。
+- **17 憑證到期**:看各端點實際出示的憑證(`OPMENU_TLS_ENDPOINTS`,openssl s_client),不讀主機上的檔案;換發後沒重啟會看得出來。
 - **確認**:變更類顯示將做什麼與影響,輸入 `yes` 才執行。
 - **紀錄**:`時間 | 環境 | AD 帳號 | os=作業系統帳號 | 項目 | sid | 結果 | 參數`;結果為 OK / DENIED / AUTH_FAIL / FAIL / BLOCKED / EMERGENCY / SSH_KEY_LOADED / SSH_KEY_FAIL…
 - **並行鎖、變更時窗**(`OPMENU_LOCK_*`、`OPMENU_CHANGE_WINDOW`):變更類項目同一時間一人、只在允許時段;91 不受時窗限制。
@@ -80,6 +83,7 @@
 /opt/opmenu/opmenu.sh --list          # 列出所有項目
 OPMENU_USER=alice OPMENU_PASS=... OPMENU_YES=1 /opt/opmenu/opmenu.sh --run 31 orders.test 1   # 非互動(需 OPMENU_ALLOW_ENV_OVERRIDE=1)
 tests/test-host-gate.sh tests/test-menu-filter.sh tests/test-ssh-key.sh   # 單元測試,不需要叢集或保管庫
+bash ~/install/lab/opmenu-items-test.sh   # lab 全項目回歸(ops02 cpadmin;會重啟 kb03、rest02、滾動重啟全部 broker,約 10 分鐘)
 ```
 
 lab 實測紀錄見 `redesign/README.md` 第 13 節與 `.claude/state/log/`。
