@@ -107,6 +107,7 @@
 | 18 JMX exporter（延伸） | 20 分 | 派送、滾動重啟、行內 Prometheus 驗證 |
 | 19 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
 | 20 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
+| 21 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
 
 ## 0.5 自己把 lab 建起來
 
@@ -2081,7 +2082,7 @@ Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~
 
 # 14. 終點：小安的檢查清單
 
-到這裡平台已經能用。後面是**延伸站**：第 15、16 站把密碼搬進銀行的 CyberArk（二選一，看銀行有沒有 Conjur）；第 17 站裝維運選單；第 18 站讓行內 Prometheus 抓指標；第 19 站稽核日誌。第 20 站是交付前一次跑完的驗收與收尾清單。
+到這裡平台已經能用。後面是**延伸站**：第 15、16 站把密碼搬進銀行的 CyberArk（二選一，看銀行有沒有 Conjur）；第 17 站裝維運選單；第 18 站讓行內 Prometheus 抓指標；第 19 站稽核日誌。第 20 站是交付前一次跑完的驗收與收尾清單。第 21 站是之後每年都會用到的憑證輪替。
 
 @role 小安 | ops02 | cpadmin
 
@@ -2129,7 +2130,7 @@ metrics in prometheus: 111 kinds
 |---|---|---|
 | 派送憑證、設定檔、drop-in（10–13 站） | 可以，重跑就是覆蓋成一樣的內容 | 改完記得 `sudo systemctl restart <unit>` |
 | 格式化儲存（10.4） | **不能**，`meta.properties` 存在就會拒絕 | 真要重來：停服務、`sudo rm -rf /var/lib/kafka/data/*`，所有 controller 和 broker 一起重做 |
-| 憑證（9 站） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留 |
+| 憑證（9 站） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留；已經上線的環境照第 21 站換發，不要重跑第 9 站 |
 | 裝套件（8 站） | 可以，dnf 看到已安裝就略過 | `versionlock add` 對已鎖的套件會再加一筆重複，重跑前先 `sudo dnf versionlock list` 看一下，已鎖的不要再加 |
 | 整台主機重置 | lab 可以 | `docker compose -f compose.yml rm -sf <host> && docker compose -f compose.yml up -d <host>`，再從第 3.2 站的「根憑證信任」對那台重做一次 |
 
@@ -3731,3 +3732,317 @@ kc01: /tmp 殘留 0 個；sudoers cpadmin,cpadmin-ops,
 ```
 
 > 正式環境交付時再做三件 lab 不做的事：OS 團隊把各主機 `/etc/sudoers.d/cpadmin`（全權）移除；把 `svc-ops.key` 移到離線保管；`~/landing`、`~/repo` 依銀行留存政策處理（套件庫才是正本）。
+
+
+# 21. 第二十一站：憑證輪替
+
+![certrotate]
+
+第 9 站簽的憑證效期一年，到期前一定要換。這一站做兩件事：每年都會遇到的 **leaf 換發**（同一個銀行 CA 重簽），以及幾年一次、銀行決定的 **換 CA**（三階段：先加新根 → 換 leaf → 移除舊根）。MDS token 金鑰不是銀行 CA 簽的、沒有到期日，不在這一站（只在外洩時才換）。
+
+| 情境 | 多久一次 | 會不會斷線 |
+|---|---|---|
+| leaf 換發 | 每年，到期前一個月內 | 不會：truststore 只信根憑證，新舊 leaf 在滾動期間都被信任 |
+| 換 CA | 銀行決定（幾年一次） | 不會：三階段的每一段，所有元件都同時信任新舊兩個根 |
+
+做法的原則：
+- **每次換發都產生新私鑰**，不重用舊的 CSR。
+- 檔名、路徑、keystore 密碼都和原本一樣，所以 properties 一個字都不用改（Secret Protection 的密文也不用重算）。
+- 新的東西先放在 `~/pki/next/`，派送完、驗證過，才換成 `~/pki/` 的正本；舊的留在 `~/pki/old-<日期>/`。
+
+## 21.1 現在用的是哪一張
+
+@role 小安 | ops02 | cpadmin
+
+每張憑證的序號、剩幾天，以及各服務**實際出示**的是哪一張（換完之後用同一條指令確認每個端點都換到了）：
+
+```bash
+cd ~/pki && for n in $(awk '{print $1}' requests.txt); do printf '%-19s serial=%s days=%s\n' $n "$(openssl x509 -in certs/$n.crt -noout -serial | cut -d= -f2 | tail -c 9)" $(( ($(date -d "$(openssl x509 -in certs/$n.crt -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); done; echo "-- 各端點出示的憑證（序號末 8 碼）"; for ep in kc01.poc.lab:9093 kb01.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 rest01.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090; do printf '%-22s %s\n' $ep "$(openssl s_client -connect $ep -servername ${ep%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial -subject -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/serial=//; s/subject=.*CN=\([^,]*\).*/\1/' | paste -sd' ' | sed 's/^\(.*\)\(........\) \(.*\)$/\2 \3/')"; done
+```
+
+```out
+kafka-internal      serial=F343BC55 days=364
+cp-server           serial=F343BC54 days=364
+（7 行）
+-- 各端點出示的憑證（序號末 8 碼）
+kc01.poc.lab:9093      F343BC55 kafka-internal
+kb01.poc.lab:9092      F343BC55 kafka-internal
+kb01.poc.lab:9095      F343BC54 cp-server
+（8 行：controller 與 broker 之間是 kafka-internal，其他對外的都是 cp-server）
+```
+
+> 要求 client 憑證的埠（9092、9093、9090）沒有帶憑證也看得到伺服器出示的那張，握手才會在之後失敗；這裡只看伺服器那一張。
+
+## 21.2 換發 leaf（同一個 CA）
+
+### 21.2.1 新私鑰與 CSR
+
+@role 小安 | ops02 | cpadmin
+
+照第 9 站的 `requests.txt`（名稱、EKU、SAN 不變），每張產生新私鑰與 CSR，放 `~/pki/next/`：
+
+```bash
+install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/incoming ~/pki/next/certs && cd ~/pki && while read -r name eku san; do (umask 077; openssl genrsa -out next/keys/$name.key 2048 2>/dev/null); ext=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$eku"); [ "$san" != "-" ] && ext+=(-addext "subjectAltName=$(echo "$san" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -)"); openssl req -new -key next/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" "${ext[@]}" -out next/requests/$name.csr && echo "$name: csr ok"; done < requests.txt
+```
+
+```out
+kafka-internal: csr ok
+（7 行）
+```
+
+### 21.2.2 銀行 CA 簽發
+
+@role 銀行 CA 窗口 | Windows 終端 | 本機
+
+和 9.2 一樣，只是從 `next/` 拿、放回 `next/`：
+
+```bash
+cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed && docker cp lab-ops02-1:/home/cpadmin/pki/next/requests "$(cygpath -m "$PWD/ca/exchange/next/")" && for f in ca/exchange/next/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/next/signed/$n.crt"; done && for f in ca/exchange/next/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/home/cpadmin/pki/next/incoming/; done && docker exec lab-ops02-1 bash -c 'chown cpadmin:cpadmin /home/cpadmin/pki/next/incoming/*; ls /home/cpadmin/pki/next/incoming | wc -l'
+```
+
+```out
+signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
+（7 行）
+7
+```
+
+### 21.2.3 檢查、做成 keystore
+
+@role 小安 | ops02 | cpadmin
+
+拆 leaf 與中繼、五項檢查加憑證鏈（和 9.3 同一套），多印一欄簽發者，換 CA 時用得到：
+
+```bash
+cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do awk -v n=$n 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$n.crt; mv incoming/$n.part1 incoming/$n.leaf.pem; cat incoming/$n.part[2-9] > incoming/$n.issuers.pem 2>/dev/null; rm -f incoming/$n.part*; done; while read -r name eku san; do leaf=incoming/$name.leaf.pem; k1=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16); k2=$(openssl pkey -in keys/$name.key -pubout 2>/dev/null | sha256sum | cut -c1-16); cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'); have_san=$(openssl x509 -in $leaf -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,); want_san=$([ "$san" = "-" ] && echo "" || echo "$san" | tr ',' '\n' | sort | paste -sd,); have_eku=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '); days=$(( ($(date -d "$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); chain=$(openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf 2>&1 | grep -c ": OK"); issuer=$(openssl x509 -in $leaf -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'); printf '%-19s key=%s cn=%s san=%s days=%s chain=%s issuer=%s\n' $name $([ $k1 = $k2 ] && echo ok || echo MISMATCH) $([ "$cn" = "$name" ] && echo ok || echo "$cn") $([ "$have_san" = "$want_san" ] && echo ok || echo DIFF) $days $([ $chain = 1 ] && echo ok || echo FAIL) "$issuer"; done < ../requests.txt
+```
+
+```out
+kafka-internal      key=ok cn=ok san=ok days=364 chain=ok issuer=PoC Bank Issuing CA 01
+（7 行，全部 ok）
+```
+
+做成 p12（**同一個 keystore 密碼**，所以 properties 不用改）：
+
+```bash
+cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do cat incoming/$n.leaf.pem incoming/$n.issuers.pem > certs/$n.crt; openssl pkcs12 -export -name $n -inkey keys/$n.key -in certs/$n.crt -out certs/$n.p12 -passout file:../store.pass && chmod 0600 certs/$n.p12; done; ls certs | wc -l; for n in kafka-internal cp-server; do echo "$n: old=$(openssl x509 -in ../certs/$n.crt -noout -serial | tail -c 9) new=$(openssl x509 -in certs/$n.crt -noout -serial | tail -c 9)"; done
+```
+
+```out
+14
+kafka-internal: old=F343BC55 new=F343BC5D
+cp-server: old=F343BC54 new=F343BC5C
+```
+
+### 21.2.4 派送、滾動重啟
+
+@role 小安 | ops02 | cpadmin
+
+| 主機 | 換哪些檔 | 重啟 |
+|---|---|---|
+| controller | kafka-internal.p12 | confluent-server |
+| broker | kafka-internal.p12、cp-server.p12 | confluent-server（JMX exporter 一起） |
+| REST Proxy | cp-server.p12、svc-rest.p12 | confluent-kafka-rest |
+| C3 | cp-server.p12、cp-server.crt／.key、svc-c3.p12 | prometheus、alertmanager、confluent-control-center |
+
+一台一台：放檔 → 重啟 → 等健康 → 確認那台出示的是新序號，才做下一台：
+
+```bash
+cd ~/pki/next && NEW_INT=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2) NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in kc01 kc02 kc03; do scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-internal.p12 /etc/confluent/ssl/ && rm -f /tmp/kafka-internal.p12 && sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done'; for i in $(seq 1 30); do [ "$(served $h.poc.lab:9093)" = $NEW_INT ] && break; sleep 2; done; echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$([ "$(served $h.poc.lab:9093)" = $NEW_INT ] && echo new || echo OLD)"; done; for h in kb01 kb02 kb03 kb04; do scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in kafka-internal.p12 cp-server.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) 9092=$([ "$(served $h.poc.lab:9092)" = $NEW_INT ] && echo new || echo OLD) 9095=$([ "$(served $h.poc.lab:9095)" = $NEW_SRV ] && echo new || echo OLD)"; done
+```
+
+```out
+kc01 active 9093=new
+（3 行）
+kb01 MDS=200 9092=new 9095=new
+（4 行）
+```
+
+> 陷阱：controller 的 `systemctl is-active` 變成 active 之後，9093 還要幾秒才開始聽。這時去看出示的憑證會拿到空的，看起來像「還是舊的」。所以上面是等到它出示新序號才往下。
+
+REST Proxy 與 C3（REST 的健康檢查用應用程式的**舊**憑證，證明舊 leaf 在換發期間仍然有效）：
+
+```bash
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in rest01 rest02; do scp -q certs/cp-server.p12 certs/svc-rest.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters) 8082=$([ "$(served $h.poc.lab:8082)" = $NEW_SRV ] && echo new || echo OLD)"; done; scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+```
+
+```out
+rest01 REST=200 8082=new
+rest02 REST=200 8082=new
+c3-01 UI=200 9021=new 9090=new
+```
+
+### 21.2.5 換成正本、交出去的那幾張
+
+@role 小安 | ops02 | cpadmin
+
+舊的整份留到 `~/pki/old-<日期>/`，新的放回正本位置。操作機自己用的 `svc-ops`、`kafka-internal`（管理 client、quorum 查詢）換成新的之後馬上試一次；緊急身分 `opmenu-breakglass` 要更新保管庫裡那份；`app-legacy-billing` 是應用程式的憑證，**交給應用程式團隊在他們的時段換**（舊的到期前都還有效）：
+
+```bash
+cd ~/pki && OLD=old-$(date +%Y%m%d) && install -d -m 0700 $OLD/keys $OLD/certs && for n in $(awk '{print $1}' requests.txt); do mv keys/$n.key $OLD/keys/; mv certs/$n.crt certs/$n.p12 $OLD/certs/; install -m 0600 next/keys/$n.key keys/; install -m 0644 next/certs/$n.crt certs/; install -m 0600 next/certs/$n.p12 certs/; done && rm -rf next && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | wc -l) 個 topic" && echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')" && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat keys/opmenu-breakglass.key certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && unset T && echo "breakglass：保管庫已更新" && echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)；舊的（還在效期內）：REST=$(curl -s --cert $OLD/certs/app-legacy-billing.crt --key $OLD/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)"
+```
+
+```out
+svc-ops 管理 client：14 個 topic
+kafka-internal 查 quorum：LeaderId: 1
+breakglass：保管庫已更新
+新的 app-legacy-billing（交給應用程式團隊）：REST=200；舊的（還在效期內）：REST=200
+```
+
+> 沒有 CCP 的銀行：breakglass 那一步改成把新的 PEM 交給 Secrets 團隊放進 PVWA（取代舊的那個 object）。
+
+最後用 21.1 的指令再看一次：每個端點的序號都要是新的。
+
+## 21.3 換 CA（三階段）
+
+銀行換根憑證（或換簽發 CA）時，不能一次全換：只要有一台還不信新的根，它就會拒絕新憑證。三個階段，每段結束時所有元件都同時信任新舊兩個根：
+
+| 階段 | 誰做 | 做什麼 | 之後的狀態 |
+|---|---|---|---|
+| 一、加 | 銀行 OS 團隊＋小安 | 信任清單加入新根（OS 的 `bank-root.pem` 變成兩張根的 bundle、truststore 多一個 alias、C3 的 ca.pem） | 新舊都信；憑證還是舊 CA 簽的 |
+| 二、換 | 銀行 CA＋小安 | 銀行用新 CA 重簽自己的伺服器（AD、套件庫、保管庫）；小安照 21.2 換發全部 leaf，改由新 CA 簽 | 新舊都信；憑證都是新 CA 簽的 |
+| 三、退 | 銀行 OS 團隊＋小安 | 信任清單拿掉舊根 | 只信新的；舊 CA 簽的一律被拒 |
+
+### 21.3.1 銀行建新 CA（lab 模擬）
+
+@role 銀行 CA 窗口 | Windows 終端 | 本機
+
+和 0.5.5 一樣的做法，名字換成 G2，放在 `ca/g2/`；簽發腳本複製一份（它用自己所在目錄的簽發 CA）：
+
+```bash
+cd ~/kafka-lab/ca && mkdir -p g2 && cd g2 && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA G2/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA G2/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && cp ../sign.sh sign.sh && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -subject -fingerprint -sha256
+```
+
+```out
+issuing.crt: OK
+subject=CN = PoC Bank Root CA G2, O = PoC Bank, C = TW
+sha256 Fingerprint=…
+```
+
+### 21.3.2 階段一：信任清單加入新根
+
+@role 銀行 OS 團隊 | Windows 終端 | 本機
+
+每台主機（含操作機）的 `bank-root.pem` 換成「舊根＋新根」兩張的 bundle。檔名不變，所以所有指向它的設定（curl、Summon 的 `cert_file`、操作機上的檢查）都不用改：
+
+```bash
+cd ~/kafka-lab/ca && cat root.crt g2/root.crt > bundle-g1-g2.pem && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/bundle-g1-g2.pem")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo
+```
+
+```out
+ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01:2
+```
+
+@role 小安 | ops02 | cpadmin
+
+先寫一支滾動重啟的小腳本，三個階段都會用（controller → broker → REST → C3，一台健康了才做下一台）：
+
+```bash
+cat > ~/conf/rolling-restart.sh <<'EOF'
+#!/usr/bin/env bash
+# 依序滾動重啟：controller → broker → REST Proxy → C3；一台健康了才做下一台
+APP_CERT=(--cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key)
+for h in kc01 kc02 kc03; do
+  ssh $h.poc.lab 'sudo systemctl restart confluent-server'
+  for i in $(seq 1 30); do openssl s_client -connect $h.poc.lab:9093 </dev/null >/dev/null 2>&1 && break; sleep 2; done
+  echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server)"
+done
+for h in kb01 kb02 kb03 kb04; do
+  ssh $h.poc.lab 'sudo systemctl restart confluent-server'
+  for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done
+  echo "$h MDS=$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
+done
+for h in rest01 rest02; do
+  ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'
+  for i in $(seq 1 30); do [ "$(curl -s "${APP_CERT[@]}" -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done
+  echo "$h REST=$(curl -s "${APP_CERT[@]}" -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"
+done
+ssh c3-01.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'
+for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done
+echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+EOF
+chmod 0700 ~/conf/rolling-restart.sh && echo rolling-restart.sh ok
+```
+
+我方的信任清單：truststore 加一個 alias `bank-root-g2`；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
+
+```bash
+cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g2 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && sudo install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && sudo install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
+```
+
+```out
+truststore：bank-root bank-root-g2
+kc01 active
+（3 行）
+kb01 MDS=200
+（4 行）
+rest01 REST=200
+rest02 REST=200
+c3-01 UI=200
+```
+
+> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（第 18.4 站交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
+
+### 21.3.3 階段二：全部改由新 CA 簽
+
+@role 銀行 CA 窗口 | Windows 終端 | 本機
+
+銀行先用 G2 重簽自己的伺服器：AD 的 LDAPS、套件庫、保管庫。私鑰沿用（銀行的事，lab 簡化），重啟讓它們出示新憑證：
+
+```bash
+cd ~/kafka-lab && docker cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01-g2.csr")" && bash ca/g2/sign.sh ca/exchange/ad01-g2.csr ca/exchange/ad01-g2.crt && docker cp "$(cygpath -m "$PWD/ca/exchange/ad01-g2.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && docker cp "$(cygpath -m "$PWD/ca/bundle-g1-g2.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem; pkill -x samba; sleep 8' && O="$(cygpath -m "$PWD/images/web/tls")" && openssl req -new -key "$O/repo.key" -out "$O/repo-g2.csr" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/g2/sign.sh images/web/tls/repo-g2.csr images/web/tls/repo.crt && rm -f images/web/tls/repo-g2.csr && docker exec lab-repo01-1 systemctl restart httpd && C="$(cygpath -m "$PWD/conjur/tls")" && openssl req -new -key "$C/conjur.key" -out "$C/conjur-g2.csr" -subj "/CN=conjur.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:conjur.poc.lab,DNS:conjur" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/g2/sign.sh conjur/tls/conjur-g2.csr conjur/tls/conjur.crt && rm -f conjur/tls/conjur-g2.csr && docker restart lab-conjur-proxy-1 >/dev/null && sleep 3 && for ep in ad01.poc.lab:636 repo01.poc.lab:443 conjur.poc.lab:443; do echo "$ep $(docker exec lab-ops02-1 bash -c "openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
+```
+
+```out
+signed ad01-g2.csr -> ad01-g2.crt  (CN = ad01.poc.lab, O = PoC Bank, C = TW; EKU serverAuth)
+signed repo-g2.csr -> repo.crt  (…)
+signed conjur-g2.csr -> conjur.crt  (…)
+ad01.poc.lab:636 PoC Bank Issuing CA G2
+repo01.poc.lab:443 PoC Bank Issuing CA G2
+conjur.poc.lab:443 PoC Bank Issuing CA G2
+```
+
+@role 小安 | ops02 | cpadmin
+
+接著**照 21.2.1 到 21.2.5 整個做一次**，唯一的差別是 21.2.2 銀行改用 `ca/g2/sign.sh` 簽。21.2.3 的檢查裡 `issuer` 那一欄要全部是 `PoC Bank Issuing CA G2`；`chain=ok` 是對 bundle 驗的（新根在裡面）。
+
+### 21.3.4 階段三：拿掉舊根
+
+@role 銀行 OS 團隊 | Windows 終端 | 本機
+
+```bash
+cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/g2/root.crt")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; docker cp "$(cygpath -m "$PWD/g2/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem
+```
+
+```out
+ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01:1
+```
+
+@role 小安 | ops02 | cpadmin
+
+truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem 只留新根，派送、滾動重啟：
+
+```bash
+cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && keytool -delete -alias bank-root -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass && echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && sudo install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && sudo install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
+```
+
+```out
+truststore：bank-root-g2
+kc01 active
+（滾動重啟 10 行，全部健康）
+c3-01 UI=200
+```
+
+最後反向驗證：舊 CA 簽的憑證（21.2 第一次換發留在 `old-` 底下的那張應用程式憑證）連 REST Proxy 要被拒；新的要能用；AD、套件庫、保管庫照常（它們在階段二已經換成 G2）：
+
+```bash
+cd ~/pki && OLDEST=$(ls -d old-* | head -1) && echo "舊 CA 簽的 app 憑證 → REST：$(curl -s --cert $OLDEST/certs/app-legacy-billing.crt --key $OLDEST/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)（000 = TLS 直接拒絕）" && echo "新 CA 簽的 app 憑證 → REST：$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)" && echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)" && echo "套件庫：$(curl -s -o /dev/null -w '%{http_code}' https://repo01.poc.lab/confluent/repodata/repomd.xml)、保管庫：$(curl -s -o /dev/null -w '%{http_code}' https://conjur.poc.lab/)"
+```
+
+```out
+舊 CA 簽的 app 憑證 → REST：000（000 = TLS 直接拒絕）
+新 CA 簽的 app 憑證 → REST：200
+alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
+套件庫：200、保管庫：200
+```
+
+> 階段三之前要確認：應用程式團隊已經換上新 CA 簽的憑證（REST 走 mTLS 的那些）、行內 Prometheus 與應用程式的 truststore 都已經有新根。否則拿掉舊根的那一刻，它們就斷了。

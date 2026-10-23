@@ -296,4 +296,18 @@ D.acceptance = () => svg(800, 230, [
   box(620, 40, 160, 150, "維運", ["OP menu 重啟 broker", "冷開機:全關全開", "收尾清單"], "gray"),
 ].join(""));
 
+// 21. Certificate rotation: leaf renewal and the three CA phases (what is trusted / what is presented)
+D.certrotate = () => svg(800, 300, [
+  box(20, 30, 230, 92, "leaf 換發（每年）", ["新私鑰 + CSR → 銀行簽", "同檔名、同 keystore 密碼", "一台一台換 → 滾動重啟"], "blue"),
+  note(20, 145, "truststore 只信根憑證：新舊 leaf 同時有效，不斷線"),
+  box(20, 170, 160, 100, "階段一：加", ["信任：舊根 + 新根", "出示：舊 CA 簽的"], "amber"),
+  arrow(180, 220, 218, 220),
+  box(220, 170, 160, 100, "階段二：換", ["信任：舊根 + 新根", "出示：新 CA 簽的", "（銀行的 AD、套件庫、", "保管庫也重簽）"], "coral"),
+  arrow(380, 220, 418, 220),
+  box(420, 170, 160, 100, "階段三：退", ["信任：只有新根", "出示：新 CA 簽的", "舊 CA 簽的一律被拒"], "teal"),
+  box(300, 30, 480, 92, "每個階段都要換的信任清單", ["OS：/etc/pki/…/bank-root.pem（bundle，檔名不變）", "我方：truststore.p12（alias）、C3 的 ca.pem、OP menu 的兩份", "行內：Prometheus 的 ca.pem、應用程式的 truststore"], "gray"),
+  box(620, 170, 160, 100, "階段三之前確認", ["應用程式已換新憑證", "行內 Prometheus、", "應用程式已信新根"], "gray"),
+  arrow(618, 220, 582, 220, null, { dash: true }),
+].join(""));
+
 module.exports = D;

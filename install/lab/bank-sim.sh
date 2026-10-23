@@ -207,4 +207,15 @@ coldboot() {   # 20.4：機房停電：全部主機（含保管庫）同時關�
   docker exec "$(container_of "${BROKERS%% *}")" bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
 }
 
-case ${1:-} in push|intake|prepare|sign|reset|conjur|sp|opmenu|prometheus|coldboot) "$1";; *) sed -n '2,10p' "$0"; echo "  延伸：conjur（15.1）sp（16.1/16.8）opmenu（17.1）prometheus（18.5）coldboot（20.4）"; exit 1;; esac
+sign_next() {   # 21.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
+  local ca_dir=${1:-ca} csr cert_name
+  announce "21.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
+  rm -rf "$LAB/ca/exchange/next"; mkdir -p "$LAB/ca/exchange/next/signed"
+  docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/pki/next/requests" "$(windows_path "$LAB/ca/exchange/next/")"
+  for csr in "$LAB"/ca/exchange/next/requests/*.csr; do cert_name=$(basename "$csr" .csr); bash "$LAB/$ca_dir/sign.sh" "$csr" "$LAB/ca/exchange/next/signed/$cert_name.crt"; done
+  for cert_file in "$LAB"/ca/exchange/next/signed/*.crt; do docker cp "$(windows_path "$cert_file")" "$(container_of "$OPS_HOST"):/home/cpadmin/pki/next/incoming/"; done
+  as_root_on "$OPS_HOST" 'chown cpadmin:cpadmin /home/cpadmin/pki/next/incoming/*; ls /home/cpadmin/pki/next/incoming | wc -l'
+}
+
+case ${1:-} in push|intake|prepare|sign|reset|conjur|sp|opmenu|prometheus|coldboot) "$1";;
+  sign-next) sign_next "${2:-ca}";; *) sed -n '2,10p' "$0"; echo "  延伸：conjur（15.1）sp（16.1/16.8）opmenu（17.1）prometheus（18.5）coldboot（20.4）"; exit 1;; esac

@@ -51,6 +51,10 @@ for step_file in "$INSTALL_DIR"/steps/[0-9][0-9]-*.sh; do
     echo "== $step_name：請在 $run_on 執行 bash steps/$step_name.sh（這台是 $this_host，略過）"
     continue
   fi
+  if grep -q '^# run: on-demand' "$step_file" && [ -z "$only_step" ]; then   # 不在安裝順序裡的（例如憑證輪替）：要用時直接執行那支
+    echo "== $step_name：要用時再執行（bash steps/$step_name.sh），照順序安裝時略過"
+    continue
+  fi
   echo
   echo "================ $step_name ================"
   bash "$step_file"
