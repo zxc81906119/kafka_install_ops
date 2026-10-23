@@ -22,3 +22,5 @@
   行內 Prometheus 9/9 up、9 rules；冷開機 broker 74s、C3 138s、broker 重試 1 次。
 - OP menu：manual 來源改成「第一次做主機類項目、過權限閘門後才取私鑰」（OPMENU_SSH_KEY_LOAD=auto）；ccp.sh 改 sed 不用 python；三個單元測試通過。
 - 查證：MDS token 私鑰的 passphrase 參數不在 Confluent 8.3 文件（未文件化）→ 不建議正式環境採用，列入給原廠的問題。MDS token 金鑰輪替方案待 lab 實驗。
+- MDS token 金鑰輪替 lab 實測：公鑰檔放兩把只認第一把 → 無法零中斷；整套輪替 196 秒，REST 失敗 7/100（約 30 秒）、管理 client 3/20、SCRAM 0 失敗。lab 的 MDS 金鑰已換成新的（ops02 ~/pki 正本已更新，舊的留 .old）。腳本 install/lab/mds-token-key-*.sh，結論寫進 redesign 第 11 節。
+- OP menu 新版打包 opmenu-20261023.42f62e71（含 manual、要用才取），lab 落地區已換、第 17 站重裝通過；人工模式實測 12/12（install/lab/opmenu-manual-test.sh，用 script 模擬終端機貼上）。

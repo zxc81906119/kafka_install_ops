@@ -235,6 +235,15 @@
 4. **下載機**：先下載再裝工具（見上方教訓）；lab 用 9p 掛載時 `dnf download` 的 checksum 核對會非常慢，應先下載到容器內磁碟再複製出來。
 5. **lab 環境問題（非設定）**：Docker Desktop VM 的 netlink 卡死，所有容器 `ip addr` 掛住 → Java 名稱解析卡在原生呼叫 → broker TOKEN listener 執行緒全部排隊、9094 堆滿 CLOSE-WAIT。重啟 broker 無效，只能重啟 Docker Desktop。判斷方式：任一容器 `timeout 5 ip addr` 卡住。
 
+### MDS token 金鑰輪替（2026-10-23 lab 實測）
+
+- 這把金鑰不是銀行 CA 簽的憑證，沒有到期日；**只在外洩或政策要求時換**，不排例行輪替。
+- **公鑰檔放兩把沒有用**：broker 的 TOKEN listener 只用檔案裡的第一把（新+舊時舊鑰簽的被拒、舊+新時新鑰簽的被拒）；MDS 自己的 REST API 也只認自己私鑰對應的那把（別台簽的 → 401）。所以做不到「先加新公鑰、再換私鑰、再拿掉舊的」的零中斷三階段。
+- 實際做法（lab 實跑，`install/lab/mds-token-key-rotate.sh`）：新金鑰先派送到所有主機（`.new`，不影響運作）→ 檔案一次全部換上 → 滾動重啟 controller → broker → REST → C3 → 驗證 → 操作機正本換新、舊的離線銷毀。
+  切換 196 秒，影響只在靠 token 的路：REST 經負載平衡 100 次失敗 7 次（集中約 30 秒，401／逾時）、管理 client 20 次失敗 3 次；**應用程式 SCRAM 寫入 0 失敗**（只有換 leader 的自動重試），broker 之間、人員 LDAP 登入不受影響。
+- 建議：排在維護時段；事前通知走 REST 的應用程式「約半分鐘可能 401，要能重試」；C3 使用者重新登入。
+- `confluent.metadata.server.token.key.passphrase`（讓 MDS 讀加密私鑰）原廠文件查不到 → 不採用，私鑰維持 PEM 0640 root:confluent；資安若要求加密先問原廠（第 12 節）。
+
 ## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
 
 | 組 | 題目 |
