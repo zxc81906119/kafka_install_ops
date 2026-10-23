@@ -245,6 +245,7 @@
 | 網路 | port 清單誰開、主機 firewalld 可否由我們管；DNS 或 /etc/hosts、FQDN；NTP 來源；REST 前的 LB 型態與 VIP；C3 9021 從哪個網段連 |
 | 憑證 | CA 申請流程與時程；會不會改 SAN／EKU、serverAuth＋clientAuth 同一張可否；回覆格式；效期與輪替；根憑證進 OS trust store／JDK cacerts 由誰 |
 | AD | svc-mds-bind 誰建、可否兩組 A／B；群組命名與管理；LDAPS 用哪台 DC、憑證、備援；人員 AD 帳密登入 C3 可否、MFA |
+| 原廠（Confluent） | `confluent.metadata.server.token.key.passphrase`（讓 MDS 讀 PKCS#8 加密的 token 私鑰）原廠文件查不到（8.3 MDS 設定參考只有 token.key.path／max.lifetime.ms／signature.algorithm），舊 cpctl 用過、lab 可用：是否正式支援、會不會補文件？MDS token 公鑰檔能否放多把（做零中斷金鑰輪替）？ |
 | CyberArk | （2026-10-23 已知：只有 PSM／PSMP 代登＋SSH 金鑰輪替，無 CCP／CP／Conjur）PVWA 取用私鑰與 master key 要不要雙人覆核、要填什麼單號；master key 放哪個 safe；應用程式現在怎麼拿資料庫密碼（SCRAM 照同一套）；元件清單（照功能問）；CCP AppID 申請與驗身分；CPM 管 cpadmin 金鑰與 from= 限制；Conjur 有無與型態、host 身分、policy 誰載、443 通否；只有 PAM 時 master key 放哪個 safe；保管庫故障時平台能否重啟 |
 | 應用程式 | 直連 SCRAM 或經 REST 各幾個；app 怎麼拿密碼、認證失敗會否重取；topic 命名與配額；client 語言與 SCRAM-SHA-512 支援 |
 | 監控維運 | 日誌送 SIEM 方式與保留；行內 Prometheus 抓 JMX exporter；稽核日誌保留與去向；變更時段；冷開機順序 |

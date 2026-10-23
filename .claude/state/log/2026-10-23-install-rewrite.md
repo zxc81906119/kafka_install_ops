@@ -18,3 +18,7 @@
 - 決定（使用者單選題）：客戶 CyberArk 只用在 PSM／PSMP 代登與 SSH 金鑰輪替，**沒有 CCP／CP／Conjur**。cpadmin 私鑰改為「人工從 PVWA 取、貼進 ssh-agent、不落地」；OP menu 維運期同一做法（lib/secrets/manual.sh）。
   連帶：第 16 站 master key 只能 16.4 落地 service.env（人工從 PVWA 取）；Summon、16.9 不適用；AD／SCRAM 密碼照銀行現行方式人工交付。redesign 第 11 節、第 12 節已更新。
 - 可讀性整理（commit c03b222）：完整命名、每檔每段註解、遠端指令一律 ssh_script heredoc、衍生值集中 site.env、rolling_restart；不用 python（19 站、15 站 jar、bank-sim 改 grep／sed）；README 加「寫法約定」。
+- 從零驗證到第 20 站通過（39/39）。途中修掉：16 站 16.9 要先把 ldap-bind-password 寫進保管庫（Summon 有一個變數取不到就整個失敗）；20 站 SCRAM app 讀回要用 app 自己 prefix 的 consumer group（orders-acceptance）。
+  行內 Prometheus 9/9 up、9 rules；冷開機 broker 74s、C3 138s、broker 重試 1 次。
+- OP menu：manual 來源改成「第一次做主機類項目、過權限閘門後才取私鑰」（OPMENU_SSH_KEY_LOAD=auto）；ccp.sh 改 sed 不用 python；三個單元測試通過。
+- 查證：MDS token 私鑰的 passphrase 參數不在 Confluent 8.3 文件（未文件化）→ 不建議正式環境採用，列入給原廠的問題。MDS token 金鑰輪替方案待 lab 實驗。

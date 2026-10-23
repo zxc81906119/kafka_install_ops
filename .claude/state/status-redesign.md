@@ -18,7 +18,7 @@ Updated: 2026-10-23 上午（session 收尾，lab 已 stop）
 ## 下一步（2026-10-22 使用者定案順序）
 1. （已完成）audit log 路由 ＋ JMX exporter → journey 第 18、19 站。
 2. （已完成）驗收清單＋收尾 → journey 第 20 站。
-3. **進行中（2026-10-23 下午）**：`install/` 延伸站 steps/15–20（15 Conjur provider＋dl01 建 jar、16 Secret Protection 含 Summon 與 16.9、17 OP menu、18 JMX、19 audit、20 驗收）與 bank-sim 的 conjur/sp/opmenu/prometheus/coldboot 已寫好；核心 1–14 已從零驗證＋冪等驗證通過。現在：在現有 lab 煙霧測試 15–19 → `EXT=1 run-all.sh` 從零到 20 → SECRETS_MODE=conjur 單獨驗 15。
+3. **已完成（2026-10-23）**：`install/` 延伸站 15–20 寫完並經可讀性整理（完整命名、註解、heredoc、不用 python／node）。**從零驗證到第 20 站通過**（down -v → 01–14 → bank-sim conjur/sp/opmenu → 15（sp 模式略過）–19 → 行內 Prometheus 9/9 → 冷開機 → 20 驗收 39/39）。待辦：SECRETS_MODE=conjur 單獨驗 15；MDS token 金鑰輪替的 lab 實驗（公鑰檔可否放兩把、混合期影響）；客戶無 CCP 的人工模式已接上（SSH_KEY_SOURCE=agent、OPMENU_SECRETS=manual），lab 未實測互動貼上。
 4. 每個里程碑 commit（已養成）；從未 push。
 
 ## 環境狀態
