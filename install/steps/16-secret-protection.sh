@@ -81,7 +81,12 @@ export HOST_FQDN NODE_ID RACK REST_ID
 TEMPLATE_VARS="HOST_FQDN NODE_ID RACK REST_ID STORE_PASSWORD LDAP_BIND_PASSWORD CONTROLLER_QUORUM BROKER_INTERNAL BROKER_TOKEN MDS_URLS AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN REST_VIP REST_APPS"
 # 第 19 站做過的話，稽核日誌的設定片段要一起帶上（否則重跑這一站會把稽核設定蓋掉）
 audit_fragment=""
-[ -f "$CONF_DIR/audit.rendered.tpl" ] && audit_fragment=$CONF_DIR/audit.rendered.tpl
+if [ -f "$CONF_DIR/audit.rendered.tpl" ]; then
+  audit_fragment=$CONF_DIR/audit.rendered.tpl
+  # 片段裡還留著稽核寫入帳號的密碼變數（第 19 站刻意留給這裡處理）：一起換掉、一起加密
+  export AUDIT_PASSWORD; AUDIT_PASSWORD=$(cat "$SECRETS_DIR/confluent-audit.pass")
+  TEMPLATE_VARS="$TEMPLATE_VARS AUDIT_PASSWORD"
+fi
 for host in $CLUSTER_HOSTS; do
   HOST_FQDN=$(fqdn "$host"); NODE_ID=$(node_id_of "$host"); RACK=$(rack_of "$host"); REST_ID=$host
   out_file=$SP_CONF_DIR/$host.properties
@@ -93,7 +98,7 @@ for host in $CLUSTER_HOSTS; do
     c3*)   render_template "$TEMPLATE_DIR/control-center.tpl" "$out_file" $TEMPLATE_VARS;;
   esac || fail "$host: render"
 done
-unset STORE_PASSWORD LDAP_BIND_PASSWORD
+unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD
 [ "$FAIL_COUNT" = 0 ] || die "產生設定失敗"
 
 export CONFLUENT_SECURITY_MASTER_KEY

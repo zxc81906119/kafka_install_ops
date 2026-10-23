@@ -27,3 +27,4 @@
 - conjur 模式驗證：第 15 站通過、第 19 站（conjur 分支）通過、第 20 站 38/38。途中修：install.sh --only 不再跳過 where 檢查；明文密碼判斷集中到 lib/render.sh 的 count_plaintext_passwords（jaas 行只看 password="…"）。
 - OP menu 緊急主機模式（使用者單選題定案）：MDS 連不上時 opmenu-emergency 群組的人只能做 16 18 21 22 23，必填原因、標成未經 AD 驗證；derive 拆成 derive（要 MDS）＋ derive_local（ssh 允許主機清單）。
   lab 實測 14/14（install/lab/opmenu-emergency-test.sh）。OP menu 新包 opmenu-20261023.e1b6b24d。redesign 第 13 節、opmenu/README 已更新。
+- lab 切回 Secret Protection＋Summon＋16.9（客戶的模式）：16、19、20 重跑 0 FAIL，驗收 39/39。修：「先 19 再重跑 16」時 16 沒把 AUDIT_PASSWORD 帶進稽核片段（正式環境換密碼重跑 16 會遇到）。
