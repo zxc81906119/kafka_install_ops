@@ -21,6 +21,7 @@ d OPMENU_MDS_PORT        8090              # MDS 的埠;OPMENU_MDS_URL 沒填時
 d OPMENU_MDS_URL         ''                # 可填多台(逗號分隔),逐台嘗試;空 = 由 OPMENU_BOOTSTRAP 推算
 d OPMENU_KAFKA_CLUSTER_ID ''               # 空 = 登入後向 MDS 取(/v1/metadata/id,不需帳密)
 d OPMENU_CERT_DIR        '/etc/opmenu/ssl'                                   # certificate 目錄;17 certificate 到期日掃這裡,下面三個檔案預設都放在這裡
+d OPMENU_TLS_ENDPOINTS   ''                                             # 17 檢查哪些端點實際出示的憑證（主機:埠，空白分隔）；空 = controller 的 9093、broker 的 9092／9095／8090、REST 的 8082、C3 的 9021
 d OPMENU_TRUSTSTORE      "$OPMENU_CERT_DIR/truststore.p12"                   # 操作者連線用的 truststore(只放銀行根憑證)
 d OPMENU_TRUSTSTORE_PASSWORD_FILE "$OPMENU_CERT_DIR/truststore.pass"
 d OPMENU_CA_PEM          "$OPMENU_CERT_DIR/ca.pem"                           # curl 呼叫 MDS 用(銀行根憑證)
@@ -61,6 +62,8 @@ d OPMENU_CCP_KEY         '/etc/opmenu/ssl/opmenu-ccp.key'
 # ── 規範(依客戶的命名規定調整)──
 d OPMENU_TOPIC_PATTERN   '^[a-z][a-z0-9]+\.[a-z0-9.-]+$'                # topic 命名:<系統>.<名稱>
 d OPMENU_SVC_PATTERN     '^[a-z][a-z0-9-]+$'                            # service account:例 app-orders
+d OPMENU_SVC_PAIR        '-a -b'                                         # 34／35／37：一個應用程式兩個帳號（<名稱>-a、<名稱>-b，權限相同），輪替密碼時換「沒在用的那個」，不中斷
+d OPMENU_HANDOVER_DIR    "\$HOME/opmenu-handover"                       # 新密碼交接檔放哪（操作者自己的家目錄，0700／0600）；存進 PVWA 後刪掉
 d OPMENU_REPLICATION     3                                              # 建 topic 的 replication factor(標準值);沒填且 broker 少於 3 台時,登入後自動降到 broker 數
 d OPMENU_EMERGENCY_TOOLS 'kafka-topics kafka-configs kafka-consumer-groups kafka-acls kafka-metadata-quorum'   # 91 允許的工具
 d OPMENU_AUDIT_TOPIC     confluent-audit-log-events                     # 43 匯出的 audit topic

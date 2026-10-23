@@ -22,4 +22,31 @@ be_service_logs()    { local host="${1%%:*}" svc="${1##*:}" n="${2:-50}"; v_any_
 be_disk_usage() { local h; for h in $OPMENU_HOSTS; do printf '%-28s ' "$h"; _ssh "$h" "df -h '$OPMENU_DATA_DIR' 2>/dev/null | tail -1 | awk '{print \"磁碟用量 \" \$5 \"  剩餘 \" \$4}'"; done; }
 be_collect_diag() { local d="$1" h; mkdir -p "$d"; for h in $OPMENU_HOSTS; do _ssh "$h" "sudo -n journalctl -u 'confluent-*' -n 500 --no-pager" > "$d/$h.log" 2>&1; done; }
 be_hosts() { echo "$OPMENU_HOSTS"; }
-be_cert_list() { local f st; for f in "$OPMENU_CERT_DIR"/*.pem "$OPMENU_CERT_DIR"/*.crt; do [ -f "$f" ] || continue; openssl x509 -in "$f" -noout >/dev/null 2>&1 || continue; if ! openssl x509 -in "$f" -noout -checkend 0 >/dev/null; then st="已過期"; elif ! openssl x509 -in "$f" -noout -checkend 604800 >/dev/null; then st="剩不到 7 天 ⚠⚠"; elif ! openssl x509 -in "$f" -noout -checkend 2592000 >/dev/null; then st="剩不到 30 天 ⚠"; elif ! openssl x509 -in "$f" -noout -checkend 7776000 >/dev/null; then st="剩不到 90 天"; else st="90 天以上"; fi; printf '%-32s %-26s %s\n' "$(basename "$f")" "$(openssl x509 -in "$f" -noout -enddate | cut -d= -f2)" "$st"; done; }
+# be_cert_list：各端點實際出示的憑證（不是操作機上的檔案）。端點清單 OPMENU_TLS_ENDPOINTS，空 = 由服務清單推算
+_tls_endpoints() {
+  [ -n "${OPMENU_TLS_ENDPOINTS:-}" ] && { echo "$OPMENU_TLS_ENDPOINTS"; return; }
+  local host svc list=""
+  for host in ${OPMENU_CONTROLLER_HOSTS:-}; do list+="$host:9093 "; done
+  for svc in $OPMENU_BROKER_SERVICES; do host=${svc%%:*}; list+="$host:9092 $host:9095 $host:8090 "; done
+  for svc in ${OPMENU_AUX_SERVICES:-}; do
+    host=${svc%%:*}
+    case ${svc##*:} in confluent-kafka-rest) list+="$host:8082 ";; confluent-control-center) list+="$host:9021 ";; esac
+  done
+  echo "${list% }"
+}
+be_cert_list() {
+  local endpoint pem status subject issuer end_date
+  printf '%-28s %-16s %-26s %-26s %s\n' "端點" "憑證" "簽發者" "到期" "狀態"
+  for endpoint in $(_tls_endpoints); do
+    pem=$(openssl s_client -connect "$endpoint" -servername "${endpoint%:*}" </dev/null 2>/dev/null | openssl x509 2>/dev/null)
+    if [ -z "$pem" ]; then printf '%-28s %s\n' "$endpoint" "連不上或沒有出示憑證"; continue; fi
+    subject=$(openssl x509 -noout -subject -nameopt sep_comma_plus,sname <<<"$pem" | sed 's/.*CN=\([^,]*\).*/\1/')
+    issuer=$(openssl x509 -noout -issuer -nameopt sep_comma_plus,sname <<<"$pem" | sed 's/.*CN=\([^,]*\).*/\1/')
+    end_date=$(openssl x509 -noout -enddate <<<"$pem" | cut -d= -f2)
+    if ! openssl x509 -noout -checkend 0 <<<"$pem" >/dev/null; then status="已過期"
+    elif ! openssl x509 -noout -checkend 604800 <<<"$pem" >/dev/null; then status="剩不到 7 天 ⚠⚠"
+    elif ! openssl x509 -noout -checkend 2592000 <<<"$pem" >/dev/null; then status="剩不到 30 天 ⚠（該換發了）"
+    else status="30 天以上"; fi
+    printf '%-28s %-16s %-26s %-26s %s\n' "$endpoint" "$subject" "$issuer" "$end_date" "$status"
+  done
+}

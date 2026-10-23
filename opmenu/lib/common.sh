@@ -30,6 +30,16 @@ core_log() { # core_log <結果> <項目> <對象/備註>;每個欄位都先去�
 }
 core_log_pre_login() { OP_USER="$(id -un)" core_log "$@"; }   # 還沒登入時的紀錄(操作者欄填作業系統帳號)
 
+# core_handover_secret <帳號> <密碼>：新密碼不印在畫面上，寫進操作者自己家目錄的交接檔（0600）；紀錄只記交接了哪個帳號
+core_handover_secret() {
+  local account="$1" secret="$2" file
+  ( umask 077; mkdir -p "$OPMENU_HANDOVER_DIR" ) || return 1
+  file="$OPMENU_HANDOVER_DIR/$account-$(date +%Y%m%d-%H%M%S).pass"
+  ( umask 077; printf '%s\n' "$secret" > "$file" ) || return 1
+  echo "新密碼已寫到 $file（只有你讀得到）。請交給 Secrets 團隊存進 PVWA，或照應用程式團隊的交付方式，完成後刪除：shred -u $file"
+  core_log HANDOVER "$account" "$file"
+}
+
 core_confirm() { # core_confirm "<將做什麼>"
   echo "${CY}將執行:$1${C0}"
   [ "${OPMENU_YES:-0}" = 1 ] && return 0
