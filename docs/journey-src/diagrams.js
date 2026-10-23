@@ -9,7 +9,7 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 function svg(w, h, body) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="${FONT}">
-<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#444441" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M2 1L8 5L2 9" fill="none" stroke="#444441" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
 <rect width="${w}" height="${h}" fill="#FFFFFF"/>${body}</svg>`;
 }
 // box with title (+ up to 2 subtitle lines)
@@ -231,7 +231,7 @@ D.secretprotection = () => svg(800, 300, [
   box(36, 150, 218, 62, "PVWA / CCP", ["人取或操作機取", "lab 用 Conjur 代替"], "amber"),
   arrow(145, 150, 145, 122, null, { dash: true }),
   box(320, 40, 210, 62, "操作機（變更時段）", ["取 passphrase → master key", "encrypt / rotate，用完刪"], "blue"),
-  arrow(318, 71, 256, 91, null, { via: [[290, 71], [290, 91]] }),
+  arrow(256, 91, 318, 71, null, { via: [[290, 91], [290, 71]] }),   // passphrase：Vault → 操作機
   box(320, 130, 210, 62, "security.properties", ["所有主機同一份密文", "0640 root:confluent"], "blue"),
   box(320, 215, 210, 62, "service.env", ["MASTER_KEY=… 只有一行", "0600 root"], "coral"),
   arrow(425, 102, 425, 128), arrow(425, 192, 425, 213, null, { dash: true }),
@@ -269,7 +269,7 @@ D.jmx = () => svg(800, 250, [
   box(380, 60, 180, 62, "操作機產三個檔", ["prometheus-scrape.yml", "alert-rules.yml、ca.pem"], "gray"),
   box(600, 60, 180, 62, "行內 Prometheus", ["三個 job、HTTPS、密碼檔", "9 條告警規則"], "amber"),
   arrow(560, 91, 598, 91, "交付"),
-  arrow(690, 122, 302, 171, "每 30 秒抓 /metrics", { via: [[690, 136], [340, 136], [340, 171]], lx: 515, ly: 131 }),
+  arrow(690, 122, 302, 171, "每 30 秒抓 /metrics", { via: [[690, 136], [340, 136], [340, 171]], lx: 515, ly: 152 }),
   box(600, 165, 180, 62, "Alertmanager / SIEM", ["銀行既有", "lag 另看 C3"], "amber"),
   arrow(740, 122, 740, 163, null, { dash: true }),
 ].join(""));
