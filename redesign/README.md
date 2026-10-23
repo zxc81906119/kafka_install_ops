@@ -250,6 +250,18 @@
 - `kafka-internal` **維持 7 台共用一張**（申請單少；風險以 0640 權限＋定期輪替緩解）。
 - 交付：手把手第 21 章（手打指令、lab 實跑）＋ `install/steps/21-cert-rotate.sh`。
 
+### Secret Protection 的 master key 保管（2026-10-23 定案，lab 實測）
+
+- **CyberArk 存兩個 object（同一個 safe、分開授權）**：`secret-protection/master-key`（給要啟動服務的一方；Summon 時是每台主機）、`secret-protection/passphrase`（只給平台工程師）。輪替時兩個一起更新，舊版本留著回滾。
+- 為什麼兩樣都要（lab 用測試值實測）：
+  - master key = passphrase ＋ 隨機 salt 推導；`confluent secret master-key generate` **每次都換新 salt**，同一個 passphrase 再產生一次是另一把 → **只存 passphrase 救不回 master key**（之前手把手 16.2「CyberArk 保管 passphrase，需要時重新推導」是錯的，已更正）。
+  - `confluent secret file rotate --master-key` 要「目前的 master key（環境變數）＋舊 passphrase」兩樣都對才成功 → 只存 master key 就不能用 CLI 輪替。
+  - 兩樣都遺失：產生新 master key、從操作機的明文來源重跑第 16 站重新加密並滾動重啟（不中斷服務）。
+- 流程：master key 產生後**先交 CyberArk 保管、確認後才派送**。`install/` 新增 `VAULT_ACCESS=api|manual`：
+  - api（lab）：腳本把 master key 寫進保管庫（不再只限 Summon）。
+  - manual（客戶，只有 PVWA）：passphrase 由小安從 PVWA 取出放 `~/secrets/sp-passphrase.txt`；master key 產生後停下（rc 2），Secrets 團隊存進 PVWA、小安把「雜湊 單號」寫進 `~/secrets/master-key.custody`，再跑一次才派送；換了 master key 雜湊對不上會再停。lab 用隔離複本驗過四種情況。`SUMMON=1` 必須 `VAULT_ACCESS=api`。
+- **只有 PAM 時 CyberArk 的角色＝保管與稽核，不參與執行期**；master key 落地 `service.env`（0600 root），擋得住設定檔外流、擋不住本機 root。要連 root 都擋，需要啟動時向外取的機制（CCP，或 Conjur＋Summon）。寫進手把手 16.7。
+
 ## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
 
 | 組 | 題目 |

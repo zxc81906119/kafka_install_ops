@@ -40,3 +40,7 @@
 - 第 10 站重跑：設定檔／drop-in 依 sha256 判斷有沒有變，有變且服務在跑的主機在 10.4 一台一台重啟（controller 等 active、broker 等 MDS 200）；憑證不算（p12 每次重產）。
   lab：A 不改 → 7 台 changed=no、0 重啟；B 手改 kc03、kb04 → 只重啟這兩台、設定還原；20 驗收 39/39。
 - 手把手文件：新增 0.6「install/ 腳本」、第 1–21 章各加「對應腳本」框；docx 已重建（commit 652a79d）。
+- 圖：往左畫的箭頭頭畫反（resvg 對 orient=auto-start-reverse），改 orient=auto；16 章 passphrase 箭頭方向改 Vault→操作機；JMX 標籤移位（commit 5d5767a）。
+- master key 保管（使用者定案：兩個都存、分開兩個 object 同一個 safe）。lab 實測：generate 每次換 salt（passphrase 算不回 master key）；rotate 要 master key＋舊 passphrase。
+  install：VAULT_ACCESS=api|manual；16.2 產生後先交保管（api 寫保管庫；manual 停下等 PVWA、custody 檔「雜湊 單號」），確認後才派送。manual 用隔離複本驗 4 情況；api 重跑 16 → 20 驗收 39/39。
+  手把手 16：intro、16.1 開兩個變數、16.2 更正錯誤說法＋存 master key、16.6 輪替後存新 key、16.7 CyberArk 角色／擋得住擋不住／遺失怎麼辦、16.8 只加 hosts 讀權（policy 在 lab Conjur 驗 201）；壞掉的 tr -d 換行修好。redesign 加定案段。docx 待使用者關閉 Word 後重建。

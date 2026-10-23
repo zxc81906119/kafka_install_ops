@@ -7,14 +7,17 @@
 #   SUMMON=0                           master key 落地在每台的 /etc/confluent/service.env（16.4；保管庫故障時仍能重啟）
 #   SUMMON=1                           master key 不落地，啟動時 Summon 向保管庫取（16.8；保管庫要在線）
 #   SUMMON=1 + LDAP_PASSWORD_VIA_ENV=1 AD 查詢密碼也不進密文，Summon 注入、${env:…} 讀（16.9；CPM 換密碼後只要滾動重啟）
+# CyberArk 保管兩樣（2026-10-23 定案，lab 實測）：
+#   master key   服務解密用；主機重建、復原時從 CyberArk 取回。只有 passphrase 算不回來（每次 generate 都換新的 salt）
+#   passphrase   輪替 master key（16.6 rotate）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給
 # 做什麼（一次把 16.2–16.9 做完，只滾動重啟一次）：
-#   16.1 確認保管庫裡有 passphrase（以及 Summon 需要的 master-key 變數、每台的身分、執行檔）
-#   16.2 取 passphrase → 產生 master key（已有就沿用）
+#   16.1 確認銀行的準備：VAULT_ACCESS=api 時檢查保管庫；manual 時檢查小安從 PVWA 取出的 passphrase 檔
+#   16.2 passphrase → 產生 master key（已有就沿用）→ master key 交 CyberArk 保管（api：寫進保管庫；manual：Secrets 團隊存進 PVWA，確認後才往下）
 #   16.3 從明文範本重新產生每台的設定 → 加密密碼欄位（16.9：AD 查詢密碼那欄改成 ${env:…}）
-#   16.8 master key 寫進保管庫（Summon 模式）
 #   16.4 派送 properties、security.properties，以及 service.env 或 Summon 的設定
 #   16.5 滾動重啟、驗證
-# 產出：~/secrets/master.key、~/secrets/security.properties、~/conf/sp/<主機>.properties、~/conf/secrets.mode=sp
+# 產出：~/secrets/master.key、~/secrets/security.properties、~/conf/sp/<主機>.properties、~/conf/secrets.mode=sp、
+#       manual 時另有 ~/secrets/master-key.custody（「master key 雜湊 單號」：PVWA 已存的是哪一把）
 # 之後：換我們管的密碼（keystore 等）→ 重跑這一站；master key 輪替見手把手 16.6。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
@@ -24,51 +27,91 @@ source "$INSTALL_DIR/lib/render.sh"
 source "$INSTALL_DIR/lib/vault.sh"
 if [ "$SECRETS_MODE" != sp ]; then log "SECRETS_MODE=$SECRETS_MODE：第 16 站不適用，略過"; exit 0; fi
 if [ "$LDAP_PASSWORD_VIA_ENV" = 1 ] && [ "$SUMMON" != 1 ]; then die "LDAP_PASSWORD_VIA_ENV=1 需要 SUMMON=1（注入靠 Summon）"; fi
+if [ "$SUMMON" = 1 ] && [ "$VAULT_ACCESS" != api ]; then die "SUMMON=1 需要 VAULT_ACCESS=api（服務啟動時要能自動向保管庫取 master key）"; fi
 export JAVA_HOME=/opt/java/current
 
 SP_CONF_DIR=$CONF_DIR/sp                                # 每台產出的（加密後的）設定
-MASTER_KEY_FILE=$SECRETS_DIR/master.key                 # master key（由 passphrase 推導，CLI 不保存）
+MASTER_KEY_FILE=$SECRETS_DIR/master.key                 # master key（CLI 不保存；正本交 CyberArk）
+PASSPHRASE_FILE=$SECRETS_DIR/sp-passphrase.txt          # 產生、輪替 master key 用的 passphrase（正本在 CyberArk）
+CUSTODY_FILE=$SECRETS_DIR/master-key.custody            # manual：「master key 雜湊 單號」，記下 PVWA 已存的是哪一把
 LOCAL_SECRETS_FILE=$SECRETS_DIR/security.properties     # 所有主機共用的密文檔（操作機這份是正本）
 REMOTE_SECRETS_PATH=/etc/confluent/secrets/security.properties
 SUMMON_DIR=$LANDING/tools/summon                        # Summon 與 summon-conjur 兩個執行檔（下載機帶進來）
+# CyberArk 裡兩個 object（同一個 safe、分開授權）：passphrase 只給平台工程師；master key 給要啟動服務的一方（Summon 時是每台主機）
+PASSPHRASE_OBJECT=$VAULT_POLICY/secret-protection/passphrase
+MASTER_KEY_OBJECT=$VAULT_POLICY/secret-protection/master-key
 
-ask_bank "16.1 Secrets 團隊：保管庫（lab 用 Conjur 扮演 PAM Vault）放 $VAULT_POLICY/secret-protection/passphrase（銀行產生；只給 ops 與操作機讀）；" \
-         "    操作機要有自己的身分 $VAULT_HOST_KEY。" \
-         "$([ "$SUMMON" = 1 ] && echo "16.8 另加變數 $VAULT_POLICY/secret-protection/master-key（ops 可寫、所有主機可讀）；每台主機都要有身分；Summon 執行檔在 $SUMMON_DIR/。")" \
-         "$([ "$LDAP_PASSWORD_VIA_ENV" = 1 ] && echo "16.9 變數 $VAULT_POLICY/ldap-bind-password 要存在且主機可讀（CPM 換 AD 查詢密碼時同步更新它）。")"
-
-section "16.1 確認保管庫的準備"
-vault_http=$(curl -s --cacert "$VAULT_CA" -o /dev/null -m 10 -w '%{http_code}' "$VAULT_URL/")
-if [ "$vault_http" = 200 ]; then ok "保管庫 $VAULT_URL：200"; else fail "保管庫 $VAULT_URL：$vault_http"; fi
-if sudo test -s "$VAULT_HOST_KEY"; then ok "$OPS_HOST 的身分在"; else fail "$OPS_HOST 沒有 $VAULT_HOST_KEY"; fi
-if vault_login_as_host "$OPS_HOST" 2>/dev/null; then
-  if vault_exists secret-protection/passphrase; then ok "passphrase 讀得到"; else fail "secret-protection/passphrase 不存在或沒有讀取權"; fi
-  vault_logout
+if [ "$VAULT_ACCESS" = api ]; then
+  ask_bank "16.1 Secrets 團隊：保管庫（lab 用 Conjur 扮演 PAM Vault）建兩個變數：$PASSPHRASE_OBJECT（銀行產生值；只給 ops 與操作機讀）、" \
+           "    $MASTER_KEY_OBJECT（ops 可寫$([ "$SUMMON" = 1 ] && echo '、所有主機可讀')）；操作機要有自己的身分 $VAULT_HOST_KEY。" \
+           "$([ "$SUMMON" = 1 ] && echo "16.8 每台主機都要有身分；Summon 執行檔在 $SUMMON_DIR/。")" \
+           "$([ "$LDAP_PASSWORD_VIA_ENV" = 1 ] && echo "16.9 變數 $VAULT_POLICY/ldap-bind-password 要存在且主機可讀（CPM 換 AD 查詢密碼時同步更新它）。")"
 else
-  fail "操作機的身分登入保管庫失敗"
+  ask_bank "16.1 Secrets 團隊：PVWA 同一個 safe 裡開兩個 object：$PASSPHRASE_OBJECT（銀行產生值，只給平台工程師取）、$MASTER_KEY_OBJECT（16.2 產生後存入）。" \
+           "    小安從 PVWA 取出 passphrase，放進 $PASSPHRASE_FILE（0600，不要貼進任何對話或工單）。"
 fi
-if [ "$SUMMON" = 1 ]; then
-  for host in $CLUSTER_HOSTS; do
-    if ssh_run "$host" "sudo test -s $VAULT_HOST_KEY"; then ok "$host 的身分在"; else fail "$host 沒有 $VAULT_HOST_KEY"; fi
-  done
-  if [ -f "$SUMMON_DIR/SHA256SUMS" ] && (cd "$SUMMON_DIR" && sha256sum -c --quiet SHA256SUMS); then ok "Summon 執行檔 sha256 相符"
-  else fail "$SUMMON_DIR 缺檔或 sha256 不符"; fi
+
+section "16.1 確認銀行的準備（VAULT_ACCESS=$VAULT_ACCESS）"
+if [ "$VAULT_ACCESS" = api ]; then
+  vault_http=$(curl -s --cacert "$VAULT_CA" -o /dev/null -m 10 -w '%{http_code}' "$VAULT_URL/")
+  if [ "$vault_http" = 200 ]; then ok "保管庫 $VAULT_URL：200"; else fail "保管庫 $VAULT_URL：$vault_http"; fi
+  if sudo test -s "$VAULT_HOST_KEY"; then ok "$OPS_HOST 的身分在"; else fail "$OPS_HOST 沒有 $VAULT_HOST_KEY"; fi
+  if vault_login_as_host "$OPS_HOST" 2>/dev/null; then
+    if vault_exists secret-protection/passphrase; then ok "passphrase 讀得到"; else fail "$PASSPHRASE_OBJECT 不存在或沒有讀取權"; fi
+    vault_logout
+  else
+    fail "操作機的身分登入保管庫失敗"
+  fi
   if [ -s "$VAULT_OPS_KEY" ]; then ok "$VAULT_OPS_KEY 在（寫 master key 用）"; else fail "沒有 $VAULT_OPS_KEY"; fi
+  if [ "$SUMMON" = 1 ]; then
+    for host in $CLUSTER_HOSTS; do
+      if ssh_run "$host" "sudo test -s $VAULT_HOST_KEY"; then ok "$host 的身分在"; else fail "$host 沒有 $VAULT_HOST_KEY"; fi
+    done
+    if [ -f "$SUMMON_DIR/SHA256SUMS" ] && (cd "$SUMMON_DIR" && sha256sum -c --quiet SHA256SUMS); then ok "Summon 執行檔 sha256 相符"
+    else fail "$SUMMON_DIR 缺檔或 sha256 不符"; fi
+  fi
+else
+  # manual：程式碰不到 PVWA。已經有 master key 就不需要 passphrase（日常重跑都是這種情況）
+  if [ -s "$MASTER_KEY_FILE" ]; then ok "已有 master key，這次不需要 passphrase"
+  elif [ "$(wc -c < "$PASSPHRASE_FILE" 2>/dev/null || echo 0)" -ge 16 ] && [ "$(stat -c %a "$PASSPHRASE_FILE")" = 600 ]; then ok "$PASSPHRASE_FILE 在（0600）"
+  else fail "還沒有 $PASSPHRASE_FILE（至少 16 字元、0600）：從 PVWA 取出放進來"; fi
 fi
 [ "$FAIL_COUNT" = 0 ] || wait_for_bank
 
-section "16.2 取 passphrase、產生 master key（已有 master.key 就沿用：換掉會讓已派送的密文全部解不開）"
+section "16.2 產生 master key（已有 master.key 就沿用：換掉會讓已派送的密文全部解不開）"
 if [ -s "$MASTER_KEY_FILE" ]; then
   ok "沿用既有的 $MASTER_KEY_FILE 與 $LOCAL_SECRETS_FILE"
 else
-  vault_login_as_host "$OPS_HOST" || die "登入保管庫失敗"
-  (umask 077; vault_get secret-protection/passphrase > "$SECRETS_DIR/sp-passphrase.txt")
-  vault_logout
-  [ "$(wc -c < "$SECRETS_DIR/sp-passphrase.txt")" -ge 16 ] || die "passphrase 太短或取值失敗"
-  rm -f "$LOCAL_SECRETS_FILE"
+  if [ "$VAULT_ACCESS" = api ]; then
+    vault_login_as_host "$OPS_HOST" || die "登入保管庫失敗"
+    (umask 077; vault_get secret-protection/passphrase > "$PASSPHRASE_FILE")
+    vault_logout
+  fi
+  [ "$(wc -c < "$PASSPHRASE_FILE")" -ge 16 ] || die "passphrase 太短或取值失敗"
+  rm -f "$LOCAL_SECRETS_FILE" "$CUSTODY_FILE"
   (umask 077; confluent secret master-key generate --local-secrets-file "$LOCAL_SECRETS_FILE" \
-     --passphrase @"$SECRETS_DIR/sp-passphrase.txt" -o yaml | awk '/master_key/{print $2}' > "$MASTER_KEY_FILE")
+     --passphrase @"$PASSPHRASE_FILE" -o yaml | awk '/master_key/{print $2}' > "$MASTER_KEY_FILE")
   if [ "$(wc -c < "$MASTER_KEY_FILE")" -ge 40 ]; then ok "master key 產生（$MASTER_KEY_FILE，0600）"; else die "master key 產生失敗"; fi
+fi
+
+section "16.2 master key 交 CyberArk 保管（還沒確認保管前不派送：不能讓一把只存在操作機的 key 上線）"
+master_key_hash=$(tr -d '\n' < "$MASTER_KEY_FILE" | sha256sum | cut -c1-12)
+if [ "$VAULT_ACCESS" = api ]; then
+  # 去掉檔尾換行：Summon 取回的值多一個換行，服務會解不開密文
+  vault_login_as_ops || die "ops 身分登入失敗"
+  if tr -d '\n' < "$MASTER_KEY_FILE" | vault_set secret-protection/master-key; then ok "set $MASTER_KEY_OBJECT（雜湊 $master_key_hash）"
+  else die "寫 master key 失敗（policy 裡要有 $MASTER_KEY_OBJECT、ops 可寫）"; fi
+  vault_logout
+else
+  custody_line=$(cat "$CUSTODY_FILE" 2>/dev/null)
+  if [ "${custody_line%% *}" = "$master_key_hash" ]; then
+    ok "PVWA 已保管這一把 master key（雜湊 $master_key_hash，單號 ${custody_line#* }）"
+  else
+    ask_bank "16.2 Secrets 團隊：把 $MASTER_KEY_FILE 的內容存進 PVWA 的 $MASTER_KEY_OBJECT（新版本；舊版本保留，回滾要用）。" \
+             "    存好之後由小安記下單號：echo \"$master_key_hash <變更單號>\" > $CUSTODY_FILE && chmod 600 $CUSTODY_FILE" \
+             "    然後再跑一次這一站。"
+    wait_for_bank
+  fi
 fi
 
 section "16.3 從明文範本重新產生每台設定，加密密碼欄位（密文集中在 security.properties）"
@@ -119,17 +162,16 @@ unset CONFLUENT_SECURITY_MASTER_KEY
 ok "security.properties：$(grep -c '^[^_].*ENC\[' "$LOCAL_SECRETS_FILE") 筆密文"
 
 if [ "$SUMMON" = 1 ]; then
-  section "16.8 master key 寫進保管庫（去掉檔尾換行，否則 Summon 取回的值多一個換行，服務解不開密文）"
-  vault_login_as_ops || die "ops 身分登入失敗"
-  if tr -d '\n' < "$MASTER_KEY_FILE" | vault_set secret-protection/master-key; then ok "set $VAULT_POLICY/secret-protection/master-key"
-  else die "寫 master key 失敗"; fi
+  # master key 在 16.2 已寫進保管庫；這裡只剩 16.9 的 AD 查詢密碼
   if [ "$LDAP_PASSWORD_VIA_ENV" = 1 ]; then
+    section "16.9 AD 查詢密碼寫進保管庫（Summon 注入用）"
+    vault_login_as_ops || die "ops 身分登入失敗"
     # 16.9：Summon 啟動時要取這個值；只要 secrets.yml 裡有一個變數取不到，Summon 就整個失敗（連 master key 也拿不到）
     # 正式環境這個值由 CPM 換密碼時一併更新；這裡寫入目前在用的那組
     if tr -d '\n' < "$SECRETS_DIR/ldap-bind.pass" | vault_set ldap-bind-password; then ok "set $VAULT_POLICY/ldap-bind-password（AD 查詢密碼，Summon 注入用）"
     else die "寫 ldap-bind-password 失敗（policy 裡要有這個變數）"; fi
+    vault_logout
   fi
-  vault_logout
 fi
 
 # ---- 16.4 派送：每台主機上要做的事 ----

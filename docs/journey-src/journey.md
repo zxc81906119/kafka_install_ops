@@ -2648,30 +2648,34 @@ hello-via-provider-1792669189
 
 第 15 站需要 Conjur。銀行若只有 PAM（沒有 Conjur），broker 沒有原廠 provider 可以用，改走 Confluent 自己的 **Secret Protection**：密碼加密後留在主機上的 `security.properties`，解密用的 master key 由 CyberArk 保管，啟動時經環境變數給服務。它和第 15 站是**二選一**；這一站從第 10 站的明文範本（第 15 站留下的 `*.tpl.plain`）重新開始。
 
-> **對應腳本**：`SECRETS_MODE=sp` 時用：`bash install/install.sh --only 16`。16.2–16.9 一次做完、只滾動重啟一次；要不要 Summon（16.8）、AD 查詢密碼要不要改注入（16.9），由 `site.env` 的 `SUMMON`、`LDAP_PASSWORD_VIA_ENV` 決定。16.6 輪替 master key 的演練沒有包進腳本。
+> **對應腳本**：`SECRETS_MODE=sp` 時用：`bash install/install.sh --only 16`。16.2–16.9 一次做完、只滾動重啟一次；要不要 Summon（16.8）、AD 查詢密碼要不要改注入（16.9），由 `site.env` 的 `SUMMON`、`LDAP_PASSWORD_VIA_ENV` 決定。`VAULT_ACCESS=manual`（只有 PVWA）時：passphrase 由你從 PVWA 取出放進 `~/secrets/sp-passphrase.txt`；master key 產生後腳本會停下，Secrets 團隊存進 PVWA、你記下單號（`~/secrets/master-key.custody`）後再跑一次才會派送。16.6 輪替 master key 的演練沒有包進腳本。
 
 ```
-passphrase（CyberArk 保管）──▶ master key ──▶ data key ──▶ 各個密碼的密文（security.properties）
+passphrase ──(＋隨機 salt)──▶ master key ──▶ data key ──▶ 各個密碼的密文（security.properties）
+（CyberArk 保管）              （CyberArk 保管）
                                    │
                         各主機 /etc/confluent/service.env（0600 root）→ systemd EnvironmentFile → 服務環境變數
 ```
 
 | 誰 | 做什麼 |
 |---|---|
-| 銀行 Secrets 團隊 | 產生 passphrase 放進 CyberArk（lab 用 Conjur 扮演 PAM Vault），給小安取用權 |
-| 小安 | 取 passphrase 產 master key、加密 properties、派送、滾動重啟；之後的 master key 輪替也是他 |
+| 銀行 Secrets 團隊 | 同一個 safe 開兩個 object：passphrase（銀行產生，只給平台工程師）、master key（16.2 產生後存入）；lab 用 Conjur 扮演 PAM Vault |
+| 小安 | 取 passphrase 產 master key、交 CyberArk 保管、加密 properties、派送、滾動重啟；之後的 master key 輪替也是他 |
+
+**為什麼兩樣都要存**（lab 實測）：master key 是 passphrase 加上一個隨機 salt 算出來的，salt 每次 `generate` 都重新產生，所以**只有 passphrase 算不回原本的 master key**；反過來，輪替 master key（16.6）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給。分成兩個 object 是為了分開授權：master key 給要啟動服務的一方（16.8 時是每台主機），passphrase 主機不應該讀得到。
 
 lab 裡沒有 PAM，所以「向 CyberArk 取 passphrase」這個動作用第 15 站的 Conjur 代替；正式環境換成 PVWA 或 CCP，取回來的字串一樣。
 
-## 16.1 銀行把 passphrase 放進保管庫
+## 16.1 銀行開好兩個 object，放進 passphrase
 
 @role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-在既有的 `kafka` policy 底下加一個變數，只給 `ops` 使用者和操作機的 host 身分讀；值由銀行產生，小安不知道內容也不需要知道：
+在既有的 `kafka` policy 底下加兩個變數：passphrase 只給 `ops` 使用者和操作機的 host 身分讀，值由銀行產生；master key 先開好空的、給 `ops` 寫，16.2 產生後由小安存入：
 
 ```bash
 cd ~/kafka-lab && cat > conjur/sp-policy.yml <<'EOF'
 - !variable secret-protection/passphrase
+- !variable secret-protection/master-key
 - !permit
   role: !user ops
   privileges: [ read, execute ]
@@ -2680,12 +2684,16 @@ cd ~/kafka-lab && cat > conjur/sp-policy.yml <<'EOF'
   role: !host ops02
   privileges: [ read, execute ]
   resource: !variable secret-protection/passphrase
+- !permit
+  role: !user ops
+  privileges: [ read, execute, update ]
+  resource: !variable secret-protection/master-key
 EOF
-(umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > conjur/keys/sp-passphrase.txt) && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/sp-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: variable kafka/secret-protection/passphrase added"; curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/keys/sp-passphrase.txt https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fpassphrase && echo "value set"'
+(umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > conjur/keys/sp-passphrase.txt) && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/sp-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: variables kafka/secret-protection/passphrase, master-key added"; curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/keys/sp-passphrase.txt https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fpassphrase && echo "value set"'
 ```
 
 ```out
-policy: variable kafka/secret-protection/passphrase added
+policy: variables kafka/secret-protection/passphrase, master-key added
 value set
 ```
 
@@ -2707,7 +2715,25 @@ master key: 45 chars
 -rw------- 1 cpadmin cpadmin 169 … security.properties
 ```
 
-「cannot be retrieved later」是 CLI 的提醒：master key 由 passphrase 推導，CLI 不保存；lab 把它存成 `master.key`（0600），正式環境則是 CyberArk 保管 passphrase，需要時重新推導。
+「cannot be retrieved later」是 CLI 的提醒：CLI 不保存 master key，而且**再跑一次 `generate` 也拿不回同一把**（會換新的 salt，算出另一把）。所以產生之後馬上交 CyberArk 保管，確認存好了才往下派送；不能讓一把只存在操作機上的 key 上線。
+
+lab：用 `ops` 身分寫進 16.1 開好的變數。`tr -d '\n'` 是必要的：`master.key` 檔尾有換行，原樣送進去的話之後取回的值會多一個換行字元，服務就解不開密文。
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '\n' < ~/secrets/master.key | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fmaster-key && unset T && echo "master key stored, hash $(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12)"
+```
+
+```out
+master key stored, hash 3f9c0a…（12 碼雜湊，之後用來核對保管的是不是這一把）
+```
+
+正式環境（只有 PVWA、程式碰不到保管庫）：小安把 `master.key` 的內容交 Secrets 團隊存進 PVWA 的 master key object（新版本；舊版本保留，回滾要用），存好後記下單號和這一把的雜湊，再往下做：
+
+```bash
+(umask 077; echo "$(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12) CHG-xxxx" > ~/secrets/master-key.custody) && cat ~/secrets/master-key.custody
+```
+
+> 注意：只存 passphrase 是不夠的。passphrase 遺失、master key 還在：服務照常，只是不能用 16.6 的 `rotate`；master key 遺失：服務照常（每台的 `service.env` 都有），但主機重建時拿不到；兩樣都遺失：產生新的 master key、照 16.3–16.5 從明文來源重新加密並滾動重啟（約 30 分鐘，不中斷服務）。
 
 ## 16.3 加密每台的 properties
 
@@ -2805,6 +2831,16 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 
 （精簡的 OS 沒有 `cmp`，所以用 sha256sum 比對。）
 
+新的 master key 一樣**先交 CyberArk 保管再上線**（指令同 16.2；正式環境照樣由 Secrets 團隊存進 PVWA、小安記單號）。保管庫裡兩個 object 這時都是新值，舊版本留著回滾用：
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '\n' < ~/secrets/master.key | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fmaster-key && unset T && echo "master key stored, hash $(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12)"
+```
+
+```out
+master key stored, hash 7d21e4…（和 16.2 那一把不同）
+```
+
 然後照 16.5 再滾動重啟一次（指令相同），每台起得來就代表新 master key 解得開：
 
 ```bash
@@ -2829,7 +2865,10 @@ alice login after master key rotation: 200
 | 項目 | 說明 |
 |---|---|
 | secret zero | master key 以一行落在每台主機的 `/etc/confluent/service.env`（0600 root）。資安若不接受磁碟副本，改用 `ExecStartPre` 在啟動前向 CCP 取 master key 寫到 `/run`（tmpfs），代價是啟動時 CyberArk 要在線 |
-| 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 16.6，CyberArk 負責保管、版本與取用紀錄 |
+| CyberArk 在這裡做什麼（只有 PAM 時） | **保管與稽核，不參與執行期**：passphrase、master key 的正本與版本（重建主機、復原、輪替時取用）；誰在什麼時候取了、對應哪張變更單；以及 PSM／PSMP 控管誰能登入主機變成 root。服務啟動時不連 CyberArk |
+| 擋得住什麼、擋不住什麼 | 擋得住：設定檔被複製出去（備份、工單附檔、診斷資料、`confluent` 群組的人）時看不到密碼。擋不住：這台主機上的 root（`service.env` 就在本機）。要連 root 都擋，需要啟動時向外取 master key 的機制（CCP 或 Conjur＋16.8） |
+| 遺失怎麼辦 | master key 從 CyberArk 取回；passphrase 遺失只影響 `rotate`；兩樣都遺失就產生新的 master key、照 16.3–16.5 重新加密（不中斷服務） |
+| 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 16.6，兩個 object 一起更新 |
 | 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟。與 master key 輪替無關 |
 | 和第 15 站的差別 | 不依賴外部系統在線、原廠正式支援、不用 jar；但密碼是加密落地而不是啟動時取 |
 
@@ -2839,25 +2878,20 @@ alice login after master key rotation: 200
 
 16.4 的 `service.env` 是整個方案裡唯一落地的 master key。CyberArk 的開源工具 **Summon** 可以把它拿掉：服務啟動時 Summon 先向保管庫取值、塞進子程序的環境變數，再執行真正的啟動腳本，磁碟上只剩「主機向保管庫認證用的身分」。代價是服務啟動時保管庫要在線。
 
-銀行先在保管庫加一個放 master key 的變數（passphrase 和 master key 分開放，輪替時兩個都更新）：
+master key 在 16.2 已經存進保管庫；銀行這裡只要讓每台主機讀得到它（passphrase 仍然只有平台工程師讀得到）：
 
 ```bash
 cd ~/kafka-lab && cat > conjur/mk-policy.yml <<'EOF'
-- !variable secret-protection/master-key
-- !permit
-  role: !user ops
-  privileges: [ read, execute, update ]
-  resource: !variable secret-protection/master-key
 - !permit
   role: !layer hosts
   privileges: [ read, execute ]
   resource: !variable secret-protection/master-key
 EOF
-docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/mk-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: variable kafka/secret-protection/master-key added"'
+docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/mk-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: hosts can read kafka/secret-protection/master-key"'
 ```
 
 ```out
-policy: variable kafka/secret-protection/master-key added
+policy: hosts can read kafka/secret-protection/master-key
 ```
 
 @role 小安 | dl01 | root
@@ -2877,20 +2911,6 @@ summon-linux-amd64.tar.gz
 ```
 
 @role 小安 | ops02 | cpadmin
-
-把現行的 master key 寫進保管庫（之後輪替時，16.6 的流程多一步：新 master key 也寫進來）：
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '
-' < ~/secrets/master.key | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fmaster-key && unset T && echo "master key stored in conjur"
-```
-
-```out
-master key stored in conjur
-```
-
-> `tr -d '
-'` 是必要的：`master.key` 檔尾有換行，直接送進去的話 Summon 取回的值會多一個換行字元，和 `service.env` 裡的不一樣，服務就解不開密文。密碼類的值寫進保管庫前都要確認沒有多餘的換行。
 
 每台 Java 主機：裝兩個執行檔、寫 Conjur 的設定與身分（身分檔就是第 15 站發的 host API key，0640 root:confluent，服務帳號讀得到）、寫 `secrets.yml`（哪個環境變數對應哪個變數），然後以服務帳號試跑一次 Summon，確認取得到值而且和 `service.env` 裡的一樣：
 
