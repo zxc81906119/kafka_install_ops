@@ -3,6 +3,8 @@
 `docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–20 章的每一章，對應一支 `steps/NN-*.sh`。
 腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
 
+**作業系統**：以 RHEL 9 為準（lab 用 Rocky Linux 9 從零跑到第 20 站）。RHEL 10 是 Confluent Platform 8.2 起官方支援的，但這些腳本**沒有在 RHEL 10 實測過**；要上 RHEL 10 之前至少先驗 versionlock 外掛、原廠公鑰匯入與驗章、C3 前置套件，以及 CPU 是否支援 x86-64-v3。
+
 ```
 install/
   install.sh          依序跑 steps/（--list / --from NN / --to NN / --only NN）

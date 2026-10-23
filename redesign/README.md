@@ -262,6 +262,11 @@
   - manual（客戶，只有 PVWA）：passphrase 由小安從 PVWA 取出放 `~/secrets/sp-passphrase.txt`；master key 產生後停下（rc 2），Secrets 團隊存進 PVWA、小安把「雜湊 單號」寫進 `~/secrets/master-key.custody`，再跑一次才派送；換了 master key 雜湊對不上會再停。lab 用隔離複本驗過四種情況。`SUMMON=1` 必須 `VAULT_ACCESS=api`。
 - **只有 PAM 時 CyberArk 的角色＝保管與稽核，不參與執行期**；master key 落地 `service.env`（0600 root），擋得住設定檔外流、擋不住本機 root。要連 root 都擋，需要啟動時向外取的機制（CCP，或 Conjur＋Summon）。寫進手把手 16.7。
 
+### 作業系統版本（2026-10-23 定案）
+
+- 以 **RHEL 9** 為準（lab：Rocky Linux 9 全程實跑）。RHEL 10.x 在 Confluent Platform 8.2／8.3 官方支援表上是 yes，C3 2.6 文件沒有另外列作業系統。
+- RHEL 10 **先不處理、未實測**；之後要做時至少驗：`python3-dnf-plugin-versionlock`、原廠公鑰匯入與 `rpm -K`、C3 前置套件（cyrus-sasl、openssl-devel）、CPU 需支援 x86-64-v3。
+
 ## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
 
 | 組 | 題目 |
