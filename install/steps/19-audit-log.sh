@@ -100,10 +100,10 @@ sudo install -o root -g confluent -m 0640 /tmp/$HOST.properties $props && rm -f 
 if [ -f /tmp/security.properties ]; then
   sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties
 fi
-plaintext=$(sudo grep -cE '^[^#].*(password|credentials|jaas.config) *= *[^$ ]' $props)
-echo "audit_lines=$(sudo grep -c security.event $props) plaintext=$plaintext"
+echo "audit_lines=$(sudo grep -c security.event $props)"
 EOF
 )
+  result="$result plaintext=$(count_plaintext_passwords <(ssh_run "$host" "sudo cat /etc/confluent/kafka/server.properties"))"
   if [ "$SECRETS_MODE_IN_USE" = plain ]; then
     case $result in audit_lines=11*) ok "$host: $result（plain 模式，密碼是明文）";; *) fail "$host: $result";; esac
   else

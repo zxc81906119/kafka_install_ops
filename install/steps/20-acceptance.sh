@@ -13,6 +13,7 @@ set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
+source "$INSTALL_DIR/lib/render.sh"   # count_plaintext_passwords
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 SECRETS_MODE_IN_USE=$(cat "$CONF_DIR/secrets.mode" 2>/dev/null || echo plain)
 APP_CLIENT_CONF=$CONF_DIR/$FIRST_SCRAM_APP.properties
@@ -74,9 +75,8 @@ check "CLIENT 9095 不帶 SASL → 失敗" bash -c "! kafka-topics --bootstrap-s
 check "用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）" bash -c "! curl -s --max-time 10 --cacert <(openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=junk 2>/dev/null) $MDS_URL/v1/metadata/id -o /dev/null"
 if [ "$SECRETS_MODE_IN_USE" != plain ]; then
   for host in ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
-    check "$host 的設定檔沒有明文密碼" ssh_script "$host" PROPS="$(props_path_of "$host")" <<'EOF'
-[ "$(sudo grep -cE '^[^#].*(password|credentials|jaas.config) *= *[^$ ]' "$PROPS")" = 0 ]
-EOF
+    plaintext_count=$(count_plaintext_passwords <(ssh_run "$host" "sudo cat $(props_path_of "$host")"))
+    check "$host 的設定檔沒有明文密碼" test "$plaintext_count" = 0
   done
   if [ "$SECRETS_MODE_IN_USE" = sp ] && [ "$SUMMON" = 1 ]; then
     check "${BROKERS%% *} 磁碟上沒有 master key（Summon）" ssh_script "${BROKERS%% *}" <<'EOF'

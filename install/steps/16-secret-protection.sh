@@ -235,13 +235,15 @@ EOF
   else fail "alice 建 topic：${create_result:-失敗}（查詢帳號 bind 可能失敗）"; fi
 fi
 
-disk_check=$(ssh_script "${BROKERS%% *}" <<'EOF'
-plaintext=$(sudo grep -cE '^[^#].*(password|credentials|jaas.config) *= *[^$ ]' /etc/confluent/kafka/server.properties)
-master_key_files=$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l)
-echo "plaintext=$plaintext master_key_on_disk=$master_key_files"
-EOF
-)
-if [ "$SUMMON" = 1 ]; then expected_disk_check="plaintext=0 master_key_on_disk=0"; else expected_disk_check="plaintext=0 master_key_on_disk=1"; fi
-if [ "$disk_check" = "$expected_disk_check" ]; then ok "${BROKERS%% *}: $disk_check"; else fail "${BROKERS%% *}: $disk_check（預期 $expected_disk_check）"; fi
+# 最後確認一台 broker：設定檔沒有明文密碼（規則在 lib/render.sh）、master key 落地的檔數（Summon 0，service.env 1）
+check_host=${BROKERS%% *}
+plaintext_count=$(count_plaintext_passwords <(ssh_run "$check_host" "sudo cat /etc/confluent/kafka/server.properties"))
+master_key_files=$(ssh_run "$check_host" "sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l")
+if [ "$SUMMON" = 1 ]; then expected_master_key_files=0; else expected_master_key_files=1; fi
+if [ "$plaintext_count" = 0 ] && [ "$master_key_files" = "$expected_master_key_files" ]; then
+  ok "$check_host：明文密碼 0、磁碟上有 master key 的檔 $master_key_files 個"
+else
+  fail "$check_host：明文密碼 $plaintext_count、磁碟上有 master key 的檔 $master_key_files 個（預期 0、$expected_master_key_files）"
+fi
 echo sp > "$CONF_DIR/secrets.mode"
 finish_step

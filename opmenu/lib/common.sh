@@ -165,6 +165,11 @@ core_menu_permissions() { # -> OP_VISIBLE[<id>] = 1 / 0;問不到或回應看不
   declare -gA OP_VISIBLE=(); OP_MENU_NOTE=""
   local id spec i rt rn op actions="" out answer
   for id in "${ACT_IDS[@]}"; do OP_VISIBLE[$id]=1; done
+  if [ "${OP_EMERGENCY_HOST:-0}" = 1 ]; then   # 緊急主機模式：問不了 MDS，只開放 OPMENU_EMERGENCY_ITEMS
+    for id in "${ACT_IDS[@]}"; do _in_words "$id" "$OPMENU_EMERGENCY_ITEMS" || OP_VISIBLE[$id]=0; done
+    OP_MENU_NOTE="緊急主機模式（MDS 連不上）：只能做主機類項目，每一步都記錄"
+    return 0
+  fi
   [ "${OPMENU_MENU_FILTER:-1}" = 1 ] || return 0
   local specs=(); declare -A seen=() ok=()
   for id in "${ACT_IDS[@]}"; do spec=$(core_item_authz "$id"); [ -n "$spec" ] && [ -z "${seen[$spec]:-}" ] && { seen[$spec]=1; specs+=("$spec"); }; done
@@ -185,6 +190,7 @@ core_menu_permissions() { # -> OP_VISIBLE[<id>] = 1 / 0;問不到或回應看不
 
 # ── 主機類動作的權限閘門:主機端的 cpadmin 是共用帳號,sudo 分不出是誰,所以碰主機前用本人的 token 問 MDS;任何錯誤一律視為拒絕 ──
 core_host_gate() {
+  [ "${OP_EMERGENCY_HOST:-0}" = 1 ] && return 0   # 緊急主機模式：授權在登入時看過作業系統群組 OPMENU_EMERGENCY_GROUP
   [ -n "${OPMENU_HOST_ACTION_AUTHZ:-}" ] || return 0
   [ "${OP_HOST_OK:-0}" = 1 ] && return 0
   local rt rn op body out

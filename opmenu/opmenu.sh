@@ -52,7 +52,7 @@ ssl.truststore.type=PKCS12
 ssl.truststore.password=$(be_truststore_password)
 EOC
   local lrc; OP_TOKEN="$(be_mds_login "$OP_USER" "$pass")"; lrc=$?
-  if [ $lrc -eq 2 ]; then echo "${CR}無法連到 MDS,請確認 cluster 狀態或通知管理員。${C0}"; core_log MDS_DOWN login ""; exit 1
+  if [ $lrc -eq 2 ]; then unset pass; emergency_login; return 0   # MDS 連不上：看能不能進緊急主機模式（不行就在裡面結束）
   elif [ $lrc -ne 0 ]; then echo "${CR}登入失敗:帳號或密碼不正確。${C0}"; core_log AUTH_FAIL login ""; exit 1; fi
   OP_TOKEN_AT=$(date +%s)
   derive || { core_log DERIVE_FAIL login ""; exit 1; }
@@ -62,13 +62,42 @@ EOC
   core_ssh_key_on_demand || core_load_ssh_key || true
 }
 
+# 緊急主機模式：MDS 連不上時，AD 身分驗證與權限查詢都做不了。
+# 只開放給作業系統群組 OPMENU_EMERGENCY_GROUP 的人（授權改看這個群組），只能做 OPMENU_EMERGENCY_ITEMS 這幾個主機類項目，
+# 必填原因；操作者標成「未經 AD 驗證」，每一筆紀錄都看得出是緊急模式（紀錄也送 syslog 時，共用帳號改不到）。
+emergency_login() {
+  core_log MDS_DOWN login ""
+  echo "${CR}無法連到 MDS（Kafka 的權限服務），AD 登入做不了。${C0}"
+  if [ -z "${OPMENU_EMERGENCY_GROUP:-}" ]; then echo "請確認 cluster 狀態或通知管理員。"; exit 1; fi
+  if ! id -nG | tr ' ' '\n' | grep -qx "$OPMENU_EMERGENCY_GROUP"; then
+    echo "緊急主機模式只開放給作業系統群組 $OPMENU_EMERGENCY_GROUP 的人（平常沒有人；事故時由 OS 團隊依程序臨時加入）。"
+    core_log DENIED "emergency host mode" "os user not in $OPMENU_EMERGENCY_GROUP"
+    exit 1
+  fi
+  local reason="${OPMENU_REASON:-}"
+  [ -n "$reason" ] || read -r -p "緊急主機模式：請輸入原因（事故單號或說明）: " reason
+  if [ ${#reason} -lt 4 ]; then echo "原因太短，不進入緊急主機模式"; exit 1; fi
+  derive_local || exit 1   # ssh 允許的主機清單（不用 MDS）
+  OP_EMERGENCY_HOST=1
+  OP_USER="$OP_USER(緊急,未經AD驗證)"
+  export OP_EMERGENCY_HOST OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_SID
+  core_log EMERGENCY_HOST login "$reason"
+  echo "${CY}已進入緊急主機模式：只能做 $OPMENU_EMERGENCY_ITEMS（看日誌、磁碟、收集診斷、重啟服務）；每一步都留紀錄。${C0}"
+  core_ssh_key_on_demand || core_load_ssh_key || true
+}
+
 # 登入後推算沒填的設定(opmenu.conf 有填的一律優先)。刻意不從 cluster 推算 broker 與主機清單:它們是重啟、ssh 的允許清單,必須是審過的固定設定
 derive() {
-  local id n
-  if [ -z "${OPMENU_KAFKA_CLUSTER_ID:-}" ]; then
+  local id
+  if [ -z "${OPMENU_KAFKA_CLUSTER_ID:-}" ]; then   # 要問 MDS
     id="$(be_cluster_id)"; [ -n "$id" ] || { echo "${CR}無法從 MDS 取得 cluster ID,請在 opmenu.conf 設定 OPMENU_KAFKA_CLUSTER_ID${C0}"; return 1; }
     dd OPMENU_KAFKA_CLUSTER_ID "$id"
   fi
+  derive_local
+}
+# 只靠設定檔就算得出來的部分（不用 MDS）：ssh 允許的主機清單、replication 上限。緊急主機模式也要做
+derive_local() {
+  local n
   [ -n "${OPMENU_BROKER_SERVICES:-}" ] || { echo "${CR}請在 opmenu.conf 設定 OPMENU_BROKER_SERVICES(可重啟的 broker,主機:服務名)${C0}"; return 1; }
   dd OPMENU_HOSTS "$(_hosts_of $OPMENU_BROKER_SERVICES ${OPMENU_AUX_SERVICES:-} ${OPMENU_CONTROLLER_HOSTS:-})"
   n=$(printf '%s\n' $OPMENU_BROKER_SERVICES | wc -l)

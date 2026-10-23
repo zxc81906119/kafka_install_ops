@@ -28,7 +28,7 @@
 | 什麼 | 放哪 | 什麼時候取 | 落地? |
 |---|---|---|---|
 | 操作者的 AD 密碼 | 操作者自己 | 登入時輸入,換到 MDS token 後丟掉;Kafka 工具用的連線檔放記憶體檔案系統、離開時刪 | 否 |
-| 操作機 → 各主機 cpadmin 的 SSH 私鑰(`OPMENU_SSH_KEY_SECRET`) | CyberArk(CPM 產生、推公鑰到各主機的那把) | 登入後取一次,`ssh-add -` 進選單自己的 ssh-agent(`OPMENU_SSH_KEY_TTL` 秒到期);離開時 agent 結束 | 否 |
+| 操作機 → 各主機 cpadmin 的 SSH 私鑰(`OPMENU_SSH_KEY_SECRET`) | CyberArk(CPM 產生、推公鑰到各主機的那把) | conjur／ccp:登入後取一次;manual:第一次做主機類項目、過了權限閘門才提示從 PVWA 貼上(`OPMENU_SSH_KEY_LOAD`)。都只進選單自己的 ssh-agent(`OPMENU_SSH_KEY_TTL` 秒到期),離開時 agent 結束 | 否 |
 | 91 緊急模式的 client 憑證(`OPMENU_BREAKGLASS_SECRET`,PEM) | CyberArk | 執行 91 時取到記憶體檔案系統,用完即刪;身分 `User:opmenu-breakglass` 在 MDS 綁 SystemAdmin | 否 |
 | 選單向保管庫認證的身分(`OPMENU_CONJUR_IDENTITY` 或 CCP 的 client 憑證) | 操作機 `/etc/opmenu/`,0640 root:opmenu | — | **是**(secret zero:這是唯一落地的) |
 
@@ -40,7 +40,8 @@
 4. `/var/log/opmenu/` 目錄 2775 root:opmenu;`OPMENU_SYSLOG=1` 時紀錄另送 syslog。
 5. 各主機 cpadmin 的 sudoers 永久規則(安裝、升級時才另開全權):
    `cpadmin ALL=(root) NOPASSWD: /usr/bin/systemctl restart confluent-*, /usr/bin/systemctl status confluent-*, /usr/bin/journalctl -u confluent-*`
-6. CyberArk:存 cpadmin 的 SSH 私鑰與 breakglass PEM;開給操作機的身分(Conjur host 或 CCP AppID)對這兩個值有讀取權。
+6. CyberArk:存 cpadmin 的 SSH 私鑰與 breakglass PEM;開給操作機的身分(Conjur host 或 CCP AppID)對這兩個值有讀取權。沒有 CCP 時 `OPMENU_SECRETS=manual`,這兩個值開給維運群組在 PVWA 取用。
+6a. 建作業系統群組 `opmenu-emergency`(平常沒有成員),寫好事故時誰加人、事後誰移出的程序。
 7. 其餘檔案不用改。
 
 ## 項目
@@ -66,6 +67,7 @@
 - **身分**:操作者輸入自己的 AD 帳密(`OPMENU_USER_FROM_OS=0`;操作機帳號就是 AD 帳號時設 1 只輸入密碼);選單立刻向 MDS 換 token,之後 MDS 呼叫用 token、Kafka 工具用 AD 帳密走 LDAP listener。
 - **動態選單**:登入後用本人的 token 問 MDS 一次,只顯示有權限的項目;直接輸入隱藏的編號一樣被擋並記錄。
 - **主機閘門**:碰主機的介面先向 MDS 確認本人有 `OPMENU_HOST_ACTION_AUTHZ`(預設 Operator 以上),因為主機端的 cpadmin 是共用帳號。
+- **緊急主機模式**:MDS 連不上時,作業系統群組 `OPMENU_EMERGENCY_GROUP`(預設 opmenu-emergency,平常空)的人可以進入,只開放 `OPMENU_EMERGENCY_ITEMS`(16 18 21 22 23);必填原因,操作者標成「未經 AD 驗證」,紀錄 EMERGENCY_HOST;21 的叢集檢查做不了時改成警告＋確認。
 - **確認**:變更類顯示將做什麼與影響,輸入 `yes` 才執行。
 - **紀錄**:`時間 | 環境 | AD 帳號 | os=作業系統帳號 | 項目 | sid | 結果 | 參數`;結果為 OK / DENIED / AUTH_FAIL / FAIL / BLOCKED / EMERGENCY / SSH_KEY_LOADED / SSH_KEY_FAIL…
 - **並行鎖、變更時窗**(`OPMENU_LOCK_*`、`OPMENU_CHANGE_WINDOW`):變更類項目同一時間一人、只在允許時段;91 不受時窗限制。

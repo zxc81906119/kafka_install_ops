@@ -275,3 +275,10 @@
   ssh 只信管理員建的 /etc/opmenu/known_hosts。lab 實測：bob/carol/alice 三種身分的動態選單、隱藏項目直接輸入被擋、23/16/22/21/27 經 cpadmin ssh 成功、kb04 換成兩段式 sudoers 後重啟與看日誌仍可、91 經 Conjur 取憑證成功、離開後無 agent 殘留、磁碟無私鑰。
   踩到：Conjur 身分檔最後一行沒換行 read 失敗；`kafka-topics --describe` 需要 DescribeConfigs → 維運群組要 Operator＋DeveloperManage Topic:*（見 opmenu/README）。
 - 2026-10-22 重排：opmenu.sh 只管登入與選單；lib/common.sh、kafka.sh、hosts.sh、secrets/；items/<編號>-<名稱>.sh 一項一檔（item 宣告 + run）；tests/。重排後單元測試 3/3、lab smoke 12 項通過，行為不變。
+- **2026-10-23 客戶沒有 CCP**：機敏資料來源加 `manual`（`lib/secrets/manual.sh`）：選單提示維運人員到 PVWA 取出 object、貼上（不回顯）、只進選單自己的 ssh-agent。
+  私鑰改成**要用才取**（`OPMENU_SSH_KEY_LOAD=auto`：manual 時 on-demand、其他來源登入就取）：第一次做主機類項目、而且**先過主機權限閘門**才要求貼上，只看 Kafka 的人、沒有主機權限的人都不會被要求。
+  掛在主 shell 執行項目之前（項目在管線的子 shell 裡跑，在那裡載入的 agent 下一個項目看不到）。lab 實測 12/12（`install/lab/opmenu-manual-test.sh`）。`ccp.sh` 改用 sed 解 JSON，不用 python。
+- **2026-10-23 緊急主機模式（使用者定案）**：MDS 連不上時（AD 登入做不了），作業系統群組 `opmenu-emergency`（平常空，事故時 OS 團隊臨時加人）的人可以進入；
+  只開放 16 磁碟、18 收集診斷、21 重啟 broker、22 重啟 REST／C3、23 看日誌（Kafka 類全部不開）；必填原因；操作者標成「<AD 帳號>(緊急,未經AD驗證)」、記 EMERGENCY_HOST；
+  主機權限閘門改由登入時的群組檢查代替；21 的 under-replicated／offline 檢查做不了時改成警告＋確認。lab 實測 14/14（`install/lab/opmenu-emergency-test.sh`，MDS 指到不通的埠模擬故障）。
+  要問客戶：誰能把人加進 opmenu-emergency、事後誰移出、紀錄送不送 SIEM。

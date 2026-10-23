@@ -24,3 +24,6 @@
 - 查證：MDS token 私鑰的 passphrase 參數不在 Confluent 8.3 文件（未文件化）→ 不建議正式環境採用，列入給原廠的問題。MDS token 金鑰輪替方案待 lab 實驗。
 - MDS token 金鑰輪替 lab 實測：公鑰檔放兩把只認第一把 → 無法零中斷；整套輪替 196 秒，REST 失敗 7/100（約 30 秒）、管理 client 3/20、SCRAM 0 失敗。lab 的 MDS 金鑰已換成新的（ops02 ~/pki 正本已更新，舊的留 .old）。腳本 install/lab/mds-token-key-*.sh，結論寫進 redesign 第 11 節。
 - OP menu 新版打包 opmenu-20261023.42f62e71（含 manual、要用才取），lab 落地區已換、第 17 站重裝通過；人工模式實測 12/12（install/lab/opmenu-manual-test.sh，用 script 模擬終端機貼上）。
+- conjur 模式驗證：第 15 站通過、第 19 站（conjur 分支）通過、第 20 站 38/38。途中修：install.sh --only 不再跳過 where 檢查；明文密碼判斷集中到 lib/render.sh 的 count_plaintext_passwords（jaas 行只看 password="…"）。
+- OP menu 緊急主機模式（使用者單選題定案）：MDS 連不上時 opmenu-emergency 群組的人只能做 16 18 21 22 23，必填原因、標成未經 AD 驗證；derive 拆成 derive（要 MDS）＋ derive_local（ssh 允許主機清單）。
+  lab 實測 14/14（install/lab/opmenu-emergency-test.sh）。OP menu 新包 opmenu-20261023.e1b6b24d。redesign 第 13 節、opmenu/README 已更新。

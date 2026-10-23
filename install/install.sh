@@ -47,7 +47,7 @@ for step_file in "$INSTALL_DIR"/steps/[0-9][0-9]-*.sh; do
   [[ "$step_number" < "$from_step" ]] && continue
   [[ "$step_number" > "$to_step" ]] && continue
   run_on=$(where_of "$step_file")
-  if [ "$run_on" != "$this_host" ] && [ -z "$only_step" ]; then
+  if [ "$run_on" != "$this_host" ]; then   # --only 也一樣：不是這台的步驟（例如下載機那支）一律略過
     echo "== $step_name：請在 $run_on 執行 bash steps/$step_name.sh（這台是 $this_host，略過）"
     continue
   fi

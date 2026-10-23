@@ -74,6 +74,13 @@ ldap_password_from_env() {
   echo 'config.providers.env.class = org.apache.kafka.common.config.provider.EnvVarConfigProvider' >> "$props_file"
 }
 
+# 明文密碼的判斷（驗收用）：
+#   1. key 本身是 password／credentials 的欄位（例如 ssl.keystore.password），值不是 ${…} 參照
+#   2. jaas.config 裡的 password="…"，值不是 ${…} 參照（像 ScramLoginModule required; 這種沒有密碼的 jaas 不算）
 count_plaintext_passwords() {
-  grep -cE "$PASSWORD_FIELD_REGEX" "$1" || true
+  local props_file=$1
+  {
+    grep -E '^[^#=]*(password|credentials) *= *[^$ ]' "$props_file" | grep -v 'jaas.config'
+    grep -E '^[^#=]*jaas.config *=' "$props_file" | grep -E 'password="[^$]'
+  } | wc -l
 }

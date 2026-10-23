@@ -75,6 +75,8 @@ d OPMENU_ALLOW_ENV_OVERRIDE 0        # 1 = 接受 OPMENU_USER/PASS/YES/REASON �
 d OPMENU_SYSLOG          1           # 1 = 每筆紀錄同時送 syslog(logger -t opmenu),集中保存、操作員無法改
 d OPMENU_TMPDIR          "$(_t=$(mktemp -p /dev/shm 2>/dev/null) && { rm -f "$_t"; echo /dev/shm; } || echo "${TMPDIR:-/tmp}")"   # 暫存連線檔放記憶體檔案系統;真的能在 /dev/shm 建檔才用(Git Bash 有這個路徑但不能用)
 d OPMENU_HOST_ACTION_AUTHZ 'Topic:__opmenu-host-ops:Describe'   # 主機類動作(重啟、日誌、磁碟、診斷)前向 MDS 確認的權限 <資源類型>:<名稱>:<操作>;預設等於「叢集層級可 describe 所有 topic」(Operator 以上),只有個別 topic 權限的人會被拒。主機用共用的 cpadmin,所以一定要檢查;空 = 不檢查
+d OPMENU_EMERGENCY_GROUP 'opmenu-emergency'   # MDS 連不上時（AD 登入做不了），這個作業系統群組的人可以進「緊急主機模式」；平常群組裡沒人，事故時由 OS 團隊臨時加入。空 = 關閉
+d OPMENU_EMERGENCY_ITEMS '16 18 21 22 23'     # 緊急主機模式只開放這些項目（磁碟、收集診斷、重啟 broker、重啟 REST／C3、看日誌）；Kafka 類項目都要 AD 身分，不開放
 d OPMENU_TOKEN_TTL       3600       # MDS token 壽命(秒,依 MDS 設定);超過後遇到 401 會提示重新登入而不是密碼錯
 # ── 動態選單:登入後用本人的 token 一次問 MDS,只顯示有權限的項目;MDS 會展開 AD 群組,所以「依 AD 群組不同」
 # 而且只有 RBAC 一份設定。只影響「看得到什麼」:執行時 Kafka / MDS / 主機閘門照樣檢查,直接輸入隱藏的編號一樣會被擋。
