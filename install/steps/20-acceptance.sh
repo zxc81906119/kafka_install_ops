@@ -1,78 +1,143 @@
 #!/usr/bin/env bash
 # 第 20 站：驗收與收尾 —— 一次跑完、結果能附在驗收文件裡：平台健康、安全（正反向）、應用程式端、維運；最後列出要收的東西
 # where: ops02 （cpadmin）
+#
+# 做什麼：
+#   20.1 平台健康：服務、quorum、MDS、沒有 under-replicated／offline partition、Self-Balancing、REST、C3、指標、JMX exporter
+#   20.2 安全：該過的過、該擋的擋（AD 帳密、RBAC、REST 憑證、SASL、憑證鏈、明文密碼、master key）
+#   20.3 應用程式端：SCRAM app 直連寫讀；REST app 經負載平衡寫，alice 讀得到
+#   20.4 維運：bob 用選單重啟一台 broker；冷開機交給機房演練（lab：bank-sim.sh coldboot）
+#   20.5 收尾：權限檢查、殘留檔、要留什麼要收什麼
+# 只讀為主；20.3 會寫兩筆測試訊息，20.4 會重啟一台 broker。
 set -uo pipefail
-D=$(cd "$(dirname "$0")/.." && pwd); source "$D/conf/site.env"; source "$D/lib/log.sh"; source "$D/lib/ssh.sh"
+source "$(dirname "$0")/../conf/site.env"
+source "$INSTALL_DIR/lib/log.sh"
+source "$INSTALL_DIR/lib/ssh.sh"
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-C=$PKI_DIR/certs; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; ADMIN=$CONF_DIR/client-admin.properties
-B1=$(fqdn "${BROKERS%% *}"); KC1=$(fqdn "${CONTROLLERS%% *}"); R1=$(fqdn "${RESTS%% *}")
-REST_APPS=$(grep -v '^#' "$D/conf/apps.txt" | awk '$2=="cert"{print $1}' | paste -sd'|'); APP=${REST_APPS%%|*}
-SCRAM1=$(grep -v '^#' "$D/conf/apps.txt" | awk '$2=="scram"{print $1; exit}')
-MODE=$(cat "$CONF_DIR/secrets.mode" 2>/dev/null || echo plain)
-P=$(cat "$SECRETS_DIR/ad-test-users.pass")
-ALL=0; chk() { local name=$1; shift; ALL=$((ALL+1)); if "$@" >/dev/null 2>&1; then ok "$name"; else fail "$name"; fi; }
-mds() { curl -s --cacert "$CA" -u "$1:$2" -o /dev/null -w '%{http_code}' "https://$B1:8090/security/1.0/authenticate"; }; export -f mds; export CA B1
-[ -f "$CONF_DIR/client-alice.properties" ] || (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="alice" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' "$P" "$C" "$(cat "$PKI_DIR/store.pass")" > "$CONF_DIR/client-alice.properties")
-[ -f "$CONF_DIR/$SCRAM1.properties" ] || (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' "$SCRAM1" "$(cat "$SECRETS_DIR/$SCRAM1.pass")" "$C" "$(cat "$PKI_DIR/store.pass")" > "$CONF_DIR/$SCRAM1.properties")
+SECRETS_MODE_IN_USE=$(cat "$CONF_DIR/secrets.mode" 2>/dev/null || echo plain)
+APP_CLIENT_CONF=$CONF_DIR/$FIRST_SCRAM_APP.properties
+SENSITIVE_TOPIC=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk -v prefix="$AUDIT_SENSITIVE_PREFIX" 'index($1, prefix) == 1 {print $1; exit}')
+TEST_USERS_PASSWORD=$(cat "$SECRETS_DIR/ad-test-users.pass")
+
+CHECK_COUNT=0
+# check "說明" <指令…>：指令成功就 ok，否則 fail；同時計數
+check() {
+  local description=$1; shift
+  CHECK_COUNT=$((CHECK_COUNT + 1))
+  if "$@" >/dev/null 2>&1; then ok "$description"; else fail "$description"; fi
+}
+# http_code <curl 參數…>：只印 HTTP 狀態碼
+http_code() { curl -s -o /dev/null -m 15 -w '%{http_code}' "$@"; }
+# mds_login_code <帳號> <密碼>：用 AD 帳密向 MDS 要 token 的 HTTP 狀態碼
+mds_login_code() { http_code --cacert "$BANK_ROOT_CA" -u "$1:$2" "$MDS_URL/security/1.0/authenticate"; }
+# 下面的 check 會用 bash -c 跑，函式與變數要 export 進去
+export -f http_code mds_login_code
+export BANK_ROOT_CA MDS_URL
+
+# 測試用的 client 設定，沒有就建
+if [ ! -f "$ALICE_CLIENT_CONF" ]; then
+  (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="alice" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' \
+     "$TEST_USERS_PASSWORD" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$ALICE_CLIENT_CONF")
+fi
+if [ ! -f "$APP_CLIENT_CONF" ]; then
+  (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' \
+     "$FIRST_SCRAM_APP" "$(cat "$SECRETS_DIR/$FIRST_SCRAM_APP.pass")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$APP_CLIENT_CONF")
+fi
 
 section "20.1 平台健康"
-chk "controller quorum 有 leader" bash -c "kafka-metadata-quorum --bootstrap-controller $KC1:9093 --command-config $CONF_DIR/client-internal.properties describe --status | grep -q 'LeaderId: *[0-9]'"
-for h in $KAFKA_HOSTS; do chk "$h confluent-server active" rsh "$h" 'systemctl is-active -q confluent-server'; done
-for h in $BROKERS; do chk "$h MDS 8090 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$(fqdn "$h"):8090/v1/metadata/id) = 200 ]"; done
-chk "沒有 under-replicated partition" bash -c "[ \"\$(kafka-topics --bootstrap-server $BROKER_TOKEN --command-config $ADMIN --describe --under-replicated-partitions | grep -c Partition:)\" = 0 ]"
-chk "沒有 offline partition" bash -c "[ \"\$(kafka-topics --bootstrap-server $BROKER_TOKEN --command-config $ADMIN --describe --unavailable-partitions | grep -c Partition:)\" = 0 ]"
-chk "Self-Balancing 啟用" bash -c "kafka-rebalance-cluster --bootstrap-server $BROKER_TOKEN --command-config $ADMIN --status 2>/dev/null | grep -q 'Balancer status: ENABLED'"
-chk "REST Proxy 經 LB 回 200（mTLS）" bash -c "[ \$(curl -s --cacert $CA --cert $C/$APP.crt --key $PKI_DIR/keys/$APP.key -o /dev/null -w '%{http_code}' https://$REST_VIP:8082/v3/clusters) = 200 ]"
-chk "Control Center 9021 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$C3_FQDN:9021/) = 200 ]"
-chk "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $CA --cert $C/cp-server.crt --key $PKI_DIR/keys/cp-server.key https://$C3_FQDN:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"
-[ "$JMX_EXPORTER" = 1 ] && for h in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *}; do chk "$h JMX exporter 7071 要帳密" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$(fqdn "$h"):7071/metrics) = 401 ]"; done
-H1=${FAILED:-0}
+check "controller quorum 有 leader" bash -c "kafka-metadata-quorum --bootstrap-controller $FIRST_CONTROLLER:9093 --command-config $INTERNAL_CLIENT_CONF describe --status | grep -q 'LeaderId: *[0-9]'"
+for host in $KAFKA_HOSTS; do check "$host confluent-server active" ssh_run "$host" 'systemctl is-active -q confluent-server'; done
+for host in $BROKERS; do check "$host MDS 8090 回 200" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$(fqdn "$host"):8090/v1/metadata/id)\" = 200 ]"; done
+check "沒有 under-replicated partition" bash -c "[ \"\$(kafka-topics --bootstrap-server $BROKER_TOKEN --command-config $ADMIN_CLIENT_CONF --describe --under-replicated-partitions | grep -c Partition:)\" = 0 ]"
+check "沒有 offline partition" bash -c "[ \"\$(kafka-topics --bootstrap-server $BROKER_TOKEN --command-config $ADMIN_CLIENT_CONF --describe --unavailable-partitions | grep -c Partition:)\" = 0 ]"
+check "Self-Balancing 啟用" bash -c "kafka-rebalance-cluster --bootstrap-server $BROKER_TOKEN --command-config $ADMIN_CLIENT_CONF --status 2>/dev/null | grep -q 'Balancer status: ENABLED'"
+check "REST Proxy 經負載平衡回 200（mTLS）" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA $(rest_app_curl_options) https://$REST_VIP:8082/v3/clusters)\" = 200 ]"
+check "Control Center 9021 回 200" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$C3_FQDN:9021/)\" = 200 ]"
+check "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $BANK_ROOT_CA --cert $CERTS_DIR/cp-server.crt --key $KEYS_DIR/cp-server.key https://$C3_FQDN:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"
+if [ "$JMX_EXPORTER" = 1 ]; then
+  for host in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *}; do
+    check "$host JMX exporter 7071 要帳密" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$(fqdn "$host"):7071/metrics)\" = 401 ]"
+  done
+fi
+health_failures=$FAIL_COUNT
 
 section "20.2 安全：正向與反向"
-chk "AD 帳密正確 → MDS 給 token" bash -c "[ \$(mds alice '$P') = 200 ]"
-chk "AD 密碼錯 → 401" bash -c "[ \$(mds alice wrong-password) = 401 ]"
-chk "不存在的帳號 → 401" bash -c "[ \$(mds nobody '$P') = 401 ]"
-chk "carol 在自己 prefix 以外建 topic 被拒" bash -c "kafka-topics --bootstrap-server $B1:9096 --command-config <(sed 's/username=\"alice\"/username=\"carol\"/' $CONF_DIR/client-alice.properties) --create --topic ${AUDIT_SENSITIVE_PREFIX}carol-test --partitions 1 --replication-factor 3 2>&1 | grep -q TopicAuthorizationException"
-chk "$SCRAM1 讀 ${AUDIT_SENSITIVE_PREFIX}* 被拒" bash -c "kafka-console-consumer --bootstrap-server $B1:9095 --consumer.config $CONF_DIR/$SCRAM1.properties --topic $(grep -v '^#' "$D/conf/topics.txt" | awk -v p="$AUDIT_SENSITIVE_PREFIX" 'index($1,p)==1{print $1; exit}') --max-messages 1 --timeout-ms 8000 2>&1 | grep -q TopicAuthorizationException"
-chk "REST Proxy 不帶憑證 → 連線被拒" bash -c "! curl -s --cacert $CA --max-time 10 https://$REST_VIP:8082/v3/clusters -o /dev/null"
-chk "REST Proxy 帶非 app 憑證（svc-ops）→ 401" bash -c "[ \$(curl -s --cacert $CA --cert $C/svc-ops.crt --key $PKI_DIR/keys/svc-ops.key -o /dev/null -w '%{http_code}' https://$REST_VIP:8082/v3/clusters) = 401 ]"
-chk "CLIENT 9095 不帶 SASL → 失敗" bash -c "! kafka-topics --bootstrap-server $B1:9095 --command-config <(printf 'security.protocol=SSL\nssl.truststore.type=PKCS12\nssl.truststore.location=$C/truststore.p12\nssl.truststore.password=%s\n' \"\$(cat $PKI_DIR/store.pass)\") --list 2>/dev/null"
-chk "用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）" bash -c "! curl -s --max-time 10 --cacert <(openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=junk 2>/dev/null) https://$B1:8090/v1/metadata/id -o /dev/null"
-if [ "$MODE" != plain ]; then
-  for h in ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do chk "$h properties 沒有明文密碼" rsh "$h" 'f=$(ls /etc/confluent/kafka/server.properties /etc/confluent/kafka-rest/kafka-rest.properties /etc/confluent/control-center/control-center.properties 2>/dev/null | head -1); [ "$(sudo grep -cE "^[^#].*(password|credentials|jaas.config) *= *[^$ ]" $f)" = 0 ]'; done
-  [ "$MODE" = sp ] && [ "$SUMMON" = 1 ] && chk "${BROKERS%% *} 磁碟上沒有 master key（Summon）" rsh "${BROKERS%% *}" '[ "$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l)" = 0 ]'
-else warn "SECRETS_MODE=plain：properties 裡的密碼是明文（0640），正式環境請走第 15 或 16 站"; fi
-chk "各主機 /etc/confluent/ssl 是 0750" rsh "${BROKERS%% *}" '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]'
-H2=$(( ${FAILED:-0} - H1 ))
+check "AD 帳密正確 → MDS 給 token（200）" bash -c "[ \"\$(mds_login_code alice '$TEST_USERS_PASSWORD')\" = 200 ]"
+check "AD 密碼錯 → 401" bash -c "[ \"\$(mds_login_code alice wrong-password)\" = 401 ]"
+check "不存在的帳號 → 401" bash -c "[ \"\$(mds_login_code nobody '$TEST_USERS_PASSWORD')\" = 401 ]"
+check "carol 在自己的 prefix 以外建 topic 被拒" bash -c "kafka-topics --bootstrap-server $FIRST_BROKER:9096 --command-config <(sed 's/username=\"alice\"/username=\"carol\"/' $ALICE_CLIENT_CONF) --create --topic ${AUDIT_SENSITIVE_PREFIX}carol-test --partitions 1 --replication-factor 3 2>&1 | grep -q TopicAuthorizationException"
+check "$FIRST_SCRAM_APP 讀 $SENSITIVE_TOPIC 被拒" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9095 --consumer.config $APP_CLIENT_CONF --topic $SENSITIVE_TOPIC --max-messages 1 --timeout-ms 8000 2>&1 | grep -q TopicAuthorizationException"
+check "REST Proxy 不帶憑證 → TLS 就拒絕" bash -c "! curl -s --cacert $BANK_ROOT_CA --max-time 10 https://$REST_VIP:8082/v3/clusters -o /dev/null"
+check "REST Proxy 帶非 app 憑證（svc-ops）→ 401" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA --cert $CERTS_DIR/svc-ops.crt --key $KEYS_DIR/svc-ops.key https://$REST_VIP:8082/v3/clusters)\" = 401 ]"
+check "CLIENT 9095 不帶 SASL → 失敗" bash -c "! kafka-topics --bootstrap-server $FIRST_BROKER:9095 --command-config <(printf 'security.protocol=SSL\nssl.truststore.type=PKCS12\nssl.truststore.location=$CERTS_DIR/truststore.p12\nssl.truststore.password=%s\n' \"\$(cat $PKI_DIR/store.pass)\") --list"
+# 主機的 OS 已經信任銀行根憑證，所以「不帶 CA」不會失敗；要用一張無關的 CA 才測得出鏈驗證
+check "用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）" bash -c "! curl -s --max-time 10 --cacert <(openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=junk 2>/dev/null) $MDS_URL/v1/metadata/id -o /dev/null"
+if [ "$SECRETS_MODE_IN_USE" != plain ]; then
+  for host in ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
+    check "$host 的設定檔沒有明文密碼" ssh_script "$host" PROPS="$(props_path_of "$host")" <<'EOF'
+[ "$(sudo grep -cE '^[^#].*(password|credentials|jaas.config) *= *[^$ ]' "$PROPS")" = 0 ]
+EOF
+  done
+  if [ "$SECRETS_MODE_IN_USE" = sp ] && [ "$SUMMON" = 1 ]; then
+    check "${BROKERS%% *} 磁碟上沒有 master key（Summon）" ssh_script "${BROKERS%% *}" <<'EOF'
+[ "$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l)" = 0 ]
+EOF
+  fi
+else
+  warn "SECRETS_MODE=plain：設定檔裡的密碼是明文（0640），正式環境請走第 15 或 16 站"
+fi
+check "/etc/confluent/ssl 是 0750" ssh_run "${BROKERS%% *}" '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]'
+security_failures=$((FAIL_COUNT - health_failures))
 
-section "20.3 應用程式端：$SCRAM1 SCRAM 直連寫讀；$APP 經 LB + REST Proxy（mTLS）寫，alice 讀到"
-CID=$(curl -s --cacert $CA "https://$B1:8090/v1/metadata/id" | grep -o '"id":"[^"]*"' | cut -d'"' -f4); MSG="acceptance-$(date +%s)"
-T1=$(grep -v '^#' "$D/conf/topics.txt" | awk '{print $1}' | grep "^${SCRAM1#app-}" | head -1); [ -n "$T1" ] || T1=$(grep -v '^#' "$D/conf/topics.txt" | awk 'NR==1{print $1}')
-TB=$(grep -v '^#' "$D/conf/topics.txt" | awk '{print $1}' | grep "^${APP##*-}" | head -1); [ -n "$TB" ] || TB=$(grep -v '^#' "$D/conf/topics.txt" | awk 'END{print $1}')
-chk "$SCRAM1 寫入 $T1" bash -c "echo $MSG | kafka-console-producer --bootstrap-server $B1:9095 --producer.config $CONF_DIR/$SCRAM1.properties --topic $T1"
-chk "$SCRAM1 讀回自己寫的" bash -c "kafka-console-consumer --bootstrap-server $B1:9095 --consumer.config $CONF_DIR/$SCRAM1.properties --topic $T1 --group acceptance-$SCRAM1 --from-beginning --timeout-ms 15000 2>/dev/null | grep -q $MSG"
-chk "$APP 經 REST Proxy 寫入 $TB（HTTP 200）" bash -c "[ \$(curl -s --cacert $CA --cert $C/$APP.crt --key $PKI_DIR/keys/$APP.key -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{\"value\":{\"type\":\"JSON\",\"data\":\"$MSG-rest\"}}' https://$REST_VIP:8082/v3/clusters/$CID/topics/$TB/records) = 200 ]"
-chk "alice 在 $TB 看到那筆" bash -c "kafka-console-consumer --bootstrap-server $B1:9096 --consumer.config $CONF_DIR/client-alice.properties --topic $TB --group acceptance-alice --from-beginning --timeout-ms 15000 2>/dev/null | grep -q $MSG-rest"
-H3=$(( ${FAILED:-0} - H1 - H2 ))
+section "20.3 應用程式端"
+cluster_id=$(curl -s --cacert "$BANK_ROOT_CA" "$MDS_URL/v1/metadata/id" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+test_message="acceptance-$(date +%s)"
+# 每個 app 用自己 prefix 的 topic：app-orders → orders.events；app-legacy-billing → billing.events
+scram_app_topic=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}' | grep "^${FIRST_SCRAM_APP#app-}\." | head -1)
+rest_app_topic=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}' | grep "^${FIRST_REST_APP##*-}\." | head -1)
+check "$FIRST_SCRAM_APP（SCRAM 直連）寫入 $scram_app_topic" bash -c "echo $test_message | kafka-console-producer --bootstrap-server $FIRST_BROKER:9095 --producer.config $APP_CLIENT_CONF --topic $scram_app_topic"
+check "$FIRST_SCRAM_APP 讀回自己寫的" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9095 --consumer.config $APP_CLIENT_CONF --topic $scram_app_topic --group acceptance-$FIRST_SCRAM_APP --from-beginning --timeout-ms 15000 2>/dev/null | grep -q $test_message"
+rest_body="{\"value\":{\"type\":\"JSON\",\"data\":\"$test_message-rest\"}}"
+check "$FIRST_REST_APP 經負載平衡 + REST Proxy（mTLS）寫入 $rest_app_topic" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA $(rest_app_curl_options) -X POST -H 'Content-Type: application/json' -d '$rest_body' https://$REST_VIP:8082/v3/clusters/$cluster_id/topics/$rest_app_topic/records)\" = 200 ]"
+check "alice 在 $rest_app_topic 讀到那筆" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9096 --consumer.config $ALICE_CLIENT_CONF --topic $rest_app_topic --group acceptance-alice --from-beginning --timeout-ms 15000 2>/dev/null | grep -q $test_message-rest"
+application_failures=$((FAIL_COUNT - health_failures - security_failures))
 
 section "20.4 維運"
 if [ "$OPMENU" = 1 ] && [ -x /opt/opmenu/opmenu.sh ]; then
-  h=$(awk '{print $3}' <<<"$BROKERS"); [ -n "$h" ] || h=${BROKERS##* }
-  r=$(sudo env OPMENU_USER=bob OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current HOME=/home/$OPMENU_OS_USER runuser -p -u "$OPMENU_OS_USER" -- /opt/opmenu/opmenu.sh --run 21 "$(fqdn "$h"):confluent-server" 2>&1 </dev/null | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g' | tail -1)
-  [[ $r == *已重啟* ]] && ok "bob 用選單重啟 $h：$r" || fail "選單重啟 $h：$r"
-  for i in $(seq 1 30); do [ "$(curl -sk -o /dev/null -w '%{http_code}' "https://$(fqdn "$h"):8090/v1/metadata/id")" = 200 ] && break; sleep 5; done
-  u=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN" --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)
-  [ "$i" -lt 30 ] && ok "$h MDS=200（~$((i*5))s）under-replicated=$u" || fail "$h 重啟後沒回來"
-else log "OPMENU=0 或未安裝：略過選單重啟"; fi
-bank "冷開機（全部主機同時關再開）由機房排程演練；預期 broker 等保管庫起來會重試（Restart=on-failure 每 10 秒）、C3 等 MDS 起來才啟動（第 13 站 drop-in）。lab：bash install/lab/bank-sim.sh coldboot"
+  restart_host=$(awk '{print $3}' <<<"$BROKERS"); [ -n "$restart_host" ] || restart_host=${BROKERS##* }
+  menu_result=$(sudo env OPMENU_USER=bob OPMENU_PASS="$TEST_USERS_PASSWORD" OPMENU_YES=1 JAVA_HOME=/opt/java/current HOME=/home/$OPMENU_OS_USER \
+                  runuser -p -u "$OPMENU_OS_USER" -- /opt/opmenu/opmenu.sh --run 21 "$(fqdn "$restart_host"):confluent-server" 2>&1 </dev/null \
+                | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g' | tail -1)
+  case $menu_result in *已重啟*) ok "bob 用選單重啟 $restart_host：$menu_result";; *) fail "bob 用選單重啟 $restart_host：$menu_result";; esac
+  for attempt in $(seq 1 30); do
+    [ "$(http_code -k "https://$(fqdn "$restart_host"):8090/v1/metadata/id")" = 200 ] && break
+    sleep 5
+  done
+  under_replicated=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)
+  if [ "$attempt" -lt 30 ]; then ok "$restart_host 的 MDS 回 200（約 $((attempt * 5)) 秒），under-replicated=$under_replicated"
+  else fail "$restart_host 重啟後沒回來"; fi
+else
+  log "OPMENU=0 或選單沒裝：略過選單重啟"
+fi
+ask_bank "冷開機（全部主機同時關再開）由機房排程演練。預期：broker 等保管庫起來前會重試（Restart=on-failure，每 10 秒），" \
+         "    C3 等 MDS 起來才啟動（第 13 站的 drop-in）。lab：bash install/lab/bank-sim.sh coldboot"
 
 section "20.5 收尾：留什麼、收什麼"
 rm -rf /tmp/jmx-* /tmp/*.properties 2>/dev/null
-bad=$(find ~ -maxdepth 3 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' -o -name '*.pem' -path '*/keys/*' \) ! -perm 600 2>/dev/null); [ -z "$bad" ] && ok "家目錄下的私鑰與密碼檔都是 0600" || fail "權限不是 0600：$(paste -sd' ' <<<"$bad")"
-for h in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
-  r=$(rsh "$h" 'printf "/tmp 殘留 %s 個；sudoers %s" $(ls /tmp | grep -cv "^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.") "$(sudo ls /etc/sudoers.d | paste -sd,)"'); [[ $r == "/tmp 殘留 0 個"* ]] && ok "$h: $r" || warn "$h: $r"
+wrong_permissions=$(find ~ -maxdepth 3 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2>/dev/null)
+if [ -z "$wrong_permissions" ]; then ok "家目錄下的私鑰與密碼檔都是 0600"; else fail "權限不是 0600：$(paste -sd' ' <<<"$wrong_permissions")"; fi
+for host in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
+  leftovers=$(ssh_script "$host" <<'EOF'
+# JVM 自己的暫存檔（hsperfdata、lib*.so、com_*）不算殘留
+tmp_leftovers=$(ls /tmp | grep -cv '^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.')
+echo "/tmp 殘留 $tmp_leftovers 個；sudoers $(sudo ls /etc/sudoers.d | paste -sd,)"
+EOF
+)
+  case $leftovers in "/tmp 殘留 0 個"*) ok "$host: $leftovers";; *) warn "$host: $leftovers";; esac
 done
-log "留在操作機：$CONF_DIR（範本與產出的設定）、$PKI_DIR、$SECRETS_DIR（0600）、~/monitoring、~/install-logs；可刪：$LANDING、$REPO_DIR（$(du -sh "$LANDING" "$REPO_DIR" 2>/dev/null | cut -f1 | paste -sd' ')，套件庫才是正本）"
-bank "交付時：OS 團隊移除各主機 /etc/sudoers.d/cpadmin（全權），只留 cpadmin-ops；$PKI_DIR/keys/svc-ops.key（super user）移到離線保管；~/.ssh/id_ed25519 正式環境改由 CyberArk 保管、操作機不留。"
-log "驗收：$(( ALL - ${FAILED:-0} )) / $ALL 項通過（健康 FAIL=$H1、安全 FAIL=$H2、應用程式 FAIL=$H3）"
-finish
+log "留在操作機：$CONF_DIR（範本產出的設定）、$PKI_DIR、$SECRETS_DIR（0600）、$MONITORING_DIR、~/install-logs"
+log "可以刪：$LANDING、$REPO_DIR（$(du -sh "$LANDING" "$REPO_DIR" 2>/dev/null | cut -f1 | paste -sd' ')；套件庫才是正本）"
+ask_bank "交付時：OS 團隊移除各主機 /etc/sudoers.d/cpadmin（全權），只留 cpadmin-ops；$KEYS_DIR/svc-ops.key（super user）移到離線保管；" \
+         "    ~/.ssh/id_ed25519 正式環境由 CyberArk 保管，操作機不留。"
+log "驗收：$((CHECK_COUNT - FAIL_COUNT)) / $CHECK_COUNT 項通過（健康失敗 $health_failures、安全失敗 $security_failures、應用程式失敗 $application_failures）"
+finish_step

@@ -1,30 +1,65 @@
-# install/lib/vault.sh — 保管庫存取（Conjur 版；lab 用 Conjur OSS 扮演 CyberArk）
-# 客戶只有 PAM／CCP 時換掉這一個檔，函式名稱與參數不變：
-#   vault_login_ops            以小安的寫值身分取 token（VAULT_OPS_KEY）
-#   vault_login_host [主機]    以主機的 host 身分取 token（本機或 ssh 到該主機讀 VAULT_HOST_KEY）
-#   vault_get <變數>           印出值（不含換行）；變數相對於 VAULT_POLICY，例如 store-password、scram/app-orders
-#   vault_set <變數>           從 stdin 讀值原樣寫入（密碼類要先 tr -d 換行；私鑰／PEM 多行就不要去）
-#   vault_has <變數>           變數存在且讀得到 → rc 0
-# token 放在 VAULT_TOKEN（只在這個 shell 的環境裡），用完 vault_logout。
-VAULT_CA=${VAULT_CA:-/etc/pki/ca-trust/source/anchors/bank-root.pem}
+# install/lib/vault.sh —— 保管庫存取（Conjur 版；lab 用 Conjur OSS 扮演銀行的 CyberArk）
+#
+# 客戶只有 PAM／CCP 時換掉這一個檔，函式名稱與用法不變。需要 site.env 的 VAULT_*。
+#
+#   vault_login_as_ops            以我方寫值用的身分（ops）登入：可讀可寫
+#   vault_login_as_host [主機]    以某台主機自己的身分登入：只能讀；不給主機就是本機
+#   vault_get    <變數>           印出值。變數名相對於 VAULT_POLICY，例如 store-password、scram/app-orders
+#   vault_set    <變數>           從 stdin 讀值原樣寫入。密碼先 tr -d '\n' 去掉換行；私鑰、PEM 是多行，不要去
+#   vault_exists <變數>           讀得到 → rc 0
+#   vault_logout                  丟掉 token
+#
+# 登入後 token 放在 VAULT_TOKEN，只存在這支步驟的 shell 裡。
 
-_venc() { printf '%s' "$1" | sed 's|/|%2F|g; s|@|%40|g'; }
+VAULT_CA=${VAULT_CA:-/etc/pki/ca-trust/source/anchors/bank-root.pem}   # 驗保管庫憑證用的銀行根憑證
 VAULT_TOKEN=${VAULT_TOKEN:-}
-_vauth() { # <login> <API key 內容>   （不用 pipeline，否則 export 會留在子 shell）
-  local login=$1 key=$2 t
-  t=$(printf '%s' "$key" | curl -sS --cacert "$VAULT_CA" -X POST --data-binary @- "$VAULT_URL/authn/$VAULT_ACCOUNT/$(_venc "$login")/authenticate" | base64 -w0)
-  [ -n "$t" ] && [ "${#t}" -gt 20 ] || { echo "vault: 認證失敗（$login）" >&2; return 1; }
-  export VAULT_TOKEN=$t
+
+# 變數路徑放進網址前要把 / 和 @ 編碼
+_url_encode() {
+  printf '%s' "$1" | sed 's|/|%2F|g; s|@|%40|g'
 }
-vault_login_ops()  { vault_login_ops_as "ops@$VAULT_POLICY"; }
-vault_login_ops_as() { [ -s "$VAULT_OPS_KEY" ] || { echo "vault: 沒有 $VAULT_OPS_KEY" >&2; return 1; }; _vauth "$1" "$(cat "$VAULT_OPS_KEY")"; }
-vault_login_host() {
-  local h=${1:-$(hostname -s)} k
-  if [ "$h" = "$(hostname -s)" ]; then k=$(sudo cat "$VAULT_HOST_KEY"); else k=$(ssh -o BatchMode=yes -o LogLevel=ERROR "$(fqdn "$h")" "sudo cat $VAULT_HOST_KEY"); fi
-  [ -n "$k" ] || { echo "vault: 讀不到 $h 的 host key" >&2; return 1; }
-  _vauth "host/$VAULT_POLICY/$h" "$k"
+
+# _vault_authenticate <登入名> <API key>：用 API key 換 token。
+# 不能寫成「… | _vault_authenticate」：管線的右邊在子 shell 跑，export 的 token 會不見。
+_vault_authenticate() {
+  local login=$1 api_key=$2 token
+  token=$(printf '%s' "$api_key" \
+    | curl -sS --cacert "$VAULT_CA" -X POST --data-binary @- "$VAULT_URL/authn/$VAULT_ACCOUNT/$(_url_encode "$login")/authenticate" \
+    | base64 -w0)
+  if [ "${#token}" -le 20 ]; then
+    echo "vault: 登入失敗（$login）" >&2
+    return 1
+  fi
+  export VAULT_TOKEN=$token
 }
-vault_get() { curl -sS -f --cacert "$VAULT_CA" -H "Authorization: Token token=\"$VAULT_TOKEN\"" "$VAULT_URL/secrets/$VAULT_ACCOUNT/variable/$(_venc "$VAULT_POLICY/$1")"; }
-vault_set() { curl -sS -f --cacert "$VAULT_CA" -H "Authorization: Token token=\"$VAULT_TOKEN\"" -X POST --data-binary @- "$VAULT_URL/secrets/$VAULT_ACCOUNT/variable/$(_venc "$VAULT_POLICY/$1")"; }
-vault_has() { vault_get "$1" >/dev/null 2>&1; }
+
+vault_login_as_ops() {
+  [ -s "$VAULT_OPS_KEY" ] || { echo "vault: 沒有 $VAULT_OPS_KEY" >&2; return 1; }
+  _vault_authenticate "ops@$VAULT_POLICY" "$(cat "$VAULT_OPS_KEY")"
+}
+
+vault_login_as_host() {
+  local host=${1:-$(hostname -s)} api_key
+  if [ "$host" = "$(hostname -s)" ]; then
+    api_key=$(sudo cat "$VAULT_HOST_KEY")
+  else
+    api_key=$(ssh -o BatchMode=yes -o LogLevel=ERROR "$(fqdn "$host")" "sudo cat $VAULT_HOST_KEY")
+  fi
+  [ -n "$api_key" ] || { echo "vault: 讀不到 $host 的 $VAULT_HOST_KEY" >&2; return 1; }
+  _vault_authenticate "host/$VAULT_POLICY/$host" "$api_key"
+}
+
+_vault_variable_url() {
+  echo "$VAULT_URL/secrets/$VAULT_ACCOUNT/variable/$(_url_encode "$VAULT_POLICY/$1")"
+}
+
+vault_get() {
+  curl -sS -f --cacert "$VAULT_CA" -H "Authorization: Token token=\"$VAULT_TOKEN\"" "$(_vault_variable_url "$1")"
+}
+
+vault_set() {
+  curl -sS -f --cacert "$VAULT_CA" -H "Authorization: Token token=\"$VAULT_TOKEN\"" -X POST --data-binary @- "$(_vault_variable_url "$1")"
+}
+
+vault_exists() { vault_get "$1" >/dev/null 2>&1; }
 vault_logout() { unset VAULT_TOKEN; }
