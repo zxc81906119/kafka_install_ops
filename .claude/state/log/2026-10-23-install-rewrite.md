@@ -37,3 +37,6 @@
 - 使用者定案（單選）：sp 模式下重跑 10／12／13 要自動接著加密。做法：lib/render.sh 加 sp_encrypt_props（16 也改用它）、secrets_mode_in_use、protect_rendered_props；10／12／13 派送前呼叫並帶上 security.properties；遠端 unresolved 檢查不算 provider 參照；conjur 模式這幾站停下請改跑 15。
   同類問題一起修：19 之後重跑 10 會把稽核設定蓋掉 → 10 也帶 audit.rendered.tpl。
   lab（不跑 16）：10 → 滾動重啟 → 12 → 13 → 20：39/39；10 台 plaintext=0、kc/kb audit 設定都在。注意：10 重跑只寫檔不重啟（enable --now），要生效需滾動重啟。
+- 第 10 站重跑：設定檔／drop-in 依 sha256 判斷有沒有變，有變且服務在跑的主機在 10.4 一台一台重啟（controller 等 active、broker 等 MDS 200）；憑證不算（p12 每次重產）。
+  lab：A 不改 → 7 台 changed=no、0 重啟；B 手改 kc03、kb04 → 只重啟這兩台、設定還原；20 驗收 39/39。
+- 手把手文件：新增 0.6「install/ 腳本」、第 1–21 章各加「對應腳本」框；docx 已重建（commit 652a79d）。

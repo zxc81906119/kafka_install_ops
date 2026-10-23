@@ -10,6 +10,7 @@
 # 產出：~/conf/<主機>.server.properties、~/conf/kraft.env（cluster id）、~/conf/client-internal.properties
 # 重跑：安全。格式化看到 meta.properties 就略過；cluster id 與 kafka-admin 密碼只在不存在時產生。
 #       第 16 站做過（Secret Protection）就照樣加密；第 19 站做過就帶上稽核設定。第 15 站（Conjur）做過的話這一站會停下，改跑第 15 站。
+#       設定檔或 drop-in 有變、服務已在跑的主機，10.4 會一台一台重啟（沒變的不動）。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
@@ -35,6 +36,12 @@ EOF
 )
   if [ "$(wc -w <<<"$installed")" = "$expected_count" ]; then ok "$host: $installed"; else fail "$host: $installed"; fi
 done
+
+# 設定檔或 drop-in 有變的主機：服務已經在跑的話，10.4 要重啟它才會讀到新設定（enable --now 不會重啟在跑的服務）。
+# 憑證（10.1）不算：p12 每次重新產生內容都不同，算進來會每次都重啟；換憑證走第 21 站。
+RESTART_NEEDED_HOSTS=""
+mark_restart_needed() { RESTART_NEEDED_HOSTS="$RESTART_NEEDED_HOSTS $1"; }
+restart_needed() { [[ " $RESTART_NEEDED_HOSTS " == *" $1 "* ]]; }
 
 section "10.2 設定檔：範本 + envsubst"
 install -d -m 0700 "$CONF_DIR"
@@ -66,15 +73,18 @@ for host in $KAFKA_HOSTS; do
   # unresolved：還留著 ${…} 的行，config provider 的參照（securepass／env／cyberark）不算
   result=$(ssh_script "$host" UPLOADED="/tmp/$host.server.properties" <<'EOF'
 props=/etc/confluent/kafka/server.properties
+before=$(sudo sha256sum $props 2>/dev/null | cut -c1-64)
 sudo install -o root -g confluent -m 0640 "$UPLOADED" $props && rm -f "$UPLOADED"
 if [ -f /tmp/security.properties ]; then
   sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets
   sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties
 fi
-echo "$(sudo grep -c . $props) lines, unresolved=$(sudo grep '\${' $props | grep -vc '\${\(securepass\|env\|cyberark\):')"
+changed=$([ "$before" = "$(sudo sha256sum $props | cut -c1-64)" ] && echo no || echo yes)
+echo "$(sudo grep -c . $props) lines, unresolved=$(sudo grep '\${' $props | grep -vc '\${\(securepass\|env\|cyberark\):') changed=$changed"
 EOF
 )
-  case $result in *"unresolved=0") ok "$host: $result";; *) fail "$host: $result";; esac
+  case $result in *"unresolved=0 changed="*) ok "$host: $result";; *) fail "$host: $result";; esac
+  [[ $result == *changed=yes ]] && mark_restart_needed "$host"
 done
 unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD
 
@@ -86,16 +96,19 @@ for host in $KAFKA_HOSTS; do
   copy_to_tmp "$host" "$CONF_DIR/$host.dropin" || { fail "$host: scp"; continue; }
   result=$(ssh_script "$host" UPLOADED="/tmp/$host.dropin" <<'EOF'
 sudo install -d -m 0755 /etc/systemd/system/confluent-server.service.d
-sudo install -m 0644 "$UPLOADED" /etc/systemd/system/confluent-server.service.d/10-override.conf && rm -f "$UPLOADED"
+dropin=/etc/systemd/system/confluent-server.service.d/10-override.conf
+before=$(sudo sha256sum $dropin 2>/dev/null | cut -c1-64)
+sudo install -m 0644 "$UPLOADED" $dropin && rm -f "$UPLOADED"
 sudo systemctl daemon-reload
 sudo install -d -o cp-kafka -g confluent -m 0750 /var/lib/kafka/data
 sudo install -d -o cp-kafka -g confluent -m 0755 /var/log/kafka
 exec_file=$(systemctl show confluent-server -p ExecStart --value | grep -o '/etc/[^ ]*properties')
-echo "exec=$exec_file data=$(sudo stat -c %U:%G:%a /var/lib/kafka/data)"
+changed=$([ "$before" = "$(sudo sha256sum $dropin | cut -c1-64)" ] && echo no || echo yes)
+echo "exec=$exec_file data=$(sudo stat -c %U:%G:%a /var/lib/kafka/data) changed=$changed"
 EOF
 )
-  if [ "$result" = "exec=/etc/confluent/kafka/server.properties data=cp-kafka:confluent:750" ]; then ok "$host: heap=$HEAP $result"
-  else fail "$host: $result"; fi
+  case $result in "exec=/etc/confluent/kafka/server.properties data=cp-kafka:confluent:750 changed="*) ok "$host: heap=$HEAP $result";; *) fail "$host: $result";; esac
+  [[ $result == *changed=yes ]] && mark_restart_needed "$host"
 done
 [ "$FAIL_COUNT" = 0 ] || die "設定或 drop-in 有問題，不啟動"
 
@@ -161,6 +174,12 @@ ok "$INTERNAL_CLIENT_CONF"
 
 section "10.4 啟動 controller，看 quorum 有沒有 leader"
 for host in $CONTROLLERS; do
+  if restart_needed "$host" && ssh_run "$host" 'systemctl is-active -q confluent-server'; then
+    # 已經在跑、設定有變：一台一台重啟（起來了才做下一台）
+    result=$(restart_and_wait "$host" confluent-server -)
+    case $result in *after*) ok "設定有變，已重啟：$result";; *) fail "$result";; esac
+    continue
+  fi
   state=$(ssh_run "$host" 'sudo systemctl enable --now confluent-server >/dev/null 2>&1; sleep 1; systemctl is-active confluent-server')
   if [ "$state" = active ]; then ok "$host: $state"; else fail "$host: $state（sudo journalctl -u confluent-server -n 50）"; fi
 done
@@ -172,6 +191,12 @@ else die "controller quorum 沒有 leader：$quorum_status"; fi
 
 section "10.4 啟動 broker，確認註冊成 observer、MDS 回 200"
 for host in $BROKERS; do
+  if restart_needed "$host" && ssh_run "$host" 'systemctl is-active -q confluent-server'; then
+    # 已經在跑、設定有變：一台一台重啟，等 MDS 回 200 才做下一台
+    result=$(restart_and_wait "$host" confluent-server "https://$(fqdn "$host"):8090/v1/metadata/id")
+    case $result in *after*) ok "設定有變，已重啟：$result";; *) fail "$result";; esac
+    continue
+  fi
   state=$(ssh_run "$host" 'sudo systemctl enable --now confluent-server >/dev/null 2>&1; sleep 1; systemctl is-active confluent-server')
   if [ "$state" = active ]; then ok "$host: $state"; else fail "$host: $state"; fi
 done
