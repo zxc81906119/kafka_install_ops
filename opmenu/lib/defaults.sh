@@ -40,7 +40,7 @@ d OPMENU_SSH_CONTROL_PERSIST 600                                        # 同一
 d OPMENU_KNOWN_HOSTS     '/etc/opmenu/known_hosts'                         # 各主機的 ssh 主機金鑰(管理員用 ssh-keyscan 建,0644 root);選單只信這份,不接受新主機
 
 # ── 機敏資料:由保管庫取,選單啟動時載入記憶體,離開時清掉(2026-10-22)──
-d OPMENU_SECRETS         conjur                                         # lib/secrets/<名稱>.sh:conjur(Conjur REST,lab 用它扮演 CyberArk)| ccp(PAM 的 Central Credential Provider,範本)
+d OPMENU_SECRETS         conjur                                         # lib/secrets/<名稱>.sh:conjur(Conjur REST,lab 用它扮演 CyberArk)| ccp(PAM 的 Central Credential Provider,範本)| manual(沒有 CCP:登入後從 PVWA 取出貼上)
 d OPMENU_SSH_KEY_SECRET  'kafka/ssh/cpadmin'                            # 保管庫裡「操作機 → 各主機 cpadmin」的 SSH 私鑰(和安裝同一把);空 = 不取,改用 ~/.ssh 既有金鑰
 d OPMENU_BREAKGLASS_SECRET 'kafka/breakglass/pem'                       # 91 緊急模式用的 client 憑證(私鑰 + 憑證鏈,PEM);只在執行 91 時取,用完即丟
 d OPMENU_BREAKGLASS_BOOTSTRAP ''                                        # 91 連的 TOKEN listener(主機:9094,逗號分隔);空 = 由 OPMENU_BOOTSTRAP 的主機 + OPMENU_TOKEN_PORT 推算

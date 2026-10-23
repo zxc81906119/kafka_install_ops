@@ -15,3 +15,6 @@
   lab 準備：15.1–15.2（Conjur、policy、host key、值）+ 全部第 16 章（含 16.8 Summon）用 run-chapter.js 部分重跑；install/ 不產生 ~/conf/*.tpl，16.3 需要時先把第 10/12/13 章的 heredoc 範本放回去。
   踩到：`confluent secret` 改寫後 properties 是 `key = value`，sed 要容許空白；alice 登入 200 證明不了 bind 可用（群組快取），要用「重啟後建 topic」這種需要群組查詢的動作。
 - 下一個：install/ 延伸站 15–19 與驗收 20（主線驗 16+16.8+16.9、17、18、19、20；15 單獨驗）。
+- 決定（使用者單選題）：客戶 CyberArk 只用在 PSM／PSMP 代登與 SSH 金鑰輪替，**沒有 CCP／CP／Conjur**。cpadmin 私鑰改為「人工從 PVWA 取、貼進 ssh-agent、不落地」；OP menu 維運期同一做法（lib/secrets/manual.sh）。
+  連帶：第 16 站 master key 只能 16.4 落地 service.env（人工從 PVWA 取）；Summon、16.9 不適用；AD／SCRAM 密碼照銀行現行方式人工交付。redesign 第 11 節、第 12 節已更新。
+- 可讀性整理（commit c03b222）：完整命名、每檔每段註解、遠端指令一律 ssh_script heredoc、衍生值集中 site.env、rolling_restart；不用 python（19 站、15 站 jar、bank-sim 改 grep／sed）；README 加「寫法約定」。

@@ -36,21 +36,32 @@ ask_bank "17.1 Secrets 團隊：保管庫加身分 host/$VAULT_POLICY/opmenu 與
          "17.3 OS 團隊：操作機上建維運人員的本機帳號（lab：$MENU_USER）；選單套件 opmenu-*.tar.gz 隨落地區送到 $OPMENU_PACKAGE_DIR/。" \
          "17.4 OS 團隊：各主機 cpadmin 的 sudo 改成兩段式（永久只留 restart／status／journalctl；安裝期的全權做完收回）。"
 
-section "17.1 確認銀行的準備"
-if sudo test -s /root/opmenu.key; then ok "/root/opmenu.key 在"
-elif sudo test -s /etc/opmenu/conjur.identity; then ok "/etc/opmenu/conjur.identity 已存在（之前裝過）"
-else fail "沒有 /root/opmenu.key"; fi
+section "17.1 確認銀行的準備（選單的機敏資料來源：OPMENU_SECRETS=$OPMENU_SECRETS）"
 if [ -f "$OPMENU_PACKAGE_DIR/SHA256SUMS" ] && (cd "$OPMENU_PACKAGE_DIR" && sha256sum -c --quiet SHA256SUMS); then ok "opmenu 套件 sha256 相符"
 else fail "$OPMENU_PACKAGE_DIR 缺檔或 sha256 不符"; fi
-if [ -s "$VAULT_OPS_KEY" ]; then ok "$VAULT_OPS_KEY 在"; else fail "沒有 $VAULT_OPS_KEY"; fi
+case $OPMENU_SECRETS in
+  conjur)   # lab：選單用自己的保管庫身分取值
+    if sudo test -s /root/opmenu.key; then ok "/root/opmenu.key 在"
+    elif sudo test -s /etc/opmenu/conjur.identity; then ok "/etc/opmenu/conjur.identity 已存在（之前裝過）"
+    else fail "沒有 /root/opmenu.key"; fi
+    if [ -s "$VAULT_OPS_KEY" ]; then ok "$VAULT_OPS_KEY 在"; else fail "沒有 $VAULT_OPS_KEY"; fi;;
+  manual)   # 客戶：沒有 CCP，維運人員登入選單後自己從 PVWA 取出貼上；這裡沒有東西要準備
+    ok "manual：cpadmin 私鑰與緊急憑證由維運人員從 PVWA 取出貼上（PVWA 上的 object 名稱寫在 opmenu.conf）";;
+  ccp)      # 有 CCP 的銀行：選單以 client 憑證打 CCP（設定見 opmenu/lib/secrets/ccp.sh）
+    ok "ccp：AppID、client 憑證請照 opmenu/README 準備";;
+esac
 [ "$FAIL_COUNT" = 0 ] || wait_for_bank
 
-section "17.2 值寫進保管庫（cpadmin 私鑰、緊急憑證 PEM）"
-vault_login_as_ops || die "ops 身分登入失敗"
-# 正式環境這把私鑰是 CPM 產生、管理的那把；lab 用第 3 站產生的
-if vault_set ssh/cpadmin < ~/.ssh/id_ed25519; then ok "ssh/cpadmin 寫入"; else fail "ssh/cpadmin"; fi
-if cat "$KEYS_DIR/opmenu-breakglass.key" "$CERTS_DIR/opmenu-breakglass.crt" | vault_set breakglass/pem; then ok "breakglass/pem 寫入"; else fail "breakglass/pem"; fi
-vault_logout
+if [ "$OPMENU_SECRETS" = conjur ]; then
+  section "17.2 值寫進保管庫（cpadmin 私鑰、緊急憑證 PEM）"
+  vault_login_as_ops || die "ops 身分登入失敗"
+  if vault_set ssh/cpadmin < ~/.ssh/id_ed25519; then ok "ssh/cpadmin 寫入"; else fail "ssh/cpadmin"; fi
+  if cat "$KEYS_DIR/opmenu-breakglass.key" "$CERTS_DIR/opmenu-breakglass.crt" | vault_set breakglass/pem; then ok "breakglass/pem 寫入"; else fail "breakglass/pem"; fi
+  vault_logout
+else
+  ask_bank "17.2 Secrets 團隊：cpadmin 私鑰（SSH Key Manager 管的那把）與緊急憑證 PEM（$KEYS_DIR/opmenu-breakglass.key + $CERTS_DIR/opmenu-breakglass.crt）" \
+           "    放進 PVWA 的 safe，開給維運群組取用（建議雙人覆核、要填變更單號）。緊急憑證交付後操作機上的私鑰可移到離線保管。"
+fi
 
 section "17.2 role binding（conf/rbac-opmenu.txt：緊急身分 SystemAdmin、維運群組補 DescribeConfigs）"
 confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
@@ -76,7 +87,7 @@ sudo tar -xzf "$OPMENU_PACKAGE_DIR"/opmenu-*.tar.gz -C /opt || die "解開 opmen
 sudo chown -R root:root /opt/opmenu && sudo chmod -R a+rX /opt/opmenu
 # /etc/opmenu：保管庫身分（opmenu 群組可讀）、truststore、根憑證、各主機的主機金鑰（ssh 嚴格比對用）
 sudo install -d -m 0755 /etc/opmenu /etc/opmenu/ssl
-if sudo test -s /root/opmenu.key; then
+if [ "$OPMENU_SECRETS" = conjur ] && sudo test -s /root/opmenu.key; then
   sudo bash -c 'printf "login=host/%s/opmenu\napi_key=%s\n" "$1" "$(cat /root/opmenu.key)" | install -m 0640 -o root -g opmenu /dev/stdin /etc/opmenu/conjur.identity && rm -f /root/opmenu.key' _ "$VAULT_POLICY"
 fi
 sudo install -m 0644 "$CERTS_DIR/truststore.p12" /etc/opmenu/ssl/truststore.p12
@@ -86,12 +97,12 @@ ssh-keyscan -t ed25519 $(for host in $CLUSTER_HOSTS; do fqdn "$host"; done) 2>/d
 # /var/log/opmenu：選單紀錄與匯出檔（opmenu 群組可寫）
 sudo install -d -m 2775 -o root -g opmenu /var/log/opmenu
 # 設定檔只填推算不出來的值：連線位址、可重啟的服務清單、保管庫
-export ENV_LABEL=$OPMENU_ENV_LABEL VAULT_URL VAULT_ACCOUNT VAULT_POLICY BOOTSTRAP_LDAP=$BROKER_LDAP
+export ENV_LABEL=$OPMENU_ENV_LABEL OPMENU_SECRETS VAULT_URL VAULT_ACCOUNT VAULT_POLICY BOOTSTRAP_LDAP=$BROKER_LDAP
 export BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS
 BROKER_SERVICES=$(for host in $BROKERS; do printf '%s:confluent-server ' "$(fqdn "$host")"; done | sed 's/ $//')
 AUX_SERVICES=$(for host in $RESTS; do printf '%s:confluent-kafka-rest ' "$(fqdn "$host")"; done; printf '%s:confluent-control-center' "$C3_FQDN")
 CONTROLLER_HOSTS=$(for host in $CONTROLLERS; do fqdn "$host"; done | paste -sd' ')
-render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS VAULT_URL VAULT_ACCOUNT VAULT_POLICY \
+render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL OPMENU_SECRETS BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS VAULT_URL VAULT_ACCOUNT VAULT_POLICY \
   || die "render opmenu.conf"
 sudo install -m 0644 "$CONF_DIR/opmenu.conf" /etc/opmenu/opmenu.conf
 listed_items=$(sudo runuser -u "$MENU_USER" -- /opt/opmenu/opmenu.sh --list 2>/dev/null | wc -l)
@@ -120,20 +131,26 @@ if [ "$alice_count" -gt "$bob_count" ] && [ "$bob_count" -gt "$carol_count" ] &&
 else fail "選單數量不符預期：alice $alice_count、bob $bob_count、carol $carol_count"; fi
 if grep -qw 91 <<<"${visible_items[alice]}" && ! grep -qw 91 <<<"${visible_items[bob]}"; then ok "91 緊急模式只有 alice（SystemAdmin）看得到"; else fail "91 的可見性不對"; fi
 
-health_line=$(run_menu_as bob 11 | grep -E '^-- broker 在線:' | head -1)
-case $health_line in *"$(wc -w <<<"$BROKERS") / "*) ok "bob 11 健康檢查：$health_line";; *) fail "bob 11：${health_line:-無輸出}";; esac
-blocked_line=$(run_menu_as bob 31 orders.x 1 | tail -1)
-case $blocked_line in *"不在你的選單內"*) ok "bob 直接輸入 31（建 topic）被擋";; *) fail "bob 31：$blocked_line";; esac
-restart_host=${BROKERS##* }
-restart_line=$(run_menu_as bob 21 "$(fqdn "$restart_host"):confluent-server" | tail -1)
-case $restart_line in *"已重啟"*) ok "bob 21 重啟 $restart_host：$restart_line";; *) fail "bob 21：$restart_line";; esac
-for attempt in $(seq 1 30); do
-  [ "$(curl -sk -o /dev/null -w '%{http_code}' "https://$(fqdn "$restart_host"):8090/v1/metadata/id")" = 200 ] && break
-  sleep 5
-done
-if [ "$attempt" -lt 30 ]; then ok "$restart_host 的 MDS 回 200（約 $((attempt * 5)) 秒）"; else fail "$restart_host 重啟後 MDS 沒回來"; fi
-breakglass_topics=$(run_menu_as alice 91 kafka-topics --list | grep -c '^[a-z_]')
-if [ "$breakglass_topics" -gt 3 ]; then ok "alice 91 緊急模式（保管庫的備用憑證）列出 $breakglass_topics 個 topic"; else fail "alice 91：$breakglass_topics"; fi
+# 下面這幾項要動主機（ssh 用 cpadmin 私鑰）或用緊急憑證；manual 模式的值要人在終端機貼上，非互動試跑做不了
+if [ "$OPMENU_SECRETS" = manual ]; then
+  warn "OPMENU_SECRETS=manual：健康檢查、重啟、緊急模式要由維運人員互動登入試跑（貼上 PVWA 取出的私鑰）"
+else
+  health_line=$(run_menu_as bob 11 | grep -E '^-- broker 在線:' | head -1)
+  case $health_line in *"$(wc -w <<<"$BROKERS") / "*) ok "bob 11 健康檢查：$health_line";; *) fail "bob 11：${health_line:-無輸出}";; esac
+  blocked_line=$(run_menu_as bob 31 orders.x 1 | tail -1)
+  case $blocked_line in *"不在你的選單內"*) ok "bob 直接輸入 31（建 topic）被擋";; *) fail "bob 31：$blocked_line";; esac
+  restart_host=${BROKERS##* }
+  restart_line=$(run_menu_as bob 21 "$(fqdn "$restart_host"):confluent-server" | tail -1)
+  case $restart_line in *"已重啟"*) ok "bob 21 重啟 $restart_host：$restart_line";; *) fail "bob 21：$restart_line";; esac
+  for attempt in $(seq 1 30); do
+    [ "$(curl -sk -o /dev/null -w '%{http_code}' "https://$(fqdn "$restart_host"):8090/v1/metadata/id")" = 200 ] && break
+    sleep 5
+  done
+  if [ "$attempt" -lt 30 ]; then ok "$restart_host 的 MDS 回 200（約 $((attempt * 5)) 秒）"; else fail "$restart_host 重啟後 MDS 沒回來"; fi
+  breakglass_topics=$(run_menu_as alice 91 kafka-topics --list | grep -c '^[a-z_]')
+  if [ "$breakglass_topics" -gt 3 ]; then ok "alice 91 緊急模式（保管庫的備用憑證）列出 $breakglass_topics 個 topic"; else fail "alice 91：$breakglass_topics"; fi
+
+fi
 
 section "17.6 收尾檢查"
 agent_count=$(pgrep -x ssh-agent | wc -l)

@@ -11,11 +11,27 @@ source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 
-section "3.1 操作機的 ssh 金鑰"
-[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -C "cpadmin@$OPS_HOST" -f ~/.ssh/id_ed25519
-ok "公鑰：$(cat ~/.ssh/id_ed25519.pub)"
+section "3.1 操作機的 ssh 金鑰（SSH_KEY_SOURCE=$SSH_KEY_SOURCE）"
+if [ "$SSH_KEY_SOURCE" = agent ]; then
+  # 客戶：金鑰對由 CyberArk 產生與輪替，公鑰由 SSH Key Manager／CPM 推到各主機；私鑰只在這次作業的 ssh-agent 裡
+  agent_keys=$(ssh-add -l 2>/dev/null)
+  if [ -n "$agent_keys" ] && [[ $agent_keys != *"no identities"* ]]; then
+    ok "ssh-agent 裡有金鑰：$(head -1 <<<"$agent_keys")"
+  else
+    ask_bank "（工程師自己做）從 CyberArk PVWA 取出「操作機 → 各主機」cpadmin 的私鑰，貼進 ssh-agent，不要存成檔案：" \
+             "    eval \$(ssh-agent -s); ssh-add -t 4h -     （貼上私鑰後按 Ctrl-D）；作業結束：ssh-agent -k"
+    fail "ssh-agent 裡沒有金鑰"
+    wait_for_bank
+  fi
+  public_key=$(ssh-add -L | head -1)
+else
+  # lab：自己產生一把放 ~/.ssh（和手把手第 3.1 站一樣）
+  [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -C "cpadmin@$OPS_HOST" -f ~/.ssh/id_ed25519
+  public_key=$(cat ~/.ssh/id_ed25519.pub)
+fi
+ok "公鑰：$public_key"
 
-ask_bank "3.1 OS 團隊：上面這把公鑰放進每台主機（$ALL_HOSTS）cpadmin 的 authorized_keys，以及 $REPO_HOST 上 $REPO_DEPLOY_USER 的。" \
+ask_bank "3.1 OS 團隊：上面這把公鑰放進每台主機（$ALL_HOSTS）cpadmin 的 authorized_keys，以及 $REPO_HOST 上 $REPO_DEPLOY_USER 的（有 SSH Key Manager 就由它推）。" \
          "3.2 OS 團隊：每台主機信任銀行根憑證（$BANK_ROOT_CA + update-ca-trust），並有指向 OS 套件庫的 .repo（含 os-packages.txt 的套件）。" \
          "3.3 OS 團隊：JDK 21 的 tar 與 .sha256 放到 $LANDING/bank/。" \
          "3.4 AD 團隊：群組 kafka-admins、kafka-operators、kafka-devs；唯讀帳號 $AD_BIND_DN；測試人員 alice/bob/carol；" \

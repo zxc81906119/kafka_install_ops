@@ -7,7 +7,7 @@
 #   lib/common.sh             共用:項目登記、紀錄、確認、輸入驗證、執行流程、主機權限閘門、ssh 金鑰載入
 #   lib/kafka.sh              共用:以操作者身分跑 Kafka 工具、呼叫 MDS;91 用保管庫憑證
 #   lib/hosts.sh              共用:ssh 到各主機重啟、看日誌、磁碟、診斷
-#   lib/secrets/<名稱>.sh     機敏資料從哪裡取:conjur | ccp(OPMENU_SECRETS 選)
+#   lib/secrets/<名稱>.sh     機敏資料從哪裡取:conjur | ccp | manual(OPMENU_SECRETS 選;manual = 沒有 CCP,維運人員從 PVWA 取出貼上)
 #   items/<編號>-<名稱>.sh     每個選單項目一個檔:開頭 item 一行宣告,下面 run() 做事
 #
 # 用法:

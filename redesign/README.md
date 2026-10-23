@@ -114,6 +114,12 @@
   **2026-10-22 定案（客戶正式環境）：走 A 的 CCP 版**。操作機不裝 agent，安裝腳本開頭以 HTTPS 打 CCP（client 憑證＋來源 IP 驗身分）取 cpadmin 私鑰，直接 `ssh-add -` 進 ssh-agent，作業結束 `ssh-agent -k`。
   要請銀行準備：CCP 的 AppID（例如 confluent-ops，允許來源 = 操作機 IP、要求 client 憑證）、把 cpadmin 的 SSH key 帳號放進該 AppID 可讀的 safe、給操作機一張打 CCP 用的 client 憑證（可沿用 svc-ops 或另簽）。
   CCP 不需要 Conjur；Conjur 是 K8s／pipeline 用的另一條線。
+  **2026-10-23 改定案：客戶沒有 CCP／CP**（CyberArk 只用在 PSM／PSMP 代登與 SSH 金鑰輪替，應用程式端完全沒用）。上面的 CCP 版不成立，改走 **C 的不落地版**：
+  變更窗口內工程師經 PSMP 以 cpadmin 登入操作機，從 PVWA 取出「操作機 → 各主機」的 cpadmin 私鑰，直接貼進 ssh-agent（`eval $(ssh-agent -s); ssh-add -t 4h -`），
+  不寫進 `~/.ssh`；作業結束 `ssh-agent -k`。輪替仍由 SSH Key Manager／CPM 負責（推公鑰到各主機）。安裝腳本開頭只確認 ssh-agent 裡有金鑰（`SSH_KEY_SOURCE=agent`）。
+  維運期 OP menu 同一個做法：保管庫來源改 `lib/secrets/manual.sh`，選單登入後提示維運人員從 PVWA 取出私鑰貼上，只進選單自己的 ssh-agent，離開即清；緊急憑證（91）也是人工貼上。
+  影響：第 16 站 master key 只能落地 `service.env`（16.4，人工從 PVWA 取），16.8 Summon、16.9 AD 密碼注入都不適用（`SUMMON=0`、`LDAP_PASSWORD_VIA_ENV=0`）；
+  AD 查詢密碼、應用程式 SCRAM 密碼照銀行現行交付方式人工交付。
 - 2026-10-22 原廠回覆「CCP 是 for Conjur」的釐清：Confluent 自家的 csid-secrets-providers 裡 CyberArk provider **只接 Conjur API**，不接 PAM 的 CCP。
   CCP 本身是 PAM 元件，應用程式直接打 CCP 拿 SCRAM 密碼不受影響；受影響的是平台端 properties 的密碼：
   銀行只有 PAM 時用不了該 provider → 維持 Secret Protection（master key 交 CyberArk 保管）。有 Conjur Enterprise ＋ Vault Synchronizer 才可能用。
@@ -239,7 +245,7 @@
 | 網路 | port 清單誰開、主機 firewalld 可否由我們管；DNS 或 /etc/hosts、FQDN；NTP 來源；REST 前的 LB 型態與 VIP；C3 9021 從哪個網段連 |
 | 憑證 | CA 申請流程與時程；會不會改 SAN／EKU、serverAuth＋clientAuth 同一張可否；回覆格式；效期與輪替；根憑證進 OS trust store／JDK cacerts 由誰 |
 | AD | svc-mds-bind 誰建、可否兩組 A／B；群組命名與管理；LDAPS 用哪台 DC、憑證、備援；人員 AD 帳密登入 C3 可否、MFA |
-| CyberArk | 元件清單（照功能問）；CCP AppID 申請與驗身分；CPM 管 cpadmin 金鑰與 from= 限制；Conjur 有無與型態、host 身分、policy 誰載、443 通否；只有 PAM 時 master key 放哪個 safe；保管庫故障時平台能否重啟 |
+| CyberArk | （2026-10-23 已知：只有 PSM／PSMP 代登＋SSH 金鑰輪替，無 CCP／CP／Conjur）PVWA 取用私鑰與 master key 要不要雙人覆核、要填什麼單號；master key 放哪個 safe；應用程式現在怎麼拿資料庫密碼（SCRAM 照同一套）；元件清單（照功能問）；CCP AppID 申請與驗身分；CPM 管 cpadmin 金鑰與 from= 限制；Conjur 有無與型態、host 身分、policy 誰載、443 通否；只有 PAM 時 master key 放哪個 safe；保管庫故障時平台能否重啟 |
 | 應用程式 | 直連 SCRAM 或經 REST 各幾個；app 怎麼拿密碼、認證失敗會否重取；topic 命名與配額；client 語言與 SCRAM-SHA-512 支援 |
 | 監控維運 | 日誌送 SIEM 方式與保留；行內 Prometheus 抓 JMX exporter；稽核日誌保留與去向；變更時段；冷開機順序 |
 
