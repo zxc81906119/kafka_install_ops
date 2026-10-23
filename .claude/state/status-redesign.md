@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-23 晚（master key 保管定案、圖箭頭修正、docx 已重建；lab 在跑）
+Updated: 2026-10-23 晚（使用者要從第 0 章重頭驗證：lab 已刪除）
 
 ## 現在在做什麼
 安裝流程重新設計（使用者主導、Claude 記錄）＋ `install/` 一章一支的安裝腳本（照手把手文件），以 `lab` 專案實跑驗證。
@@ -22,7 +22,7 @@ Updated: 2026-10-23 晚（master key 保管定案、圖箭頭修正、docx 已�
 - 本輪任務都完成；等使用者決定下一個題目。從未 push。
 
 ## 環境狀態
-- lab: `lab` 專案 **在跑**（Secret Protection＋Summon＋16.9 模式；CA 已換成 G2；MDS token 金鑰已換新，ops02 ~/pki 舊的 .old；OP menu 0655fe43）。Conjur 三容器、dl01 也在跑。停：`cd ~/kafka-lab && docker compose -f compose.yml -f conjur.yml stop && docker stop dl01`
-  重開：`cd ~/kafka-lab && docker compose -f compose.yml -f conjur.yml start && docker start dl01`
+- lab: **已刪除**（2026-10-23，使用者要從第 0 章重頭驗證）：18 個容器、6 個 volume、網路，以及 ~/kafka-lab 的 ca、conjur、bank-os-repo、bank-prometheus、secrets.env、compose 檔。
+  保留：~/kafka-lab/landing（3.1 GB 下載，含 opmenu 最新包）、~/kafka-lab/images、docker image（lab-node 等）。照手把手第 0 章重建。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。

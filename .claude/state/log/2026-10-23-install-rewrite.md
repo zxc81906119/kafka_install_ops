@@ -44,3 +44,4 @@
 - master key 保管（使用者定案：兩個都存、分開兩個 object 同一個 safe）。lab 實測：generate 每次換 salt（passphrase 算不回 master key）；rotate 要 master key＋舊 passphrase。
   install：VAULT_ACCESS=api|manual；16.2 產生後先交保管（api 寫保管庫；manual 停下等 PVWA、custody 檔「雜湊 單號」），確認後才派送。manual 用隔離複本驗 4 情況；api 重跑 16 → 20 驗收 39/39。
   手把手 16：intro、16.1 開兩個變數、16.2 更正錯誤說法＋存 master key、16.6 輪替後存新 key、16.7 CyberArk 角色／擋得住擋不住／遺失怎麼辦、16.8 只加 hosts 讀權（policy 在 lab Conjur 驗 201）；壞掉的 tr -d 換行修好。redesign 加定案段。docx 待使用者關閉 Word 後重建。
+- 使用者要求從第 0 章重頭驗證：lab 全刪（留 landing、images、docker image）。
