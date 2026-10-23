@@ -11,3 +11,7 @@
   第 4 站 `dnf list available` 在已裝主機只剩沒裝的套件 → 改 `repoquery`；第 8 站 `versionlock add` 對已鎖套件會加重複行 → 先查清單再加（手把手第 8 站的指令也有同樣行為，14.2「裝套件可重跑」那列待補一句，docx 未重建）。
   格式化、CSR、mds-token、密碼檔、cluster id 都正確略過；服務 restart 後 quorum／MDS／REST／C3 全部回 200。
 - 收尾：journey 14.2 補 versionlock 重跑註記、docx 重建；lab 全部 stop。
+- 16.9（AD 查詢密碼改 Summon 注入 + Kafka 內建 EnvVarConfigProvider）在 lab 實跑通過並併入 journey（docx 重建）；redesign 第 11 節補實作結果與「密碼放法決策樹」三題。
+  lab 準備：15.1–15.2（Conjur、policy、host key、值）+ 全部第 16 章（含 16.8 Summon）用 run-chapter.js 部分重跑；install/ 不產生 ~/conf/*.tpl，16.3 需要時先把第 10/12/13 章的 heredoc 範本放回去。
+  踩到：`confluent secret` 改寫後 properties 是 `key = value`，sed 要容許空白；alice 登入 200 證明不了 bind 可用（群組快取），要用「重啟後建 topic」這種需要群組查詢的動作。
+- 下一個：install/ 延伸站 15–19 與驗收 20（主線驗 16+16.8+16.9、17、18、19、20；15 單獨驗）。

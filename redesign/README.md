@@ -127,6 +127,13 @@
   - Secret Protection 可用：同一份 security.properties 發所有主機，master key 走 `EnvironmentFile=/etc/confluent/service.env`（0600）；master key 輪替 = rotate → 重派兩個檔 → 滾動重啟，全程 20 分鐘內。
   - 兩者都是啟動時讀一次，密碼輪替都要滾動重啟。
   - Summon（CyberArk 開源）可讓 Secret Protection 的 master key 不落地：`ExecStart=summon -p summon-conjur -f secrets.yml <原啟動腳本>`，值只在子程序環境變數；代價是啟動時保管庫要在線；主機上剩 /etc/conjur.identity（host 身分）。接 PAM 的 CCP 沒有官方 provider，可自寫（stdin 給 id、stdout 回值）。
+  - **16.9（2026-10-23 lab 驗過）**：Secret Protection 的本質是密文「凍」在 security.properties，CPM 換了 AD 查詢密碼 broker 不會跟上。解法：那一個欄位不加密，由 Summon 把保管庫的值注入環境變數、properties 用 Kafka 內建 `EnvVarConfigProvider`（`config.providers = securepass,env`、`ldap.java.naming.security.credentials = ${env:LDAP_BIND_PASSWORD}`），不需 csid jar。
+    驗證：改完滾動重啟後 alice 經 LDAP listener 建 topic 成功（群組查詢靠 bind 帳號、快取為空）、kb01 日誌 0 筆 LDAP 認證錯誤；AD 改密碼＋保管庫更新後只滾動重啟即生效。注意 `confluent secret` 改寫過的 properties 是 `key = value`（有空白）。
+- **密碼放法決策樹（給客戶的三題，2026-10-23）**：
+  1. 有 Conjur？有 → 第 15 站（全部 `${cyberark:…}`，密碼不落地）。沒有 → 2。
+  2. 保管庫故障時平台要能重啟？要 → 16.4（master key 落地 service.env）。可接受不行 → 16.8（Summon 不落地）。
+  3. AD 查詢密碼由 CPM 管？是 → 加 16.9（該欄位改 Summon 注入），並開 A／B 兩組查詢帳號、CPM 只在放行時輪替。否 → 留在密文，換密碼走 16.3 重算。
+  其他組合技術上可行但多一條信任鏈，不推薦。
 - 只有 PAM 又想不落地：方案 A = FileConfigProvider ＋ systemd ExecStartPre 以 client 憑證打 CCP REST 寫到 tmpfs（/run，0700）；方案 B = 自寫 CCP ConfigProvider jar。PoC 先用 Secret Protection。
 
 ### 3. 操作機 ssh 進各主機的 cpadmin

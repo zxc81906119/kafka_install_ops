@@ -102,7 +102,7 @@
 | 9 憑證 | 15 分 | — |
 | 10–13 設定、啟動、權限、REST、C3 | 40 分 | 每段啟動要等健康檢查；C3 第一次起來 1–2 分鐘 |
 | 15 Conjur（延伸） | 40 分 | 下載機建 jar 要 15–20 分；之後是改設定與滾動重啟 |
-| 16 Secret Protection（延伸） | 20 分 | 加密、派送、兩次滾動重啟 |
+| 16 Secret Protection（延伸） | 30 分 | 加密、派送、滾動重啟；16.8 Summon、16.9 AD 密碼改注入各再滾一輪 |
 | 17 OP menu（延伸） | 20 分 | 保管庫加身分、裝選單、改 sudoers、三種身分試跑 |
 | 18 JMX exporter（延伸） | 20 分 | 派送、滾動重啟、行內 Prometheus 驗證 |
 | 19 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
@@ -2879,6 +2879,98 @@ kb01 main pid 7764 = summon; java child has MASTER_KEY in env: 1 ; on disk: 0 fi
 主程序是 Summon，Java 是它的子程序，`systemctl stop` 送的訊號 Summon 會轉給子程序，停機和原本一樣。現在主機上和 master key 有關的只剩 `/etc/conjur.identity`（主機的 Conjur 身分）：這就是 secret zero，和第 15 站的 host API key 是同一把。
 
 > 什麼時候不要用 Summon：如果銀行要求「保管庫故障時平台仍能重啟」，就留在 16.4 的 `service.env` 作法。兩者的差別只有啟動時要不要連得到保管庫。
+
+## 16.9 選配：AD 查詢密碼不凍在密文裡，啟動時從保管庫注入
+
+@role 小安 | ops02 | cpadmin
+
+Secret Protection 有一個本質上的脫鉤：密碼加密後「凍」在 `security.properties`，CyberArk 只是保存一份副本。CPM 替 AD 查詢帳號（`svc-mds-bind`）換了密碼，broker 不會知道，一定要有人重算密文、派送、滾動重啟。對 keystore 這類我們自己管的密碼沒差；對由 CPM 管的 AD 密碼，可以換一條路：**不加密它，啟動時由 Summon 從保管庫取回放進環境變數，properties 用 Kafka 內建的 `EnvVarConfigProvider` 讀環境變數**。不需要任何額外的 jar，`securepass` 和 `env` 兩個 provider 並存，各管各的欄位。
+
+```
+CPM 換密碼 ──▶ AD                                 broker 啟動
+            └─▶ 保管庫 kafka/ldap-bind-password ──▶ Summon 取值 → 環境變數 LDAP_BIND_PASSWORD ──▶ ${env:LDAP_BIND_PASSWORD}
+                                                    （master key 也是同一趟 Summon 給的）
+```
+
+保管庫裡要有這個值（15.2 寫過；只做過 16 沒做 15.2 的話這一行會補上，值相同就是覆蓋）：
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '\n' < ~/secrets/ldap-bind.pass | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password && unset T && echo "conjur: kafka/ldap-bind-password set"
+```
+
+```out
+conjur: kafka/ldap-bind-password set
+```
+
+7 台 controller 與 broker（LDAP 設定在共用區塊，兩種都有）：`secrets.yml` 多一行、properties 三處改法（`confluent secret` 改寫過的檔是 `key = value`，等號兩邊有空白，sed 要容許）——`config.providers` 加上 `env`、宣告 `env` 的 class、`ldap.java.naming.security.credentials` 從 `${securepass:…}` 改成 `${env:LDAP_BIND_PASSWORD}`。改完以服務帳號試跑 Summon，確認取回的值和操作機手上的一樣：
+
+```bash
+B=$(tr -d '\n' < ~/secrets/ldap-bind.pass | sha256sum | cut -c1-12) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab "grep -q '^LDAP_BIND_PASSWORD:' /etc/confluent/secrets.yml || echo 'LDAP_BIND_PASSWORD: !var kafka/ldap-bind-password' | sudo tee -a /etc/confluent/secrets.yml >/dev/null; f=/etc/confluent/kafka/server.properties; sudo sed -i -e 's|^config.providers *=.*|config.providers = securepass,env|' -e '/^config.providers.env.class *=/d' -e 's|^ldap.java.naming.security.credentials *=.*|ldap.java.naming.security.credentials = \${env:LDAP_BIND_PASSWORD}|' \$f && echo 'config.providers.env.class = org.apache.kafka.common.config.provider.EnvVarConfigProvider' | sudo tee -a \$f >/dev/null && a=\$(sudo -u cp-kafka /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml printenv LDAP_BIND_PASSWORD | tr -d '\n' | sha256sum | cut -c1-12) && echo \"\$(hostname): providers=\$(sudo grep '^config.providers *=' \$f | sed 's/.*= *//') env-refs=\$(sudo grep -c 'env:LDAP_BIND_PASSWORD' \$f) securepass-refs=\$(sudo grep -c 'securepass:' \$f) summon-value=\$([ \$a = $B ] && echo matches || echo MISMATCH)\""; done
+```
+
+```out
+kc01: providers=securepass,env env-refs=1 securepass-refs=10 summon-value=matches
+kb01: providers=securepass,env env-refs=1 securepass-refs=16 summon-value=matches
+（7 行；securepass 的參照比 16.3 少 1 個，就是搬去 env 的那個）
+```
+
+滾動重啟 controller、broker。驗證要挑一個**非得用查詢帳號不可**的動作：alice 登入只用她自己的帳密，群組快取也撐得住，看不出 bind 有沒有成功；重啟後快取是空的，alice 透過 LDAP listener 建 topic 時，MDS 必須先用查詢帳號到 AD 找出她的群組才會放行。再從 kb01 的程序環境證明密碼在環境變數裡、日誌沒有 LDAP 認證錯誤：
+
+```bash
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; [ -f ~/conf/client-alice.properties ] || (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="alice" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/ad-test-users.pass)" "$(cat ~/pki/store.pass)" > ~/conf/client-alice.properties); t=ldap-check-$(date +%s); echo "alice（群組 kafka-admins）建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 java env has LDAP_BIND_PASSWORD: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^LDAP_BIND_PASSWORD="); credentials line: $(sudo grep "^ldap.java.naming.security.credentials" /etc/confluent/kafka/server.properties | sed "s/^[^=]*= *//"); ldap auth errors since restart: $(sudo journalctl -u confluent-server --since -5min --no-pager 2>/dev/null | grep -ci "AuthenticationException\|LDAP search failed")"'
+```
+
+```out
+kc01 active
+（3 行）
+kb01 MDS=200
+（4 行）
+alice（群組 kafka-admins）建 topic：Created topic
+kb01 java env has LDAP_BIND_PASSWORD: 1; credentials line: ${env:LDAP_BIND_PASSWORD}; ldap auth errors since restart: 0
+```
+
+`security.properties` 裡舊的 `ldap.java.naming.security.credentials` 密文還在，只是沒有人參照它；下次 `confluent secret file remove` 清掉即可。
+
+### 演練：CPM 換了 AD 密碼，平台怎麼跟上
+
+@role 銀行 AD 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+正式環境這一步是 CPM：改 AD、更新保管庫，一次完成。lab 用 samba-tool 改密碼、再寫進 Conjur；小安這次**什麼都不用拿**：
+
+```bash
+docker exec lab-ad01-1 bash -c 'P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"' && cd ~/kafka-lab && docker exec lab-ad01-1 cat /root/secrets/bind.pass > conjur/keys/bind-new.txt && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/keys/bind-new.txt https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password && echo "vault: kafka/ldap-bind-password updated"'; rm -f conjur/keys/bind-new.txt
+```
+
+```out
+AD: password changed
+vault: kafka/ldap-bind-password updated
+```
+
+@role 小安 | ops02 | cpadmin
+
+不重算密文、不派送任何檔案，只滾動重啟；起來的那台就拿到新密碼。操作機本地的 `ldap-bind.pass` 已經是舊的，順手從保管庫取回更新（之後 16.3 若重做加密才會用到）：
+
+```bash
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; t=ldap-rotated-$(date +%s); echo "換密碼後 alice 建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; echo "kb01 ldap auth errors since restart: $(ssh kb01.poc.lab 'sudo journalctl -u confluent-server --since -5min --no-pager 2>/dev/null | grep -ci "AuthenticationException\|LDAP search failed"')"; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && HT=$(sudo cat /etc/confluent/conjur/host.key | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fops02/authenticate | base64 -w0) && (umask 077; curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password > ~/secrets/ldap-bind.pass) && unset HT && echo "ops02: ldap-bind.pass refreshed from vault"
+```
+
+```out
+kc01 active
+（3 行）
+kb01 MDS=200
+（4 行）
+換密碼後 alice 建 topic：Created topic
+kb01 ldap auth errors since restart: 0
+ops02: ldap-bind.pass refreshed from vault
+```
+
+> 和 15.7 一樣的提醒：滾動重啟期間，還沒重啟的 broker 用舊密碼 bind 會失敗，靠 AD 群組快取撐著。正式環境用 A／B 兩組查詢帳號交替，CPM 只准輪替閒置的那組，就沒有這個空窗。
+
+| 密碼 | 誰管輪替 | 放法 | 換了之後要做什麼 |
+|---|---|---|---|
+| keystore、truststore | 我們（換憑證時） | Secret Protection 密文 | 重算密文、派送、滾動重啟（16.3–16.5） |
+| AD 查詢帳號 | CPM | 保管庫 → Summon → `${env:…}` | 只滾動重啟 |
+| master key | 我們（依變更單） | 保管庫 → Summon | 16.6 + 16.8 的寫回保管庫，滾動重啟 |
 
 # 17. 第十七站：維運選單（OP menu）
 
