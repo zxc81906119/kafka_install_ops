@@ -270,6 +270,7 @@
 ### 升級與日常修補（2026-10-24 定案，待實作）
 
 - 範圍：**Confluent 小版與 patch**（滾動升級、回滾、features 升版）、**Control Center**、**JDK**（銀行交付新版 tar）、**OS 修補**（滾動 dnf update，Confluent 與 JDK 由 versionlock 保護）。
+- **JDK 情境＝升 8.3 時一起從 21 換到 25**（使用者定案）。8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（官方相容表）→ 分三段：① 8.2.4→8.3.2（維持 JDK 21，可 `dnf downgrade` 回滾）② JDK 21→25 逐台滾動（切 `/opt/java/current`，退回＝切回 21）③ 兩段都驗過才 features 升版（finalize）。要回 8.2 時先切回 JDK 21 再 downgrade。**C3 留在 JDK 21**（官方未寫 C3 2.6 支援 25）。
 - 形式：和第 21 章一樣，先寫手把手新章（手打、lab 實跑），再寫 `install/steps/22-*.sh`（隨時執行，不在安裝順序裡）。
 - lab 演練：用 `install/` 以 **8.2.4** 從零裝一套（硬碟上 `packages/rpm/confluent/` 有整套 8.2.4，或照第 1 站重新下載），再照新章升到 8.3.2；持續流量下量測遺失與失敗。C3 與 JDK 的演練要另外下載舊一版（C3 2.6.0 或更早、另一個 JDK 21.x）。
 - 官方做法（CP 8.3 升級文件，2026-10-24 查）：
