@@ -52,3 +52,4 @@
 - 驗證 A（文件）：客戶模式從零 8.2.4（53 分，38/38）→ 照手把手第 22 章 13 塊（22.9 回滾移到 finalize 前、加 kb04 升回）全部 rc=0 → 驗收 38/38。文件修：22.1 預期輸出少已安裝那行、JDK 21 版本號改 21.0.x。22-upgrade.sh 加 ONLY_HOSTS（回滾後單台升回）。
 - 使用者要用記憶體：中斷驗證 B（packages 中途）、停容器、關 Docker Desktop、wsl --shutdown。審查 23 項已修（d7f4c31），待全書實跑驗證。
 - 2026-10-24 夜：run-upgrade-drill.sh（新）全流程通過：客戶模式 8.2.4 → 22-upgrade.sh plan/backup/packages（驗收 38/38）/jdk 25（38/38）/rollback kb04/ONLY_HOSTS 升回/finalize 不帶確認停下、帶確認升版（38/38）；直連 7367/7367 遺失 0、REST 1/1360（402，controller 期間）。
+- 全書實跑（lab 模式）抓到兩個文件缺陷：(1) 21.3.3 我方 leaf 用 G2 重簽只寫成一句話，執行工具（與讀者）會跳過 → 階段三拿掉舊根後 broker 驗不過 controller、整個叢集起不來；已改成 7 塊可執行指令＋階段三前的端點檢查；21-cert-rotate.sh trust-sync 加同樣的閘門。(2) 17.4 收掉 kb04 全權 sudo 沒放回 → 18.2、19.2、21.x 在 kb04 靜默失敗；章末加還原。另：21.2.5 備份目錄帶時間（同一天兩輪會互蓋）。根憑證續簽（同 key 同名）實測：舊 leaf 驗得過新根（openssl），不必重簽。

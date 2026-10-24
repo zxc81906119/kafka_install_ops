@@ -3265,6 +3265,18 @@ kb04 full sudo restored for the rest of the lab
 
 > 最後一行只是 lab 的事：後面的章節還需要 cpadmin 的全權。正式環境各主機只留 `cpadmin-ops` 那份窄規則。
 
+@role 銀行 OS 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+17.4 為了證明「只剩窄規則時選單仍能重啟」，把 kb04 的全權 sudo 收掉了。正式環境的全權是變更時段由 OS 團隊依變更單開、做完收回；lab 後面的章節（第 18、19、21、22 章）都還要在 kb04 上安裝與派送，所以演練完把它放回去，當作「下一個變更時段開了全權」：
+
+```bash
+docker exec lab-kb04-1 bash -c 'mv /root/cpadmin.sudoers.full /etc/sudoers.d/cpadmin && visudo -cf /etc/sudoers.d/cpadmin >/dev/null && echo "kb04: full sudo back (change window)"'
+```
+
+```out
+kb04: full sudo back (change window)
+```
+
 # 18. 第十八站：讓行內的 Prometheus 抓指標（JMX exporter）
 
 ![jmx]
@@ -3973,10 +3985,10 @@ c3-01 UI=200 9021=new 9090=new
 
 @role 小安 | ops02 | cpadmin
 
-舊的整份留到 `~/pki/old-<日期>/`，新的放回正本位置。操作機自己用的 `svc-ops`、`kafka-internal`（管理 client、quorum 查詢）換成新的之後馬上試一次；緊急身分 `opmenu-breakglass` 要更新保管庫裡那份；`app-legacy-billing` 是應用程式的憑證，**交給應用程式團隊在他們的時段換**（舊的到期前都還有效）：
+舊的整份留到 `~/pki/old-<日期時間>/`，新的放回正本位置。操作機自己用的 `svc-ops`、`kafka-internal`（管理 client、quorum 查詢）換成新的之後馬上試一次；緊急身分 `opmenu-breakglass` 要更新保管庫裡那份；`app-legacy-billing` 是應用程式的憑證，**交給應用程式團隊在他們的時段換**（舊的到期前都還有效）：
 
 ```bash
-cd ~/pki && OLD=old-$(date +%Y%m%d) && install -d -m 0700 $OLD/keys $OLD/certs && for n in $(awk '{print $1}' requests.txt); do mv keys/$n.key $OLD/keys/; mv certs/$n.crt certs/$n.p12 $OLD/certs/; install -m 0600 next/keys/$n.key keys/; install -m 0644 next/certs/$n.crt certs/; install -m 0600 next/certs/$n.p12 certs/; done && rm -rf next && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | wc -l) 個 topic" && echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')" && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat keys/opmenu-breakglass.key certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && unset T && echo "breakglass：保管庫已更新" && echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)；舊的（還在效期內）：REST=$(curl -s --cert $OLD/certs/app-legacy-billing.crt --key $OLD/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)"
+cd ~/pki && OLD=old-$(date +%Y%m%d-%H%M) && install -d -m 0700 $OLD/keys $OLD/certs && for n in $(awk '{print $1}' requests.txt); do mv keys/$n.key $OLD/keys/; mv certs/$n.crt certs/$n.p12 $OLD/certs/; install -m 0600 next/keys/$n.key keys/; install -m 0644 next/certs/$n.crt certs/; install -m 0600 next/certs/$n.p12 certs/; done && rm -rf next && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | wc -l) 個 topic" && echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')" && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat keys/opmenu-breakglass.key certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && unset T && echo "breakglass：保管庫已更新" && echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)；舊的（還在效期內）：REST=$(curl -s --cert $OLD/certs/app-legacy-billing.crt --key $OLD/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)"
 ```
 
 ```out
@@ -4103,7 +4115,107 @@ conjur.poc.lab:443 PoC Bank Issuing CA G2
 
 @role 小安 | ops02 | cpadmin
 
-接著**照 21.2.1 到 21.2.5 整個做一次**，唯一的差別是 21.2.2 銀行改用 `ca/g2/sign.sh` 簽。21.2.3 的檢查裡 `issuer` 那一欄要全部是 `PoC Bank Issuing CA G2`；`chain=ok` 是對 bundle 驗的（新根在裡面）。
+接著我方的每一張憑證都要改由 G2 簽：**把 21.2.1 到 21.2.5 整個再做一次**，唯一的差別是銀行改用 `ca/g2/sign.sh`。下面照順序列出同一組指令（`chain=ok` 是對 bundle 驗的，新根在裡面）：
+
+**21.2.1 新私鑰與 CSR**
+
+```bash
+install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/incoming ~/pki/next/certs && cd ~/pki && while read -r name eku san; do (umask 077; openssl genrsa -out next/keys/$name.key 2048 2>/dev/null); ext=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$eku"); [ "$san" != "-" ] && ext+=(-addext "subjectAltName=$(echo "$san" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -)"); openssl req -new -key next/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" "${ext[@]}" -out next/requests/$name.csr && echo "$name: csr ok"; done < requests.txt
+```
+
+```out
+kafka-internal: csr ok
+（7 行）
+```
+
+**21.2.2 銀行改用 G2 簽**
+
+@role 銀行 CA 窗口 | Windows 終端 | 本機
+
+```bash
+cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed && docker cp lab-ops02-1:/home/cpadmin/pki/next/requests "$(cygpath -m "$PWD/ca/exchange/next/")" && for f in ca/exchange/next/requests/*.csr; do n=$(basename $f .csr); bash ca/g2/sign.sh "$f" "ca/exchange/next/signed/$n.crt"; done && for f in ca/exchange/next/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/home/cpadmin/pki/next/incoming/; done && docker exec lab-ops02-1 bash -c 'chown cpadmin:cpadmin /home/cpadmin/pki/next/incoming/*; ls /home/cpadmin/pki/next/incoming | wc -l'
+```
+
+```out
+signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
+（7 行）
+7
+```
+
+**21.2.3 檢查（issuer 要是 G2）**
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do awk -v n=$n 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$n.crt; mv incoming/$n.part1 incoming/$n.leaf.pem; cat incoming/$n.part[2-9] > incoming/$n.issuers.pem 2>/dev/null; rm -f incoming/$n.part*; done; while read -r name eku san; do leaf=incoming/$name.leaf.pem; k1=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16); k2=$(openssl pkey -in keys/$name.key -pubout 2>/dev/null | sha256sum | cut -c1-16); cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'); have_san=$(openssl x509 -in $leaf -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,); want_san=$([ "$san" = "-" ] && echo "" || echo "$san" | tr ',' '\n' | sort | paste -sd,); have_eku=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '); days=$(( ($(date -d "$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); chain=$(openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf 2>&1 | grep -c ": OK"); issuer=$(openssl x509 -in $leaf -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'); printf '%-19s key=%s cn=%s san=%s days=%s chain=%s issuer=%s\n' $name $([ $k1 = $k2 ] && echo ok || echo MISMATCH) $([ "$cn" = "$name" ] && echo ok || echo "$cn") $([ "$have_san" = "$want_san" ] && echo ok || echo DIFF) $days $([ $chain = 1 ] && echo ok || echo FAIL) "$issuer"; done < ../requests.txt
+```
+
+```out
+kafka-internal      key=ok cn=ok san=ok days=364 chain=ok issuer=PoC Bank Issuing CA G2
+（7 行，全部 ok）
+```
+
+**21.2.3 做成 keystore**
+
+```bash
+cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do cat incoming/$n.leaf.pem incoming/$n.issuers.pem > certs/$n.crt; openssl pkcs12 -export -name $n -inkey keys/$n.key -in certs/$n.crt -out certs/$n.p12 -passout file:../store.pass && chmod 0600 certs/$n.p12; done; ls certs | wc -l; for n in kafka-internal cp-server; do echo "$n: old=$(openssl x509 -in ../certs/$n.crt -noout -serial | tail -c 9) new=$(openssl x509 -in certs/$n.crt -noout -serial | tail -c 9)"; done
+```
+
+```out
+14
+kafka-internal: old=F343BC55 new=F343BC5D
+cp-server: old=F343BC54 new=F343BC5C
+```
+
+**21.2.4 派送、滾動重啟 controller 與 broker**
+
+```bash
+cd ~/pki/next && NEW_INT=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2) NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in kc01 kc02 kc03; do scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-internal.p12 /etc/confluent/ssl/ && rm -f /tmp/kafka-internal.p12 && sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done'; for i in $(seq 1 30); do [ "$(served $h.poc.lab:9093)" = $NEW_INT ] && break; sleep 2; done; echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$([ "$(served $h.poc.lab:9093)" = $NEW_INT ] && echo new || echo OLD)"; done; for h in kb01 kb02 kb03 kb04; do scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in kafka-internal.p12 cp-server.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) 9092=$([ "$(served $h.poc.lab:9092)" = $NEW_INT ] && echo new || echo OLD) 9095=$([ "$(served $h.poc.lab:9095)" = $NEW_SRV ] && echo new || echo OLD)"; done
+```
+
+```out
+kc01 active 9093=new
+（3 行）
+kb01 MDS=200 9092=new 9095=new
+（4 行）
+```
+
+**21.2.4 REST Proxy 與 C3**
+
+```bash
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in rest01 rest02; do scp -q certs/cp-server.p12 certs/svc-rest.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters) 8082=$([ "$(served $h.poc.lab:8082)" = $NEW_SRV ] && echo new || echo OLD)"; done; scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+```
+
+```out
+rest01 REST=200 8082=new
+rest02 REST=200 8082=new
+c3-01 UI=200 9021=new 9090=new
+```
+
+**21.2.5 換成正本**
+
+```bash
+cd ~/pki && OLD=old-$(date +%Y%m%d-%H%M) && install -d -m 0700 $OLD/keys $OLD/certs && for n in $(awk '{print $1}' requests.txt); do mv keys/$n.key $OLD/keys/; mv certs/$n.crt certs/$n.p12 $OLD/certs/; install -m 0600 next/keys/$n.key keys/; install -m 0644 next/certs/$n.crt certs/; install -m 0600 next/certs/$n.p12 certs/; done && rm -rf next && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | wc -l) 個 topic" && echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')" && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat keys/opmenu-breakglass.key certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && unset T && echo "breakglass：保管庫已更新" && echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)；舊的（還在效期內）：REST=$(curl -s --cert $OLD/certs/app-legacy-billing.crt --key $OLD/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)"
+```
+
+```out
+svc-ops 管理 client：14 個 topic
+kafka-internal 查 quorum：LeaderId: 1
+breakglass：保管庫已更新
+新的 app-legacy-billing（交給應用程式團隊）：REST=200；舊的（還在效期內）：REST=200
+```
+
+> 陷阱：這一段**一定要做完才能進階段三**。只有銀行的伺服器換成 G2、我方的 leaf 還是舊 CA 簽的就拿掉舊根，broker 驗不過 controller 的憑證，整個叢集起不來（lab 實際發生過：broker 一直重啟、MDS 不回應）。
+
+最後確認每個端點出示的都是 G2 簽的憑證，全部是才往下：
+
+```bash
+bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 rest01.poc.lab:8082 rest02.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090; do i=$(openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/.*CN *= *//; s/,.*//'); [ "$i" = "PoC Bank Issuing CA G2" ] || { echo "$ep 出示的是：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "13 個端點都是 G2 簽的：可以進階段三"
+```
+
+```out
+13 個端點都是 G2 簽的：可以進階段三
+```
 
 ### 21.3.4 階段三：拿掉舊根
 

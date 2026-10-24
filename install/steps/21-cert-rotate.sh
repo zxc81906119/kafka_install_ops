@@ -189,6 +189,15 @@ trust_sync() {
   section "信任清單同步：以 $BANK_ROOT_CA 為準（銀行 OS 團隊先換好；換 CA 階段一是新舊兩張、階段三只剩新的）"
   root_count=$(grep -c 'BEGIN CERTIFICATE' "$BANK_ROOT_CA")
   [ "$root_count" -ge 1 ] || die "$BANK_ROOT_CA 裡沒有憑證"
+  # 先確認每個端點出示的憑證都驗得過「即將生效」的信任清單。換 CA 階段三（只剩新根）時，
+  # 我方的 leaf 若還是舊 CA 簽的，同步下去 broker 就驗不過 controller、整個叢集起不來（lab 實際發生過）
+  local endpoint verify_code unverified=0
+  for endpoint in $ENDPOINTS; do
+    verify_code=$(openssl s_client -connect "${endpoint%=*}" -servername "${endpoint%%:*}" -CAfile "$BANK_ROOT_CA" </dev/null 2>/dev/null \
+                  | sed -n 's/.*Verify return code: \([0-9]*\).*/\1/p' | tail -1)
+    if [ "$verify_code" = 0 ]; then ok "${endpoint%=*} 驗得過"; else fail "${endpoint%=*} 驗不過（${verify_code:-沒有回應}）"; unverified=1; fi
+  done
+  [ "$unverified" = 0 ] || die "有端點出示的憑證驗不過新的信任清單：先做 leaf（銀行用新 CA 簽），再同步；什麼都沒改"
   local work_dir; work_dir=$(mktemp -d)
   # 把 bundle 拆成一張一張，以 CN 當 alias 重建 truststore（舊的留 .old）
   awk -v out="$work_dir/root-" 'BEGIN{n=0} /BEGIN CERT/{n++} n>0 {print > (out n ".pem")}' "$BANK_ROOT_CA"
