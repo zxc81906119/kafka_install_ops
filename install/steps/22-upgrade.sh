@@ -121,7 +121,8 @@ backup() {
   section "22.2 備份 → $backup_dir"
   install -d -m 0700 "$backup_dir"
   for host in $CLUSTER_HOSTS; do
-    if ssh_run "$host" 'sudo tar -czf - -C / etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > "$backup_dir/$host.tar.gz"
+    # master key（service.env）與保管庫身分不進備份：正本在 CyberArk，備份檔就不必當機敏資料保管
+    if ssh_run "$host" 'sudo tar -czf - -C / --exclude=etc/confluent/service.env --exclude=etc/confluent/conjur etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > "$backup_dir/$host.tar.gz"
     then ok "$host $(du -h "$backup_dir/$host.tar.gz" | cut -f1)"; else fail "$host 備份失敗"; fi
   done
   features describe > "$backup_dir/features.txt"

@@ -73,7 +73,7 @@ prepare() {
     docker run --rm -v "$(windows_path "$LAB/bank-os-repo"):/out" lab-node:1 bash -c '
 set -e
 R="--disablerepo=* --enablerepo=baseos,appstream,extras"
-dnf -q $R download --resolve --arch x86_64 --arch noarch --destdir /out/Packages java-21-openjdk-headless chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion
+dnf -q $R download --resolve --arch x86_64 --arch noarch --destdir /out/Packages chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion
 dnf -q -y $R install createrepo_c >/dev/null
 createrepo_c -q /out
 ls /out/Packages | wc -l'
