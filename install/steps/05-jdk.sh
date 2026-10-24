@@ -12,7 +12,8 @@ source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 
 section "壓縮檔與頂層目錄"
-JDK_TAR=$(ls "$LANDING"/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz 2>/dev/null | head -1)
+# bank/ 裡可能同時有新舊幾版（之後的 JDK 修補也放這裡）：依版本號排序挑最新的
+JDK_TAR=$(ls "$LANDING"/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz 2>/dev/null | sort -V | tail -1)
 [ -n "$JDK_TAR" ] || die "$LANDING/bank 裡沒有 JDK tar"
 (cd "$LANDING/bank" && sha256sum -c --quiet "$(basename "$JDK_TAR").sha256") || die "JDK sha256 不符"
 JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1)   # 例如 jdk-21.0.12+1

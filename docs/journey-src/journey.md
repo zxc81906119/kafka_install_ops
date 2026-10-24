@@ -1000,10 +1000,10 @@ dnf -q --repofrompath=cp-test,https://repo01.poc.lab/confluent/ --repo=cp-test -
 
 銀行給的 tar 在 `~/landing/bank/`。決定：解壓到 `/opt/java/<版本目錄>`，再做一個固定的連結 `/opt/java/current` 指向它，所有設定一律寫 `/opt/java/current`，以後換版只改連結。`java`、`keytool` 用 alternatives 登記（RHEL 的標準做法），`/etc/profile.d/java.sh` 設 `JAVA_HOME`；服務自己的 systemd 設定還會再明確寫一次 `JAVA_HOME`，不受全域切換影響。
 
-先看壓縮檔的頂層目錄名稱，並準備 `profile.d` 的檔案：
+先看壓縮檔的頂層目錄名稱，並準備 `profile.d` 的檔案（`bank/` 裡有新舊幾版時，`sort -V | tail -1` 挑版本最新的）：
 
 ```bash
-JDK_TAR=$(ls ~/landing/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && echo "tar=$(basename $JDK_TAR) dir=$JDK_DIR" && install -d -m 0700 ~/jdk && cat > ~/jdk/java.sh <<'EOF'
+JDK_TAR=$(ls ~/landing/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && echo "tar=$(basename $JDK_TAR) dir=$JDK_DIR" && install -d -m 0700 ~/jdk && cat > ~/jdk/java.sh <<'EOF'
 # JDK 21 for Confluent Platform (/opt/java/current). Services set JAVA_HOME in their systemd drop-in.
 [ -n "$JAVA_HOME" ] || export JAVA_HOME=/opt/java/current
 EOF
