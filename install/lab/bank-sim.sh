@@ -6,6 +6,7 @@
 #   bash bank-sim.sh prepare   3.1 公鑰派送、3.2 OS 套件庫＋根憑證信任、3.4 AD、3.5 NTP 與 LB
 #   bash bank-sim.sh sign      9.2 銀行 CA 簽 ops02 ~/pki/requests/*.csr → ~/pki/incoming/
 #   bash bank-sim.sh reset     down -v 後重新 up（從零）；dl01 保留
+#   bash bank-sim.sh pvwa-key  客戶模式：CyberArk 產生 cpadmin 金鑰對（$LAB/pvwa/），prepare 改派這把的公鑰
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 LAB=${LAB:-$HOME/kafka-lab}; INSTALL=$(cd "$(dirname "$0")/.." && pwd)
@@ -45,9 +46,27 @@ intake() {
   as_root_on "$OPS_HOST" 'chown -R cpadmin:cpadmin /home/cpadmin/landing && chmod -R a-w /home/cpadmin/landing && echo "$(find /home/cpadmin/landing -type f | wc -l) files, $(du -sh /home/cpadmin/landing | cut -f1)"'
 }
 
+# 客戶模式（SSH_KEY_SOURCE=agent）：cpadmin 的金鑰對由 CyberArk 產生，lab 放在 $LAB/pvwa/ 扮演 PVWA 裡的那個 object
+PVWA_DIR=$LAB/pvwa
+pvwa_key() {
+  announce "CyberArk：產生 cpadmin（操作機 → 各主機）的金鑰對，私鑰留在 PVWA（$PVWA_DIR，0600）"
+  mkdir -p "$PVWA_DIR"
+  [ -f "$PVWA_DIR/cpadmin_ed25519" ] || ssh-keygen -q -t ed25519 -N "" -C "cpadmin@$OPS_HOST (cyberark)" -f "$PVWA_DIR/cpadmin_ed25519"
+  chmod 600 "$PVWA_DIR/cpadmin_ed25519"; cat "$PVWA_DIR/cpadmin_ed25519.pub"
+}
+
 prepare() {
-  announce "3.1 OS 團隊：ops02 的公鑰 → 所有主機 cpadmin 與 repo01 的 repodeploy（共用 authorized_keys.d volume）"
-  as_root_on "$OPS_HOST" 'k=$(cat /home/cpadmin/.ssh/id_ed25519.pub); install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/cpadmin <<<"$k"; install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/repodeploy <<<"$k"; ls /etc/ssh/authorized_keys.d/'
+  # 公鑰：CyberArk 產生的那把（pvwa_key 做過）優先；否則用操作機自己產生的（lab 模式，第 3 站）
+  if [ -f "$PVWA_DIR/cpadmin_ed25519.pub" ]; then
+    announce "3.1 OS 團隊（SSH Key Manager）：CyberArk 的 cpadmin 公鑰 → 所有主機 cpadmin 與 repo01 的 repodeploy"
+    # 用 stdin 送（ops02 的 /tmp 是 tmpfs，docker cp 寫進去容器裡看不到）
+    docker exec -i "$(container_of "$OPS_HOST")" bash -c 'cat > /tmp/cpadmin-cyberark.pub' < "$PVWA_DIR/cpadmin_ed25519.pub"
+    public_key_source=/tmp/cpadmin-cyberark.pub
+  else
+    announce "3.1 OS 團隊：ops02 的公鑰 → 所有主機 cpadmin 與 repo01 的 repodeploy（共用 authorized_keys.d volume）"
+    public_key_source=/home/cpadmin/.ssh/id_ed25519.pub
+  fi
+  as_root_on "$OPS_HOST" 'k=$(cat '"$public_key_source"'); install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/cpadmin <<<"$k"; install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/repodeploy <<<"$k"; ls /etc/ssh/authorized_keys.d/'
 
   announce "3.2 OS 套件庫（repo01 /os/）：有現成的 $LAB/bank-os-repo 就直接用，沒有才從 Rocky repo 抓"
   if [ ! -f "$LAB/bank-os-repo/repodata/repomd.xml" ]; then
@@ -69,8 +88,8 @@ ls /out/Packages | wc -l'
 
   announce "3.4 AD 團隊：OU、群組、svc-mds-bind、alice/bob/carol；LDAPS 憑證；密碼交付"
   for i in $(seq 1 30); do as_root_on "$AD_HOST" 'samba-tool user list >/dev/null 2>&1' && break; sleep 5; done
-  if as_root_on "$AD_HOST" 'samba-tool ou list 2>/dev/null | grep -q "^OU=Confluent,"'; then echo "AD 物件已存在，略過建立"; else
-    as_root_on "$AD_HOST" 'install -d -m 0700 /root/secrets && for k in bind users; do openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20 > /root/secrets/$k.pass; done; B=DC=corp,DC=poc,DC=lab; samba-tool ou create "OU=Confluent,$B" && for ou in Users Groups Service; do samba-tool ou create "OU=$ou,OU=Confluent,$B"; done && samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" --userou="OU=Service,OU=Confluent" --description="read-only LDAP bind for Confluent MDS" && for g in kafka-admins kafka-operators kafka-devs; do samba-tool group add "$g" --groupou="OU=Groups,OU=Confluent"; done && for p in alice:kafka-admins bob:kafka-operators carol:kafka-devs; do u=${p%%:*}; g=${p#*:}; samba-tool user create "$u" "$(cat /root/secrets/users.pass)" --userou="OU=Users,OU=Confluent" && samba-tool group addmembers "$g" "$u"; done; samba-tool group listmembers kafka-admins' | grep -v '^User\|^Added\|^$' || true
+  if as_root_on "$AD_HOST" 'samba-tool ou list 2>/dev/null | grep -qE "^OU=Confluent(,|$)"'; then echo "AD 物件已存在，略過建立"; else
+    as_root_on "$AD_HOST" 'install -d -m 0700 /root/secrets && for k in bind users; do [ -s /root/secrets/$k.pass ] || (umask 077; openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20 > /root/secrets/$k.pass); done; B=DC=corp,DC=poc,DC=lab; samba-tool ou create "OU=Confluent,$B" && for ou in Users Groups Service; do samba-tool ou create "OU=$ou,OU=Confluent,$B"; done && samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" --userou="OU=Service,OU=Confluent" --description="read-only LDAP bind for Confluent MDS" && for g in kafka-admins kafka-operators kafka-devs; do samba-tool group add "$g" --groupou="OU=Groups,OU=Confluent"; done && for p in alice:kafka-admins bob:kafka-operators carol:kafka-devs; do u=${p%%:*}; g=${p#*:}; samba-tool user create "$u" "$(cat /root/secrets/users.pass)" --userou="OU=Users,OU=Confluent" && samba-tool group addmembers "$g" "$u"; done; samba-tool group listmembers kafka-admins' | grep -v '^User\|^Added\|^$' || true
   fi
   as_root_on "$AD_HOST" 'mkdir -p /root/csr && cd /root/csr && [ -f ad01.csr ] || openssl req -new -newkey rsa:2048 -nodes -keyout ad01.key -out ad01.csr -subj "/CN=ad01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:ad01.poc.lab,DNS:ad01" -addext "keyUsage=digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth" 2>/dev/null; echo csr-ok'
   mkdir -p "$LAB/ca/exchange"
@@ -101,7 +120,8 @@ sign() {
 
 reset() {
   announce "lab 從零：down -v（volume 全刪，落地區 $LAB/landing 保留）→ up -d"
-  (cd "$LAB" && docker compose -f compose.yml -f conjur.yml down -v --remove-orphans 2>&1 | tail -1; docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)
+  local compose_files=(-f compose.yml); [ -f "$LAB/conjur.yml" ] && compose_files+=(-f conjur.yml)
+  (cd "$LAB" && docker compose "${compose_files[@]}" down -v --remove-orphans 2>&1 | tail -1; docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)
   sleep 5; (cd "$LAB" && docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)   # lb01 第一次有時沒起來
   docker start dl01 >/dev/null 2>&1 || true
   docker ps --format '{{.Names}}' | grep -c '^lab-\|^dl01$'
@@ -200,7 +220,8 @@ prometheus() {   # 18.5：銀行的 Prometheus 接上來看 target 與規則，�
 
 coldboot() {   # 20.4：機房停電：全部主機（含保管庫）同時關、同時開
   announce "20.4 冷開機：全部 stop → start，量 broker MDS 與 C3 回來的時間"
-  cd "$LAB" && docker compose -f compose.yml -f conjur.yml stop 2>&1 | grep -c Stopped; t0=$(date +%s); docker compose -f compose.yml -f conjur.yml start 2>&1 | grep -c Started
+  local compose_files=(-f compose.yml); [ -f "$LAB/conjur.yml" ] && compose_files+=(-f conjur.yml)   # 客戶模式沒有建 Conjur
+  cd "$LAB" && docker compose "${compose_files[@]}" stop 2>&1 | grep -c Stopped; t0=$(date +%s); docker compose "${compose_files[@]}" start 2>&1 | grep -c Started
   probe() { docker exec "$(container_of "$OPS_HOST")" bash -c "curl -sk -o /dev/null -w '%{http_code}' $1"; }
   for i in $(seq 1 60); do a=0; for h in $BROKERS; do [ "$(probe "https://$(fqdn "$h"):8090/v1/metadata/id")" = 200 ] && a=$((a+1)); done; [ "$a" = "$(wc -w <<<"$BROKERS")" ] && break; sleep 10; done; echo "broker 的 MDS 都回 200：$(( $(date +%s) - t0 ))s"
   for i in $(seq 1 60); do [ "$(probe "https://$C3_FQDN:9021/")" = 200 ] && break; sleep 10; done; echo "C3 回 200：$(( $(date +%s) - t0 ))s"
@@ -218,4 +239,4 @@ sign_next() {   # 21.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參
 }
 
 case ${1:-} in push|intake|prepare|sign|reset|conjur|sp|opmenu|prometheus|coldboot) "$1";;
-  sign-next) sign_next "${2:-ca}";; *) sed -n '2,10p' "$0"; echo "  延伸：conjur（15.1）sp（16.1/16.8）opmenu（17.1）prometheus（18.5）coldboot（20.4）"; exit 1;; esac
+  sign-next) sign_next "${2:-ca}";; pvwa-key) pvwa_key;; *) sed -n '2,11p' "$0"; echo "  延伸：conjur（15.1）sp（16.1/16.8）opmenu（17.1）prometheus（18.5）coldboot（20.4）"; exit 1;; esac

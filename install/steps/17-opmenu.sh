@@ -154,11 +154,18 @@ else
 fi
 
 section "17.6 收尾檢查"
-agent_count=$(pgrep -x ssh-agent | wc -l)
+# 只算維運帳號留下的 ssh-agent：SSH_KEY_SOURCE=agent 時工程師自己的 agent（cpadmin）本來就在跑，不算殘留
+agent_count=$(pgrep -u "$MENU_USER" -x ssh-agent | wc -l)
 keys_on_disk=$(sudo grep -rls 'PRIVATE KEY' "/home/$MENU_USER" /dev/shm 2>/dev/null | wc -l)
-reads_identity=$(sudo runuser -u "$MENU_USER" -- cat /etc/opmenu/conjur.identity >/dev/null 2>&1 && echo yes || echo no)
+# 選單向保管庫認證的身分檔：只有 conjur 來源才有，而且維運帳號（經 opmenu 群組）要讀得到；manual 沒有這個檔
+if [ "$OPMENU_SECRETS" = conjur ]; then
+  reads_identity=$(sudo runuser -u "$MENU_USER" -- cat /etc/opmenu/conjur.identity >/dev/null 2>&1 && echo yes || echo no)
+  expected_identity=yes
+else
+  reads_identity=none; expected_identity=none
+fi
 reads_cpadmin_secrets=$(sudo runuser -u "$MENU_USER" -- ls "$SECRETS_DIR" >/dev/null 2>&1 && echo YES || echo no)
-summary="ssh-agent=$agent_count 磁碟上的私鑰=$keys_on_disk $MENU_USER讀得到身分檔=$reads_identity $MENU_USER讀得到cpadmin密碼=$reads_cpadmin_secrets"
-if [ "$agent_count $keys_on_disk $reads_identity $reads_cpadmin_secrets" = "0 0 yes no" ]; then ok "$summary"; else fail "$summary"; fi
+summary="$MENU_USER的ssh-agent=$agent_count 磁碟上的私鑰=$keys_on_disk $MENU_USER讀得到身分檔=$reads_identity $MENU_USER讀得到cpadmin密碼=$reads_cpadmin_secrets"
+if [ "$agent_count $keys_on_disk $reads_identity $reads_cpadmin_secrets" = "0 0 $expected_identity no" ]; then ok "$summary"; else fail "$summary"; fi
 sudo tail -3 /var/log/opmenu/opmenu.log | cut -c1-110 | tee -a "$LOG_FILE"
 finish_step

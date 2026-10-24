@@ -77,7 +77,7 @@ install/
 | `OPMENU_OS_USER`、`OPMENU_ENV_LABEL` | `op01`、`LAB` | 實際帳號、`PROD`／`UAT` | |
 | 主機、`DOMAIN`、`REPO_URL`、AD 的 DN、`NTP_SERVER`、`HEAP_*` | lab 值 | 實際值 | heap 依主機記憶體調整 |
 
-> 注意：客戶這組設定還沒有從零整套跑過；驗過的是片段：第 16 站 manual 的保管流程（隔離複本 4 種情況）、OP menu manual 12/12。上線前先在 lab 用這組設定從零跑到第 20 站。
+客戶這組設定已在 lab 從零整套跑過（2026-10-24，CP 8.2.4，`install/lab/run-customer.sh`）：第 20 站驗收 38/38；選單的主機類項目（20.4 bob 重啟 broker）因為要人在終端機貼私鑰，列為人工驗收項目。
 
 ## 安裝完之後還會用到的
 
@@ -129,6 +129,7 @@ install/
 bash install/lab/run-all.sh            # down -v 從零；約 1.5–2 小時（下載機已有檔案時 dnf download 會 SKIPPED）
 bash install/lab/run-all.sh --no-reset # 用現有 lab 重跑（驗冪等）
 EXT=1 bash install/lab/run-all.sh      # 從零一路到第 20 站（約 1 小時）
+bash install/lab/run-customer.sh       # 客戶模式從零到第 20 站（PVWA、Secrets 團隊、工程師貼私鑰都由它扮演）；FROM=N 從第 N 段接著跑
 ```
 
 `lab/bank-sim.sh` 的每個子命令就是文件裡橘色「銀行」標籤的區塊，只是從 Windows 端對容器執行；正式環境沒有這支。

@@ -105,7 +105,10 @@ check "alice 在 $rest_app_topic 讀到那筆" bash -c "kafka-console-consumer -
 application_failures=$((FAIL_COUNT - health_failures - security_failures))
 
 section "20.4 維運"
-if [ "$OPMENU" = 1 ] && [ -x /opt/opmenu/opmenu.sh ]; then
+if [ "$OPMENU" = 1 ] && [ "$OPMENU_SECRETS" = manual ]; then
+  # manual：主機類項目要維運人員在終端機貼上從 PVWA 取出的私鑰，非互動做不到（第 17 站同樣只提醒）
+  warn "人工驗收項目：維運人員（bob）互動登入選單，選 21 重啟一台 broker、依提示貼上 PVWA 取出的 cpadmin 私鑰；成功後把選單紀錄那一行附在驗收文件"
+elif [ "$OPMENU" = 1 ] && [ -x /opt/opmenu/opmenu.sh ]; then
   restart_host=$(awk '{print $3}' <<<"$BROKERS"); [ -n "$restart_host" ] || restart_host=${BROKERS##* }
   menu_result=$(sudo env OPMENU_USER=bob OPMENU_PASS="$TEST_USERS_PASSWORD" OPMENU_YES=1 JAVA_HOME=/opt/java/current HOME=/home/$OPMENU_OS_USER \
                   runuser -p -u "$OPMENU_OS_USER" -- /opt/opmenu/opmenu.sh --run 21 "$(fqdn "$restart_host"):confluent-server" 2>&1 </dev/null \
@@ -121,7 +124,13 @@ if [ "$OPMENU" = 1 ] && [ -x /opt/opmenu/opmenu.sh ]; then
 else
   log "OPMENU=0 或選單沒裝：略過選單重啟"
 fi
-ask_bank "冷開機（全部主機同時關再開）由機房排程演練。預期：broker 等保管庫起來前會重試（Restart=on-failure，每 10 秒），" \
+# 冷開機的預期依密碼放法不同：Summon／Conjur 啟動時要向保管庫取值；master key 落地 service.env 時不依賴保管庫
+if [ "$SECRETS_MODE" = conjur ] || [ "$SUMMON" = 1 ]; then
+  cold_boot_expectation="broker 等保管庫起來前會重試（Restart=on-failure，每 10 秒）"
+else
+  cold_boot_expectation="master key 在各主機的 service.env，開機不依賴保管庫；controller → broker 依序回來"
+fi
+ask_bank "冷開機（全部主機同時關再開）由機房排程演練。預期：$cold_boot_expectation，" \
          "    C3 等 MDS 起來才啟動（第 13 站的 drop-in）。lab：bash install/lab/bank-sim.sh coldboot"
 
 section "20.5 收尾：留什麼、收什麼"

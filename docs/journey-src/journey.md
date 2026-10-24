@@ -2132,6 +2132,8 @@ metrics in prometheus: 111 kinds
 
 先看三件事：服務是不是 `active`、ExecStart 指向哪份設定、日誌最後 20 行的 ERROR。九成的問題在這裡。
 
+> 陷阱：broker 是 `active`、9092 也開了，但 9094／9095／9096 和 MDS 的 8090 一直沒開，日誌最後停在 `Waiting for all of the authorizer futures to be completed`、之後沒有任何 ERROR：多半是 AD 查詢帳號（svc-mds-bind）的密碼和 AD 上的不一致。broker 第一次向 AD 查群組失敗後只會安靜地重試，不印原因。對齊密碼（`ldap-bind.pass` 與 AD 帳號）後不用重啟，它會自己接著起來。
+
 ## 14.2 做錯了怎麼重來
 
 | 步驟 | 能不能重跑 | 怎麼做 |

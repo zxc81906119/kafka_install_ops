@@ -46,3 +46,5 @@
   手把手 16：intro、16.1 開兩個變數、16.2 更正錯誤說法＋存 master key、16.6 輪替後存新 key、16.7 CyberArk 角色／擋得住擋不住／遺失怎麼辦、16.8 只加 hosts 讀權（policy 在 lab Conjur 驗 201）；壞掉的 tr -d 換行修好。redesign 加定案段。docx 待使用者關閉 Word 後重建。
 - 使用者要求從第 0 章重頭驗證：lab 全刪（留 landing、images、docker image）。
 - 手把手：每個 bash 指令塊上方自動標在哪台執行、換機器附 docker exec（容器→容器先 exit）；移除 21 個對應腳本框與 0.6（之後另寫腳本文件），0.6 的陷阱搬到 16.7。
+- 2026-10-24：問題清單文件、升級定案（JDK 21→25 三段、C3 留 21）；寫 run-customer.sh（bank-sim pvwa-key、reset/coldboot 不需 conjur.yml、17.6 只算維運帳號的 agent、身分檔只在 conjur 檢查）；第 0 章從文件重建；開始客戶模式 8.2.4 從零。
+- 客戶模式從零（CP 8.2.4，run-customer.sh）：第 20 站 38/38（20.4 選單主機項目改為人工驗收）；kb 每台 master key 檔 1、明文 0、操作機無 cpadmin 私鑰檔、17.6 過、Prometheus 9/9、冷開機 MDS 62s／C3 126s。途中修：.ssh 目錄、ops02 /tmp 是 tmpfs（docker cp 看不到→改 stdin）、bank-sim AD 冪等判斷對不上 Samba 輸出（重跑 prepare 產生新密碼檔→broker 卡在 authorizer、無錯誤訊息；已寫進手把手 14.1 陷阱）。新增 install/tools/load.sh（持續流量，自 cpctl 改寫，未實測）。

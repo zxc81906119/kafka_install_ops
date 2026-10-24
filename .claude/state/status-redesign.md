@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-23 晚（使用者要從第 0 章重頭驗證：lab 已刪除）
+Updated: 2026-10-24（lab 使用中：客戶模式從零實跑 8.2.4）
 
 ## 現在在做什麼
 安裝流程重新設計（使用者主導、Claude 記錄）＋ `install/` 一章一支的安裝腳本（照手把手文件），以 `lab` 專案實跑驗證。
@@ -19,12 +19,13 @@ Updated: 2026-10-23 晚（使用者要從第 0 章重頭驗證：lab 已刪除�
 - master key：CyberArk 存 passphrase＋master key 兩個 object；install 16 加 VAULT_ACCESS（manual 等 PVWA 保管確認才派送）；手把手 16 章更正（docx 已重建）。
 
 ## 下一步
-- 使用者正從第 0 章重頭驗證（照手把手手打），有問題會回報。
-- 待辦：另寫一份「install/ 腳本使用說明」（原 0.6＋每章對應腳本的內容，見 commit 652a79d）。
+- 使用者同意放棄手打驗證、lab 交給 Claude（2026-10-24）。
+- 客戶模式從零（CP 8.2.4）**38/38 通過**（lab 目前就是這套，等著升級演練）。
+- **下一步**：之後寫升級章（8.2.4→8.3.2、JDK 21→25 三段、C3 留 21）並實測。
+- 腳本使用說明：已併進 `install/README.md`（每站對照表、lab 與客戶設定差異、安裝後的重跑；commit 6df1591）。
 - 從未 push。
 
 ## 環境狀態
-- lab: **已刪除**（2026-10-23，使用者要從第 0 章重頭驗證）：18 個容器、6 個 volume、網路，以及 ~/kafka-lab 的 ca、conjur、bank-os-repo、bank-prometheus、secrets.env、compose 檔。
-  保留：~/kafka-lab/landing（3.1 GB 下載，含 opmenu 最新包）、~/kafka-lab/images、docker image（lab-node 等）。照手把手第 0 章重建。
+- lab: **使用中（Claude）**：第 0 章用 run-chapter.js 從文件重建（14 塊全過）；客戶模式設定只改送進 lab 的 site.env。PVWA 模擬在 ~/kafka-lab/pvwa/。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
