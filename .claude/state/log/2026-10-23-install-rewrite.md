@@ -51,3 +51,4 @@
 - 升級演練（lab，客戶模式）8.2.4→8.3.2（JDK21）→ JDK25 → kb04 回滾演練 → finalize 4.3：直連 14009/14009 遺失 0；REST 2/2684 失敗（402，兩次都在 controller 重啟時，試用 license）；驗收三次 38/38。發現：RPM 升級換 unit 檔要 daemon-reload；leader 會換人、每台前重查；quorum replication 的 Lag 是第 4 欄；svc-rest 要加 _confluent-command ResourceOwner；JDK25 Unsafe 警告；4.3 一併開 share/ELR/streams。修：05 站與手把手第 5 章挑 JDK 用 sort -V（bank/ 有兩版時原本挑到舊的）。
 - 驗證 A（文件）：客戶模式從零 8.2.4（53 分，38/38）→ 照手把手第 22 章 13 塊（22.9 回滾移到 finalize 前、加 kb04 升回）全部 rc=0 → 驗收 38/38。文件修：22.1 預期輸出少已安裝那行、JDK 21 版本號改 21.0.x。22-upgrade.sh 加 ONLY_HOSTS（回滾後單台升回）。
 - 使用者要用記憶體：中斷驗證 B（packages 中途）、停容器、關 Docker Desktop、wsl --shutdown。審查 23 項已修（d7f4c31），待全書實跑驗證。
+- 2026-10-24 夜：run-upgrade-drill.sh（新）全流程通過：客戶模式 8.2.4 → 22-upgrade.sh plan/backup/packages（驗收 38/38）/jdk 25（38/38）/rollback kb04/ONLY_HOSTS 升回/finalize 不帶確認停下、帶確認升版（38/38）；直連 7367/7367 遺失 0、REST 1/1360（402，controller 期間）。
