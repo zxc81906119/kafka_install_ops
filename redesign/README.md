@@ -287,7 +287,7 @@
   - 各台 `/etc/confluent` 與 drop-in：**銀行既有的主機備份系統**（客戶模式 cpadmin 私鑰只在變更時段的 agent 裡，操作機的排程無法 ssh 進各台）；lab 用每台自己的 timer 模擬。
   - 機敏資料（`~/pki`、`~/secrets`、master key）：**事件觸發**，安裝、換憑證、換密碼時交 CyberArk 保管，不排程（同第 16 站 master key 的做法）。
 - 排程身分：**新發唯讀的 `svc-backup` 應用憑證**（使用者定案），不用 super user 的 svc-ops。查原廠：SecurityAdmin 可「查看他人 role binding、不能管理」；topic 設定、配額、SCRAM 清單需要的最低權限待 lab 實測。
-- 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO，列為客戶問題。
+- 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO 決定（尚未列入客戶問題清單）。
 
 ## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
 
