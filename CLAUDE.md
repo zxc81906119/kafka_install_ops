@@ -1,5 +1,9 @@
 # untitled7 — Confluent Platform 8.3 離線安裝 PoC（銀行）
 
+> **語言規則（最優先，每一則都適用）**：所有給使用者看的文字一律用**繁體中文**，英文只用在技術名詞與指令
+> （dnf、RPM、versionlock、MDS、CyberArk、`kafka-features` …）。包括：做事過程中的進度說明、背景工作回報、
+> 表格、最後的總結、問題選項。不要因為工具輸出或上一則是英文就跟著改用英文。使用者不需要再提醒。
+
 PoC for installing Confluent Platform 8.3.2 + Control Center 2.6.1 fully offline at a bank.
 Simulated hosts run in Docker Desktop on Windows 11; everything is driven from Git Bash.
 Details of the architecture and every component: @README.md
