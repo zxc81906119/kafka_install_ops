@@ -4111,6 +4111,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 ```out
 Feature: confluent.metadata.version SupportedMinVersion: CP-7.3-IV3 SupportedMaxVersion: CP-8.2-IV1A FinalizedVersionLevel: CP-8.2-IV1A Epoch: …
 LeaderId:               2
+confluent-server.noarch 1:8.2.4-1 @confluent-internal
 confluent-server.noarch 1:8.2.4-1 confluent-internal
 confluent-server.noarch 1:8.3.2-1 confluent-internal
 under-replicated: 0
@@ -4243,7 +4244,7 @@ JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V 
 kb01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 20 秒）under-replicated=0
 （broker 4 台、REST 2 台）
 ops02 openjdk version "25.0.5" … LTS
-c3-01 /opt/java/jdk-21.0.12.1+1
+c3-01 /opt/java/jdk-21.0.x+y
 ```
 
 broker 的日誌會多一則 `WARNING: A terminally deprecated method in sun.misc.Unsafe has been called`：原廠說明這只是警告，JDK 25 上照常運作。第二段結束：照第 20 章再驗一次（實測全數通過）。
@@ -4295,7 +4296,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 ```
 
 ```out
-kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.12.1+1/bin/java MDS 200（約 15 秒）
+kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.x+y/bin/java MDS 200（約 15–20 秒）
 ```
 
 退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。演練完再照 22.4、22.7 把它升回去。

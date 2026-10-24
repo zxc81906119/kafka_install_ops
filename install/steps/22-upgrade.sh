@@ -12,6 +12,7 @@
 #   CONFIRM_CLUSTER_ID=<cluster id> bash steps/22-upgrade.sh finalize <release>
 #                                                   22.8 第三段：kafka-features upgrade --release-version <release>（例如 4.3）；不能退，所以要帶 cluster id 確認
 #   bash steps/22-upgrade.sh rollback <主機> <版本>   22.9 finalize 之前：這台 JDK 切回最新的 jdk-21*、套件 downgrade 到 <版本>
+#   ONLY_HOSTS="kb04" bash steps/22-upgrade.sh packages|jdk …   只做列出的主機（回滾後把那台升回去）；略過 C3、role binding、操作機
 #
 # 每台的步驟：versionlock 解開 → 這台裝的每個 Confluent 套件換成目標版本 → 鎖回 → daemon-reload
 # （RPM 升級會換掉 unit 檔）→ 確認設定檔沒被動、ExecStart 指著我們的設定 → 重啟 → 等健康才做下一台。
@@ -22,6 +23,9 @@ source "$INSTALL_DIR/lib/ssh.sh"
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 ACTION=${1:-plan}
+ONLY_HOSTS=${ONLY_HOSTS:-}          # 有值就只做這些主機（空白分隔）
+# selected <主機>：沒有 ONLY_HOSTS 時全部都做；有的話只做列出的
+selected() { [ -z "$ONLY_HOSTS" ] || [[ " $ONLY_HOSTS " == *" $1 "* ]]; }
 BACKUP_ROOT=$HOME/upgrade-backup
 # 8.3 不能再有的設定（留在設定檔裡 broker 會起不來）
 REMOVED_SETTINGS_REGEX='^(message.format.version|message.downconversion.enable|message.timestamp.difference.max.ms|log.message.format.version)'
@@ -82,11 +86,13 @@ change_packages_and_restart() {
 # controller 一台一台，每輪重查 leader（過程中會換人），leader 留到最後
 for_each_controller_leader_last() {
   local callback=$1 done_list="" round leader host candidate
-  for round in $(seq 1 "$(wc -w <<<"$CONTROLLERS")"); do
+  for candidate in $CONTROLLERS; do selected "$candidate" || done_list="$done_list $candidate"; done
+  local remaining; remaining=$(( $(wc -w <<<"$CONTROLLERS") - $(wc -w <<<"$done_list") ))
+  for round in $(seq 1 "$remaining"); do
     leader=$(current_leader); host=""
     for candidate in $CONTROLLERS; do
       [[ " $done_list " == *" $candidate "* ]] && continue
-      [ "$candidate" = "$leader" ] && [ "$round" -lt "$(wc -w <<<"$CONTROLLERS")" ] && continue
+      [ "$candidate" = "$leader" ] && [ "$round" -lt "$remaining" ] && continue
       host=$candidate; break
     done
     log "這輪 leader=$leader，做 $host"
@@ -125,6 +131,7 @@ backup() {
 
 packages() {
   local version=${1:-$CP_VERSION}
+  if [ -z "$ONLY_HOSTS" ]; then
   section "22.3 Control Center 先（$C3_HOST）"
   local c3_installed; c3_installed=$(ssh_run "$C3_HOST" "rpm -q --qf '%{VERSION}' confluent-control-center-next-gen")
   if [ "$c3_installed" = "$C3_VERSION" ]; then
@@ -132,11 +139,16 @@ packages() {
   else
     change_packages_and_restart "$C3_HOST" "$C3_VERSION" install || die "C3 升級失敗"
   fi
+  fi
   section "22.4 broker 逐台 → $version"
-  for host in $BROKERS; do change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
+  for host in $BROKERS; do selected "$host" || continue; change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
   section "22.5 controller 逐台（每輪重查 leader，leader 最後）"
   upgrade_controller() { change_packages_and_restart "$1" "$version" install; }
   for_each_controller_leader_last upgrade_controller || die "controller 升級停下"
+  if [ -n "$ONLY_HOSTS" ]; then
+    for host in $RESTS; do selected "$host" || continue; change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
+    log "ONLY_HOSTS=$ONLY_HOSTS：略過 role binding 與操作機"; return 0
+  fi
   section "22.6 REST Proxy（先給 svc-rest 在 _confluent-command 的 ResourceOwner）與操作機"
   source "$CONF_DIR/kraft.env"   # CLUSTER_ID
   confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
@@ -177,7 +189,8 @@ jdk() {
     case $process_java in "/opt/java/$jdk_dir/bin/java") ok "$host：$linked，程序用 $process_java";; *) fail "$host：程序用 $process_java";; esac
   }
   for_each_controller_leader_last switch_jdk_on || die "controller 換 JDK 停下"
-  for host in $BROKERS $RESTS; do switch_jdk_on "$host" || die "停在 $host"; done
+  for host in $BROKERS $RESTS; do selected "$host" || continue; switch_jdk_on "$host" || die "停在 $host"; done
+  [ -n "$ONLY_HOSTS" ] && { log "ONLY_HOSTS=$ONLY_HOSTS：略過操作機"; return 0; }
   sudo tar -xzf "$jdk_tar" -C /opt/java && sudo chown -R root:root "/opt/java/$jdk_dir" && sudo ln -sfn "/opt/java/$jdk_dir" /opt/java/current
   ok "$OPS_HOST：$(java -version 2>&1 | head -1)"
   log "$C3_HOST 留在 $(ssh_run "$C3_HOST" 'readlink /opt/java/current')；第二段完成：跑第 20 站驗收"
