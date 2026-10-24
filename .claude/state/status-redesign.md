@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-24 夜（lab 使用中：升級演練 run-upgrade-drill.sh）
+Updated: 2026-10-24 夜（session 收尾；lab 使用中：全書重跑在背景）
 
 ## 現在在做什麼
 安裝流程重新設計（使用者主導、Claude 記錄）＋ `install/` 一章一支的安裝腳本（照手把手文件），以 `lab` 專案實跑驗證。
@@ -26,13 +26,14 @@ Updated: 2026-10-24 夜（lab 使用中：升級演練 run-upgrade-drill.sh）
 - 從未 push。
 
 ## 環境狀態
-- lab: **使用中（Claude）**：刪掉重建，lab 模式照文件從零跑第 0–21 章（run-chapter.js，180 塊）。
+- lab: **使用中（Claude）**：lab 模式照文件從零跑第 0–21 章（第二次，189 塊；第一次在 21.3.4 抓到文件缺陷後已修）。22:24 時 93 塊 rc=0、在 15.3 建 jar，沒有被遮住的失敗。執行檔：scratchpad 的 full.sh（由 journey.md 產生，17.3 佔位路徑換成 repo 路徑），紀錄 scratchpad/full2.log；跑完要掃「a password is required／Permission denied／FAIL／MDS=000／REST=000／驗不過」。落地區的 8.2.4 RPM、JDK 25、舊 JDK 21 暫放 ~/kafka-lab/landing-extra/，演練升級時要搬回。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
 
-## 待辦（2026-10-24 晚，依序）
-1. ~~驗證 B~~ 完成（run-upgrade-drill.sh，2026-10-24 夜，全流程通過）。
-2. 全書照文件從零實跑（lab 模式，第 0–21 章，run-chapter.js）：驗證審查修正（d7f4c31）的指令與預期輸出。
-3. 補強需要 lab 的：第 6／7 章檔案系統與 java.io.tmpdir、第 10 章 metadata.log.dir、第 18 章 raft 指標（README 說法待更正）、第 19 章稽核 topic RF。
-4. 新章：license（讀 JWT 到期、套用程序未實測、告警）、controller 替換（kc03 同名換新機）、broker 縮減／擴充（kb04）。
-5. 日常備份章（svc-backup 唯讀身分、排程＋OP menu）、OS 修補、C3 升級（使用者這次沒選先做）。
+## 待辦（2026-10-24 夜，依序）
+1. ~~驗證 B~~ 完成（run-upgrade-drill.sh）。
+2. **全書重跑（進行中）**：結束後核對：17 章末 kb04 sudo 還原、18.2／19.2 在 kb04 成功、21.3.3 新的 7 塊與 G2 端點檢查、21.3.4 不再斷。
+3. **21.4 換鏈演練（使用者同意）**：情境＝21.0 表第 7 列（根換私鑰 G3、中繼 G2 沿用私鑰由 G3 重簽）。先手打實跑寫 21.4，再驗 `21-cert-rotate.sh chain <新中繼.pem>`（已寫、lint 過、未實跑；commit 標明未驗證）。銀行自己的伺服器（AD、repo、conjur）也要換新鏈。
+4. 補強需要 lab 的：第 6／7 章檔案系統與 java.io.tmpdir、第 10 章 metadata.log.dir、第 18 章 raft 指標（README 說法待更正）、第 19 章稽核 topic RF。
+5. 新章：license（JWT 到期；無 JMX 指標，原廠只有 C3 90 天提示與日誌警告 → 排程讀 JWT 給監控）、controller 替換（kc03 同名換新機）、broker 縮減／擴充（kb04）。
+6. 日常備份章（svc-backup，SecurityAdmin 可唯讀看 role binding）、OS 修補、C3 升級。

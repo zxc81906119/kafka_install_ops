@@ -10,7 +10,9 @@
 #                                             銀行放回 ~/pki/next/incoming/ 後再跑一次：檢查 → 做 keystore → 派送 → 滾動重啟 → 換成正本
 #   bash steps/21-cert-rotate.sh trust-sync   銀行換好各主機 OS 的 bank-root.pem 之後，把我方的信任清單同步成一樣、滾動重啟：
 #                                             換 CA 階段一（bank-root.pem 是新舊兩張根）、階段三（只剩新根）都是這個動作
-# 換 CA 的三階段 = trust-sync（加新根）→ leaf（銀行用新 CA 簽）→ trust-sync（退舊根）；手把手 21.3。
+#   bash steps/21-cert-rotate.sh chain <新中繼.pem>   leaf 不動，只把銀行給的新中繼重包進每個 p12（不用 CSR）→ 派送 → 滾動重啟 → 換成正本
+#                                             用在：中繼同私鑰續簽；根換私鑰但中繼沿用私鑰、由新根重簽（手把手 21.0 的第 2、5、7 列）
+# 換 CA 的三階段 = trust-sync（加新根）→ leaf（銀行用新 CA 簽）或 chain（中繼沿用私鑰時）→ trust-sync（退舊根）；手把手 21.3、21.4。
 #
 # 不變的東西：檔名、路徑、keystore 密碼。所以 properties 一個字都不用改，Secret Protection 的密文也不用重算。
 # 舊的正本留在 ~/pki/old-<日期時間>/。
@@ -45,6 +47,10 @@ files_for_host() {
 
 serial_of_file()     { openssl x509 -in "$1" -noout -serial | cut -d= -f2; }
 serial_of_endpoint() { openssl s_client -connect "$1" -servername "${1%:*}" </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; }
+# 第二張（中繼）的序號：憑證鏈檔裡的、端點出示的
+second_serial() { awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; }
+chain_of_file()     { echo "$(serial_of_file "$1"):$(second_serial < "$1")"; }
+chain_of_endpoint() { local presented; presented=$(openssl s_client -connect "$1" -servername "${1%:*}" -showcerts </dev/null 2>/dev/null); echo "$(openssl x509 -noout -serial 2>/dev/null <<<"$presented" | cut -d= -f2):$(second_serial <<<"$presented")"; }
 
 # show_status：每張憑證與每個端點
 show_status() {
@@ -76,6 +82,22 @@ create_requests() {
     if openssl req -new -key "$NEXT_DIR/keys/$cert_name.key" -sha256 -subj "/CN=$cert_name/O=PoC Bank/C=TW" "${extensions[@]}" -out "$NEXT_DIR/requests/$cert_name.csr"
     then ok "$cert_name: csr"; else fail "$cert_name: openssl req"; fi
   done < "$REQUESTS_FILE"
+}
+
+# ---- chain 第一段：現在的私鑰與 leaf ＋ 銀行給的新中繼，放進 next/（之後和 leaf 共用檢查、派送、換成正本） ----
+prepare_chain() {
+  local new_chain_file=$1 cert_name
+  [ -s "$new_chain_file" ] || die "找不到新中繼的 PEM：$new_chain_file（銀行給的中繼憑證；若有多層中繼依序放在同一個檔）"
+  [ -e "$NEXT_DIR" ] && die "$NEXT_DIR 已經存在（上一輪還沒做完？）：確認後刪掉再跑"
+  section "21.4 換鏈：leaf 不動，配上新中繼 $(openssl x509 -in "$new_chain_file" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')（簽發者 $(openssl x509 -in "$new_chain_file" -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')）"
+  install -d -m 0700 "$NEXT_DIR" "$NEXT_DIR/keys" "$NEXT_DIR/requests" "$NEXT_DIR/incoming" "$NEXT_DIR/certs"
+  for cert_name in $(awk '{print $1}' "$REQUESTS_FILE"); do
+    install -m 0600 "$KEYS_DIR/$cert_name.key" "$NEXT_DIR/keys/"
+    install -m 0644 "$PKI_DIR/requests/$cert_name.csr" "$NEXT_DIR/requests/"
+    # 現在的 leaf（憑證鏈檔的第一張）＋ 新中繼
+    { awk '/BEGIN CERT/{n++} n==1' "$CERTS_DIR/$cert_name.crt"; cat "$new_chain_file"; } > "$NEXT_DIR/incoming/$cert_name.crt"
+    ok "$cert_name：leaf 序號 $(serial_of_file "$CERTS_DIR/$cert_name.crt" | tail -c 9) 不變，換上新中繼"
+  done
 }
 
 # ---- leaf 第二段：銀行回覆檢查、做 keystore ----
@@ -137,9 +159,10 @@ EOF
   ssh_run "$C3_HOST" 'for unit in prometheus alertmanager; do sudo systemctl restart $unit; done'
   rolling_restart c3 || die "C3 沒有健康"
   for endpoint in $ENDPOINTS; do
-    expected=$(serial_of_file "$NEXT_DIR/certs/${endpoint#*=}.crt")
-    for attempt in $(seq 1 30); do served=$(serial_of_endpoint "${endpoint%=*}"); [ "$served" = "$expected" ] && break; sleep 2; done   # controller 起來後 9093 要幾秒才開
-    if [ "$served" = "$expected" ]; then ok "${endpoint%=*} 出示新的 ${endpoint#*=}"; else fail "${endpoint%=*} 出示 ${served: -8}，新的是 ${expected: -8}"; fi
+    # 比「leaf 序號：中繼序號」：換發時 leaf 變、換鏈時中繼變，兩種都看得出來
+    expected=$(chain_of_file "$NEXT_DIR/certs/${endpoint#*=}.crt")
+    for attempt in $(seq 1 30); do served=$(chain_of_endpoint "${endpoint%=*}"); [ "$served" = "$expected" ] && break; sleep 2; done   # controller 起來後 9093 要幾秒才開
+    if [ "$served" = "$expected" ]; then ok "${endpoint%=*} 出示新的 ${endpoint#*=}"; else fail "${endpoint%=*} 出示 ${served}，新的是 ${expected}"; fi
   done
   [ "$FAIL_COUNT" = 0 ] || die "有端點還沒出示新憑證"
 }
@@ -265,7 +288,12 @@ case $ACTION in
                "    回覆（憑證＋簽發 CA，PEM）放到 $NEXT_DIR/incoming/<名稱>.crt。放好後再跑一次：bash $0 leaf"
       wait_for_bank
     fi;;
+  chain)
+    prepare_chain "${2:?用法：bash $0 chain <新中繼.pem>}"
+    check_and_build
+    deploy_and_restart
+    promote;;
   trust-sync) trust_sync;;
-  *) die "用法：bash $0 status|leaf|trust-sync";;
+  *) die "用法：bash $0 status|leaf|chain <新中繼.pem>|trust-sync";;
 esac
 finish_step
