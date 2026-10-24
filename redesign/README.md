@@ -267,6 +267,18 @@
 - 以 **RHEL 9** 為準（lab：Rocky Linux 9 全程實跑）。RHEL 10.x 在 Confluent Platform 8.2／8.3 官方支援表上是 yes，C3 2.6 文件沒有另外列作業系統。
 - RHEL 10 **先不處理、未實測**；之後要做時至少驗：`python3-dnf-plugin-versionlock`、原廠公鑰匯入與 `rpm -K`、C3 前置套件（cyrus-sasl、openssl-devel）、CPU 需支援 x86-64-v3。
 
+### 升級與日常修補（2026-10-24 定案，待實作）
+
+- 範圍：**Confluent 小版與 patch**（滾動升級、回滾、features 升版）、**Control Center**、**JDK**（銀行交付新版 tar）、**OS 修補**（滾動 dnf update，Confluent 與 JDK 由 versionlock 保護）。
+- 形式：和第 21 章一樣，先寫手把手新章（手打、lab 實跑），再寫 `install/steps/22-*.sh`（隨時執行，不在安裝順序裡）。
+- lab 演練：用 `install/` 以 **8.2.4** 從零裝一套（硬碟上 `packages/rpm/confluent/` 有整套 8.2.4，或照第 1 站重新下載），再照新章升到 8.3.2；持續流量下量測遺失與失敗。C3 與 JDK 的演練要另外下載舊一版（C3 2.6.0 或更早、另一個 JDK 21.x）。
+- 官方做法（CP 8.3 升級文件，2026-10-24 查）：
+  - 順序：**Control Center 最先** → broker 逐台 → controller 逐台 → REST Proxy（所有 broker 升完後）→ 應用程式最後。舊 cpctl 沒有把 C3 排在最前面，新章照官方。
+  - REST Proxy（RBAC）升級前先在 `_confluent-command` topic 加 ResourceOwner role binding。
+  - features：全部升完後 `kafka-features --release-version 4.3` 先看 version-mapping 再 `upgrade`；升了之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降版「可能要從備份還原」→ **finalize（features 升版）之前都可回滾，之後不行**。8.2.x 是 4.2-IV0／IV1，8.3 是 4.3-IV0。
+  - 每台升級前：移除已廢棄的 `message.format.version` 等設定、備份 `/etc`；KRaft 升級需從 7.7.1 以後；所有元件同版，不跨版混用。
+  - 官方寫法是 `yum remove` 舊版再 `install` 新版；我們的設定不在 RPM 的預設路徑（`/etc/confluent/…`），比照 cpctl 用 `dnf install` 新版並更新 versionlock，實測時確認設定與 drop-in 不被覆蓋。
+
 ## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
 
 > 2026-10-24：依目前的定案改寫成可以直接交給銀行的文件 `docs/Confluent-請銀行確認的事項.docx`（來源 `docs/questions-src/questions.md`，每題附「為什麼要知道」與「沒有答案時我們的預設」）。原廠題不在裡面，仍在下表。
