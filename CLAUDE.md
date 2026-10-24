@@ -33,6 +33,7 @@ Details of the architecture and every component: @README.md
   - `manual-src/guide.md` → `Confluent-手動安裝手冊.docx`
   - `checklist-src/build.js` (reads `installer/conf/versions.env`) → `Confluent-主機準備清單.xlsx`
   - `journey-src/journey.md` + `diagrams.js` → `Confluent-安裝旅程-手把手.docx` (self-contained hands-on guide)
+  - `questions-src/questions.md` (built with `manual-src/build.js <md> <docx>`) → `Confluent-請銀行確認的事項.docx`
 - `redesign/README.md` — running notes of the installer redesign discussion (decisions, lessons, open questions).
 - Not in git: `packages/`, `packages-manual/`, `delivery/`, `bank-ca/`, `*.p12|*.pem|*.key|*.crt`, `secrets.env`.
 

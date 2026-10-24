@@ -15,6 +15,7 @@ dependencies are already installed (`npm ci` only on a fresh clone).
 | `docs/Confluent-手動安裝手冊.docx` | `docs/manual-src/guide.md` | `cd docs/manual-src && node build.js` |
 | `docs/Confluent-主機準備清單.xlsx` | `docs/checklist-src/build.js` (+ `installer/conf/versions.env`) | `cd docs/checklist-src && node build.js` |
 | `docs/Confluent-安裝旅程-手把手.docx` | `docs/journey-src/journey.md`, `diagrams.js` | `cd docs/journey-src && node build.js` |
+| `docs/Confluent-請銀行確認的事項.docx` | `docs/questions-src/questions.md` | `cd docs/manual-src && node build.js ../questions-src/questions.md ../Confluent-請銀行確認的事項.docx` |
 
 ## Rules
 - `install.js` **requires the output path argument**; without it the deck lands in `docs/deck-src/install.pptx`
