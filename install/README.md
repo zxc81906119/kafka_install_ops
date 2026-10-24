@@ -20,7 +20,8 @@ install/
   templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、Prometheus 設定
   steps/01–14         核心：下載到 C3、總檢查
   steps/15–20         延伸：15 Conjur provider（含下載機建 jar 的 15-…-jar）、16 Secret Protection（+Summon、+AD 密碼注入）、17 OP menu、18 JMX exporter、19 稽核日誌、20 驗收
-  steps/21            隨時：21 憑證輪替（status｜leaf｜trust-sync；照順序安裝時略過）
+  steps/21–22         隨時：21 憑證輪替（status｜leaf｜trust-sync）、22 升級（plan｜backup｜packages｜jdk｜finalize｜rollback）；照順序安裝時略過
+  tools/load.sh       演練用持續流量：start／stop／report（直連遺失幾筆、REST 失敗幾次）
   lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：conjur / sp / opmenu / prometheus / coldboot）
   lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動；EXT=1 再接 15–20
   tools/lint.sh       靜態檢查：shellcheck（含送到遠端的 heredoc）＋「pipefail 下不准 | grep -q」；沒有 shellcheck 時用 docker image cp-ops:poc 跑
@@ -61,6 +62,7 @@ install/
 | 19 | `--only 19` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15／16 留下的）處理 |
 | 20 | `--only 20` | 印「驗收：N / N 項通過」；冷開機（20.4）交給機房演練 |
 | 21 | `bash install/steps/21-cert-rotate.sh status｜leaf｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；換 CA 三階段 = `trust-sync` → `leaf` → `trust-sync` |
+| 22 | `bash install/steps/22-upgrade.sh plan｜backup｜packages｜jdk 25｜finalize 4.3｜rollback 主機 版本` | 不在安裝順序裡。先改 `site.env` 的 `CP_VERSION`；每段結束跑第 20 站；finalize 要帶 `CONFIRM_CLUSTER_ID`（不能退）；rollback 只在 finalize 之前 |
 
 ## lab 與客戶環境的設定差異（conf/site.env）
 

@@ -267,7 +267,7 @@
 - 以 **RHEL 9** 為準（lab：Rocky Linux 9 全程實跑）。RHEL 10.x 在 Confluent Platform 8.2／8.3 官方支援表上是 yes，C3 2.6 文件沒有另外列作業系統。
 - RHEL 10 **先不處理、未實測**；之後要做時至少驗：`python3-dnf-plugin-versionlock`、原廠公鑰匯入與 `rpm -K`、C3 前置套件（cyrus-sasl、openssl-devel）、CPU 需支援 x86-64-v3。
 
-### 升級與日常修補（2026-10-24 定案，待實作）
+### 升級與日常修補（2026-10-24 定案；Confluent＋JDK 已實作：手把手第 22 章＋第 22 站，lab 實跑）
 
 - 範圍：**Confluent 小版與 patch**（滾動升級、回滾、features 升版）、**Control Center**、**JDK**（銀行交付新版 tar）、**OS 修補**（滾動 dnf update，Confluent 與 JDK 由 versionlock 保護）。
 - **JDK 情境＝升 8.3 時一起從 21 換到 25**（使用者定案）。8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（官方相容表）→ 分三段：① 8.2.4→8.3.2（維持 JDK 21，可 `dnf downgrade` 回滾）② JDK 21→25 逐台滾動（切 `/opt/java/current`，退回＝切回 21）③ 兩段都驗過才 features 升版（finalize）。要回 8.2 時先切回 JDK 21 再 downgrade。**C3 留在 JDK 21**（官方未寫 C3 2.6 支援 25）。
@@ -279,6 +279,15 @@
   - features：全部升完後 `kafka-features --release-version 4.3` 先看 version-mapping 再 `upgrade`；升了之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降版「可能要從備份還原」→ **finalize（features 升版）之前都可回滾，之後不行**。8.2.x 是 4.2-IV0／IV1，8.3 是 4.3-IV0。
   - 每台升級前：移除已廢棄的 `message.format.version` 等設定、備份 `/etc`；KRaft 升級需從 7.7.1 以後；所有元件同版，不跨版混用。
   - 官方寫法是 `yum remove` 舊版再 `install` 新版；我們的設定不在 RPM 的預設路徑（`/etc/confluent/…`），比照 cpctl 用 `dnf install` 新版並更新 versionlock，實測時確認設定與 drop-in 不被覆蓋。
+
+### 日常備份（2026-10-24 定案，待實作）
+
+- **三類分工**（使用者定案）：
+  - 叢集中繼資料（RBAC、topic 與設定、配額、SCRAM 帳號清單、features）：**操作機排程每天匯出**（systemd timer，保留 N 天）＋ **OP menu 立即匯出**（變更前的快照，紀錄是本人；擴充現有 44「匯出權限清單」）。
+  - 各台 `/etc/confluent` 與 drop-in：**銀行既有的主機備份系統**（客戶模式 cpadmin 私鑰只在變更時段的 agent 裡，操作機的排程無法 ssh 進各台）；lab 用每台自己的 timer 模擬。
+  - 機敏資料（`~/pki`、`~/secrets`、master key）：**事件觸發**，安裝、換憑證、換密碼時交 CyberArk 保管，不排程（同第 16 站 master key 的做法）。
+- 排程身分：**新發唯讀的 `svc-backup` 應用憑證**（使用者定案），不用 super user 的 svc-ops。查原廠：SecurityAdmin 可「查看他人 role binding、不能管理」；topic 設定、配額、SCRAM 清單需要的最低權限待 lab 實測。
+- 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO，列為客戶問題。
 
 ## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
 
