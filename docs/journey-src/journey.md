@@ -109,6 +109,7 @@
 | 19 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
 | 20 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
 | 21 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
+| 22 升級 | 50 分 | 套件一輪、JDK 一輪滾動重啟（每台 15 秒到 2 分鐘）；controller 要等 quorum 追上 |
 
 ## 0.5 自己把 lab 建起來
 
@@ -4078,3 +4079,225 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 ```
 
 > 階段三之前要確認：應用程式團隊已經換上新 CA 簽的憑證（REST 走 mTLS 的那些）、行內 Prometheus 與應用程式的 truststore 都已經有新根。否則拿掉舊根的那一刻，它們就斷了。
+
+# 22. 第二十二站：升級 Confluent 與 JDK
+
+![upgrade]
+
+平台上線之後，Confluent 每季會出新版，JDK 也會跟著更新。這一站用一次真實的情境走完：**Confluent Platform 8.2.4 → 8.3.2**，同時把 **JDK 21 換成 25**（8.3 才支援 Java 25，8.2 不支援）。Control Center 這次版本不變（2.6.1 支援 7.5.15 到 8.3.x），維持 JDK 21。
+
+分三段，每段結束都可以停下來驗收：
+
+| 段 | 做什麼 | 出問題怎麼退 |
+|---|---|---|
+| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3 → broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（22.9） |
+| 二 | JDK 21 → 25：controller、broker、REST Proxy、操作機逐台切換 `/opt/java/current`；C3 留在 21 | 連結切回 21、重啟 |
+| 三 | finalize：features 升到 4.3（`kafka-features upgrade --release-version 4.3`） | **不能退**：之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降回去可能要從備份還原 |
+
+要回 8.2 時順序反過來：先把 JDK 切回 21（8.2 不支援 25），再 `dnf downgrade`。所以**前兩段都驗收過才做第三段**。
+
+> 實測（lab，客戶模式，全程持續流量）：約 48 分鐘。直連應用程式送出 14,009 筆、讀回 14,009 筆，遺失 0；經負載平衡的 REST 2,684 次中失敗 2 次（HTTP 402，都發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 20 章的驗收，都全數通過。
+
+## 22.1 升級前檢查
+
+@role 小安 | ops02 | cpadmin
+
+確認現在的版本、quorum、套件庫裡有沒有新版、有沒有沒追上的複本，以及 8.3 已經拿掉的設定（`message.format.version` 這類留在設定檔裡，8.3 會起不來）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe 2>/dev/null | grep confluent.metadata.version | tr -s ' \t' ' ' && kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep LeaderId && dnf -q --refresh list --showduplicates confluent-server 2>/dev/null | grep confluent-internal | tr -s ' ' && echo "under-replicated: $(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do printf '%s:%s ' $h "$(ssh $h.poc.lab 'sudo grep -cE "^(message.format.version|message.downconversion.enable|message.timestamp.difference.max.ms|log.message.format.version)" /etc/confluent/kafka/server.properties')"; done; echo
+```
+
+```out
+Feature: confluent.metadata.version SupportedMinVersion: CP-7.3-IV3 SupportedMaxVersion: CP-8.2-IV1A FinalizedVersionLevel: CP-8.2-IV1A Epoch: …
+LeaderId:               2
+confluent-server.noarch 1:8.2.4-1 confluent-internal
+confluent-server.noarch 1:8.3.2-1 confluent-internal
+under-replicated: 0
+kc01:0 kc02:0 kc03:0 kb01:0 kb02:0 kb03:0 kb04:0
+```
+
+新版的 RPM 和 JDK 照第 1–4 站的流程帶進來：下載機抓 `confluent-*-8.3.2`、照 1.5 把 `latest/21` 換成 `latest/25` 抓 JDK 25 交給銀行、掃描交換、上架。套件庫裡**舊版要留著**，回滾要用。
+
+## 22.2 備份
+
+@role 小安 | ops02 | cpadmin
+
+每台的 `/etc/confluent` 與 systemd drop-in、features 狀態、操作機的套件清單，打包回操作機（0700）。回滾、或 finalize 之後真的要退，都從這裡拿：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && B=~/upgrade-backup/$(date +%Y%m%d-%H%M) && install -d -m 0700 $B && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo tar -czf - -C / etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > $B/$h.tar.gz && printf '%s %s  ' $h "$(du -h $B/$h.tar.gz | cut -f1)"; done; echo; kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe > $B/features.txt 2>/dev/null; rpm -qa 'confluent-*' | sort > $B/ops02-packages.txt; echo "$B"
+```
+
+```out
+kc01 28K  kc02 28K  kc03 28K  kb01 32K  kb02 32K  kb03 32K  kb04 32K  rest01 28K  rest02 28K  c3-01 32K
+/home/cpadmin/upgrade-backup/20261024-1401
+```
+
+## 22.3 第一段：Control Center 先
+
+@role 小安 | ops02 | cpadmin
+
+原廠要求 C3 比 broker、controller 先升。這次 C3 版本不變，只要確認它活著、版本在 8.3 的相容範圍內（2.6.x 支援到 8.3.x）。C3 有新版時就在這一步照 22.4 的方式換套件、重啟。
+
+```bash
+ssh c3-01.poc.lab 'rpm -q confluent-control-center-next-gen; systemctl is-active confluent-control-center'; echo "UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+```
+
+```out
+confluent-control-center-next-gen-2.6.1-1.noarch
+active
+UI=200
+```
+
+## 22.4 第一段：broker 逐台
+
+@role 小安 | ops02 | cpadmin
+
+每台：解開 versionlock → 這台裝的每個 Confluent 套件都換成 8.3.2 → 重新鎖 → **`daemon-reload`**（RPM 升級會換掉 systemd 的 unit 檔，不 reload 就重啟，用的還是舊的定義）→ 確認設定檔沒被動、ExecStart 還指著我們的設定 → 重啟 → 等 MDS 回 200、under-replicated 回到 0 才做下一台：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do t0=$(date +%s); ssh $h.poc.lab 'before=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; after=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); echo "$(hostname) $(rpm -q confluent-server) 設定檔$([ $before = $after ] && echo 沒變 || echo 被改了) exec=$(systemctl show confluent-server -p ExecStart --value | grep -o "/etc/[^ ]*properties")"; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "  MDS 200（約 $((i*5)) 秒）under-replicated=$u，這台 $(( $(date +%s) - t0 )) 秒"; done
+```
+
+```out
+kb01 confluent-server-8.3.2-1.noarch 設定檔沒變 exec=/etc/confluent/kafka/server.properties
+  MDS 200（約 20 秒）under-replicated=0，這台 73 秒
+（4 台，每台 70–110 秒）
+```
+
+> 陷阱：重啟前沒做 `daemon-reload`，systemd 會印 `The unit file … changed on disk`。設定還是我們的（drop-in 會疊上去），但下一次 reload 才會真的用新的 unit；所以每台都在重啟前 reload。
+
+## 22.5 第一段：controller 逐台（leader 最後）
+
+@role 小安 | ops02 | cpadmin
+
+步驟和 broker 一樣。controller 的健康看 quorum：這台回來、`Lag` 是 0。**leader 會在過程中換人**（實測做完第二台時 leader 從 kc02 換到 kc01），所以每做一台之前都重新查一次 leader，跳過它，最後一輪才做 leader：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config /home/cpadmin/conf/client-internal.properties" && done_list="" && for round in 1 2 3; do leader=kc0$($Q describe --status 2>/dev/null | awk '/LeaderId/{print $2}'); h=""; for c in kc01 kc02 kc03; do [[ " $done_list " == *" $c "* ]] && continue; [ $c = $leader ] && [ $round -lt 3 ] && continue; h=$c; break; done; ssh $h.poc.lab 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; sudo systemctl restart confluent-server'; sleep 10; for i in $(seq 1 60); do lag=$($Q describe --replication 2>/dev/null | awk -v id=${h#kc0} '$1==id {print $4}'); [ "$lag" = 0 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') Lag=$lag（這輪開始時 leader=$leader）"; done_list="$done_list $h"; done
+```
+
+```out
+kc01 confluent-server-8.3.2-1.noarch Lag=0（這輪開始時 leader=kc02）
+kc03 confluent-server-8.3.2-1.noarch Lag=0（這輪開始時 leader=kc01）
+kc02 confluent-server-8.3.2-1.noarch Lag=0（這輪開始時 leader=kc01）
+```
+
+`describe --replication` 的欄位依序是 NodeId、DirectoryId、LogEndOffset、**Lag**、…，看的是第 4 欄。
+
+## 22.6 第一段：REST Proxy 與操作機的工具
+
+@role 小安 | ops02 | cpadmin
+
+原廠要求 RBAC 環境在升 REST Proxy 之前，先讓 REST Proxy 的身分在 `_confluent-command` 有 ResourceOwner（原本只有 DeveloperRead）：
+
+```bash
+source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command --kafka-cluster $CLUSTER_ID | grep -E 'Role|Name' | tr -s ' '
+```
+
+```out
+| Role | ResourceOwner |
+| Name | _confluent-command |
+```
+
+兩台 REST Proxy 一台一台換（負載平衡會把流量送到另一台），最後是操作機自己的 `kafka-*` 與 `confluent` 指令：
+
+```bash
+for h in rest01 rest02; do ssh $h.poc.lab 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-kafka-rest') REST 200（約 $((i*5)) 秒）"; done; pkgs=$(rpm -qa 'confluent-*' --qf '%{NAME}-8.3.2 '); sudo dnf -q versionlock delete 'confluent-*' >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; echo "ops02 $(rpm -q confluent-server confluent-cli | paste -sd' ')"
+```
+
+```out
+rest01 confluent-kafka-rest-8.3.2-1.noarch REST 200（約 15 秒）
+rest02 confluent-kafka-rest-8.3.2-1.noarch REST 200（約 15 秒）
+ops02 confluent-server-8.3.2-1.noarch confluent-cli-8.3.2-1.x86_64
+```
+
+第一段結束：照第 20 章 20.1–20.3 再驗一次（實測全數通過）。這時 features 還是 8.2，隨時可以照 22.9 退回。
+
+## 22.7 第二段：JDK 21 → 25
+
+@role 小安 | ops02 | cpadmin
+
+和第 5 站一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。**c3-01 不動**（原廠沒有寫 C3 2.6 支援 Java 25）。
+
+先 controller（每輪重查 leader、leader 最後）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && echo "新 JDK：$JDK_DIR" && Q="kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config /home/cpadmin/conf/client-internal.properties" && done_list="" && for round in 1 2 3; do leader=kc0$($Q describe --status 2>/dev/null | awk '/LeaderId/{print $2}'); h=""; for c in kc01 kc02 kc03; do [[ " $done_list " == *" $c "* ]] && continue; [ $c = $leader ] && [ $round -lt 3 ] && continue; h=$c; break; done; scp -q "$JDK_TAR" $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo systemctl restart confluent-server"; sleep 10; for i in $(seq 1 60); do lag=$($Q describe --replication 2>/dev/null | awk -v id=${h#kc0} '$1==id {print $4}'); [ "$lag" = 0 ] && break; sleep 5; done; echo "$h java=$(ssh $h.poc.lab 'sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe') Lag=$lag"; done_list="$done_list $h"; done
+```
+
+```out
+新 JDK：jdk-25.0.5+8
+kc01 java=/opt/java/jdk-25.0.5+8/bin/java Lag=0
+（3 台，每台約 15 秒）
+```
+
+再 broker、REST Proxy、操作機：
+
+```bash
+JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04 rest01 rest02; do case $h in kb*) unit=confluent-server; url=https://$h.poc.lab:8090/v1/metadata/id; opt="";; *) unit=confluent-kafka-rest; url=https://$h.poc.lab:8082/v3/clusters; opt="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key";; esac; scp -q "$JDK_TAR" $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo systemctl restart $unit"; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' $opt $url)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "$h java=$(ssh $h.poc.lab "sudo readlink /proc/\$(systemctl show $unit -p MainPID --value)/exe") 200（約 $((i*5)) 秒）under-replicated=$u"; done; sudo tar -xzf "$JDK_TAR" -C /opt/java && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && echo "ops02 $(java -version 2>&1 | head -1)"; echo "c3-01 $(ssh c3-01.poc.lab 'readlink /opt/java/current')"
+```
+
+```out
+kb01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 20 秒）under-replicated=0
+（broker 4 台、REST 2 台）
+ops02 openjdk version "25.0.5" … LTS
+c3-01 /opt/java/jdk-21.0.12.1+1
+```
+
+broker 的日誌會多一則 `WARNING: A terminally deprecated method in sun.misc.Unsafe has been called`：原廠說明這只是警告，JDK 25 上照常運作。第二段結束：照第 20 章再驗一次（實測全數通過）。
+
+## 22.8 第三段：finalize（之後不能退回 8.2）
+
+@role 小安 | ops02 | cpadmin
+
+先看 4.3 會把哪些 feature 升到多少，再 `--dry-run`：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && F="kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config /home/cpadmin/conf/client-admin.properties" && $F version-mapping --release-version 4.3 2>/dev/null && $F upgrade --release-version 4.3 --dry-run 2>/dev/null
+```
+
+```out
+confluent.metadata.version=137 (4.3)
+kraft.version=1
+transaction.version=2
+group.version=1
+eligible.leader.replicas.version=1
+share.version=1
+streams.version=1
+confluent.metadata.version can be upgraded to 137.
+（7 行 can be upgraded）
+```
+
+除了 metadata 版本，4.3 也一併開啟 eligible leader replicas、share groups、streams 的新協定。確定前兩段都驗過了，正式升：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && F="kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config /home/cpadmin/conf/client-admin.properties" && $F upgrade --release-version 4.3 2>/dev/null && $F describe 2>/dev/null | grep confluent.metadata.version | awk '{print $2, $8}'
+```
+
+```out
+confluent.metadata.version was upgraded to 137.
+（7 行 was upgraded）
+confluent.metadata.version CP-8.3-IV0B
+```
+
+最後照第 20 章完整驗收一次。
+
+## 22.9 回滾（finalize 之前）
+
+@role 小安 | ops02 | cpadmin
+
+任何一段出問題、features 還沒升（`describe` 看到的還是 `CP-8.2-…`），就逐台退：先把 JDK 切回 21，再把套件 `downgrade` 回 8.2.4、重新鎖、`daemon-reload`、重啟。順序和升級相反（操作機、REST Proxy → controller → broker，C3 最後）。實測拿 kb04 單台演練（其他台都是 8.3.2）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-21* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.2.4 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y downgrade $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
+```
+
+```out
+kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.12.1+1/bin/java MDS 200（約 15 秒）
+```
+
+退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。演練完再照 22.4、22.7 把它升回去。
+
+> 回滾：finalize 之後就不能用這個方法了。真的要退，得用 22.2 的備份與原廠支援的還原程序，所以 finalize 一定排在前兩段都驗收、觀察一段時間之後。

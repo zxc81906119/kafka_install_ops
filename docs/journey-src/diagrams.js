@@ -310,4 +310,16 @@ D.certrotate = () => svg(800, 300, [
   arrow(618, 220, 582, 220, null, { dash: true }),
 ].join(""));
 
+// 22. upgrade: three phases, rollback only before finalize
+D.upgrade = () => svg(800, 300, [
+  box(20, 30, 240, 120, "一：套件 8.2.4 → 8.3.2", ["JDK 維持 21", "C3 → broker 逐台 →", "controller 逐台（leader 最後）", "→ REST → 操作機"], "blue"),
+  arrow(260, 90, 288, 90),
+  box(290, 30, 220, 120, "二：JDK 21 → 25", ["切 /opt/java/current", "controller、broker、REST、", "操作機逐台重啟", "C3 留在 21"], "teal"),
+  arrow(510, 90, 538, 90),
+  box(540, 30, 240, 120, "三：finalize", ["kafka-features upgrade", "--release-version 4.3", "metadata 版本升到 8.3", "之後不能退回 8.2"], "coral"),
+  box(20, 190, 490, 80, "finalize 之前都能退", ["先把 JDK 切回 21（8.2 不支援 25）→ dnf downgrade 回 8.2.4", "順序和升級相反；每段結束跑第 20 章驗收"], "amber"),
+  arrow(265, 188, 265, 152, null, { dash: true }),
+  box(540, 190, 240, 80, "每台的步驟", ["versionlock 解開 → 換套件 → 鎖回", "daemon-reload → 重啟 → 等健康"], "gray"),
+].join(""));
+
 module.exports = D;
