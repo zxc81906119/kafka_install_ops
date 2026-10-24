@@ -289,6 +289,19 @@
 - 排程身分：**新發唯讀的 `svc-backup` 應用憑證**（使用者定案），不用 super user 的 svc-ops。查原廠：SecurityAdmin 可「查看他人 role binding、不能管理」；topic 設定、配額、SCRAM 清單需要的最低權限待 lab 實測。
 - 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO 決定（尚未列入客戶問題清單）。
 
+### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
+
+- 新章（先做）：**License 套用與到期監控**、**Controller 替換／增減（dynamic quorum）**、**Broker 擴充／縮減（Self-Balancing）**。都照「手打實跑 → 手把手 → 腳本」。
+  - 已定案但這次沒選先做：日常備份、OS 修補、C3 升級；另列待議：滾動重啟 SOP、容量規劃、災難備援（Cluster Linking，lab 記憶體要評估）、Tiered Storage。
+- 現有章節**全部補強**：
+  - 第 3 章：主機在 VMware 時停用 vMotion 與磁碟快照（原廠：可能造成整個叢集中斷）；Kafka 資料碟與 OS 碟分開、RAID 10 優先、RAID 5 不建議。
+  - 第 6／7 章：檔案系統 XFS／ext4 檢查；`java.io.tmpdir` 指到可執行的目錄，讓銀行的 `/tmp` 可以維持 noexec。
+  - 第 10 章：明確設定 `metadata.log.dir`。
+  - 第 18 章：KRaft quorum 告警（`kafka.server:type=raft-metrics`）；README 說「Confluent Server 不以 JMX 提供 raft 指標」與原廠文件矛盾，lab 實測後更正。
+  - 第 19 章：稽核 topic 的 replication factor 應為 3；原廠建議可考慮送到專用叢集。
+  - 第 22 章：註明 JDK 25 是支援版本、原廠建議仍是 21。
+- 已自行抽查的原廠原文：trial 30 天、到期後 C3 起不來、Confluent Server 能起但持續報錯（license 頁）；vMotion／快照、RAID 10、XFS／ext4、用完整 JDK（deployment 頁）。子代理說原廠建議 `noatime`，該頁沒有寫，不採用。
+
 ## 12. 給客戶的總問題清單（2026-10-22，依安裝旅程整理）
 
 > 2026-10-24：依目前的定案改寫成可以直接交給銀行的文件 `docs/Confluent-請銀行確認的事項.docx`（來源 `docs/questions-src/questions.md`，每題附「為什麼要知道」與「沒有答案時我們的預設」）。原廠題不在裡面，仍在下表。
