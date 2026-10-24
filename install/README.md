@@ -1,6 +1,6 @@
 # install/ — 照手把手文件一章一支的安裝腳本
 
-`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–20 章的每一章，對應一支 `steps/NN-*.sh`。
+`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–21 章的每一章，對應一支 `steps/NN-*.sh`（手把手只教手打指令，兩者的對照在下面「每一站」）。
 腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
 
 **作業系統**：以 RHEL 9 為準（lab 用 Rocky Linux 9 從零跑到第 20 站）。RHEL 10 是 Confluent Platform 8.2 起官方支援的，但這些腳本**沒有在 RHEL 10 實測過**；要上 RHEL 10 之前至少先驗 versionlock 外掛、原廠公鑰匯入與驗章、C3 前置套件，以及 CPU 是否支援 x86-64-v3。
@@ -37,8 +37,54 @@ install/
 
 - 每一步 rc 0 成功、rc 2 **等銀行**（印出「請銀行做」清單；銀行做完後 `--from` 同一站重跑）、其他 rc 失敗（看 `~/install-logs/` 最新的 log）。
 - 銀行的事腳本**不代做**，只印清單並驗證結果：第 2 站的掃描與交換、第 3 站的公鑰／套件庫／根憑證／JDK／AD／NTP／LB、第 9 站的簽發。
-- 重跑是安全的：dnf、install、tee 都是覆蓋成一樣的內容；格式化看到 `meta.properties` 就略過；密碑檔、cluster id、MDS token 金鑰只在不存在時產生；topic 用 `--if-not-exists`。
+- 重跑是安全的：dnf、install、tee 都是覆蓋成一樣的內容；格式化看到 `meta.properties` 就略過；密碼檔、cluster id、MDS token 金鑰只在不存在時產生；topic 用 `--if-not-exists`。
 - 密碼不進畫面、不進 log：`~/pki/store.pass`、`~/secrets/*.pass`（0600）讀進變數後交給 envsubst 或指令。
+
+## 每一站：在哪跑、會在哪裡停下
+
+手把手文件只教手打指令；這張表是兩者的對照。指令都在操作機以 cpadmin 執行，除非另外註明。
+
+| 站 | 指令 | 會停下等銀行（rc 2）／注意 |
+|---|---|---|
+| 1 | 下載機（root）`bash install/steps/01-download.sh` | 落地區預設 `/out`（`OUT=` 可改）；已下載的檔案 `dnf download` 會 SKIPPED |
+| 2 | `bash install/install.sh --only 02` | 掃描、開單、檔案交換是銀行的事：印清單；送到後核對 SHA256SUMS 與原廠簽章 |
+| 3 | `--only 03` | 我方只產生 ssh 金鑰（`SSH_KEY_SOURCE=file` 時）；金鑰登入、根憑證、OS 套件庫、JDK、LDAPS、負載平衡任一項沒好就停 |
+| 4–8 | `--only 04` … `--only 08` | 6 只讀；8 裝套件並 versionlock |
+| 9 | `--only 09` | 第一次產生私鑰與 CSR 後停在「請銀行簽」；回覆放進 `~/pki/incoming/` 再跑一次 |
+| 10 | `--only 10` | 重跑時設定或 drop-in 有變、服務在跑的主機一台一台重啟；16 做過會照樣加密，19 做過會帶上稽核設定 |
+| 11–13 | `--only 11` … `--only 13` | 12、13 重跑時 16 做過會照樣加密 |
+| 14 | `--only 14` | 只讀的總檢查。2–14 可一次跑：`bash install/install.sh --to 14` |
+| 15 | 下載機 `bash install/steps/15-conjur-provider-jar.sh`，再 `--only 15` | `SECRETS_MODE=conjur` 才用；15.7、15.8 的演練不在腳本裡 |
+| 16 | `--only 16` | `SECRETS_MODE=sp` 才用；`VAULT_ACCESS=manual` 時：沒有 passphrase 檔會停；master key 產生後停下等 Secrets 團隊存進 PVWA、記單號（`~/secrets/master-key.custody`）；16.6 輪替不在腳本裡 |
+| 17 | `--only 17` | `OPMENU=1`；`OPMENU_SECRETS=manual` 時要維運人員互動登入試跑主機類項目 |
+| 18 | `--only 18` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/` |
+| 19 | `--only 19` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15／16 留下的）處理 |
+| 20 | `--only 20` | 印「驗收：N / N 項通過」；冷開機（20.4）交給機房演練 |
+| 21 | `bash install/steps/21-cert-rotate.sh status｜leaf｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；換 CA 三階段 = `trust-sync` → `leaf` → `trust-sync` |
+
+## lab 與客戶環境的設定差異（conf/site.env）
+
+客戶的 CyberArk 只有 PAM（PSM／PSMP 代登、SSH 金鑰輪替），沒有 CCP／Conjur，程式碰不到保管庫，所以下面這些要換：
+
+| 設定 | lab | 客戶 | 為什麼 |
+|---|---|---|---|
+| `SSH_KEY_SOURCE` | `file` | `agent` | cpadmin 私鑰變更窗口內從 PVWA 取出貼進 ssh-agent，不落地 |
+| `FETCH_JDK` | `1` | `0` | JDK 由銀行交付到 `landing/bank/` |
+| `VAULT_ACCESS` | `api` | `manual` | passphrase 由人從 PVWA 取出；master key 由 Secrets 團隊存進 PVWA |
+| `SUMMON` | `1` | `0` | Summon 要能自動向保管庫取值；客戶的 master key 落地 `service.env`（0600 root） |
+| `LDAP_PASSWORD_VIA_ENV` | `1` | `0` | 需要 Summon；客戶的 AD 查詢密碼加密在 `security.properties`，換密碼後重跑第 16 站 |
+| `OPMENU_SECRETS` | `conjur` | `manual` | 維運人員做主機類項目時才從 PVWA 貼上私鑰 |
+| `OPMENU_OS_USER`、`OPMENU_ENV_LABEL` | `op01`、`LAB` | 實際帳號、`PROD`／`UAT` | |
+| 主機、`DOMAIN`、`REPO_URL`、AD 的 DN、`NTP_SERVER`、`HEAP_*` | lab 值 | 實際值 | heap 依主機記憶體調整 |
+
+> 注意：客戶這組設定還沒有從零整套跑過；驗過的是片段：第 16 站 manual 的保管流程（隔離複本 4 種情況）、OP menu manual 12/12。上線前先在 lab 用這組設定從零跑到第 20 站。
+
+## 安裝完之後還會用到的
+
+- **改了設定**（範本、`site.env` 的 heap 等）：重跑對應的站（10／12／13）。10 只重啟設定有變的主機；做過 16 會照樣加密，不會把明文寫回主機。
+- **換我方管的密碼**（keystore 密碼、AD 查詢密碼）：改 0600 密碼檔後重跑第 16 站（重新加密、滾動重啟）。
+- **改稽核規則**：改 `templates/audit.tpl` 後重跑第 19 站。
+- **換憑證**：第 21 站（見上表）。
 
 ## 寫法約定（改腳本前先看）
 
@@ -64,7 +110,9 @@ install/
 | `SUMMON=1` | 16 站的 master key 不落地（16.8）；0 = 落地 `service.env` |
 | `LDAP_PASSWORD_VIA_ENV=1` | 16 站 AD 查詢密碼不進密文、由 Summon 注入 `${env:…}`（16.9，需 SUMMON=1） |
 | `OPMENU` `JMX_EXPORTER` `AUDIT_LOG` | 17／18／19 站要不要做 |
-| `VAULT_*` | 保管庫位置、policy、身分檔路徑 |
+| `VAULT_ACCESS=api|manual` | 程式能不能直接讀寫保管庫；manual 時 16 站的 passphrase 與 master key 都經人從 PVWA 取存 |
+| `OPMENU_SECRETS=conjur|ccp|manual` | 選單的 cpadmin 私鑰、緊急憑證從哪取 |
+| `VAULT_*` | 保管庫位置、policy、身分檔路徑（api 時用） |
 
 16 站一次把 16.3–16.9 做完，只滾動重啟一次；19 站依 `~/conf/secrets.mode`（15／16 留下的）決定密碼怎麼放。
 
