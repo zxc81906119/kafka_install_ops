@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-24（lab 使用中：客戶模式從零實跑 8.2.4）
+Updated: 2026-10-24 晚（lab 已停、Docker Desktop 已關：使用者要用記憶體）
 
 ## 現在在做什麼
 安裝流程重新設計（使用者主導、Claude 記錄）＋ `install/` 一章一支的安裝腳本（照手把手文件），以 `lab` 專案實跑驗證。
@@ -26,6 +26,13 @@ Updated: 2026-10-24（lab 使用中：客戶模式從零實跑 8.2.4）
 - 從未 push。
 
 ## 環境狀態
-- lab: **使用中（Claude）**：第 0 章用 run-chapter.js 從文件重建（14 塊全過）；客戶模式設定只改送進 lab 的 site.env。PVWA 模擬在 ~/kafka-lab/pvwa/。
+- lab: **已停**（容器 stop、Docker Desktop 關閉、wsl --shutdown）。狀態：驗證 B 跑到 `22-upgrade.sh packages` 中途被中斷（plan、backup 已過），lab 是半升級狀態，下次從零重建即可。重開：啟動 Docker Desktop → `cd ~/kafka-lab && docker compose -f compose.yml start && docker start dl01`。
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
+
+## 待辦（2026-10-24 晚，依序）
+1. 驗證 B 重跑：客戶模式從零 8.2.4 → `22-upgrade.sh` plan／backup／packages／jdk 25／rollback kb04／ONLY_HOSTS 升回／finalize（不帶確認要停、帶確認升版）→ 驗收。腳本：scratchpad 的 valB.sh（要重寫成 repo 內的 lab 腳本較好）。
+2. 全書照文件從零實跑（lab 模式，第 0–21 章，run-chapter.js）：驗證審查修正（d7f4c31）的指令與預期輸出。
+3. 補強需要 lab 的：第 6／7 章檔案系統與 java.io.tmpdir、第 10 章 metadata.log.dir、第 18 章 raft 指標（README 說法待更正）、第 19 章稽核 topic RF。
+4. 新章：license（讀 JWT 到期、套用程序未實測、告警）、controller 替換（kc03 同名換新機）、broker 縮減／擴充（kb04）。
+5. 日常備份章（svc-backup 唯讀身分、排程＋OP menu）、OS 修補、C3 升級（使用者這次沒選先做）。
