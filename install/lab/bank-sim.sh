@@ -68,6 +68,15 @@ prepare() {
   fi
   as_root_on "$OPS_HOST" 'k=$(cat '"$public_key_source"'); install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/cpadmin <<<"$k"; install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/repodeploy <<<"$k"; ls /etc/ssh/authorized_keys.d/'
 
+  # repo01 的 HTTPS 憑證要驗得過 ca/root.crt：手把手第 21 章演練過換 CA 的 lab，repo.crt 會是 G2／G3 簽的，用現在的 CA 重簽
+  local repo_tls=$LAB/images/web/tls
+  if ! openssl verify -CAfile "$(windows_path "$LAB/ca/root.crt")" -untrusted "$(windows_path "$repo_tls/repo.crt")" "$(windows_path "$repo_tls/repo.crt")" >/dev/null 2>&1; then
+    announce "3.2 套件庫管理員：repo01 的 HTTPS 憑證驗不過目前的根（之前換過 CA），用現在的 CA 重簽"
+    openssl req -new -key "$(windows_path "$repo_tls/repo.key")" -out "$(windows_path "$repo_tls/repo.csr")" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null
+    bash "$LAB/ca/sign.sh" "$repo_tls/repo.csr" "$repo_tls/repo.crt" && rm -f "$repo_tls/repo.csr"
+    docker exec "$(container_of repo01)" systemctl restart httpd
+  fi
+
   announce "3.2 OS 套件庫（repo01 /os/）：有現成的 $LAB/bank-os-repo 就直接用，沒有才從 Rocky repo 抓"
   if [ ! -f "$LAB/bank-os-repo/repodata/repomd.xml" ]; then
     docker run --rm -v "$(windows_path "$LAB/bank-os-repo"):/out" lab-node:1 bash -c '
