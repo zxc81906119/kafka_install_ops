@@ -22,7 +22,7 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
 1. 客戶模式從零全書重跑（0–21、23–28），驗證 11.2、16.x、20.6、26.5 的新寫法；再看一次 Conjur 模式第 16 章。
 2. 升級演練：`~/kafka-lab/landing-extra/*` 搬回 `landing`，`run-upgrade-drill.sh`；再 `CP_VERSION=8.2.4 TO=17 run-customer.sh`
    後 `run-full.sh customer 22 23`。
-3. CyberArk 缺口 4（svc-ops／MDS token 私鑰正本：建議放 PVWA 專屬 safe）待使用者決定。
+3. CyberArk 缺口 4：使用者決定不做（維持 20.5 離線保管）。
 - 從未 push。
 
 ## 環境狀態

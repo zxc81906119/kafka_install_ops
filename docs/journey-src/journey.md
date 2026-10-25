@@ -4550,11 +4550,11 @@ cd ~/kafka-lab && mv pvwa/cpadmin_ed25519 pvwa/cpadmin_ed25519.prev && mv pvwa/c
 agent 裡還是舊鑰，ssh 被拒：
 
 ```bash
-r=$(ssh -o BatchMode=yes -o ConnectTimeout=5 kb01.poc.lab hostname 2>&1); echo "agent 裡：$(ssh-add -l | cut -d' ' -f2)；ssh kb01：$(grep -o 'Permission denied' <<<"$r" || echo "$r")"
+r=$(ssh -o BatchMode=yes -o ConnectTimeout=5 kb01.poc.lab hostname 2>&1); echo "agent 裡：$(ssh-add -l | cut -d' ' -f2)；ssh kb01：$(grep -q 'Permission denied' <<<"$r" && echo "被拒（Permission denied）" || echo "$r")"
 ```
 
 ```out
-agent 裡：SHA256:…（舊金鑰）；ssh kb01：Permission denied
+agent 裡：SHA256:…（舊金鑰）；ssh kb01：被拒（Permission denied）
 ```
 
 @role 小安（清掉舊鑰、從 PVWA 貼新鑰；lab 由 Windows 終端代貼） | Windows 終端 | 本機
