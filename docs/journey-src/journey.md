@@ -3448,6 +3448,8 @@ opmenu 27 items; known_hosts 20 keys; uid=1001(op01) gid=1002(op01) groups=1002(
 
 @only customer
 
+@role 銀行 OS 團隊（lab 由小安用 sudo 代勞） | ops02 | cpadmin
+
 `manual`：兩個 `*_SECRET` 是給人看的 PVWA 位置，選單要私鑰時會照這個提示維運人員去取：
 
 ```bash
@@ -3482,6 +3484,8 @@ sudo chmod 0644 /etc/opmenu/opmenu.conf && sudo runuser -u op01 -- /opt/opmenu/o
 ```
 
 @only conjur,provider
+
+@role 銀行 OS 團隊（lab 由小安用 sudo 代勞） | ops02 | cpadmin
 
 `conjur`：選單以 17.1 發的 `host/kafka/opmenu` 身分向 Conjur 取值。先放身分檔（只有 `opmenu` 群組讀得到），再寫設定：
 
@@ -3566,6 +3570,8 @@ bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；2
 
 @only customer
 
+@role 小安（代打 bob、carol、alice；以 sudo 切成 op01 執行） | ops02 | cpadmin
+
 主機類項目（23、21）和緊急模式（91）會提示「請到 CyberArk PVWA 取出：Safe KAFKA-OPS / cpadmin-hosts（SSH key）」，維運人員從 PVWA 複製、貼上、按 `Ctrl-D`（貼上的內容不會出現在畫面）。為了把結果印在這裡，lab 用一支小腳本在虛擬終端機裡跑選單，等提示出現後把 stdin 的內容「貼」進去：
 
 ```bash
@@ -3602,6 +3608,8 @@ kb04 MDS=200 after ~20s
 ```
 
 @only conjur,provider
+
+@role 小安（代打 bob、alice；以 sudo 切成 op01 執行） | ops02 | cpadmin
 
 選單自己向 Conjur 取私鑰與緊急憑證，維運人員不用貼；`--run` 非互動就能跑：
 
@@ -4028,6 +4036,8 @@ grep -c 'security.event' common.tpl
 
 @only customer,conjur
 
+@role 小安 | ops02 | cpadmin
+
 重新產生 7 台的 `server.properties`（第 16 站的流程：明文渲染 → Secret Protection 加密，新增的兩個密碼欄位會被一起加密進同一份 `security.properties`）、派送、滾動重啟。REST Proxy 與 C3 不受影響：
 
 ```bash
@@ -4041,6 +4051,8 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04
 ```
 
 @only conjur
+
+@role 小安 | ops02 | cpadmin
 
 做過 16.9 的話（AD 查詢密碼改由 Summon 注入）：剛才從範本重新產生的設定又把它加密回密文了，重啟前照 16.9 改回 `${env:LDAP_BIND_PASSWORD}`。沒做 16.9 的主機（`secrets.yml` 裡沒有這個變數）直接略過，不會有輸出：
 
@@ -4282,6 +4294,8 @@ kb03 MDS=200 after ~20s; under-replicated=0
 
 @only customer
 
+@role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
+
 ```bash
 cd ~/kafka-lab && MSYS_NO_PATHCONV=1 docker compose -f compose.yml stop 2>&1 | grep -c Stopped && t0=$(date +%s) && MSYS_NO_PATHCONV=1 docker compose -f compose.yml start 2>&1 | grep -c Started && probe() { docker exec lab-ops02-1 bash -c "curl -sk -o /dev/null -w '%{http_code}' $1"; }; for i in $(seq 1 60); do a=0; for h in kb01 kb02 kb03 kb04; do [ "$(probe https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && a=$((a+1)); done; [ $a = 4 ] && break; sleep 10; done; echo "4 台 broker 的 MDS 都回 200：$(( $(date +%s) - t0 ))s"; for i in $(seq 1 60); do [ "$(probe https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 10; done; echo "C3 回 200：$(( $(date +%s) - t0 ))s"; echo "REST 經 LB：$(docker exec lab-ops02-1 bash -c "curl -s --cacert /etc/pki/ca-trust/source/anchors/bank-root.pem --cert /home/cpadmin/pki/certs/app-legacy-billing.crt --key /home/cpadmin/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters")"; docker exec lab-kb01-1 bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
 ```
@@ -4311,6 +4325,8 @@ kb01
 ```
 
 @only conjur,provider
+
+@role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
 
 lab 一併把 Conjur 關掉再開，就是最壞情況：做過 16.8 的話 broker 依賴保管庫（Summon 向 Conjur 取 master key），Conjur 比 broker 慢起來時 broker 會先失敗、靠 systemd 的 `Restart=on-failure` 每 10 秒重試：
 
@@ -4693,6 +4709,8 @@ repo01.poc.lab:443 PoC Bank Issuing CA G2
 
 @only conjur,provider
 
+@role 銀行 CA 窗口 | Windows 終端 | 本機
+
 銀行有 Conjur 的話，保管庫自己的 HTTPS 憑證也改由 G2 簽：
 
 ```bash
@@ -4958,6 +4976,8 @@ repo01.poc.lab:443 中繼的簽發者：PoC Bank Root CA G3
 ```
 
 @only conjur,provider
+
+@role 銀行 CA 窗口 | Windows 終端 | 本機
 
 銀行有 Conjur 的話，保管庫的憑證檔也換成新鏈：
 

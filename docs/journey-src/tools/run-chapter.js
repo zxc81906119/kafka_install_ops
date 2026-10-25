@@ -17,11 +17,13 @@ const groups=[];
 while((m=re.exec(sec))){
   if(m[1]){ head=m[1]; level=m[2].length; while(scopes.length && scopes[scopes.length-1].level>=level) scopes.pop(); continue; }
   if(m[3]){ const p=m[3].split("|").map(x=>x.trim()); role={who:p[0],host:p[1],user:p[2]}; continue; }
-  if(m[4]){ const list=m[4].trim(); if(scopes.length && scopes[scopes.length-1].level===level) scopes.pop(); if(list!=="all") scopes.push({level, list:list.split(",").map(x=>x.trim())}); continue; }
+  // 新的 @only 範圍要有自己的 @role：不然會沿用上一個（可能是別的模式、被略過的那塊）的主機
+  if(m[4]){ const list=m[4].trim(); if(scopes.length && scopes[scopes.length-1].level===level) scopes.pop(); if(list!=="all") { scopes.push({level, list:list.split(",").map(x=>x.trim())}); role=null; } continue; }
   const code=m[5]; n++;
   const out_of_mode=scopes.find(x=>!x.list.includes(MODE));
   if(out_of_mode) { groups.push({key:"skip",blocks:[{n,head,why:`only ${out_of_mode.list.join(",")}`}]}); continue; }
-  if(!role || role.host==="—" || /\s-it\s/.test(code)) { groups.push({key:"skip",blocks:[{n,head,why:"interactive"}]}); continue; }
+  if(!role) throw new Error(`block ${n} (${head.trim()}) has no @role in its @only section`);
+  if(role.host==="—" ||/\s-it\s/.test(code)) { groups.push({key:"skip",blocks:[{n,head,why:"interactive"}]}); continue; }
   let ex=null, key="local";
   if(!/Windows/.test(role.host)) {
     const c= role.host==="dl01" ? "dl01" : `lab-${role.host}-1`;
