@@ -12,6 +12,8 @@
 #   CONFIRM_CLUSTER_ID=<cluster id> bash steps/22-upgrade.sh finalize <release>
 #                                                   22.8 第三段：kafka-features upgrade --release-version <release>（例如 4.3）；不能退，所以要帶 cluster id 確認
 #   bash steps/22-upgrade.sh rollback <主機> <版本>   22.9 finalize 之前：這台 JDK 切回最新的 jdk-21*、套件 downgrade 到 <版本>
+#   bash steps/22-upgrade.sh c3 <版本>              只換 Control Center（手把手第 28 章）：比現在新就 install、比較舊就 downgrade（回滾）；
+#                                                   套件要先上架到內部套件庫；做完把 site.env 的 C3_VERSION 改成同一版
 #   ONLY_HOSTS="kb04" bash steps/22-upgrade.sh packages|jdk …   只做列出的主機（回滾後把那台升回去）；略過 C3、role binding、操作機
 #
 # 每台的步驟：versionlock 解開 → 這台裝的每個 Confluent 套件換成目標版本 → 鎖回 → daemon-reload
@@ -67,6 +69,12 @@ packages=$(rpm -qa "confluent-*" --qf "%{NAME}-$VERSION ")
 sudo dnf -q versionlock delete "confluent-*" >/dev/null
 sudo dnf -q -y "$DNF_ACTION" $packages >/dev/null && sudo dnf -q versionlock add $packages >/dev/null
 sudo systemctl daemon-reload
+# C3：RPM 換版本會把 C3 自己要寫的 generated 檔改回 root:root 644（lab 實測），改回來，不然之後改告警規則寫不進去
+if [ -d /etc/confluent-control-center ]; then
+  for file in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do
+    sudo chown cp-control-center:confluent /etc/confluent-control-center/$file && sudo chmod 0640 /etc/confluent-control-center/$file
+  done
+fi
 after=$(sudo sha256sum "$PROPS" | cut -c1-12)
 exec_file=$(systemctl show "$UNIT" -p ExecStart --value | grep -o '/etc/[^ ]*properties')
 echo "$(rpm -q --qf '%{VERSION}' "$MAIN_PACKAGE") config=$([ "$before" = "$after" ] && echo same || echo CHANGED) exec=$exec_file"
@@ -79,7 +87,8 @@ change_packages_and_restart() {
   case $host in rest*) main_package=confluent-kafka-rest;; c3*) main_package=confluent-control-center-next-gen;; *) main_package=confluent-server;; esac
   result=$(ssh_script "$host" VERSION="$version" DNF_ACTION="$dnf_action" UNIT="$unit" PROPS="$props" MAIN_PACKAGE="$main_package" <<<"$CHANGE_PACKAGES")
   case $result in "$version config=same exec=$props") ok "$host：$result";; *) fail "$host：$result（不重啟）"; return 1;; esac
-  ssh_run "$host" "sudo systemctl restart $unit"
+  # C3 的套件裡也有 Prometheus、Alertmanager：一起重啟，才會跑新版的執行檔
+  case $host in c3*) ssh_run "$host" "sudo systemctl restart prometheus alertmanager $unit";; *) ssh_run "$host" "sudo systemctl restart $unit";; esac
   if wait_healthy "$host"; then ok "$host：重啟後健康"; else fail "$host：重啟後沒有健康"; return 1; fi
 }
 
@@ -221,9 +230,21 @@ rollback() {
   change_packages_and_restart "$host" "$version" downgrade || die "$host 回滾失敗"
 }
 
+# c3 <版本>：只換 Control Center；比現在新就 install、比較舊就 downgrade
+c3() {
+  local target=${1:?用法：bash $0 c3 <版本>} installed action
+  installed=$(ssh_run "$C3_HOST" "rpm -q --qf '%{VERSION}' confluent-control-center-next-gen")
+  section "28 Control Center $installed → $target（$C3_HOST）"
+  [ "$installed" = "$target" ] && { ok "已經是 $target"; return 0; }
+  action=install; [ "$(printf '%s
+' "$installed" "$target" | sort -V | tail -1)" = "$installed" ] && action=downgrade
+  change_packages_and_restart "$C3_HOST" "$target" "$action" || die "C3 換版本失敗"
+  [ "$target" = "$C3_VERSION" ] || warn "site.env 的 C3_VERSION 還是 $C3_VERSION：改成 $target，之後重跑其他站才一致"
+}
+
 case $ACTION in
   plan|backup) "$ACTION";;
-  packages|jdk|finalize|rollback) shift; "$ACTION" "$@";;
+  packages|jdk|finalize|rollback|c3) shift; "$ACTION" "$@";;
   *) sed -n '5,17p' "$0"; exit 1;;
 esac
 finish_step

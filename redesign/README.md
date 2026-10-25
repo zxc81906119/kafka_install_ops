@@ -290,6 +290,12 @@
 - 實作：操作機 `~/conf/metadata-backup.sh`＋systemd timer（每天 02:00，保留 30 天，syslog tag `confluent-backup`）；7 個文字檔＋SHA256SUMS，比對兩天的備份用 sha256＋join（精簡 OS 沒有 diff）；features 的 Epoch 拿掉、ACL 排序，否則每天都「有變」。OP menu 立即匯出（擴充 44）**尚未做**。
 - 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO 決定（尚未列入客戶問題清單）。
 
+### JMX exporter 的身分認證（2026-10-25 定案）
+
+- 維持現狀：HTTPS（主機憑證）＋ HTTP Basic auth（帳號 prometheus，主機上只存加鹽 SHA-256），不加 mTLS。
+- 已知取捨：9 個 exporter 共用一組 scrape 密碼；keystore 密碼明文在 exporter YAML（0640 root:confluent）。
+- 待問銀行：7071 是否只放行行內 Prometheus 的來源 IP（第 7 章 firewalld 目前對所有來源開放）；行內 Prometheus 抓其他系統用哪種認證。
+
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
 **2026-10-25 進度（lab 實跑）**：license 監控（第 23 章＋`23-license.sh`）、controller 替換（第 24 章＋`24-controller-replace.sh`）、broker 縮減／擴充（第 25 章＋`25-broker-scale.sh`）、日常備份（第 26 章）、換鏈（21.4＋`21-cert-rotate.sh chain`）都已實作並實跑。補強：第 6 章資料碟檔案系統檢查、10.3 `java.io.tmpdir` 選配（kb04 實測）、第 10 章明確設定 `metadata.log.dir`（kc01、kb01 實測）、第 18 章 KRaft quorum 告警、第 19 章稽核 topic RF 3 確認、第 22 章 JDK 25 註記。

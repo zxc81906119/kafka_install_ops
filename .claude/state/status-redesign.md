@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-25 早上（lab 停止中：Docker Desktop 未啟動）
+Updated: 2026-10-25 上午（lab 使用中：Claude；C3 回到 2.6.1）
 
 ## 現在在做什麼
 安裝流程重新設計（使用者主導、Claude 記錄）＋ `install/` 一章一支的安裝腳本（照手把手文件），以 `lab` 專案實跑驗證。
@@ -30,8 +30,12 @@ Updated: 2026-10-25 早上（lab 停止中：Docker Desktop 未啟動）
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
 
-## 待辦（2026-10-25 早上；夜間工作的細節見 log/2026-10-25-overnight-chapters.md）
-1. ~~全書重跑~~、~~21.4 換鏈＋chain 腳本~~、~~第 23 章 license＋23-license.sh~~、~~第 24 章換 controller＋24-controller-replace.sh~~、~~第 25 章 broker 增減＋25-broker-scale.sh~~、~~第 26 章日常備份＋26-metadata-backup.sh~~、~~補強第 6／10／18／19／22 章~~：全部 lab 實跑通過。
-2. **還沒做**：所有演練之後的最後一次第 20 章驗收（20.1–20.3）。跑的時候 session 中斷、Docker Desktop 也停了；開 lab 後先跑這個。
-3. lab 其他 5 台（kc02、kc03、kb02–kb04）的 properties 還沒有 `metadata.log.dir`（值等於預設）；下次重新產生設定時帶入。
-4. 之後：OS 修補章、C3 升級章；OP menu 44 擴充「立即匯出」備份；遮蔽失敗掃描加 ERROR／登入失敗／login: 401／AUTH_FAIL。
+## 待辦（2026-10-25 上午）
+1. ~~冷開機後第 20 章驗收~~ 21/21、15/15、應用程式端全過；OS 修補後再跑一次也全過。
+2. ~~lab 其他 5 台 metadata.log.dir~~ 完成（7 台都生效，操作機的範本也補了）。
+3. ~~第 27 章 OS 修補＋27-os-patch.sh~~：11 台各 6 個 OS 套件（含 openssh-server）實際更新，Confluent 不動、不用重開機。
+4. ~~第 28 章 C3 升級＋22-upgrade.sh c3~~：2.6.1→2.6.0→2.6.1。坑：RPM 換版本會把 C3 自己寫的 3 個 generated 檔改回 root:root 644，已在程序與腳本裡改回；C3 換版本要連 Prometheus、Alertmanager 一起重啟。
+5. 定案：JMX exporter 維持 HTTPS＋Basic auth（redesign 有記）。
+6. **等使用者決定**：cp-server 改成純 server 憑證（EKU 只留 serverAuth）。Claude 的建議：另發 c3-monitoring（clientAuth、無 RBAC）給 C3 ↔ 內建 Prometheus／Alertmanager；不要用 svc-c3（SystemAdmin，私鑰會以明文 PEM 放在 c3-01）；檢查指令改用 svc-ops；要不要 client_allowed_sans 待定。
+7. 待查：telemetry（OTLP → C3 Prometheus）有沒有 raft／quorum 指標（白名單擋住，沒驗）；文件要寫成「JMX 沒有 raft-metrics」。
+8. 之後：OP menu 44 擴充「立即匯出」備份；遮蔽失敗掃描加 ERROR／登入失敗／login: 401／AUTH_FAIL；請銀行確認事項加 JMX 來源 IP 限制與行內 Prometheus 認證方式。

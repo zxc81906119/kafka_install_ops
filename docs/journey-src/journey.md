@@ -3607,7 +3607,7 @@ docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
 bank-prometheus removed
 ```
 
-> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 24.1 的 `kafka-metadata-quorum describe --replication`。
+> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 24.1 的 `kafka-metadata-quorum describe --replication`。這裡說的是 **JMX 這條路**；broker 與 controller 另外會用 telemetry（OTLP）推指標到 C3 內建的 Prometheus，那條路受 `confluent.telemetry.exporter._c3.metrics.include` 白名單限制，有沒有 raft／quorum 指標還沒驗證。
 
 > 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3 或另外接 lag exporter。
 
@@ -5273,3 +5273,198 @@ topics.txt 多出來的：Topic: orders.backup-demo
 > features 的 `Epoch` 每次都不同、ACL 列出的順序不固定，腳本已經拿掉與排序，否則每天都會顯示「有變」。
 
 還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。
+
+# 27. 第二十七站：OS 修補
+
+銀行每月的 OS 修補照常由銀行的套件庫（Satellite／Nexus／web server）發布；平台這邊要做的只是「一台一台修、該重開就重開、健康了才做下一台」。Confluent 套件被 versionlock 鎖住（第 8 站），JDK 是 tar（第 5 站），所以 `dnf update` 只會動 OS 套件；C3 的前置套件 `cyrus-sasl`、`openssl-devel` 跟著 OS 修補走（不鎖）。
+
+| 順序 | 主機 | 修完之後 |
+|---|---|---|
+| 1 | broker 逐台 | 要重開機就重開；平台服務要重啟就重啟；等 MDS 200、沒有 under-replicated 才下一台 |
+| 2 | controller 逐台，leader 最後 | 等 quorum 的 Lag 回到 0 |
+| 3 | REST Proxy、C3、操作機 | REST 經 LB 200、C3 200 |
+
+要不要重開機、要不要重啟服務，用 `dnf needs-restarting` 判斷，不靠人記：`-r` 看核心程式庫（kernel、glibc、systemd…）有沒有更新，`-s` 列出用到被更新程式庫、需要重啟的服務。JVM 自帶 TLS 實作，OS 的 openssl 更新通常不會把 Confluent 服務列進 `-s`。
+
+> lab 是容器，不能真的重開機（核心是 WSL2 的）；遇到「要重開機：是」時，正式環境是 `sudo systemctl reboot` 再等健康，lab 改用 `docker restart lab-<主機>-1`。
+
+## 27.1 修補前：看有哪些更新、Confluent 有沒有鎖住
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" && for h in kc01 kb01 rest01 c3-01 ops02; do ssh $h.poc.lab 'echo "$(hostname)：可更新 $(sudo dnf -q check-update --refresh 2>/dev/null | grep -c "^[a-zA-Z0-9]") 個（$(sudo dnf -q check-update 2>/dev/null | awk "/^[a-zA-Z0-9]/{print \$1}" | sed "s/\.[^.]*$//" | sort -u | paste -sd" " -)）；鎖住 $(sudo dnf -q versionlock list 2>/dev/null | grep -c confluent) 個 confluent 套件"'; done
+```
+
+```out
+under-replicated：0
+kc01：可更新 6 個（acl libacl openssh openssh-clients openssh-server vim-minimal）；鎖住 9 個 confluent 套件
+kb01：可更新 6 個（acl libacl openssh openssh-clients openssh-server vim-minimal）；鎖住 9 個 confluent 套件
+rest01：可更新 6 個（…同上）；鎖住 4 個 confluent 套件
+c3-01：可更新 6 個（…同上）；鎖住 1 個 confluent 套件
+ops02：可更新 6 個（…同上）；鎖住 10 個 confluent 套件
+```
+
+> 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 站重新鎖。Confluent 的升級只走第 22 章。
+
+## 27.2 broker 逐台
+
+@role 小安 | ops02 | cpadmin
+
+每台：更新 → 看要不要重開機、哪些平台服務要重啟 → 照判斷做 → 等健康、沒有 under-replicated 才下一台：
+
+```bash
+cat > ~/conf/os-patch-host.sh <<'EOF'
+#!/usr/bin/env bash
+# 在一台主機上：dnf update（Confluent 由 versionlock 擋住）→ 判斷要不要重開機、哪些平台服務要重啟
+n=$(sudo dnf -q check-update --refresh 2>/dev/null | grep -c '^[a-zA-Z0-9]')
+sudo dnf -y -q update >/dev/null 2>&1 || { echo "$(hostname) dnf update 失敗"; exit 1; }
+reboot=$(sudo dnf needs-restarting -r >/dev/null 2>&1 && echo 否 || echo 是)
+services=$(sudo dnf needs-restarting -s 2>/dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u | paste -sd, -)
+echo "$(hostname) 更新 $n 個；要重開機：$reboot；要重啟的平台服務：${services:-無}；confluent 版本：$(rpm -qa 'confluent-*' --qf '%{VERSION}\n' | sort -u | paste -sd, -)"
+EOF
+chmod 0700 ~/conf/os-patch-host.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-server*) ssh $h.poc.lab 'sudo systemctl restart confluent-server';; esac; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && [ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" = 0 ] && break; sleep 10; done; echo "  $h MDS=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
+```
+
+```out
+kb01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+  kb01 MDS=200
+（4 台）
+```
+
+## 27.3 controller 逐台，leader 最後
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config $HOME/conf/client-internal.properties" && leader=kc0$(kafka-metadata-quorum $Q describe --status 2>/dev/null | awk '/LeaderId/{print $2}') && for h in $(echo kc01 kc02 kc03 | tr ' ' '\n' | grep -vx $leader) $leader; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-server*) ssh $h.poc.lab 'sudo systemctl restart confluent-server';; esac; id=${h#kc0}; for i in $(seq 1 60); do [ "$(kafka-metadata-quorum $Q describe --replication 2>/dev/null | awk -v id=$id '$1==id {print $4}')" = 0 ] && break; sleep 5; done; echo "  $h Lag=$(kafka-metadata-quorum $Q describe --replication 2>/dev/null | awk -v id=$id '$1==id {print $4}')$([ $h = $leader ] && echo '（leader，最後做）')"; done
+```
+
+```out
+kc02 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+  kc02 Lag=0
+kc03 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+  kc03 Lag=0
+kc01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+  kc01 Lag=0（leader，最後做）
+```
+
+## 27.4 REST Proxy、C3、操作機
+
+@role 小安 | ops02 | cpadmin
+
+REST 一台一台（另一台照常服務）；C3 修補期間畫面短暫不能用（只有一台）；操作機最後，自己修自己：
+
+```bash
+for h in rest01 rest02 c3-01; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-kafka-rest*) ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest';; *confluent-control-center*|*prometheus*|*alertmanager*) ssh $h.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done';; esac; done; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; bash ~/conf/os-patch-host.sh
+```
+
+```out
+rest01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+rest02 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+c3-01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：2.6.1
+  REST 經 LB=200 C3=200
+ops02 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+```
+
+> 實測（2026-10-25，lab）：11 台各 6 個 OS 套件（含 openssh-server，修補過程中 ssh 連線不斷），Confluent 版本都沒變、不用重開機、沒有平台服務要重啟；之後第 20 章驗收全過。openssh-server 更新後 sshd 由 RPM 自己重啟，所以 `-s` 雖然會列 sshd，這裡只看平台服務。
+
+最後照第 20 章驗收一次（20.1–20.3）。
+
+# 28. 第二十八站：升級 Control Center
+
+Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Platform 頻繁，可以單獨升級。和第 22 章不同的地方：
+
+| 項目 | 說明 |
+|---|---|
+| 相容性 | 先查原廠的相容表：新版 C3 要支援目前的 CP 版本（2.6.x 支援到 CP 8.3.x）。CP 要升級時，**C3 先升**（22.3） |
+| 停機 | 只有一台：升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看） |
+| 資料 | 內建 Prometheus 的歷史指標在 C3 的資料目錄，換套件不會清掉 |
+| JDK | C3 留在 JDK 21（22.7） |
+| 回滾 | `dnf downgrade` 回舊版（舊版的 RPM 一直留在套件庫，第 4 站） |
+
+lab 上已經是原廠最新的 2.6.1，所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 28.3。
+
+## 28.1 下載、驗簽章
+
+@role 小安 | dl01 | root
+
+和第 1 站一樣指定精確版本；C3 的相依（`cyrus-sasl`、`openssl-devel`）來自銀行的 OS 套件庫，已經裝過，不用 `--resolve`：
+
+```bash
+V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && dnf -q download --destdir /out/c3 confluent-control-center-next-gen-$V && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls
+```
+
+```out
+./confluent-control-center-next-gen-2.6.0-1.noarch.rpm: digests signatures OK
+SHA256SUMS
+confluent-control-center-next-gen-2.6.0-1.noarch.rpm
+```
+
+## 28.2 引進、上架
+
+@role Lab 管理員（扮演銀行） | Windows 終端 | 本機
+
+照 2.4 的方式送到操作機的落地區（唯讀），進來後再驗一次 sha256：
+
+```bash
+docker cp "$(cygpath -m "$HOME/kafka-lab/landing/c3")" lab-ops02-1:/home/cpadmin/landing/ && docker exec lab-ops02-1 bash -c "chown -R cpadmin:cpadmin /home/cpadmin/landing/c3 && chmod -R a-w /home/cpadmin/landing/c3 && cd /home/cpadmin/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+```
+
+```out
+sha256-ok
+```
+
+@role 小安 | ops02 | cpadmin
+
+加進內部套件庫（舊版不刪，回滾要用），只推 `confluent/` 這個目錄：
+
+```bash
+cp ~/landing/c3/*.rpm ~/repo/confluent/ && createrepo_c -q --update ~/repo/confluent && tar -C ~/repo -cf - confluent | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/repo -xpf -' && ssh c3-01.poc.lab 'echo "套件庫裡的 C3：$(sudo dnf -q --refresh --showduplicates list confluent-control-center-next-gen 2>/dev/null | awk "/control-center/{print \$2}" | sort -u | paste -sd" " -)"'
+```
+
+```out
+套件庫裡的 C3：2.6.0-1 2.6.1-1
+```
+
+## 28.3 （lab 演練用）退回 2.6.0：也就是回滾程序
+
+@role 小安 | ops02 | cpadmin
+
+解鎖 → 換版本 → 鎖回新的版本 → `daemon-reload`（RPM 會換掉 unit 檔）→ 把 C3 自己要寫的 4 個 generated 檔改回 `cp-control-center`（RPM 換版本會把它們改回 root）→ 確認設定檔沒被動、`ExecStart` 還是指著我們的設定 → 重啟 Prometheus、Alertmanager、C3 → 等畫面 200。升級與回滾是同一段，只差 `dnf install` 或 `dnf downgrade`：
+
+```bash
+cat > ~/conf/c3-change.sh <<'EOF'
+#!/usr/bin/env bash
+# c3-change.sh <版本> <install|downgrade>：在 c3-01 換 C3 套件版本、重啟、等畫面 200
+V=$1 A=$2
+ssh c3-01.poc.lab "p=/etc/confluent/control-center/control-center.properties; before=\$(sudo sha256sum \$p | cut -c1-12); sudo dnf -q versionlock delete confluent-control-center-next-gen >/dev/null; sudo dnf -q -y --refresh $A confluent-control-center-next-gen-$V >/dev/null && sudo dnf -q versionlock add confluent-control-center-next-gen-$V >/dev/null; sudo systemctl daemon-reload; cd /etc/confluent-control-center && for f in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do sudo chown cp-control-center:confluent \$f && sudo chmod 0640 \$f; done; echo \"\$(rpm -q confluent-control-center-next-gen) config=\$([ \"\$before\" = \"\$(sudo sha256sum \$p | cut -c1-12)\" ] && echo same || echo CHANGED) exec=\$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties' | head -1) lock=\$(sudo dnf -q versionlock list | grep control-center)\"; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart \$u; done"
+for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done
+echo "UI=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)（約 $((i*5)) 秒）；Prometheus 指標 $(curl -s -m 10 --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) 種"
+EOF
+chmod 0700 ~/conf/c3-change.sh && bash ~/conf/c3-change.sh 2.6.0 downgrade
+```
+
+```out
+confluent-control-center-next-gen-2.6.0-1.noarch config=same exec=/etc/confluent/control-center/control-center.properties lock=confluent-control-center-next-gen-0:2.6.0-1.*
+UI=200（約 30 秒）；Prometheus 指標 125 種
+```
+
+## 28.4 升級到新版
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+bash ~/conf/c3-change.sh 2.6.1 install && ssh c3-01.poc.lab 'cd /etc/confluent-control-center && echo "C3 自己寫的 4 個檔：$(sudo stat -c %U alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml | sort -u | paste -sd, -)"' && echo "alice 登入 MDS（C3 用同一套）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
+```
+
+```out
+confluent-control-center-next-gen-2.6.1-1.noarch config=same exec=/etc/confluent/control-center/control-center.properties lock=confluent-control-center-next-gen-0:2.6.1-1.*
+UI=200（約 35 秒）；Prometheus 指標 125 種（歷史指標沒有因換版本而消失）
+C3 自己寫的 4 個檔：cp-control-center
+alice 登入 MDS（C3 用同一套）：200
+```
+
+> 陷阱（lab 實測）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。
+
+最後用瀏覽器登入 C3 看一眼叢集總覽（lab：`https://localhost:19021`，alice）。
