@@ -56,8 +56,11 @@ pvwa_key() {
 }
 
 prepare() {
-  # 公鑰：CyberArk 產生的那把（pvwa_key 做過）優先；否則用操作機自己產生的（lab 模式，第 3 站）
-  if [ -f "$PVWA_DIR/cpadmin_ed25519.pub" ]; then
+  # 公鑰：看操作機 site.env 的 SSH_KEY_SOURCE——agent（客戶模式）用 CyberArk 產生的那把（pvwa_key），
+  # 其他用操作機自己產生的（lab 模式，第 3 站）。不能只看 pvwa/ 有沒有金鑰：前一輪客戶模式留下的那把會被誤用
+  local key_source
+  key_source=$(as_root_on "$OPS_HOST" "sed -n 's/^SSH_KEY_SOURCE=\\([a-z]*\\).*/\\1/p' /home/cpadmin/install/conf/site.env" 2>/dev/null)
+  if [ "$key_source" = agent ] && [ -f "$PVWA_DIR/cpadmin_ed25519.pub" ]; then
     announce "3.1 OS 團隊（SSH Key Manager）：CyberArk 的 cpadmin 公鑰 → 所有主機 cpadmin 與 repo01 的 repodeploy"
     # 用 stdin 送（ops02 的 /tmp 是 tmpfs，docker cp 寫進去容器裡看不到）
     docker exec -i "$(container_of "$OPS_HOST")" bash -c 'cat > /tmp/cpadmin-cyberark.pub' < "$PVWA_DIR/cpadmin_ed25519.pub"
