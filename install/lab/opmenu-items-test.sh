@@ -90,6 +90,7 @@ item_ok alice 42 add kafka-devs DeveloperRead Topic regtest.
 item_ok alice 42 remove kafka-devs DeveloperRead Topic regtest.
 item_ok alice 43 60
 item_ok alice 44
+item_ok alice 44 snapshot
 item_ok alice 45 60 alice
 item_ok alice 91 kafka-topics --list
 

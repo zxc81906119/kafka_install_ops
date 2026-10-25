@@ -3607,7 +3607,7 @@ docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
 bank-prometheus removed
 ```
 
-> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 24.1 的 `kafka-metadata-quorum describe --replication`。這裡說的是 **JMX 這條路**；broker 與 controller 另外會用 telemetry（OTLP）推指標到 C3 內建的 Prometheus，那條路受 `confluent.telemetry.exporter._c3.metrics.include` 白名單限制，有沒有 raft／quorum 指標還沒驗證。
+> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 24.1 的 `kafka-metadata-quorum describe --replication`。這裡說的是 **JMX 這條路**。raft 指標其實在 Confluent 的 telemetry 裡（`io.confluent.kafka.server/raft/…`：current_leader、current_epoch、number_of_voters、number_unknown_voter_connections、high_watermark、commit／election latency），lab 實測（2026-10-25）：只在 kc02 的 `confluent.telemetry.exporter._c3.metrics.include` 加上 `io.confluent.kafka.server.raft.(?!.*delta).*`，C3 內建 Prometheus 收到正確的值（leader 1、voters 3、unknown 0）。但**不建議**拿這條路告警：C3 內建 Prometheus 收的 telemetry 沒有主機標籤，三台 controller 都送時同名序列會互撞，被拒成 out of order（整批被拒，連 C3 自己的指標也一起掉；把白名單放寬成全部時實際發生）；delta 類型也不收（500）。所以 C3 的白名單不動，quorum 告警用上面三個 JMX 指標。
 
 > 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3 或另外接 lag exporter。
 
@@ -5188,11 +5188,12 @@ out=$BACKUP_ROOT/$(date +%Y%m%d-%H%M); install -d -m 0700 "$out"; failed=""
 save() { local file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
 save topics.txt         kafka-topics $A --describe
 save topic-configs.txt  kafka-configs $A --describe --entity-type topics
-save users.txt          kafka-configs $A --describe --entity-type users      # SCRAM 只有機制與迭代次數，沒有密碼；配額
+save users.txt          users      # SCRAM 只有機制與迭代次數，沒有密碼；配額
 save broker-configs.txt kafka-configs $A --describe --entity-type brokers --entity-default
-# 比對兩天的備份靠 sha256：會變的雜訊（features 的 Epoch）拿掉、ACL 的順序不固定所以排序
+# 比對兩天的備份靠 sha256：會變的雜訊（features 的 Epoch）拿掉、ACL 與帳號清單的順序不固定所以排序
 features() { kafka-features $A describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
 acls() { kafka-acls $A --list | grep . | sort; }
+users() { kafka-configs $A --describe --entity-type users | sort; }
 save features.txt       features
 save acls.txt           acls
 # RBAC：confluent CLI 用自己的 HOME，免得蓋掉操作機上原本的登入身分
@@ -5270,7 +5271,9 @@ users.txt          相同
 topics.txt 多出來的：Topic: orders.backup-demo
 ```
 
-> features 的 `Epoch` 每次都不同、ACL 列出的順序不固定，腳本已經拿掉與排序，否則每天都會顯示「有變」。
+> features 的 `Epoch` 每次都不同、ACL 與帳號清單（`users.txt`）列出的順序不固定，腳本已經拿掉與排序，否則常會顯示「有變」。
+
+> 變更前的快照也可以由維運人員從 OP menu 44 匯出（`44 snapshot`）：以本人 AD 身分執行、檔名與內容和這裡一樣（另多一份權限清單 CSV），放在選單的輸出目錄，可以拿來和每日備份比對。
 
 還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。
 

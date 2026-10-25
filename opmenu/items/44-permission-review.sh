@@ -1,11 +1,12 @@
-item 44 4 n n "匯出權限清單(permission review)" "列出各 role 的所有 principal 與資源範圍(CSV),交給定期權限覆核;需 SecurityAdmin 或 UserAdmin"
-run() {
-  local f="$OPMENU_OUT_DIR/permission-review-$(date +%Y%m%d-%H%M%S)-$OP_USER.csv" role p res code body rb arr o n=0 rt rn pt
+item 44 4 n n "匯出權限清單(permission review)/變更前快照" "列出各 role 的所有 principal 與資源範圍(CSV),交給定期權限覆核;加 snapshot 再匯出 topic、設定、帳號與配額、ACL、features(變更前快照,格式同每日備份);需 SecurityAdmin 或 UserAdmin"
+# 把權限清單寫成 CSV;回傳寫了幾筆(印在 stdout 最後一行)
+review_csv() {
+  local f="$1" role p res code body rb arr o n=0 rt rn pt
   echo "role,principal,resource_type,resource_name,pattern_type" > "$f"
   for role in $OPMENU_REVIEW_ROLES; do
     v_match "$role" '^[A-Za-z]+$' "role 名稱" >/dev/null || continue
     res=$(be_mds POST "/security/1.0/lookup/role/$role" "$(k_scope)"); code="${res##*HTTP }"; body="${res%$'\n'HTTP*}"
-    [ "$code" = 200 ] || { echo "查詢 role $role 失敗(HTTP $code);需要 SecurityAdmin 或 UserAdmin"; rm -f "$f"; return 1; }
+    [ "$code" = 200 ] || { echo "查詢 role $role 失敗(HTTP $code);需要 SecurityAdmin 或 UserAdmin"; return 1; }
     for p in $(printf '%s' "$body" | grep -o '"[A-Za-z]*:[^"]*"' | tr -d '"'); do
       v_principal "$p" >/dev/null || continue
       rb=$(be_mds POST "/security/1.0/lookup/rolebindings/principal/$p" "$(k_scope)" | sed '$d')
@@ -19,5 +20,27 @@ run() {
       fi
     done
   done
-  echo "已匯出 $n 筆權限:$f"
+  echo "$n"
+}
+run() {
+  local mode="${1:-}" c f d n failed=""
+  if [ -z "$mode" ] && [ -t 0 ]; then read -r -p "1) 只匯出權限清單 CSV  2) 變更前完整快照 [1]: " c; [ "$c" = 2 ] && mode=snapshot; fi
+  if [ "$mode" != snapshot ]; then
+    f="$OPMENU_OUT_DIR/permission-review-$(date +%Y%m%d-%H%M%S)-$OP_USER.csv"
+    n=$(review_csv "$f" | tail -1); [[ "$n" =~ ^[0-9]+$ ]] || { echo "$n"; rm -f "$f"; return 1; }
+    echo "已匯出 $n 筆權限:$f"; return 0
+  fi
+  # 變更前快照:檔名與內容和每日備份(手把手第 26 章)一樣,sha256 可直接比對;features 的 Epoch 拿掉、ACL 與帳號清單排序
+  d="$OPMENU_OUT_DIR/snapshot-$(date +%Y%m%d-%H%M%S)-$OP_USER"; mkdir -p "$d" && chmod 0750 "$d" || return 1
+  n=$(review_csv "$d/permission-review.csv" | tail -1); [[ "$n" =~ ^[0-9]+$ ]] || failed="$failed permission-review.csv"
+  be_kafka kafka-topics --describe > "$d/topics.txt" || failed="$failed topics.txt"
+  be_kafka kafka-configs --describe --entity-type topics > "$d/topic-configs.txt" || failed="$failed topic-configs.txt"
+  be_kafka kafka-configs --describe --entity-type users | sort > "$d/users.txt" || failed="$failed users.txt"
+  be_kafka kafka-configs --describe --entity-type brokers --entity-default > "$d/broker-configs.txt" || failed="$failed broker-configs.txt"
+  be_kafka kafka-acls --list | grep . | sort > "$d/acls.txt" || failed="$failed acls.txt"
+  be_kafka kafka-features describe | sed 's/[[:space:]]*Epoch: [0-9]*//' > "$d/features.txt" || failed="$failed features.txt"
+  for f in "$d"/*.txt; do [ -s "$f" ] || failed="$failed $(basename "$f")(空的)"; done   # 接 sort 的那幾項,前段失敗會被 sort 的結束碼遮住
+  (cd "$d" && sha256sum -- *.txt *.csv > SHA256SUMS)
+  [ -z "$failed" ] || { echo "快照有失敗的項目:$failed(目錄 $d)"; return 1; }
+  echo "已匯出變更前快照($n 筆權限,$(ls "$d" | grep -c '\.txt$') 個清單):$d"
 }

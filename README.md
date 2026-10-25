@@ -226,7 +226,7 @@ cpctl upgrade finalize --to 8.3.2   # kafka-features upgrade --release-version�
 
 - `kafka-internal` 憑證由所有 controller 和 broker 共用，而且是 super user：任何一台的私鑰外洩，等於整個叢集被取得。緩解方式：私鑰權限 0640、以 `cpctl certs rotate` 定期（或事故時立即）輪替；正式環境也可以改成每台各自一張憑證。
 - JMX exporter 的 keystore 密碼必須以明文寫在 exporter 的 YAML（0640 root:confluent；YAML 不支援 Secret Protection）。scrape 密碼則只存雜湊。
-- Confluent Server 不以 JMX 提供 raft 指標（2026-10-25 在 8.3.2 的 controller 以 jshell 列出全部 MBean 確認：沒有 `kafka.server:type=raft-metrics`）；手把手第 18 章改用 controller 的 `LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount` 告警；controller quorum 健康以 `ActiveControllerCount` 告警，詳細狀態用 `cpctl verify`。consumer lag 不是 broker JMX 指標，由 C3 顯示（或另接 lag exporter）。
+- Confluent Server 不以 JMX 提供 raft 指標（2026-10-25 在 8.3.2 的 controller 以 jshell 列出全部 MBean 確認：沒有 `kafka.server:type=raft-metrics`）；raft 指標只在 Confluent telemetry 裡，送進 C3 內建 Prometheus 時沒有主機標籤、多台會互撞，不適合拿來告警（手把手第 18 章）；手把手第 18 章改用 controller 的 `LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount` 告警；controller quorum 健康以 `ActiveControllerCount` 告警，詳細狀態用 `cpctl verify`。consumer lag 不是 broker JMX 指標，由 C3 顯示（或另接 lag exporter）。
 - svc-cpctl 是安裝用的身分（client 憑證，不是 AD 帳號），列在 `super.users` 中：持有它的私鑰（ops01 `pki/svc-cpctl.key`，0600）就等於 super user。安裝完成後建議把私鑰移到離線保管，需要時再取回。
 - 在 Docker Desktop 上，從 Windows 發出的請求來源 IP 都相同，LB 的 source-hash 黏著會把它們全部送到同一台 REST Proxy；負載分散要從 cpnet 內的不同來源驗證。
 - **整個環境冷開機**（例如停電後所有主機同時開機）：C3 若比 MDS 先啟動，會卡在「client has already been closed」且不開 9021（2026-10-16 實測）。已在 C3 的 systemd drop-in 加上啟動前等待 MDS（最多 5 分鐘，逾時仍會啟動）。正式環境的開機順序建議仍是 controller → broker → REST / C3。

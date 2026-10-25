@@ -304,6 +304,7 @@
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
 **2026-10-25 進度（lab 實跑）**：license 監控（第 23 章＋`23-license.sh`）、controller 替換（第 24 章＋`24-controller-replace.sh`）、broker 縮減／擴充（第 25 章＋`25-broker-scale.sh`）、日常備份（第 26 章）、換鏈（21.4＋`21-cert-rotate.sh chain`）都已實作並實跑。補強：第 6 章資料碟檔案系統檢查、10.3 `java.io.tmpdir` 選配（kb04 實測）、第 10 章明確設定 `metadata.log.dir`（kc01、kb01 實測）、第 18 章 KRaft quorum 告警、第 19 章稽核 topic RF 3 確認、第 22 章 JDK 25 註記。
+- **raft 指標的完整結論（2026-10-25 lab 實測）**：JMX 沒有 `raft-metrics`；Confluent telemetry 有（`io.confluent.kafka.server/raft/*`，只在 kc02 白名單加 `io.confluent.kafka.server.raft.(?!.*delta).*` 時 C3 Prometheus 收到正確值）。但 C3 內建 Prometheus 收的 telemetry 沒有主機標籤，多台同名序列互撞 → out of order（400，整批被拒）；delta 類型 500。→ 不改 C3 白名單，quorum 告警用 JMX 的 controller 指標。
 - **更正**：下面「README 說『不以 JMX 提供 raft 指標』與原廠文件矛盾」不成立。Apache Kafka 有 `kafka.server:type=raft-metrics`，但 Confluent Server 8.3.2 的 controller 上沒有這組 MBean（jshell 連進 JVM 列出全部 MBean 確認）；quorum 告警改用 controller 的 `LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`（第 18 章新增 3 條規則，行內 Prometheus 實測載入 12 條）。
 - 第 19 章：兩個稽核 topic 本來就是 RF 3（`min.insync.replicas=1`），不用改；文件補上檢查指令與「可送專用稽核叢集」。
 

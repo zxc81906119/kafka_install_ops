@@ -60,9 +60,10 @@ run_backup() {
   section "26.3 匯出到 $out"
   # save <檔名> <指令…>：輸出存檔；失敗或空的就記下來，錯誤訊息留在 <檔名>.err
   save() { file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
-  # 比對兩天的備份靠 sha256：features 的 Epoch 每次不同、ACL 的順序不固定，所以拿掉與排序
+  # 比對兩天的備份靠 sha256：features 的 Epoch 每次不同、ACL 與帳號清單的順序不固定，所以拿掉與排序
   features() { kafka-features "${backup[@]}" describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
   acls() { kafka-acls "${backup[@]}" --list | grep . | sort; }
+  users() { kafka-configs "${backup[@]}" --describe --entity-type users | sort; }
   rbac() {
     local role principal cid; cid=$(cluster_id)
     for principal in $(for role in $(cli_as svc-backup iam rbac role list -o json | grep -o '"name": *"[A-Za-z]*"' | cut -d'"' -f4); do
@@ -73,7 +74,7 @@ run_backup() {
   }
   save topics.txt         kafka-topics "${backup[@]}" --describe
   save topic-configs.txt  kafka-configs "${backup[@]}" --describe --entity-type topics
-  save users.txt          kafka-configs "${backup[@]}" --describe --entity-type users
+  save users.txt          users
   save broker-configs.txt kafka-configs "${backup[@]}" --describe --entity-type brokers --entity-default
   save features.txt       features
   save acls.txt           acls
