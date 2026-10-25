@@ -53,7 +53,7 @@
 - 每個指令上方都有一行「▶ 在哪台（用哪個帳號）執行」。要換機器的那一個指令（以及每章第一個指令）會附上 lab 裡切過去的指令，例如 `docker exec -it -u cpadmin -w /home/cpadmin lab-ops02-1 bash`；從一台容器換到另一台時，先 `exit` 回到 Git Bash 再切。正式環境則是經 CyberArk 代登（PSMP）ssh 進那台主機。
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
 - 指令都是一行可以整段貼上的；多行的 `heredoc`（`<<'EOF' … EOF`）要整段一起貼。
-- 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。正本在 PVWA；操作機上的是作業用的副本。
+- 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。正本在 PVWA；操作機上的是作業用的副本。從 PVWA 取出貼上時一律用**不顯示的寫法**（私鑰見 3.1、密碼見 3.4），PSMP 的錄影才不會錄到。
 - 主線是本案客戶的情境：銀行的 CyberArk 只有 PAM（PVWA、PSMP、SSH Key Manager、CPM），密碼和金鑰由人從 PVWA 取放。看到紫色「◆ 這一段只在：銀行有 Conjur（選配）」的段落（第 15 站、16.8、16.9 和各章的 Conjur 寫法）就跳過；那是給有 Conjur 的銀行用的。
 
 - 指令很長是為了「整段貼上就能跑」。看不懂沒關係，先照做；每一站開頭說這站要做什麼，結尾說看到什麼代表成功。
@@ -804,7 +804,14 @@ install -d -m 0700 ~/.ssh && rm -f ~/.ssh/engineer-agent.sock && ssh-agent -a ~/
 agent: /home/cpadmin/.ssh/engineer-agent.sock
 ```
 
-從 PVWA 取出 cpadmin 的私鑰，貼進 agent：正式環境是在 ops02 上執行 `SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-add -`，貼上 PVWA 顯示的私鑰，再按 `Ctrl-D`。lab 用 Windows 終端把 pvwa/ 裡的那份送進去，效果相同（私鑰只進 agent 的記憶體）：
+從 PVWA 取出 cpadmin 的私鑰，貼進 agent。正式環境在 ops02 上執行下面這一行，貼上 PVWA 顯示的私鑰，再按 `Ctrl-D`：
+
+`stty -echo; SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-add -t 10h -; stty echo`
+
+- `stty -echo`：貼上的內容**不顯示在畫面上**。PSMP 會錄下整個畫面，終端機也會留捲動紀錄；不關掉回顯，私鑰就跟著進了錄影檔。之後所有「從 PVWA 取出貼上」都用不顯示的寫法（密碼是 3.4 那種一行的寫法）。
+- `-t 10h`：私鑰在 agent 裡最多留 10 小時（一個工作天），時間到自動移除；作業結束仍然要 `ssh-agent -k`（20.5）。
+
+lab 用 Windows 終端把 pvwa/ 裡的那份送進去，效果相同（私鑰只進 agent 的記憶體，不經過畫面）；lab 一開就是好幾天，所以省略 `-t`：
 
 @role 小安（從 PVWA 取私鑰貼進 agent；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
@@ -818,7 +825,11 @@ Identity added: (stdin) (cpadmin (CyberArk managed))
 磁碟上的私鑰：0 個
 ```
 
-> 操作機重開機、或 agent 被結束後，私鑰就不在了：重新做這兩步（開 agent、貼私鑰）。CyberArk 定期換這把金鑰時，換的是 PVWA 裡的私鑰和各主機的公鑰，操作機上沒有要改的東西。
+> 操作機重開機、agent 被結束、或 `-t` 時間到了，私鑰就不在了：重新做這兩步（開 agent、貼私鑰）。
+>
+> 陷阱：CyberArk（SSH Key Manager）定期換這把金鑰時，換的是 PVWA 裡的私鑰和各主機的公鑰，**agent 裡還是舊的那把**：之後每個 ssh 都會 `Permission denied (publickey)`。安裝、升級做到一半遇到，後面的步驟會全部失敗。所以：
+> - 變更時段內請 Secrets 團隊**暫停這個帳號的自動輪替**（待銀行確認，問題清單 8.4）。
+> - 輪替過後要作業：先清掉 agent 裡的舊鑰 `SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-add -D`，再照上面從 PVWA 貼新的，用 `ssh -o BatchMode=yes kb01.poc.lab hostname` 確認登得進去（演練見 20.6）。
 
 @role 小安 | ops02 | cpadmin
 
@@ -957,7 +968,7 @@ ldap-bind.pass
 
 @role 小安（從 PVWA 取出；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
-小安從 PVWA 取出，放進操作機的 `~/secrets/`（0700 目錄、0600 檔；正式環境是在 ops02 上 `cat > ~/secrets/ldap-bind.pass` 再貼上）：
+小安從 PVWA 取出，放進操作機的 `~/secrets/`（0700 目錄、0600 檔）。正式環境在 ops02 上每個檔執行一次 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/ldap-bind.pass; unset P; echo)`：`read -s` 讓貼上的密碼不顯示在畫面上（PSMP 錄影錄不到），`printf %s` 不多寫換行。lab 由 Windows 終端代貼：
 
 ```bash
 docker exec lab-ops02-1 install -d -o cpadmin -g cpadmin -m 0700 /home/cpadmin/secrets && for f in ldap-bind ad-test-users; do docker exec -i -u cpadmin lab-ops02-1 bash -c "umask 077; cat > ~/secrets/$f.pass" < ~/kafka-lab/pvwa/$f.pass; done; docker exec lab-ops02-1 ls -la /home/cpadmin/secrets | tail -n +4
@@ -1948,6 +1959,38 @@ store:24 kafka-admin:24 app-orders:24 app-payments:24
 
 > 應用程式團隊從 PVWA 取自己的 SCRAM 密碼，放進他們的設定；這本的 `~/conf/app-orders.properties` 是小安在操作機扮演應用程式用的。密碼換了（第 15 章的演練、OP menu 35 換服務密碼）就要同步更新 PVWA 的那個 object。
 
+## 11.2 演練：緊急帳號 kafka-admin 用過就換密碼
+
+`kafka-admin` 是 MDS 故障時唯一進得去的管理身分（CLIENT 9095，SCRAM，super user）。平常沒人用；一旦有人在緊急時從 PVWA 取出來用過，這個密碼就算曝光了，**用完當天就要換**。CPM 沒有可以換 Kafka SCRAM 密碼的 plugin，所以由小安換、再交回 PVWA。平常沒有程式掛在這個帳號上，所以一個帳號直接換、不需要 A／B 兩組，也不會中斷任何服務（應用程式的 SCRAM 帳號才需要 A／B，見 OP menu 35）。
+
+@role 小安 | ops02 | cpadmin
+
+先模擬一次緊急使用（用 PVWA 那份密碼從 9095 登入），再換密碼：新密碼先寫暫存檔，叢集改成功才換掉 `~/secrets/kafka-admin.pass`。`kafka-configs` 出錯時會把整串設定（含密碼）印出來，所以它的輸出一律丟掉，結果用 `--describe` 和實際登入確認：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; BS=kb01.poc.lab:9094; T=$(mktemp -d) && login() { grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $T/c.properties && printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="%s";\n' "$(cat $1)" >> $T/c.properties && kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list >/dev/null 2>&1 && echo 登入成功 || echo 被拒; } && echo "緊急使用（目前的密碼）：$(login ~/secrets/kafka-admin.pass)" && cp -p ~/secrets/kafka-admin.pass $T/old.pass && (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > $T/new.pass) && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name kafka-admin --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat $T/new.pass)]" >/dev/null 2>&1 && install -m 0600 $T/new.pass ~/secrets/kafka-admin.pass && echo "kafka-admin: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name kafka-admin 2>/dev/null | grep -o 'SCRAM-SHA-512=[^ ]*')" && echo "換完：新密碼 $(login ~/secrets/kafka-admin.pass)；舊密碼 $(login $T/old.pass)"; rm -rf $T
+```
+
+```out
+緊急使用（目前的密碼）：登入成功
+kafka-admin: SCRAM-SHA-512=iterations=8192
+換完：新密碼 登入成功；舊密碼 被拒
+```
+
+> 新密碼會短暫出現在操作機的行程參數裡（`--add-config` 只吃命令列；`--add-config-file` 不接受 SCRAM 這個欄位）。操作機只有 cpadmin 登入，可以接受。
+
+@role 銀行 Secrets 團隊（更新 PVWA 的 kafka-admin-scram，舊版本保留；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+cd ~/kafka-lab && cp -p pvwa/kafka-admin.pass pvwa/kafka-admin.prev.pass && (umask 077; docker exec lab-ops02-1 cat /home/cpadmin/secrets/kafka-admin.pass > pvwa/kafka-admin.pass) && echo "PVWA kafka-admin-scram 已更新：$(wc -c < pvwa/kafka-admin.pass) 字元"
+```
+
+```out
+PVWA kafka-admin-scram 已更新：24 字元
+```
+
+> 誰在什麼時候取用過 `kafka-admin-scram`，PVWA 的取用紀錄查得到；Kafka 那邊，稽核日誌（第 19 站）會記下 `User:kafka-admin` 做了什麼。兩邊對得上，才算這次緊急使用結案。
+
 
 # 12. 第十二站：REST Proxy
 
@@ -2813,7 +2856,7 @@ value set
 
 @role 小安（從 PVWA 取出；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
-從 PVWA 取出 passphrase，放進操作機的 0600 檔（正式環境是在 ops02 上 `cat > ~/secrets/sp-passphrase.txt` 再貼上；不要貼進任何對話或工單）：
+從 PVWA 取出 passphrase，放進操作機的 0600 檔（正式環境在 ops02 上 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/sp-passphrase.txt; unset P; echo)`，同 3.4 不顯示的寫法；不要貼進任何對話或工單）：
 
 ```bash
 docker exec -i -u cpadmin lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-passphrase.txt; echo "passphrase: $(wc -c < ~/secrets/sp-passphrase.txt) chars"' < ~/kafka-lab/pvwa/sp-passphrase.txt
@@ -2844,7 +2887,7 @@ passphrase: 32 chars
 用 Confluent CLI 產生 master key。`security.properties` 是之後所有密文的容器：
 
 ```bash
-(umask 077; confluent secret master-key generate --local-secrets-file ~/secrets/security.properties --passphrase @"$HOME/secrets/sp-passphrase.txt" -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key) && echo "master key: $(wc -c < ~/secrets/master.key) chars" && ls -la ~/secrets/security.properties ~/secrets/master.key
+(umask 077; confluent secret master-key generate --local-secrets-file ~/secrets/security.properties --passphrase "$(cat ~/secrets/sp-passphrase.txt)" -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key) && echo "master key: $(wc -c < ~/secrets/master.key) chars" && ls -la ~/secrets/security.properties ~/secrets/master.key
 ```
 
 ```out
@@ -2853,6 +2896,10 @@ master key: 45 chars
 -rw------- 1 cpadmin cpadmin  45 … master.key
 -rw------- 1 cpadmin cpadmin 169 … security.properties
 ```
+
+> 陷阱：`--passphrase` 一定要給**值本身**（`"$(cat 檔案)"`）。Confluent CLI v4 不認 `@檔案`、也不認 `-`（stdin），會把「`@/home/cpadmin/secrets/sp-passphrase.txt`」這串字當成 passphrase：產生、加密、輪替表面上都成功，但銀行給的 passphrase 根本沒用到，任何拿到 `security.properties` 又猜得到路徑的人都算得出 master key；檔案一改名，下一次輪替就 `incorrect master key passphrase`（2026-10-25 lab 實測）。16.6 結尾有檢查。
+>
+> 給值的代價是執行那一瞬間值會出現在操作機的行程參數裡（`/proc/<pid>/cmdline`）。操作機上還有維運人員的帳號，**待銀行確認**：請 OS 團隊把操作機的 `/proc` 掛成 `hidepid=2`（`/etc/fstab`：`proc /proc proc defaults,hidepid=2 0 0`），別的帳號就看不到 cpadmin 的行程。16.10、11.2 用 `--config`／`--add-config` 帶密碼時也一樣。
 
 「cannot be retrieved later」是 CLI 的提醒：CLI 不保存 master key，而且**再跑一次 `generate` 也拿不回同一把**（會換新的 salt，算出另一把）。所以產生之後馬上交 CyberArk 保管，確認存好了才往下派送；不能讓一把只存在操作機上的 key 上線。
 
@@ -2907,13 +2954,14 @@ master key stored, hash 3f9c0a…（12 碼雜湊，之後用來核對保管的�
 先用第 10、12、13 站的方式從明文範本產生每台的設定（和之前完全一樣，只是範本來源是 `.plain`），再逐檔加密所有 `password`／`credentials` 欄位。加密後原檔裡的值變成 `${securepass:…}` 參照，密文集中寫進 `security.properties`：
 
 ```bash
-cd ~/conf && for t in common controller broker kafka-rest control-center; do [ -f $t.tpl.plain ] && cp $t.tpl.plain $t.tpl; done; export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${REST_ID} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; for h in rest01 rest02; do export HOST_FQDN=$h.poc.lab REST_ID=$h; (umask 077; envsubst "$V" < kafka-rest.tpl > $h.kafka-rest.properties); done; (umask 077; envsubst "$V" < control-center.tpl > c3-01.control-center.properties); unset STORE_PASSWORD LDAP_BIND_PASSWORD; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties *.kafka-rest.properties c3-01.control-center.properties; do keys=$(grep -E '^[^#].*(password|credentials)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; echo "security.properties: $(grep -c '^[^_].*ENC\[' ~/secrets/security.properties) entries"
+cd ~/conf && for t in common controller broker kafka-rest control-center; do [ -f $t.tpl.plain ] && cp $t.tpl.plain $t.tpl; done; export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) AUDIT_PASSWORD=$(cat ~/secrets/confluent-audit.pass 2>/dev/null) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${REST_ID} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD} ${AUDIT_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; for h in rest01 rest02; do export HOST_FQDN=$h.poc.lab REST_ID=$h; (umask 077; envsubst "$V" < kafka-rest.tpl > $h.kafka-rest.properties); done; (umask 077; envsubst "$V" < control-center.tpl > c3-01.control-center.properties); unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD; echo "沒替換到的變數：$(grep -ho '${[A-Z_]*}' *.server.properties *.kafka-rest.properties c3-01.control-center.properties | sort -u | paste -sd' ' | sed 's/^$/0 個/')"; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties *.kafka-rest.properties c3-01.control-center.properties; do keys=$(grep -E '^[^#].*(password|credentials)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; echo "security.properties: $(grep -c '^[^_].*ENC\[' ~/secrets/security.properties) entries"
 ```
 
 ```out
+沒替換到的變數：0 個
 kb01.server.properties: 17 encrypted, plaintext=0
-（broker 17、controller 11、REST 9、C3 18；10 個檔 plaintext 都是 0）
-security.properties: 137 entries
+（broker 17、controller 11、REST 9、C3 18；做過第 19 站的話 broker 19、controller 13。10 個檔 plaintext 都是 0）
+security.properties: 137 entries（做過第 19 站是 151）
 ```
 
 > `${securepass:/etc/confluent/secrets/security.properties:kb01.server.properties/ssl.keystore.password}` 的最後一段是「本機檔名／欄位」，所以同一份 `security.properties` 可以放所有主機的密文，派送時每台拿同一個檔。
@@ -2966,6 +3014,16 @@ service.env: root:root 600
 
 `security.properties` 裡那 1 筆是 `_metadata.symmetric_key.0.envvar=CONFLUENT_SECURITY_MASTER_KEY`，記的是「去哪個環境變數找 master key」，不是 key 本身。檔案開頭幾行 `_metadata.*` 是鹽、迭代次數，和被 master key 包起來的 data key。
 
+最後確認 passphrase 真的有用上（16.2 的陷阱）：在副本上試著輪替一次，正式檔不動。兩個都要是「是」；前一個是「否」代表 master key 不是用 PVWA 那組 passphrase 產生的，照 16.7「遺失怎麼辦」重新產生、重新加密：
+
+```bash
+T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "用 PVWA 的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
+```
+
+```out
+用 PVWA 的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
+```
+
 ## 16.6 演練：輪替 master key
 
 @only customer
@@ -2983,6 +3041,8 @@ new passphrase stored
 ```
 
 @role 小安（從 PVWA 取出新 passphrase；lab 由 Windows 終端代貼） | Windows 終端 | 本機
+
+正式環境同 16.2 不顯示的寫法，檔名換成 `sp-passphrase-new.txt`：
 
 ```bash
 docker exec -i -u cpadmin lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-passphrase-new.txt; echo "new passphrase: $(wc -c < ~/secrets/sp-passphrase-new.txt) chars"' < ~/kafka-lab/pvwa/sp-passphrase-new.txt
@@ -3023,7 +3083,7 @@ new passphrase: 32 chars
 小安手上還有舊 passphrase（`sp-passphrase.txt`），用 `rotate --master-key` 把 data key 重新包一次。密碼本身與 properties 都不動，只有 `security.properties` 和各主機的 `service.env` 要換：
 
 ```bash
-cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && cp -p ~/secrets/master.key ~/secrets/master.key.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && (umask 077; confluent secret file rotate --master-key --passphrase @"$HOME/secrets/sp-passphrase.txt" --passphrase-new @"$HOME/secrets/sp-passphrase-new.txt" --local-secrets-file ~/secrets/security.properties -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key) && unset CONFLUENT_SECURITY_MASTER_KEY && echo "master key changed: $([ "$(sha256sum < ~/secrets/master.key)" = "$(sha256sum < ~/secrets/master.key.bak)" ] && echo no || echo yes)" && mv ~/secrets/sp-passphrase-new.txt ~/secrets/sp-passphrase.txt && (umask 077; echo "CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)" > ~/secrets/service.env) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/secrets/security.properties ~/secrets/service.env $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && sudo install -o root -g root -m 0600 /tmp/service.env /etc/confluent/service.env && rm -f /tmp/security.properties /tmp/service.env && printf "%s " $(hostname)'; done; rm -f ~/secrets/service.env; echo
+cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && cp -p ~/secrets/master.key ~/secrets/master.key.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && (umask 077; confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "$(cat ~/secrets/sp-passphrase-new.txt)" --local-secrets-file ~/secrets/security.properties -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key) && unset CONFLUENT_SECURITY_MASTER_KEY && echo "master key changed: $([ "$(sha256sum < ~/secrets/master.key)" = "$(sha256sum < ~/secrets/master.key.bak)" ] && echo no || echo yes)" && mv ~/secrets/sp-passphrase-new.txt ~/secrets/sp-passphrase.txt && (umask 077; echo "CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)" > ~/secrets/service.env) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/secrets/security.properties ~/secrets/service.env $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && sudo install -o root -g root -m 0600 /tmp/service.env /etc/confluent/service.env && rm -f /tmp/security.properties /tmp/service.env && printf "%s " $(hostname)'; done; rm -f ~/secrets/service.env; echo
 ```
 
 ```out
@@ -3091,6 +3151,16 @@ c3 ui=200
 alice login after master key rotation: 200
 ```
 
+輪替完照 16.5 最後那個檢查再做一次：新的 passphrase（PVWA 現行版本）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
+
+```bash
+T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "用 PVWA 的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
+```
+
+```out
+用 PVWA 的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
+```
+
 > 回滾：在刪掉 `.bak` 之前，把 `security.properties.bak` 和 `master.key.bak` 用 16.4 的方式派送回去、再滾動重啟一次，就回到舊 master key。所以 `.bak` 要等全部驗證完才刪。
 
 ## 16.7 要跟資安說清楚的事
@@ -3100,9 +3170,10 @@ alice login after master key rotation: 200
 | secret zero | master key 以一行落在每台主機的 `/etc/confluent/service.env`（0600 root）。資安若不接受磁碟副本，改用 `ExecStartPre` 在啟動前向 CCP 取 master key 寫到 `/run`（tmpfs），代價是啟動時 CyberArk 要在線 |
 | CyberArk 在這裡做什麼（只有 PAM 時） | **保管與稽核，不參與執行期**：passphrase、master key 的正本與版本（重建主機、復原、輪替時取用）；誰在什麼時候取了、對應哪張變更單；以及 PSM／PSMP 控管誰能登入主機變成 root。服務啟動時不連 CyberArk |
 | 擋得住什麼、擋不住什麼 | 擋得住：設定檔被複製出去（備份、工單附檔、診斷資料、`confluent` 群組的人）時看不到密碼。擋不住：這台主機上的 root（`service.env` 就在本機）。要連 root 都擋，需要啟動時向外取 master key 的機制（CCP 或 Conjur＋16.8） |
-| 遺失怎麼辦 | master key 從 CyberArk 取回；passphrase 遺失只影響 `rotate`；兩樣都遺失就產生新的 master key、照 16.3–16.5 重新加密（不中斷服務） |
+| 遺失怎麼辦 | `rotate` 一定要**同時**有舊 passphrase 和舊 master key（環境變數），CLI 也沒有辦法從 passphrase＋`security.properties` 重新算出 master key（2026-10-25 lab 實測），所以兩個 object 都要保管。master key 遺失：從 PVWA 取回（服務啟動要它）。passphrase 遺失：服務照跑，但不能 `rotate`。缺一個又取不回：產生新的 master key、照 16.3–16.5 重新加密（不中斷服務） |
+| data key | `security.properties` 裡真正加密每筆密碼的那把，被 master key 包著。**不做例行輪替**：16.6 換的是外層的 master key。懷疑外洩時，拿到舊 master key＋舊 `security.properties` 的人已經解得出明文，所以要換的是**密碼本身**（keystore 跟著第 21 章換證、SCRAM 與 AD 查詢密碼用 `update`／16.10），再照 16.3–16.5 重新加密 |
 | 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 16.6，兩個 object 一起更新 |
-| 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟。與 master key 輪替無關 |
+| 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟，與 master key 輪替無關。CPM 管的 AD 查詢密碼見 16.10 |
 | 和第 15 站的差別 | 不依賴外部系統在線、原廠正式支援、不用 jar；但密碼是加密落地而不是啟動時取 |
 
 > 陷阱：做過這一站之後，若回頭照第 10、12、13 站重新產生設定並派送，會把明文密碼寫回主機；改了設定要照 16.3–16.5 重新加密、派送、重啟。
@@ -3236,7 +3307,7 @@ kb01: providers=securepass,env env-refs=1 securepass-refs=16 summon-value=matche
 滾動重啟 controller、broker。驗證要挑一個**非得用查詢帳號不可**的動作：alice 登入只用她自己的帳密，群組快取也撐得住，看不出 bind 有沒有成功；重啟後快取是空的，alice 透過 LDAP listener 建 topic 時，MDS 必須先用查詢帳號到 AD 找出她的群組才會放行。再從 kb01 的程序環境證明密碼在環境變數裡、日誌沒有 LDAP 認證錯誤：
 
 ```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; [ -f ~/conf/client-alice.properties ] || (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="alice" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/ad-test-users.pass)" "$(cat ~/pki/store.pass)" > ~/conf/client-alice.properties); t=ldap-check-$(date +%s); echo "alice（群組 kafka-admins）建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 java env has LDAP_BIND_PASSWORD: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^LDAP_BIND_PASSWORD="); credentials line: $(sudo grep "^ldap.java.naming.security.credentials" /etc/confluent/kafka/server.properties | sed "s/^[^=]*= *//"); ldap auth errors since restart: $(sudo journalctl -u confluent-server --since -5min --no-pager 2>/dev/null | grep -ci "AuthenticationException\|LDAP search failed")"'
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; [ -f ~/conf/client-alice.properties ] || (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="alice" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/ad-test-users.pass)" "$(cat ~/pki/store.pass)" > ~/conf/client-alice.properties); t=ldap-check-$(date +%s); echo "alice（群組 kafka-admins）建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 java env has LDAP_BIND_PASSWORD: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^LDAP_BIND_PASSWORD="); credentials line: $(sudo grep "^ldap.java.naming.security.credentials" /etc/confluent/kafka/server.properties | sed "s/^[^=]*= *//"); ldap auth errors since restart: $(sudo journalctl -u confluent-server --since "$(systemctl show -p ActiveEnterTimestamp --value confluent-server)" --no-pager 2>/dev/null | grep -ci "javax.naming\|LDAP search failed")"'
 ```
 
 ```out
@@ -3270,7 +3341,7 @@ vault: kafka/ldap-bind-password updated
 不重算密文、不派送任何檔案，只滾動重啟；起來的那台就拿到新密碼。操作機本地的 `ldap-bind.pass` 已經是舊的，順手從保管庫取回更新（之後 16.3 若重做加密才會用到）：
 
 ```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; t=ldap-rotated-$(date +%s); echo "換密碼後 alice 建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; echo "kb01 ldap auth errors since restart: $(ssh kb01.poc.lab 'sudo journalctl -u confluent-server --since -5min --no-pager 2>/dev/null | grep -ci "AuthenticationException\|LDAP search failed"')"; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && HT=$(sudo cat /etc/confluent/conjur/host.key | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fops02/authenticate | base64 -w0) && (umask 077; curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password > ~/secrets/ldap-bind.pass) && unset HT && echo "ops02: ldap-bind.pass refreshed from vault"
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; t=ldap-rotated-$(date +%s); echo "換密碼後 alice 建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; echo "kb01 ldap auth errors since restart: $(ssh kb01.poc.lab 'sudo journalctl -u confluent-server --since "$(systemctl show -p ActiveEnterTimestamp --value confluent-server)" --no-pager 2>/dev/null | grep -ci "javax.naming\|LDAP search failed"')"; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && HT=$(sudo cat /etc/confluent/conjur/host.key | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fops02/authenticate | base64 -w0) && (umask 077; curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password > ~/secrets/ldap-bind.pass) && unset HT && echo "ops02: ldap-bind.pass refreshed from vault"
 ```
 
 ```out
@@ -3290,6 +3361,73 @@ ops02: ldap-bind.pass refreshed from vault
 | keystore、truststore | 我們（換憑證時） | Secret Protection 密文 | 重算密文、派送、滾動重啟（16.3–16.5） |
 | AD 查詢帳號 | CPM | 保管庫 → Summon → `${env:…}` | 只滾動重啟 |
 | master key | 我們（依變更單） | 保管庫 → Summon | 16.6 + 16.8 的寫回保管庫，滾動重啟 |
+
+## 16.10 演練：CPM 換了 AD 查詢帳號的密碼（只有 PAM 時）
+
+@only customer
+
+只有 PAM 時，`svc-mds-bind` 的密碼加密後固定在 `security.properties`。CPM 一換 AD 密碼，broker 手上就是舊的：當下靠群組快取撐著，下次重啟時 MDS 起不來（第 7 站的陷阱：卡在 `Waiting for all of the authorizer futures`）。所以 CPM 換完，平台要跟著做一次：從 PVWA 取新密碼 → 只更新這一個欄位的密文 → 派送 `security.properties` → 滾動重啟。
+
+> 待銀行確認：這個帳號的 CPM 輪替要**關掉自動排程、改成依變更單觸發**（CPM 換完通知平台工程師接著做這一節），或開 A／B 兩組查詢帳號交替（CPM 只換閒置的那組，平台切過去再滾動重啟，中間沒有空窗）。手冊以「依變更單觸發、單一帳號」為準。
+
+@role 銀行 AD 團隊（CPM 換密碼；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+正式環境這一步是 CPM：改 AD、更新 PVWA 的 object，一次完成。lab 用 samba-tool 改密碼，再寫進 pvwa/（舊值另存 `.prev`）：
+
+```bash
+docker exec lab-ad01-1 bash -c 'until P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $P =~ [A-Z] && $P =~ [a-z] && $P =~ [0-9] ]]; do :; done; samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"' && cd ~/kafka-lab && cp -p pvwa/ldap-bind.pass pvwa/ldap-bind.prev.pass && (umask 077; docker exec lab-ad01-1 cat /root/secrets/bind.pass > pvwa/ldap-bind.pass) && echo "PVWA svc-mds-bind updated"
+```
+
+```out
+AD: password changed
+PVWA svc-mds-bind updated
+```
+
+@role 小安（從 PVWA 取出新密碼；lab 由 Windows 終端代貼） | Windows 終端 | 本機
+
+正式環境同 3.4 不顯示的寫法（檔名 `ldap-bind.pass`）：
+
+```bash
+docker exec -i -u cpadmin lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/ldap-bind.pass; echo "ldap-bind.pass: $(wc -c < ~/secrets/ldap-bind.pass) chars"' < ~/kafka-lab/pvwa/ldap-bind.pass
+```
+
+```out
+ldap-bind.pass: 20 chars
+```
+
+@role 小安 | ops02 | cpadmin
+
+不用重做 16.3：`confluent secret file update` 只重算指定欄位的密文，properties 本身不動（裡面本來就是 `${securepass:…}` 參照）。controller 和 broker 共 7 個檔有這個欄位，所以 `security.properties` 裡應該剛好變 7 行：
+
+```bash
+cd ~/conf && cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do confluent secret file update --config-file $h.server.properties --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "ldap.java.naming.security.credentials=$(cat ~/secrets/ldap-bind.pass)" >/dev/null || echo "$h: update FAILED"; done; unset CONFLUENT_SECURITY_MASTER_KEY; d=$(grep -vxFf ~/secrets/security.properties.bak ~/secrets/security.properties); echo "changed lines: $(grep -c . <<<"$d"), of which ldap credentials: $(grep -c 'ldap.java.naming.security.credentials' <<<"$d")"
+```
+
+```out
+changed lines: 7, of which ldap credentials: 7
+```
+
+> 新密碼會短暫出現在這台操作機的行程參數裡（`--config` 只吃命令列）。操作機只有 cpadmin 登入，可以接受；介意的話就改走 16.3 整批重新加密。
+
+`security.properties` 每台都是同一份，所以 10 台都派送（REST、C3 那幾行沒變，不用重啟）；只滾動重啟 controller 和 broker，再用 alice 的 AD 帳密登入 MDS 證明 bind 成功（MDS 要先用查詢帳號到 AD 找到 alice，才能驗她的密碼）：
+
+```bash
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/secrets/security.properties $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties'; done; for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; echo "換密碼後 alice 登入 MDS：$(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; echo "kb01 ldap auth errors since restart: $(ssh kb01.poc.lab 'sudo journalctl -u confluent-server --since "$(systemctl show -p ActiveEnterTimestamp --value confluent-server)" --no-pager 2>/dev/null | grep -ci "javax.naming\|LDAP search failed"')"; echo "kb01 bind 欄位仍是密文參照：$(ssh kb01.poc.lab "sudo grep -c '^ldap.java.naming.security.credentials *= *\\\${securepass:' /etc/confluent/kafka/server.properties")"; rm -f ~/secrets/security.properties.bak
+```
+
+```out
+kc01 active
+（3 行）
+kb01 MDS=200
+（4 行）
+換密碼後 alice 登入 MDS：200
+kb01 ldap auth errors since restart: 0
+kb01 bind 欄位仍是密文參照：1
+```
+
+> 回滾（CPM 換錯、AD 被改回舊密碼）：刪 `.bak` 之前，把 `security.properties.bak` 派送回 10 台、再滾動重啟 controller 和 broker。
+>
+> 和 16.9（有 Conjur）的差別：那裡 CPM 換完只要滾動重啟；這裡多了「取密碼 → 更新密文 → 派送」，所以 CPM 不能悄悄換，一定要通知平台。
 
 # 17. 第十七站：維運選單（OP menu）
 
@@ -4387,6 +4525,54 @@ kc01: /tmp 殘留 0 個；sudoers cpadmin,cpadmin-ops,
 
 > 正式環境交付時再做三件 lab 不做的事：OS 團隊把各主機 `/etc/sudoers.d/cpadmin`（全權）移除；把 `svc-ops.key` 移到離線保管；`~/landing`、`~/repo` 依銀行留存政策處理（套件庫才是正本）。
 
+
+
+## 20.6 演練：CyberArk 換了 cpadmin 的 SSH 金鑰
+
+@only customer
+
+SSH Key Manager 會定期換 cpadmin 的金鑰對：PVWA 裡的私鑰換新、各主機的公鑰換新。操作機 agent 裡的還是舊的那把，所以輪替後第一件事是換掉 agent 裡的私鑰（3.1 的陷阱）。維運人員的 OP menu 不受影響：選單每次都是當下從 PVWA 取，取到的就是新的。
+
+@role 銀行 Secrets 團隊（CyberArk SSH Key Manager 輪替；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+產生新金鑰對、舊的留一份（`.prev`），新公鑰推到所有主機的 cpadmin 與 repo01 的 repodeploy（同 3.1）：
+
+```bash
+cd ~/kafka-lab && mv pvwa/cpadmin_ed25519 pvwa/cpadmin_ed25519.prev && mv pvwa/cpadmin_ed25519.pub pvwa/cpadmin_ed25519.prev.pub && (umask 077; ssh-keygen -q -t ed25519 -N '' -C "cpadmin (CyberArk managed)" -f pvwa/cpadmin_ed25519) && docker exec -i lab-ops02-1 bash -c 'k=$(cat); for u in cpadmin repodeploy; do install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/$u <<<"$k"; done' < pvwa/cpadmin_ed25519.pub && echo "新金鑰 $(ssh-keygen -lf pvwa/cpadmin_ed25519.pub | cut -d' ' -f2)；舊金鑰 $(ssh-keygen -lf pvwa/cpadmin_ed25519.prev.pub | cut -d' ' -f2)"
+```
+
+```out
+新金鑰 SHA256:…；舊金鑰 SHA256:…（兩個不同）
+```
+
+@role 小安 | ops02 | cpadmin
+
+agent 裡還是舊鑰，ssh 被拒：
+
+```bash
+r=$(ssh -o BatchMode=yes -o ConnectTimeout=5 kb01.poc.lab hostname 2>&1); echo "agent 裡：$(ssh-add -l | cut -d' ' -f2)；ssh kb01：$(grep -o 'Permission denied' <<<"$r" || echo "$r")"
+```
+
+```out
+agent 裡：SHA256:…（舊金鑰）；ssh kb01：Permission denied
+```
+
+@role 小安（清掉舊鑰、從 PVWA 貼新鑰；lab 由 Windows 終端代貼） | Windows 終端 | 本機
+
+正式環境在 ops02 上 `SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-add -D`，再照 3.1 用不顯示的寫法貼新的私鑰：
+
+```bash
+docker exec -u cpadmin -e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock lab-ops02-1 ssh-add -D && docker exec -i -u cpadmin -e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock lab-ops02-1 ssh-add - < ~/kafka-lab/pvwa/cpadmin_ed25519 && docker exec -u cpadmin -e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock lab-ops02-1 bash -c 'echo "agent 裡：$(ssh-add -l | cut -d" " -f2)"; ok=0; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 repo01; do u=cpadmin; [ $h = repo01 ] && u=repodeploy; ssh -o BatchMode=yes -o ConnectTimeout=5 $u@$h.poc.lab true 2>/dev/null && ok=$((ok+1)); done; echo "新金鑰登入：$ok/11 台"'
+```
+
+```out
+All identities removed.
+Identity added: (stdin) (cpadmin (CyberArk managed))
+agent 裡：SHA256:…（新金鑰）
+新金鑰登入：11/11 台
+```
+
+> 輪替的時間點要避開變更時段：做到一半金鑰被換，後面的 ssh 會全部失敗（3.1 的陷阱）。待銀行確認：這個帳號的輪替排程、變更時段能否暫停（問題清單 8.4）。
 
 # 21. 第二十一站：憑證輪替
 
@@ -5831,7 +6017,17 @@ syslog：中繼資料已匯出：/home/cpadmin/backup/metadata/20261025-0103
 
 @role 小安 | ops02 | cpadmin
 
-比對最近兩次的備份，哪些檔有變一眼看出來（精簡的 OS 沒有 `diff`，用 sha256 與 `join`）；以 topic 為例列出多出來的。lab 在兩次匯出之間新建了 `orders.backup-demo`：
+比對最近兩次的備份，哪些檔有變一眼看出來（精簡的 OS 沒有 `diff`，用 sha256 與 `join`）；以 topic 為例列出多出來的。
+
+正式環境比的是「昨天」和「今天」。lab 沒有隔天，所以先造一個變化：新建 `orders.backup-demo`，等到下一分鐘再匯出一次（備份目錄以分鐘命名，同一分鐘再匯出會蓋掉前一份）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --create --if-not-exists --topic orders.backup-demo --partitions 1 --replication-factor 3 >/dev/null && last=$(ls -d ~/backup/metadata/20* | tail -1) && while [ "$(date +%Y%m%d-%H%M)" = "$(basename $last)" ]; do sleep 5; done && ~/conf/metadata-backup.sh >/dev/null && echo "新建 orders.backup-demo 後再匯出：$(basename $(ls -d ~/backup/metadata/20* | tail -1))（上一份 $(basename $last)）"
+```
+
+```out
+新建 orders.backup-demo 後再匯出：20261025-0108（上一份 20261025-0107）
+```
 
 ```bash
 cd ~/backup/metadata && set -- $(ls -d 20* | tail -2) && echo "比對 $1 → $2" && join -1 2 -2 2 <(sort -k2 $1/SHA256SUMS) <(sort -k2 $2/SHA256SUMS) | awk '{printf "%-18s %s\n", $1, ($2 == $3 ? "相同" : "有變")}' && echo "topics.txt 多出來的：$(grep -o 'Topic: [^[:space:]]*' $2/topics.txt | sort -u | grep -vxFf <(grep -o 'Topic: [^[:space:]]*' $1/topics.txt | sort -u) | paste -sd' ')"
@@ -5847,6 +6043,16 @@ topic-configs.txt  有變
 topics.txt         有變
 users.txt          相同
 topics.txt 多出來的：Topic: orders.backup-demo
+```
+
+`topics.txt`、`topic-configs.txt` 每次都可能顯示「有變」：describe 的輸出含 leader、ISR 這類會隨時間變動的欄位。要看的是**多了或少了哪些 topic**（最後一行）。看完把示範用的 topic 刪掉：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --delete --topic orders.backup-demo >/dev/null 2>&1; sleep 3; echo "orders.backup-demo 還在嗎：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | grep -cx orders.backup-demo)"
+```
+
+```out
+orders.backup-demo 還在嗎：0
 ```
 
 > features 的 `Epoch` 每次都不同、ACL 與帳號清單（`users.txt`）列出的順序不固定，腳本已經拿掉與排序，否則常會顯示「有變」。

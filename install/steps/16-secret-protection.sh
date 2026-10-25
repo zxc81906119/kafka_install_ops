@@ -90,7 +90,7 @@ else
   [ "$(wc -c < "$PASSPHRASE_FILE")" -ge 16 ] || die "passphrase 太短或取值失敗"
   rm -f "$LOCAL_SECRETS_FILE" "$CUSTODY_FILE"
   (umask 077; confluent secret master-key generate --local-secrets-file "$LOCAL_SECRETS_FILE" \
-     --passphrase @"$PASSPHRASE_FILE" -o yaml | awk '/master_key/{print $2}' > "$MASTER_KEY_FILE")
+     --passphrase "$(cat "$PASSPHRASE_FILE")" -o yaml | awk '/master_key/{print $2}' > "$MASTER_KEY_FILE")
   if [ "$(wc -c < "$MASTER_KEY_FILE")" -ge 40 ]; then ok "master key 產生（$MASTER_KEY_FILE，0600）"; else die "master key 產生失敗"; fi
 fi
 

@@ -81,12 +81,6 @@
 
 - 給銀行的 OS 套件清單若用 `dnf download --resolve` 算，下載容器必須是乾淨的最小安裝，且**先下載、再安裝工具**：先裝了 `createrepo_c` 再下載，它的相依 `createrepo_c-libs` 就被當成已存在而漏掉（操作機安裝時才發現）。
 
-### 影響（之後討論到時處理）
-
-- 交付目錄、客戶主機準備清單：JDK 改為「客戶提供」。
-- 安裝前檢查：確認每台的 `JAVA_HOME` 存在、版本為 21。
-- 目前程式中的 tar 安裝方式、JDK 安裝與移除（`JDK_SOURCE`、`JDK_RETIRED`）在新設計中不需要。
-
 ---
 
 ## 11. 安裝帳號、SSH、sudo（行內有 CyberArk 的情況）
@@ -210,24 +204,9 @@
 
 ---
 
-## 手動實測進度（cp-man，2026-10-20）
+## 手動實測的教訓（2026-10-20 起）
 
-全程由使用者在操作機 ops02 手動下指令，不用 cpctl。lab 由 Claude 扮演銀行（AD、CA 簽發、repo01 的 OS 套件庫與 NTP、LB、主機帳號開通）。
-
-| 項目 | 狀態 |
-|---|---|
-| 1–6 下載、驗證、搬進內網、上架 repo01（httpd + createrepo_c） | 完成 |
-| 8 JDK 21（銀行給 tar；`/opt/java`、alternatives、`/etc/profile.d/java.sh`） | 完成 |
-| 13 安裝前檢查、14 OS 調校、15 套件安裝 + versionlock | 完成 |
-| 12 憑證（7 張 CSR → 銀行 CA → 匯入前檢查 → PKCS12、truststore、MDS token 金鑰） | 完成 |
-| 16–17 controller/broker 設定、格式化、啟動 | 完成 |
-| 18 SCRAM、RBAC、配額、topic；alice/carol AD 登入驗證 | 完成 |
-| 19 REST Proxy ×2（經 LB）、C3（Prometheus/Alertmanager mTLS） | 完成 |
-| 20 OP 選單 | 不納入 |
-| 21 端對端驗收、22 收尾 | 待做 |
-| 延後：Secret Protection、audit log 路由、JMX exporter | 待做 |
-
-### 踩到的坑（新腳本一定要處理）
+### 踩到的坑（腳本一定要處理）
 
 1. **RPM 服務用預設設定啟動**：`systemctl start` 前若 drop-in 沒生效，服務會讀 RPM 預設的 properties（REST Proxy 變成無加密 HTTP、C3 連不上 Kafka）。腳本在 start 前必須檢查 `systemctl show <unit> -p ExecStart` 指向我們的設定檔；而且 `enable --now` 對已在跑的服務不重啟，設定變更要明確 `restart`。
 2. **C3 要能寫 `/etc/confluent-control-center/*-generated.yml`**（alertmanager、trigger_rules、recording_rules、prometheus-generated-local）：擁有者要是 `cp-control-center:confluent`，不能全部設成 root。
@@ -261,6 +240,8 @@
   - api（lab）：腳本把 master key 寫進保管庫（不再只限 Summon）。
   - manual（客戶，只有 PVWA）：passphrase 由小安從 PVWA 取出放 `~/secrets/sp-passphrase.txt`；master key 產生後停下（rc 2），Secrets 團隊存進 PVWA、小安把「雜湊 單號」寫進 `~/secrets/master-key.custody`，再跑一次才派送；換了 master key 雜湊對不上會再停。lab 用隔離複本驗過四種情況。`SUMMON=1` 必須 `VAULT_ACCESS=api`。
 - **只有 PAM 時 CyberArk 的角色＝保管與稽核，不參與執行期**；master key 落地 `service.env`（0600 root），擋得住設定檔外流、擋不住本機 root。要連 root 都擋，需要啟動時向外取的機制（CCP，或 Conjur＋Summon）。寫進手把手 16.7。
+- **輪替（2026-10-25 定案，lab 實測）**：16.6 是原廠的 `confluent secret file rotate --master-key`，必須同時給舊 passphrase 與舊 master key（環境變數），CLI 也無法由 passphrase＋`security.properties` 重算 master key → PVWA 兩個 object 都要保管。**data key 不例行輪替**；懷疑外洩時換密碼本身（第 21 章、16.10）再重新加密。輪替週期問銀行（問題清單 8.7，預設每年＋保管人異動時）。
+- **查明（2026-10-25，lab 實測）**：Confluent CLI v4.72 的 `--passphrase`／`--passphrase-new` 不認 `@檔案`（也不認 `-`），把「`@/home/cpadmin/secrets/…`」字串本身當 passphrase：PVWA 的 passphrase 從沒用到、知道路徑＋拿到 security.properties 就算得出 master key；檔名一換（16.6 的 mv）下一次輪替就失敗。改為給值 `"$(cat 檔案)"`（手把手 16.2、16.6、install 16）；16.5、16.6 結尾加「用 PVWA 的 passphrase 還能輪替、錯的被拒」檢查。代價：值短暫出現在行程參數 → 操作機 `/proc` 掛 `hidepid=2`（問題清單 4.6）。
 
 ### 作業系統版本（2026-10-23 定案）
 
@@ -274,11 +255,11 @@
 - 形式：和第 21 章一樣，先寫手把手新章（手打、lab 實跑），再寫 `install/steps/22-*.sh`（隨時執行，不在安裝順序裡）。
 - lab 演練：用 `install/` 以 **8.2.4** 從零裝一套（硬碟上 `packages/rpm/confluent/` 有整套 8.2.4，或照第 1 站重新下載），再照新章升到 8.3.2；持續流量下量測遺失與失敗。C3 與 JDK 的演練要另外下載舊一版（C3 2.6.0 或更早、另一個 JDK 21.x）。
 - 官方做法（CP 8.3 升級文件，2026-10-24 查）：
-  - 順序：**Control Center 最先** → broker 逐台 → controller 逐台 → REST Proxy（所有 broker 升完後）→ 應用程式最後。舊 cpctl 沒有把 C3 排在最前面，新章照官方。
+  - 順序：**Control Center 最先** → broker 逐台 → controller 逐台 → REST Proxy（所有 broker 升完後）→ 應用程式最後。照官方。
   - REST Proxy（RBAC）升級前先在 `_confluent-command` topic 加 ResourceOwner role binding。
   - features：全部升完後 `kafka-features --release-version 4.3` 先看 version-mapping 再 `upgrade`；升了之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降版「可能要從備份還原」→ **finalize（features 升版）之前都可回滾，之後不行**。8.2.x 是 4.2-IV0／IV1，8.3 是 4.3-IV0。
   - 每台升級前：移除已廢棄的 `message.format.version` 等設定、備份 `/etc`；KRaft 升級需從 7.7.1 以後；所有元件同版，不跨版混用。
-  - 官方寫法是 `yum remove` 舊版再 `install` 新版；我們的設定不在 RPM 的預設路徑（`/etc/confluent/…`），比照 cpctl 用 `dnf install` 新版並更新 versionlock，實測時確認設定與 drop-in 不被覆蓋。
+  - 官方寫法是 `yum remove` 舊版再 `install` 新版；我們的設定不在 RPM 的預設路徑（`/etc/confluent/…`），改用 `dnf install` 新版並更新 versionlock，實測時確認設定與 drop-in 不被覆蓋。
 
 ### 日常備份（2026-10-24 定案；2026-10-25 已實作：手把手第 26 章，lab 實跑）
 
@@ -307,6 +288,12 @@
 - 維持現狀：HTTPS（主機憑證）＋ HTTP Basic auth（帳號 prometheus，主機上只存加鹽 SHA-256），不加 mTLS。
 - 已知取捨：9 個 exporter 共用一組 scrape 密碼；keystore 密碼明文在 exporter YAML（0640 root:confluent）。
 - 待問銀行：7071 是否只放行行內 Prometheus 的來源 IP（第 7 章 firewalld 目前對所有來源開放）；行內 Prometheus 抓其他系統用哪種認證。
+
+### 只保留現行設計（2026-10-25 定案）
+
+- 只保留現行設計：舊的 cpctl 安裝程式、cp-poc／cp-man 兩個 lab、舊手動安裝手冊、全流程簡報、主機準備清單、另設堡壘機的舊 OP menu 設計都已從 redesign 分支移除（只剩 main 分支的歷史）。
+- 現行設計只有一種：操作機 ops02 同時是維運人員登入點（經 PSMP），OP menu 跑在操作機，碰主機用 cpadmin 金鑰（正本在 PVWA，只放進 ssh-agent），見手把手第 17 章。SSH 金鑰只有 cpadmin 一組。
+- 同日確認：cpadmin 先用 `NOPASSWD` sudo；CPM 的 reconcile 帳號不用 cpadmin。
 
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
@@ -338,7 +325,7 @@
 | 網路 | port 清單誰開、主機 firewalld 可否由我們管；DNS 或 /etc/hosts、FQDN；NTP 來源；REST 前的 LB 型態與 VIP；C3 9021 從哪個網段連 |
 | 憑證 | CA 申請流程與時程；會不會改 SAN／EKU、serverAuth＋clientAuth 同一張可否；回覆格式；效期與輪替；根憑證進 OS trust store／JDK cacerts 由誰 |
 | AD | svc-mds-bind 誰建、可否兩組 A／B；群組命名與管理；LDAPS 用哪台 DC、憑證、備援；人員 AD 帳密登入 C3 可否、MFA |
-| 原廠（Confluent） | `confluent.metadata.server.token.key.passphrase`（讓 MDS 讀 PKCS#8 加密的 token 私鑰）原廠文件查不到（8.3 MDS 設定參考只有 token.key.path／max.lifetime.ms／signature.algorithm），舊 cpctl 用過、lab 可用：是否正式支援、會不會補文件？MDS token 公鑰檔能否放多把（做零中斷金鑰輪替）？ |
+| 原廠（Confluent） | `confluent.metadata.server.token.key.passphrase`（讓 MDS 讀 PKCS#8 加密的 token 私鑰）原廠文件查不到（8.3 MDS 設定參考只有 token.key.path／max.lifetime.ms／signature.algorithm），lab 試過可用：是否正式支援、會不會補文件？MDS token 公鑰檔能否放多把（做零中斷金鑰輪替）？ |
 | CyberArk | （2026-10-23 已知：只有 PSM／PSMP 代登＋SSH 金鑰輪替，無 CCP／CP／Conjur）PVWA 取用私鑰與 master key 要不要雙人覆核、要填什麼單號；master key 放哪個 safe；應用程式現在怎麼拿資料庫密碼（SCRAM 照同一套）；元件清單（照功能問）；CCP AppID 申請與驗身分；CPM 管 cpadmin 金鑰與 from= 限制；Conjur 有無與型態、host 身分、policy 誰載、443 通否；只有 PAM 時 master key 放哪個 safe；保管庫故障時平台能否重啟 |
 | 應用程式 | 直連 SCRAM 或經 REST 各幾個；app 怎麼拿密碼、認證失敗會否重取；topic 命名與配額；client 語言與 SCRAM-SHA-512 支援 |
 | 監控維運 | 日誌送 SIEM 方式與保留；行內 Prometheus 抓 JMX exporter；稽核日誌保留與去向；變更時段；冷開機順序 |
