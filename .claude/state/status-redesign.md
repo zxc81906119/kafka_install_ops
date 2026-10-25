@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-25 上午（lab 使用中：Claude；kc02 telemetry 已還原）
+Updated: 2026-10-25 上午（lab 使用中：Claude，客戶模式全書重跑）
 
 ## 現在在做什麼
 安裝流程重新設計（使用者主導、Claude 記錄）＋ `install/` 一章一支的安裝腳本（照手把手文件），以 `lab` 專案實跑驗證。
@@ -30,12 +30,11 @@ Updated: 2026-10-25 上午（lab 使用中：Claude；kc02 telemetry 已還原�
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
 
-## 待辦（2026-10-25 上午）
-1. ~~冷開機後第 20 章驗收~~ 21/21、15/15、應用程式端全過；OS 修補後再跑一次也全過。
-2. ~~lab 其他 5 台 metadata.log.dir~~ 完成（7 台都生效，操作機的範本也補了）。
-3. ~~第 27 章 OS 修補＋27-os-patch.sh~~：11 台各 6 個 OS 套件（含 openssh-server）實際更新，Confluent 不動、不用重開機。
-4. ~~第 28 章 C3 升級＋22-upgrade.sh c3~~：2.6.1→2.6.0→2.6.1。坑：RPM 換版本會把 C3 自己寫的 3 個 generated 檔改回 root:root 644，已在程序與腳本裡改回；C3 換版本要連 Prometheus、Alertmanager 一起重啟。
-5. 定案：JMX exporter 維持 HTTPS＋Basic auth（redesign 有記）。
-6. **延後（使用者：之後再改）**：cp-server 改成純 server 憑證（EKU 只留 serverAuth）。Claude 的建議：另發 c3-monitoring（clientAuth、無 RBAC）給 C3 ↔ 內建 Prometheus／Alertmanager；不要用 svc-c3（SystemAdmin，私鑰會以明文 PEM 放在 c3-01）；檢查指令改用 svc-ops；要不要 client_allowed_sans 待定。
-7. ~~telemetry raft 指標~~：有（io.confluent.kafka.server/raft/*），但 C3 Prometheus 沒有主機標籤、多台互撞 → 不改白名單，維持 JMX 告警（第 18 章、README、redesign 已寫）。
-8. ~~OP menu 44 snapshot~~（lab 實測：和每日備份 6 個清單 sha256 相同；bob 被擋；回歸測試加一行）；~~掃描工具~~ docs/journey-src/tools/scan-log.sh（全書重跑後必跑）；~~請銀行確認 11.3、11.4~~。users.txt 加排序（帳號清單順序不固定）。
+## 待辦（2026-10-25 上午：手冊主線改客戶模式＋全模式實測，使用者定案「自檢完直接改、直接測」）
+自檢：log/2026-10-25-self-review.md。改寫已 commit 681e5f9（@only 標記、run-chapter.js MODE、run-full.sh、3.1 PVWA 金鑰、11.1 交付保管、
+16/17/19/20/21 分模式、svc-backup 移第 9 章）。測試矩陣（每輪從零，跑完 scan-log.sh）：
+1. 客戶模式：手把手 0–21（進行中）→ 23–28；install `run-customer.sh` 全段 1–25（已加 21、23–27 站與 TO=）。
+2. Conjur 模式：手把手 0–21、23–28；install `EXT=1 run-all.sh`。
+3. provider 模式：手把手 0–20。
+4. 升級：`run-upgrade-drill.sh`（裝到第 17 段再升級）；手把手第 22 章在 8.2.4 lab 上（`CP_VERSION=8.2.4 TO=17 run-customer.sh` 後 `run-full.sh customer 22 23`；先把 landing-extra 搬回 landing）。
+之後：延後的 cp-server 純 server 憑證；OP menu 44 打包上架。

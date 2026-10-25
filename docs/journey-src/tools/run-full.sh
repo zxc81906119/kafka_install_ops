@@ -18,7 +18,8 @@ mkdir -p "$OUT_DIR"
 stamp=$(date +%Y%m%d-%H%M)
 runner="$OUT_DIR/run-$MODE-$FROM-$TO-$stamp.sh"; log="${runner%.sh}.log"
 
-MODE=$MODE node "$TOOLS_DIR/run-chapter.js" "$REPO_DIR/docs/journey-src/journey.md" "$FROM" "$TO" "$runner" || exit 1
+# Node 是 Windows 程式：路徑先轉成 C:/… 再給它（MSYS_NO_PATHCONV=1 時 Git Bash 不會自動轉）
+MODE=$MODE node "$(cygpath -m "$TOOLS_DIR/run-chapter.js")" "$(cygpath -m "$REPO_DIR/docs/journey-src/journey.md")" "$FROM" "$TO" "$(cygpath -m "$runner")" || exit 1
 # 17.3 打包選單：文件寫的是佔位的原始碼目錄
 sed -i "s#<放 opmenu/ 原始碼的目錄>#$REPO_DIR#" "$runner"
 

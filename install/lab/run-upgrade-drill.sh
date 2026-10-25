@@ -28,7 +28,7 @@ acceptance() { on_ops "驗收（$1）" 'bash install/install.sh --only 20 2>&1 |
 
 if [ "${SKIP_INSTALL:-0}" != 1 ]; then
   printf '######## 客戶模式從零裝 %s\n' "$FROM_VERSION"
-  CP_VERSION=$FROM_VERSION bash "$LAB_TOOLS_DIR/run-customer.sh" || { echo "安裝失敗"; exit 1; }
+  CP_VERSION=$FROM_VERSION TO=17 bash "$LAB_TOOLS_DIR/run-customer.sh" || { echo "安裝失敗"; exit 1; }   # 裝到第一次驗收就好
 fi
 # 升級前先改 site.env 的目標版本（第 22 章、22-upgrade.sh 的做法）
 docker exec "$OPS_CONTAINER" sed -i "s/^CP_VERSION=[0-9.]*/CP_VERSION=$TO_VERSION/" /home/cpadmin/install/conf/site.env

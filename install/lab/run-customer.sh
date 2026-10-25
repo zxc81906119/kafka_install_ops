@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # install/lab/run-customer.sh —— lab：用「客戶模式」從零實跑到第 20 站（Windows Git Bash）
 #
-#   bash run-customer.sh                  從零（bank-sim reset），裝 site.env 的 CP_VERSION
+#   bash run-customer.sh                  從零（bank-sim reset），裝 site.env 的 CP_VERSION；驗收後接著跑 21、23–27 站，最後再驗收一次
 #   CP_VERSION=8.2.4 bash run-customer.sh 指定版本（升級演練：先裝 8.2.4）
 #   FROM=6 bash run-customer.sh           從第 6 段接著跑（段號在每段的 ######## 標題裡）；接著跑時 CP_VERSION 要和第一次一樣
+#   TO=17 bash run-customer.sh            跑到第 17 段（第一次驗收）就停
 #
 # 客戶的 CyberArk 只有 PAM，程式碰不到保管庫，所以 site.env 換成（install/README「lab 與客戶環境的設定差異」）：
 #   SSH_KEY_SOURCE=agent  VAULT_ACCESS=manual  SUMMON=0  LDAP_PASSWORD_VIA_ENV=0  OPMENU_SECRETS=manual
@@ -24,14 +25,17 @@ OPS_CONTAINER=lab-ops02-1
 AGENT_SOCKET=/home/cpadmin/.ssh/engineer-agent.sock   # 工程師這次作業的 ssh-agent（容器重開就沒了）
 started_at=$(date +%s)
 
-# stage <段號> <標題>：段號小於 FROM 就略過這一段（回 1），否則印標題（回 0）
+# stage <段號> <標題>：段號小於 FROM 或大於 TO 就略過這一段（回 1），否則印標題（回 0）
 stage() {
   local number=$1; shift
   [ "$number" -ge "${FROM:-1}" ] || return 1
+  [ "$number" -le "${TO:-99}" ] || return 1
   printf '\n######## %s %s (+%ss) ########\n' "$number" "$*" "$(( $(date +%s) - started_at ))"
 }
 # 在操作機以 cpadmin 跑 install.sh；帶上工程師 ssh-agent 的位置
 install_on_ops() { docker exec -u cpadmin -w /home/cpadmin -e SSH_AUTH_SOCK="$AGENT_SOCKET" "$OPS_CONTAINER" bash install/install.sh "$@" </dev/null; }
+# 隨時執行的站（21 以後）：直接跑那一支
+step_on_ops() { local script=$1; shift; docker exec -u cpadmin -w /home/cpadmin -e SSH_AUTH_SOCK="$AGENT_SOCKET" "$OPS_CONTAINER" bash "install/steps/$script" "$@" </dev/null; }
 # expect_wait_for_bank <rc> <站> [前置站]：install.sh 應該停在「第 <站> 站等銀行」（rc 2）。
 # 給了前置站就再確認它已經做完（略過的站不會留完成標記，所以由呼叫的地方指定），不然可能是更早的站在等銀行
 expect_wait_for_bank() {
@@ -92,4 +96,21 @@ stage 14 "16–19" && { install_on_ops --from 16 --to 19 || exit 1; }
 stage 15 "銀行：行內 Prometheus 接上（18.5）" && { $BANK prometheus; }
 stage 16 "機房：冷開機（20.4）；工程師重新貼私鑰" && { $BANK coldboot && engineer_loads_key || exit 1; }
 stage 17 "20 驗收" && { install_on_ops --from 20 || exit 1; }
-stage 18 "完成" && { install_on_ops --list; }
+stage 18 "21 憑證：status、leaf 換發（第一次停在等銀行簽）" && {
+  step_on_ops 21-cert-rotate.sh status || exit 1
+  step_on_ops 21-cert-rotate.sh leaf; [ $? = 2 ] || { echo "21 leaf 第一次應停在等銀行（rc 2）"; exit 1; }
+  $BANK sign-next && step_on_ops 21-cert-rotate.sh leaf || exit 1
+}
+stage 19 "23 license：status、schedule" && {
+  step_on_ops 23-license.sh status; rc=$?; [ $rc = 0 ] || [ $rc = 2 ] || exit 1   # 試用版不到 90 天是 rc 2
+  step_on_ops 23-license.sh schedule || exit 1
+}
+stage 20 "26 日常備份：grant、run、schedule、compare" && {
+  step_on_ops 26-metadata-backup.sh grant && step_on_ops 26-metadata-backup.sh run || exit 1
+  sleep 61; step_on_ops 26-metadata-backup.sh schedule && step_on_ops 26-metadata-backup.sh compare || exit 1
+}
+stage 21 "24 換 controller（kc03 清空重建）" && { step_on_ops 24-controller-replace.sh replace kc03 || exit 1; }
+stage 22 "25 broker 縮減與擴充（kb04）" && { step_on_ops 25-broker-scale.sh remove kb04 && step_on_ops 25-broker-scale.sh add kb04 || exit 1; }
+stage 23 "27 OS 修補" && { step_on_ops 27-os-patch.sh apply || exit 1; }
+stage 24 "20 驗收（21–27 做完再一次）" && { install_on_ops --from 20 || exit 1; }
+stage 25 "完成" && { install_on_ops --list; }
