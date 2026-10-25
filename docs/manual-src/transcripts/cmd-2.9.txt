@@ -1,8 +1,0 @@
-##### 2.9 內部 repo 主機準備(ops02;cpadmin + sudo)。httpd/createrepo_c 正式環境由行內 RHEL 鏡像安裝;模擬環境用落地區 bootstrap/ 的檔案
-sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9 && rpm -K /mnt/exchange/bootstrap/*.rpm | grep -vc 'digests signatures OK'
-sudo dnf -y -q --disablerepo='*' install /mnt/exchange/bootstrap/*.rpm && rpm -q httpd createrepo_c jq openldap-clients
-sudo sed -i 's/^Listen 80$/Listen 8080/' /etc/httpd/conf/httpd.conf && sudo rm -f /etc/httpd/conf.d/welcome.conf && grep -n '^Listen' /etc/httpd/conf/httpd.conf
-printf 'DocumentRoot "/srv/repo"\n<Directory "/srv/repo">\n    Options Indexes FollowSymLinks\n    AllowOverride None\n    Require all granted\n    <LimitExcept GET HEAD OPTIONS>\n        Require all denied\n    </LimitExcept>\n</Directory>\n' | sudo tee /etc/httpd/conf.d/cp-repo.conf
-id repoadmin 2>/dev/null || sudo useradd -r -s /sbin/nologin repoadmin; sudo install -d -o repoadmin -g repoadmin -m 0755 /srv/repo && stat -c '%U:%G %a %n' /srv/repo
-sudo httpd -t && sudo systemctl enable -q --now httpd && systemctl is-active httpd && ss -ltn | grep 8080
-curl -s -o /dev/null -w 'GET  %{http_code}\n' http://ops02.poc.lab:8080/ && curl -s -o /dev/null -w 'PUT  %{http_code}\n' -X PUT http://ops02.poc.lab:8080/x

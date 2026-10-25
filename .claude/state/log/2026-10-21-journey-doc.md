@@ -11,7 +11,7 @@
 - 2026-10-21 自檢手把手文件：補名詞小抄、檔案位置、時間預估、0.5.9 收工與重開、14.1 出問題先看哪裡、14.2 做錯怎麼重來；修正 3.1 root 進 ops02、3.2/第 4 站/1.3 會誤判的預期輸出。第 0 章自建環境仍未從零實跑。
 - 2026-10-21 第 0 章從零實跑（`~/kafka-lab`，scratchpad `ch0.sh`）：10 個區塊全部通過。修了兩件事並寫回 journey.md：
   (1) Git Bash 的 openssl 是 Windows 原生程式，`sign.sh` 收到 `/c/Users/...` 會靜靜失敗 → 腳本內用 `cygpath -m` 轉路徑；
-  (2) 網段 172.32/172.33 與 cp-man 重疊（`Pool overlaps`）→ 改 172.35/172.36，並在 0.5.6、14.3 加陷阱說明。
+  (2) 網段與別的 compose 專案重疊（`Pool overlaps`）→ 改 172.35/172.36，並在 0.5.6、14.3 加陷阱說明。
   lb01 第一次 `up -d` 只起 13 台，再 `up -d` 一次即可。第 1–3 章實跑中（`ch123.sh`）。
 - 2026-10-22 凌晨：第 1–14 章全部從零實跑通過（scratchpad 執行器 ch123.sh、ch5-14.sh、ch9-14.sh：每個 ```bash 區塊依 @role 的主機／身分執行，同主機連續區塊共用一個 shell）。
   文件修正：3.1 ssh 測試清單加 ops02（否則第 5 站 `ssh ops02` 會 Host key verification failed）；5 站變數寫 `~/jdk/jdk.env` 再 source；

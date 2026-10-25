@@ -1,0 +1,11 @@
+{
+  "name": "cp-bank-questions",
+  "private": true,
+  "description": "Generates docs/Confluent-請銀行確認的事項.docx",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "docx": "9.5.1"
+  }
+}

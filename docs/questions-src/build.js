@@ -1,4 +1,4 @@
-// Builds docs/Confluent-手動安裝手冊.docx from guide.md (a small Markdown subset).
+// Builds docs/Confluent-請銀行確認的事項.docx from questions.md (a small Markdown subset).
 // Supported: # / ## / ### headings, paragraphs, "- " bullets, "1. " numbered items,
 // ```fenced code```, | pipe | tables |, "> " callouts (">!" = warning), `code`, **bold**,
 // a line "[[toc]]" for the table of contents and "[[pagebreak]]".
@@ -10,9 +10,9 @@ const {
   PageBreak, TabStopType,
 } = require('docx');
 
-// 不帶參數：手動安裝手冊。其他文件共用同一套樣式：node build.js <來源.md> <輸出.docx>
-const SRC = process.argv[2] ? path.resolve(process.argv[2]) : path.join(__dirname, 'guide.md');
-const OUT = process.argv[3] ? path.resolve(process.argv[3]) : path.join(__dirname, '..', 'Confluent-手動安裝手冊.docx');
+// 不帶參數：請銀行確認的事項。其他文件可共用同一套樣式：node build.js <來源.md> <輸出.docx>
+const SRC = process.argv[2] ? path.resolve(process.argv[2]) : path.join(__dirname, 'questions.md');
+const OUT = process.argv[3] ? path.resolve(process.argv[3]) : path.join(__dirname, '..', 'Confluent-請銀行確認的事項.docx');
 
 const FONT = 'Microsoft JhengHei';
 const MONO = 'Consolas';

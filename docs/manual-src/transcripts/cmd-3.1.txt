@@ -1,4 +1,0 @@
-##### 3.1 步驟 00:安裝前預檢(ops02,cpadmin)
-for c in ssh scp openssl curl sha256sum flock; do command -v "$c" >/dev/null || echo "MISSING $c"; done; echo tools-checked
-for h in ops02 ad01 lb01 jump01 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do printf '%-7s ' $h; ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 cpadmin@$h.poc.lab 'sudo -n true && . /etc/os-release && echo "$ID-$VERSION_ID tmp=$(findmnt -no OPTIONS /tmp | grep -o noexec || echo exec-ok) tmpfree=$(df -Pm /tmp | awk "NR==2{print \$4}")MB skew=$(( $(date +%s) - '"$(date +%s)"' ))"' 2>&1 | tail -1; done
-for src in kc01 kb01 rest01 c3-01 jump01; do for h in ops02 ad01 lb01 jump01 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh -o BatchMode=yes $src.poc.lab "getent hosts $h.poc.lab >/dev/null" || echo "$src cannot resolve $h.poc.lab"; done; done; echo dns-checked

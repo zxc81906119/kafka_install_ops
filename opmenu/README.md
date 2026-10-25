@@ -2,7 +2,7 @@
 
 > 2026-10-22 重新設計(redesign/README.md 第 13 節):**主機上不放任何 agent**,主機類動作用「和安裝同一個 cpadmin」ssh 過去做,
 > 主機只靠 sudoers 限制;私鑰與緊急模式憑證都從 CyberArk 取,不落地;拿掉 ticket、清理日誌、docker 後端。
-> 部署走離線引進流程:`windows/package-opmenu.sh` 打包成 `packages/tools/opmenu-<日期>.<sha8>.tar.gz`。
+> 部署走離線引進流程:在外網端打包成 `opmenu-<日期>.<sha8>.tar.gz`,隨落地區送到操作機 `~/landing/tools/opmenu/`(手把手 17.3)。
 
 給維運人員(opxx)用的文字選單:在操作機用自己的本機帳號登入後,從選單執行審核過的作業,每次執行留紀錄。
 **Kafka 的動作能不能做,由 Kafka 的 RBAC 依操作者本人的 AD 群組決定;主機的動作先問 MDS「本人有沒有 Operator 以上的權限」,再以 cpadmin ssh 到主機,主機的 sudo 只開放重啟與看日誌。**

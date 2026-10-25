@@ -1,2 +1,0 @@
-# (補) 2.5 的 CRLF 檢查:下載機沒有 perl(rc=127),改用 grep;沒有輸出 = 沒有 CRLF
-grep -rl $'\r' /src/opmenu/opmenu.sh /src/opmenu/lib /src/opmenu/README.md /src/opmenu/opmenu.conf.example; echo crlf-files=$(grep -rl $'\r' /src/opmenu/opmenu.sh /src/opmenu/lib /src/opmenu/README.md /src/opmenu/opmenu.conf.example | wc -l)

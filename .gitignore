@@ -1,39 +1,23 @@
-# Offline packages (landing zone) - large binaries, never committed
-packages/*
-!packages/.gitkeep
-
-# Secrets and license - provided per environment
-installer/conf/secrets.env
-installer/conf/license.txt
-
-# Generated at runtime
-logs/
-state/
+# Secrets, licences, keys - provided per environment, never committed
+secrets.env
+license.txt
 *.p12
 *.pem
 *.key
 *.crt
 
+# Offline packages never go into git (the lab's landing zone is ~/kafka-lab/landing)
+packages/
+
+# Generated at runtime
+logs/
+
 # IDE
 .idea/
 *.iml
 
-# deck generator dependencies (npm ci in docs/deck-src)
+# generator dependencies (npm ci in docs/*-src)
 node_modules/
-# PowerPoint lock files
+# Office lock files
 ~$*
 
-# Full manual (no cpctl) run: separate landing zone and secrets
-packages-manual/
-docker/manual/secrets.env
-
-# Simulated bank PKI (windows/bank-ca.sh): CA private keys
-bank-ca/
-
-# Delivery sets built by windows/make-delivery.sh (copies of packages/)
-delivery/
-packages-manual.old/
-
-# hand-off state is meant to be in git (CLAUDE.md); the state/ rule above is for installer/state
-!.claude/state/
-!.claude/state/**

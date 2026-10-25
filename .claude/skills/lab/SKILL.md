@@ -1,46 +1,45 @@
 ---
 name: lab
-description: Operate the Docker-based lab (cp-poc, cp-man, ~/kafka-lab): start/stop, enter hosts, check cluster health, diagnose slowness. Use when the user asks about the environment state, "幫我看一下目前狀況", or something in the lab hangs.
+description: Operate the Docker-based lab (~/kafka-lab, compose project `lab`): start/stop, enter hosts, check cluster health, diagnose slowness. Use when the user asks about the environment state, "幫我看一下目前狀況", or something in the lab hangs.
 ---
 
 # Lab operations
 
-Two compose projects share one Docker Desktop VM (~10.7 GB RAM). Run one at a time.
+One lab: compose project `lab` in `~/kafka-lab/` (built by the hands-on guide, chapter 0), 14 containers
+`lab-<host>-1` (ops02, repo01, kc01-03, kb01-04, rest01-02, c3-01, ad01, lb01) + download host `dl01`; with
+Conjur also `lab-conjur-*` (`-f conjur.yml`). Docker Desktop VM has ~10.7 GB RAM: run nothing else alongside.
 
-| Project | File | Hosts | Purpose |
-|---|---|---|---|
-| `cp-poc` | `docker/compose.yml` | ops01 (cpctl), repo01, kc01-04, kb01-04, rest01-02, c3-01, ad01, lb01, jump01 | cpctl-driven install |
-| `cp-man` | `docker/manual/compose.yml` | ops02 (bare), repo01, kc01-03, kb01-04, rest01-02, c3-01, ad01, lb01 | manual install (the journey) |
-| `lab` | `~/kafka-lab/compose.yml` (built by the journey guide) | same as cp-man, containers `lab-<host>-1` | self-contained variant |
-
-Switch: `docker compose -f docker/compose.yml stop` → `docker compose -f docker/manual/compose.yml up -d`
-(`down -v` for a clean slate). `cp-poc-kc04-1` may need a separate `docker stop`.
+- Start/stop: `cd ~/kafka-lab && docker compose -f compose.yml $([ -f conjur.yml ] && echo "-f conjur.yml") up -d|stop`.
+- From zero: `bash docs/journey-src/tools/run-full.sh <customer|conjur|provider>` (tears down everything except
+  `~/kafka-lab/landing` and `landing-extra`) or `bash install/lab/run-customer.sh` / `EXT=1 bash install/lab/run-all.sh`.
+- Run logs: `~/kafka-lab-runs/`; check them with `docs/journey-src/tools/scan-log.sh <log>`.
 
 ## Entering hosts
-- Operator host as cpadmin: `docker exec -it -u cpadmin -w /home/cpadmin cp-man-ops02-1 bash`
-- Any host as root ("bank" work): `MSYS_NO_PATHCONV=1 docker exec cp-man-<host>-1 bash -c '...'`
+- Operator host as cpadmin: `docker exec -it -u cpadmin -w /home/cpadmin lab-ops02-1 bash`. In customer mode
+  cpadmin's private key exists only in the agent: add `-e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock`;
+  after a cold boot re-paste the key from `~/kafka-lab/pvwa/` (guide 20.4).
+- Any host as root ("bank" work): `MSYS_NO_PATHCONV=1 docker exec lab-<host>-1 bash -c '...'`
 - Download host: `docker exec -it dl01 bash` (`/out` = landing zone).
-- Windows paths for `-v` / `docker cp`: `"$(cygpath -m "$PWD/dir")"`; keep `MSYS_NO_PATHCONV=1`.
+- Windows paths for `-v` / `docker cp` / Node: `"$(cygpath -m "$PWD/dir")"`; keep `MSYS_NO_PATHCONV=1`.
 
-## Health checks (from ops02 as cpadmin, `export JAVA_HOME=/opt/java/current` or the installed JDK path)
+## Health checks (from ops02 as cpadmin, `export JAVA_HOME=/opt/java/current`)
 - Services: `systemctl is-active confluent-server` on kc*/kb*; `confluent-kafka-rest` on rest*;
   `prometheus alertmanager confluent-control-center` on c3-01.
 - Quorum: `kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status`
-- MDS: `curl -s -o /dev/null -w %{http_code} https://kbNN.poc.lab:8090/v1/metadata/id` → 200
-- TOKEN listener: `kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list`
+- MDS: `curl -sk -o /dev/null -w %{http_code} https://kbNN.poc.lab:8090/v1/metadata/id` → 200
 - REST: legacy cert → 200, other cert → 401, no cert → 000, via `rest.poc.lab` → 200.
-- C3: `https://c3-01.poc.lab:9021/` → 200 (Windows: `https://localhost:19021`).
+- C3: `https://c3-01.poc.lab:9021/` → 200.
+- Acceptance: guide chapter 20 / `bash install/steps/20-acceptance.sh`.
 
 ## When things are slow or hang
-1. `MSYS_NO_PATHCONV=1 timeout 15 docker exec cp-man-ops02-1 sh -c 'timeout 5 ip addr | wc -l'` — if this hangs in
-   every container, the VM kernel's netlink is stuck → Java name resolution blocks → broker TOKEN listener
-   threads queue (9094 fills with CLOSE-WAIT). Restart Docker Desktop. Do not touch configs.
-2. Memory: `docker exec cp-man-ops02-1 free -m`; if MemAvailable is tiny, stop the other project.
-3. Reads over the Windows bind mount are ~2 MB/s: `rpm -K`/`sha256sum` on 3 GB takes 20+ minutes; copy into a
-   docker volume first (`docker cp` is much faster than reading through the mount).
-4. Always put a `timeout` on docker exec commands that touch Kafka; never `pkill -f <pattern>` that matches your
+1. `MSYS_NO_PATHCONV=1 timeout 15 docker exec lab-ops02-1 sh -c 'timeout 5 ip addr | wc -l'` — if this hangs in
+   every container, the VM kernel's netlink is stuck → Java name resolution blocks → broker listener threads
+   queue. Restart Docker Desktop. Do not touch configs.
+2. Memory: `docker exec lab-ops02-1 free -m`.
+3. Reads over the Windows bind mount are ~2 MB/s: `rpm -K`/`sha256sum` on 3 GB takes long; copy into a docker
+   volume first.
+4. `pgrep` in Git Bash can't see container processes: check with `docker exec <c> ps -eo etime,args`.
+5. Always put a `timeout` on docker exec commands that touch Kafka; never `pkill -f <pattern>` that matches your
    own `bash -c` command line.
-
-## Memory and cleanup
-- `dl01` and leftover `docker run` containers can be removed with `docker rm -f`.
-- `packages-manual.old/` (6 GB) and `delivery/` are disposable copies.
+6. Transient Internet mirror errors (e.g. 3.2 "Failed to download metadata for repo 'appstream'") are not guide
+   bugs: rerun.

@@ -24,7 +24,7 @@
   RBAC 發現：kafka-topics --describe 需 DescribeConfigs → 維運群組加 DeveloperManage Topic:*；kafka-devs 加 DeveloperManage Topic:orders.*（lab 綁好）。
   lab 現況：`lab` 在跑（含 Conjur、dl01），平台 Secret Protection + Summon 模式，op01/opmenu 已部署在 ops02。
 - 2026-10-22 深夜：journey 第 17 站「維運選單」實跑通過並併入（保管庫身分與兩個值、裝選單、兩段式 sudoers、bob/carol/alice 試跑、收尾檢查）；diagrams 加 opmenu；docx 重建。
-  OP menu 打包：windows/package-opmenu.sh → packages/tools/opmenu-20261022.5b4cdd00.tar.gz（landing/tools/opmenu）。
+  OP menu 打包：opmenu-20261022.5b4cdd00.tar.gz 放進 landing/tools/opmenu（打包方式見手把手 17.3）。
   待辦順序（使用者定）：2 audit log 路由 + JMX exporter（HTTPS + basic auth + scrape 設定）→ 1 驗收清單（平台健康、安全、應用程式端、維運）＋ 22 收尾 → 4 安裝腳本重寫（照手把手一章一支）。
 - 2026-10-22 深夜 2：journey 第 18 站 JMX exporter（salted SHA-256 basic auth、HTTPS、javaagent drop-in 40-jmx.conf、給銀行的 scrape/alert/ca、prom/prometheus 容器扮演行內 Prometheus：9/9 up、9 rules）與
   第 19 站稽核日誌（confluent-audit SCRAM + DeveloperWrite/Manage prefix、router JSON、Secret Protection 重新加密派送、kc/kb 滾動重啟；驗證：payments produce 允許與 app-orders describe 拒絕進 _sensitive）實跑通過並併入。

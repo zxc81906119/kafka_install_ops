@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install/ 的靜態檢查：改完腳本、上 lab 之前先跑。
 #   bash install/tools/lint.sh            在有 shellcheck 的機器跑（RHEL：EPEL 的 ShellCheck）
-#   在 Windows Git Bash 沒有 shellcheck 時，自動改用 docker image cp-ops:poc（裡面有 ShellCheck）跑同一支
+#   在 Windows Git Bash 沒有 shellcheck 時，自動改用原廠 docker image koalaman/shellcheck（LINT_IMAGE 可換）
 #
 # 檢查三件事：
 #   1. 每支 .sh 本身（shellcheck，warning 以上）
@@ -13,14 +13,16 @@
 # 結束碼：0 乾淨；1 有問題（逐條列出 檔案:行:欄）
 set -uo pipefail
 INSTALL_ROOT=$(cd "$(dirname "$0")/.." && pwd)
-LINT_IMAGE=${LINT_IMAGE:-cp-ops:poc}
+LINT_IMAGE=${LINT_IMAGE:-koalaman/shellcheck:v0.10.0}
 
-# 沒有 shellcheck：用 docker 跑自己（install/ 唯讀掛進去、不連網）
+# 沒有 shellcheck：每次呼叫改在 docker 裡跑（目前目錄唯讀掛進去、不連網；檔名都用相對路徑）
 if ! command -v shellcheck >/dev/null; then
   command -v docker >/dev/null || { echo "找不到 shellcheck，也沒有 docker"; exit 1; }
-  windows_root=$INSTALL_ROOT
-  command -v cygpath >/dev/null && windows_root=$(cygpath -m "$INSTALL_ROOT")
-  MSYS_NO_PATHCONV=1 exec docker run --rm --network none -v "$windows_root:/install:ro" "$LINT_IMAGE" bash /install/tools/lint.sh
+  shellcheck() {
+    local here=$PWD
+    command -v cygpath >/dev/null && here=$(cygpath -m "$PWD")
+    MSYS_NO_PATHCONV=1 docker run --rm --network none -v "$here:/mnt:ro" -w /mnt "$LINT_IMAGE" "$@"
+  }
 fi
 
 cd "$INSTALL_ROOT" || exit 1

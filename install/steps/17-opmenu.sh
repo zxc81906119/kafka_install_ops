@@ -19,7 +19,7 @@ source "$INSTALL_DIR/lib/render.sh"
 source "$INSTALL_DIR/lib/vault.sh"
 if [ "$OPMENU" != 1 ]; then log "OPMENU=$OPMENU：略過第 17 站"; exit 0; fi
 export JAVA_HOME=/opt/java/current
-OPMENU_PACKAGE_DIR=$LANDING/tools/opmenu      # windows/package-opmenu.sh 打的包，隨落地區送進來
+OPMENU_PACKAGE_DIR=$LANDING/tools/opmenu      # 手把手 17.3 在外網端打的包，隨落地區送進來
 MENU_USER=$OPMENU_OS_USER                     # 維運人員的本機帳號
 
 # 以某個 AD 身分非互動執行選單（試跑用）。正式環境維運人員是互動登入，自己輸入 AD 帳密。
