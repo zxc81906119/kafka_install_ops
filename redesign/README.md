@@ -290,6 +290,11 @@
 - 實作：操作機 `~/conf/metadata-backup.sh`＋systemd timer（每天 02:00，保留 30 天，syslog tag `confluent-backup`）；7 個文字檔＋SHA256SUMS，比對兩天的備份用 sha256＋join（精簡 OS 沒有 diff）；features 的 Epoch 拿掉、ACL 排序，否則每天都「有變」。OP menu 立即匯出（擴充 44）**尚未做**。
 - 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO 決定（尚未列入客戶問題清單）。
 
+### cp-server 改成純 server 憑證（2026-10-25 討論，使用者決定之後再做）
+
+- 目標：cp-server 的 EKU 只留 serverAuth。現在當 client 用的只有 C3 ↔ 內建 Prometheus／Alertmanager（C3 的 keystore、prometheus-generated.yml 的 tls_config）與操作機的檢查指令（curl --cert cp-server 連 9090）。broker／REST／MDS／JMX exporter 只當 server 用；telemetry 用 kafka-internal。
+- Claude 的建議（未定案）：另發 `c3-monitoring`（clientAuth、無 RBAC）給 C3 監控元件用；不用 svc-c3（它是 SystemAdmin，Prometheus 需要明文 PEM 私鑰）；檢查指令改用 svc-ops；已上線環境先改 C3 再換發 cp-server（21.2）；可選 `client_allowed_sans`（要先確認 C3 附的 Prometheus 版本支援）。
+
 ### JMX exporter 的身分認證（2026-10-25 定案）
 
 - 維持現狀：HTTPS（主機憑證）＋ HTTP Basic auth（帳號 prometheus，主機上只存加鹽 SHA-256），不加 mTLS。

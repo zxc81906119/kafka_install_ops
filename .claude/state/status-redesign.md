@@ -36,6 +36,6 @@ Updated: 2026-10-25 上午（lab 使用中：Claude；C3 回到 2.6.1）
 3. ~~第 27 章 OS 修補＋27-os-patch.sh~~：11 台各 6 個 OS 套件（含 openssh-server）實際更新，Confluent 不動、不用重開機。
 4. ~~第 28 章 C3 升級＋22-upgrade.sh c3~~：2.6.1→2.6.0→2.6.1。坑：RPM 換版本會把 C3 自己寫的 3 個 generated 檔改回 root:root 644，已在程序與腳本裡改回；C3 換版本要連 Prometheus、Alertmanager 一起重啟。
 5. 定案：JMX exporter 維持 HTTPS＋Basic auth（redesign 有記）。
-6. **等使用者決定**：cp-server 改成純 server 憑證（EKU 只留 serverAuth）。Claude 的建議：另發 c3-monitoring（clientAuth、無 RBAC）給 C3 ↔ 內建 Prometheus／Alertmanager；不要用 svc-c3（SystemAdmin，私鑰會以明文 PEM 放在 c3-01）；檢查指令改用 svc-ops；要不要 client_allowed_sans 待定。
+6. **延後（使用者：之後再改）**：cp-server 改成純 server 憑證（EKU 只留 serverAuth）。Claude 的建議：另發 c3-monitoring（clientAuth、無 RBAC）給 C3 ↔ 內建 Prometheus／Alertmanager；不要用 svc-c3（SystemAdmin，私鑰會以明文 PEM 放在 c3-01）；檢查指令改用 svc-ops；要不要 client_allowed_sans 待定。
 7. 待查：telemetry（OTLP → C3 Prometheus）有沒有 raft／quorum 指標（白名單擋住，沒驗）；文件要寫成「JMX 沒有 raft-metrics」。
 8. 之後：OP menu 44 擴充「立即匯出」備份；遮蔽失敗掃描加 ERROR／登入失敗／login: 401／AUTH_FAIL；請銀行確認事項加 JMX 來源 IP 限制與行內 Prometheus 認證方式。
