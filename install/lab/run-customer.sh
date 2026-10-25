@@ -114,3 +114,5 @@ stage 22 "25 broker 縮減與擴充（kb04）" && { step_on_ops 25-broker-scale.
 stage 23 "27 OS 修補" && { step_on_ops 27-os-patch.sh apply || exit 1; }
 stage 24 "20 驗收（21–27 做完再一次）" && { install_on_ops --from 20 || exit 1; }
 stage 25 "完成" && { install_on_ops --list; }
+# TO= 讓最後幾段被略過時，最後一個 stage 會回 1；走到這裡就是成功
+exit 0
