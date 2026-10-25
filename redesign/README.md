@@ -290,6 +290,13 @@
 - 實作：操作機 `~/conf/metadata-backup.sh`＋systemd timer（每天 02:00，保留 30 天，syslog tag `confluent-backup`）；7 個文字檔＋SHA256SUMS，比對兩天的備份用 sha256＋join（精簡 OS 沒有 diff）；features 的 Epoch 拿掉、ACL 排序，否則每天都「有變」。OP menu 立即匯出（擴充 44）**尚未做**。
 - 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO 決定（尚未列入客戶問題清單）。
 
+### 手冊主線改成客戶情境、全模式實測（2026-10-25 定案）
+
+- 手冊主線＝客戶模式：CyberArk 只有 PAM（PSMP 代登、SSH Key Manager、PVWA 人工取放），密碼與金鑰由人從 PVWA 取放；Conjur／CCP／Summon 改成「銀行有才做」的選配。
+- 客戶有的用客戶的（AD、CA、OS 套件庫、NTP、LB、PAM、主機備份、行內 Prometheus）；客戶沒有的才用我們的機制（例如操作機的 systemd timer）。
+- 銀行未回覆的事項：用我們的預設，文件標「待銀行確認」。
+- 流程：Claude 自檢（順序、內容足夠、要改的內容）→ 直接改 → 從零實測四種模式：客戶模式（手冊全書＋install 全站含 21–28）、有 Conjur 的選配模式、升級演練（8.2.4 起）、Secret Protection 與 Conjur provider 兩條密碼路徑各走一次。每次跑完都用 scan-log.sh 掃。
+
 ### cp-server 改成純 server 憑證（2026-10-25 討論，使用者決定之後再做）
 
 - 目標：cp-server 的 EKU 只留 serverAuth。現在當 client 用的只有 C3 ↔ 內建 Prometheus／Alertmanager（C3 的 keystore、prometheus-generated.yml 的 tls_config）與操作機的檢查指令（curl --cert cp-server 連 9090）。broker／REST／MDS／JMX exporter 只當 server 用；telemetry 用 kafka-internal。
