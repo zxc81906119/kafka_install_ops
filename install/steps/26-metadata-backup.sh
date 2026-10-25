@@ -63,7 +63,7 @@ run_backup() {
   # 比對兩天的備份靠 sha256：features 的 Epoch 每次不同、ACL 與帳號清單的順序不固定，所以拿掉與排序
   features() { kafka-features "${backup[@]}" describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
   acls() { kafka-acls "${backup[@]}" --list | grep . | sort; }
-  users() { kafka-configs "${backup[@]}" --describe --entity-type users | sort; }
+  scram_and_quotas() { kafka-configs "${backup[@]}" --describe --entity-type users | sort; }
   rbac() {
     local role principal cid; cid=$(cluster_id)
     for principal in $(for role in $(cli_as svc-backup iam rbac role list -o json | grep -o '"name": *"[A-Za-z]*"' | cut -d'"' -f4); do
@@ -74,7 +74,7 @@ run_backup() {
   }
   save topics.txt         kafka-topics "${backup[@]}" --describe
   save topic-configs.txt  kafka-configs "${backup[@]}" --describe --entity-type topics
-  save users.txt          users
+  save users.txt          scram_and_quotas
   save broker-configs.txt kafka-configs "${backup[@]}" --describe --entity-type brokers --entity-default
   save features.txt       features
   save acls.txt           acls

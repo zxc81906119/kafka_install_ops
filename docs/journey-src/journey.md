@@ -3566,7 +3566,7 @@ bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；2
 
 @only customer
 
-主機類項目（23、21）和緊急模式（91）會提示「請到 CyberArk PVWA 取出：…」，維運人員從 PVWA 複製、貼上、按 `Ctrl-D`。為了把結果印在這裡，lab 用一支小腳本在虛擬終端機裡跑選單，等提示出現後把 stdin 的內容「貼」進去：
+主機類項目（23、21）和緊急模式（91）會提示「請到 CyberArk PVWA 取出：Safe KAFKA-OPS / cpadmin-hosts（SSH key）」，維運人員從 PVWA 複製、貼上、按 `Ctrl-D`（貼上的內容不會出現在畫面）。為了把結果印在這裡，lab 用一支小腳本在虛擬終端機裡跑選單，等提示出現後把 stdin 的內容「貼」進去：
 
 ```bash
 cat > ~/conf/opmenu-try.sh <<'EOF'
@@ -3589,12 +3589,12 @@ Created topic orders.optest.
 @role 維運人員 bob、alice（從 PVWA 取出貼上；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && try() { docker exec -i -u cpadmin lab-ops02-1 bash /home/cpadmin/conf/opmenu-try.sh "$@"; }; try bob 23 kb04.poc.lab:confluent-server 10 < pvwa/cpadmin_ed25519 | grep -E 'PVWA|kb04' | tail -2 | cut -c1-100; try bob 21 kb04.poc.lab:confluent-server < pvwa/cpadmin_ed25519 | tail -1; docker exec -u cpadmin lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"'; try alice 91 kafka-topics --list < pvwa/opmenu-breakglass.pem | grep -c '^[a-z_]' | sed 's/^/91 緊急模式列出的 topic：/'; try alice 33 orders.optest < /dev/null | grep 將執行
+cd ~/kafka-lab && try() { docker exec -i -u cpadmin lab-ops02-1 bash /home/cpadmin/conf/opmenu-try.sh "$@"; }; try bob 23 kb04.poc.lab:confluent-server 10 < pvwa/cpadmin_ed25519 | grep -E 'kb04' | tail -2 | cut -c1-100; try bob 21 kb04.poc.lab:confluent-server < pvwa/cpadmin_ed25519 | tail -1; docker exec -u cpadmin lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"'; try alice 91 kafka-topics --list < pvwa/opmenu-breakglass.pem | grep -c '^[a-z_]' | sed 's/^/91 緊急模式列出的 topic：/'; try alice 33 orders.optest < /dev/null | grep 將執行
 ```
 
 ```out
-請到 CyberArk PVWA 取出：Safe KAFKA-OPS / cpadmin-hosts（SSH key）
-Oct 25 …  kb04 kafka-server-start[…]: … INFO …
+Oct 25 09:57:24 kb04 kafka-server-start[2266]: [2026-10-25 09:57:24,799] INFO Updated lag of 0 group …
+Oct 25 09:58:24 kb04 kafka-server-start[2266]: [2026-10-25 09:58:24,782] INFO Updated lag of 0 group …
 已重啟 kb04.poc.lab 的 confluent-server
 kb04 MDS=200 after ~20s
 91 緊急模式列出的 topic：14
@@ -5742,14 +5742,14 @@ A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --co
 out=$BACKUP_ROOT/$(date +%Y%m%d-%H%M); install -d -m 0700 "$out"; failed=""
 # save <檔名> <指令…>：輸出存檔；失敗或空的就記下來，錯誤訊息留在 <檔名>.err
 save() { local file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
-save topics.txt         kafka-topics $A --describe
-save topic-configs.txt  kafka-configs $A --describe --entity-type topics
-save users.txt          users      # SCRAM 只有機制與迭代次數，沒有密碼；配額
-save broker-configs.txt kafka-configs $A --describe --entity-type brokers --entity-default
 # 比對兩天的備份靠 sha256：會變的雜訊（features 的 Epoch）拿掉、ACL 與帳號清單的順序不固定所以排序
 features() { kafka-features $A describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
 acls() { kafka-acls $A --list | grep . | sort; }
-users() { kafka-configs $A --describe --entity-type users | sort; }
+scram_and_quotas() { kafka-configs $A --describe --entity-type users | sort; }
+save topics.txt         kafka-topics $A --describe
+save topic-configs.txt  kafka-configs $A --describe --entity-type topics
+save users.txt          scram_and_quotas      # SCRAM 只有機制與迭代次數，沒有密碼；配額
+save broker-configs.txt kafka-configs $A --describe --entity-type brokers --entity-default
 save features.txt       features
 save acls.txt           acls
 # RBAC：confluent CLI 用自己的 HOME，免得蓋掉操作機上原本的登入身分
