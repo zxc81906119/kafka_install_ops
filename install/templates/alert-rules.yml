@@ -34,6 +34,24 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "KRaft active controller count is {{ $value }} (expected exactly 1)"
+      # KRaft quorum: Confluent Server has no raft-metrics MBean; the controllers' own metadata metrics show the quorum's health
+      - alert: KafkaControllerMetadataLag
+        expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="confluent-controller"}) > 30000
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: applies the metadata log {{ $value }} ms behind (quorum not keeping up)"
+      - alert: KafkaMetadataErrors
+        expr: max by (instance) (kafka_controller_kafkacontroller_metadataerrorcount{job="confluent-controller"}) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }}: errors while applying the KRaft metadata log"
+      - alert: KafkaControllerLeaderFlapping
+        expr: sum(increase(kafka_controller_kafkacontroller_newactivecontrollerscount{job="confluent-controller"}[15m])) > 2
+        labels: { severity: warning }
+        annotations:
+          summary: "KRaft controller leader changed {{ $value }} times in 15 minutes"
       - alert: KafkaRequestHandlerSaturated
         expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent) < 0.3
         for: 10m

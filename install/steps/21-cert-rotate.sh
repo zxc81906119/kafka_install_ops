@@ -11,7 +11,7 @@
 #   bash steps/21-cert-rotate.sh trust-sync   銀行換好各主機 OS 的 bank-root.pem 之後，把我方的信任清單同步成一樣、滾動重啟：
 #                                             換 CA 階段一（bank-root.pem 是新舊兩張根）、階段三（只剩新根）都是這個動作
 #   bash steps/21-cert-rotate.sh chain <新中繼.pem>   leaf 不動，只把銀行給的新中繼重包進每個 p12（不用 CSR）→ 派送 → 滾動重啟 → 換成正本
-#                                             用在：中繼同私鑰續簽；根換私鑰但中繼沿用私鑰、由新根重簽（手把手 21.0 的第 2、5、7 列）
+#                                             用在：中繼同私鑰續簽；根換私鑰但中繼沿用私鑰、由新根重簽（手把手 21.0 判斷表的第 3、5、7 列）
 # 換 CA 的三階段 = trust-sync（加新根）→ leaf（銀行用新 CA 簽）或 chain（中繼沿用私鑰時）→ trust-sync（退舊根）；手把手 21.3、21.4。
 #
 # 不變的東西：檔名、路徑、keystore 密碼。所以 properties 一個字都不用改，Secret Protection 的密文也不用重算。

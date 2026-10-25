@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-24 夜（session 收尾；lab 使用中：全書重跑在背景）
+Updated: 2026-10-25 早上（lab 停止中：Docker Desktop 未啟動）
 
 ## 現在在做什麼
 安裝流程重新設計（使用者主導、Claude 記錄）＋ `install/` 一章一支的安裝腳本（照手把手文件），以 `lab` 專案實跑驗證。
@@ -30,10 +30,8 @@ Updated: 2026-10-24 夜（session 收尾；lab 使用中：全書重跑在背景
 - 磁碟：`packages-manual.old/`（6 GB）可刪；`delivery/` 可刪。
 - 密碼檔：`docker/manual/secrets.env`（AD 三組）；ops02 `~/secrets/`、`~/pki/store.pass`。
 
-## 待辦（2026-10-24 夜，依序）
-1. ~~驗證 B~~ 完成（run-upgrade-drill.sh）。
-2. **全書重跑（進行中）**：結束後核對：17 章末 kb04 sudo 還原、18.2／19.2 在 kb04 成功、21.3.3 新的 7 塊與 G2 端點檢查、21.3.4 不再斷。
-3. **21.4 換鏈演練（使用者同意）**：情境＝21.0 表第 7 列（根換私鑰 G3、中繼 G2 沿用私鑰由 G3 重簽）。先手打實跑寫 21.4，再驗 `21-cert-rotate.sh chain <新中繼.pem>`（已寫、lint 過、未實跑；commit 標明未驗證）。銀行自己的伺服器（AD、repo、conjur）也要換新鏈。
-4. 補強需要 lab 的：第 6／7 章檔案系統與 java.io.tmpdir、第 10 章 metadata.log.dir、第 18 章 raft 指標（README 說法待更正）、第 19 章稽核 topic RF。
-5. 新章：license（JWT 到期；無 JMX 指標，原廠只有 C3 90 天提示與日誌警告 → 排程讀 JWT 給監控）、controller 替換（kc03 同名換新機）、broker 縮減／擴充（kb04）。
-6. 日常備份章（svc-backup，SecurityAdmin 可唯讀看 role binding）、OS 修補、C3 升級。
+## 待辦（2026-10-25 早上；夜間工作的細節見 log/2026-10-25-overnight-chapters.md）
+1. ~~全書重跑~~、~~21.4 換鏈＋chain 腳本~~、~~第 23 章 license＋23-license.sh~~、~~第 24 章換 controller＋24-controller-replace.sh~~、~~第 25 章 broker 增減＋25-broker-scale.sh~~、~~第 26 章日常備份＋26-metadata-backup.sh~~、~~補強第 6／10／18／19／22 章~~：全部 lab 實跑通過。
+2. **還沒做**：所有演練之後的最後一次第 20 章驗收（20.1–20.3）。跑的時候 session 中斷、Docker Desktop 也停了；開 lab 後先跑這個。
+3. lab 其他 5 台（kc02、kc03、kb02–kb04）的 properties 還沒有 `metadata.log.dir`（值等於預設）；下次重新產生設定時帶入。
+4. 之後：OS 修補章、C3 升級章；OP menu 44 擴充「立即匯出」備份；遮蔽失敗掃描加 ERROR／登入失敗／login: 401／AUTH_FAIL。

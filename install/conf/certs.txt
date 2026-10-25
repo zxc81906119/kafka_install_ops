@@ -6,3 +6,4 @@ svc-c3             clientAuth             -
 svc-ops            clientAuth             -
 app-legacy-billing clientAuth             -
 opmenu-breakglass  clientAuth             -
+svc-backup         clientAuth             -

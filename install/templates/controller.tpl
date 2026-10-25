@@ -8,6 +8,8 @@ advertised.listeners=CONTROLLER://${HOST_FQDN}:9093
 listener.security.protocol.map=CONTROLLER:SSL,INTERNAL:SSL
 inter.broker.listener.name=INTERNAL
 log.dirs=/var/lib/kafka/data
+# metadata log (__cluster_metadata) stays here even if more log.dirs are added later (default = first log.dirs entry)
+metadata.log.dir=/var/lib/kafka/data
 
 ############################# MDS on KRaft controllers #############################
 confluent.metadata.server.kraft.controller.enabled=true

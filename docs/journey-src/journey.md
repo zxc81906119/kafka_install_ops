@@ -1090,6 +1090,19 @@ ops02   rocky-9.8 cpu=8 mem=10953MB tmp_free=2048MB tmp_noexec=0
 （11 行，tmp_noexec 都是 0）
 ```
 
+**資料碟的檔案系統**（原廠只支援 XFS、ext4；正式環境資料碟要先由主機團隊掛在 `/var/lib/kafka`，還沒掛就會看到 `/var/lib`，也就是 OS 碟）：
+
+```bash
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'd=/var/lib/kafka; [ -e $d ] || d=/var/lib; printf "%-5s %s fstype=%s free=%sGB\n" "$(hostname)" "$d" "$(df -T $d | awk "NR==2{print \$2}")" "$(df -BG --output=avail $d | tail -1 | tr -dc 0-9)"'; done
+```
+
+```out
+kc01  /var/lib fstype=overlay free=712GB
+（7 行；lab 是容器，所以是 overlay、和 OS 共用；正式環境要是 xfs 或 ext4，而且路徑是 /var/lib/kafka）
+```
+
+> `/tmp` 要能執行：broker 啟動時會把壓縮（snappy、zstd、lz4）的原生程式庫解壓到 `java.io.tmpdir`（預設 `/tmp`）再載入，`noexec` 的 `/tmp` 會讓用到這些壓縮的 producer／consumer 失敗。銀行的強化規範若要求 `/tmp` 一律 `noexec`，見 10.3 的 `java.io.tmpdir` 做法。
+
 **時鐘誤差**（TLS 與 MDS token 要求 2 秒內）：
 
 ```bash
@@ -1527,6 +1540,8 @@ advertised.listeners=CONTROLLER://${HOST_FQDN}:9093
 listener.security.protocol.map=CONTROLLER:SSL,INTERNAL:SSL
 inter.broker.listener.name=INTERNAL
 log.dirs=/var/lib/kafka/data
+# metadata log (__cluster_metadata) stays here even if more log.dirs are added later (default = first log.dirs entry)
+metadata.log.dir=/var/lib/kafka/data
 
 ############################# MDS on KRaft controllers #############################
 confluent.metadata.server.kraft.controller.enabled=true
@@ -1554,6 +1569,8 @@ broker.rack=${RACK}
 controller.quorum.bootstrap.servers=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
 controller.listener.names=CONTROLLER
 log.dirs=/var/lib/kafka/data
+# metadata log (__cluster_metadata) stays here even if more log.dirs are added later (default = first log.dirs entry)
+metadata.log.dir=/var/lib/kafka/data
 
 ############################# Listeners #############################
 listeners=INTERNAL://${HOST_FQDN}:9092,TOKEN://${HOST_FQDN}:9094,CLIENT://${HOST_FQDN}:9095,LDAP://${HOST_FQDN}:9096
@@ -1667,6 +1684,10 @@ sudo systemctl daemon-reload && sudo install -d -o cp-kafka -g confluent -m 0750
 kc01  heap=384m exec=/etc/confluent/kafka/server.properties data=cp-kafka:confluent:750
 （7 行）
 ```
+
+> 選配：銀行規定 `/tmp` 一律 `noexec` 時（第 6 章有檢查），讓 JVM 改把原生程式庫解到資料碟上的目錄。另加一個 drop-in，用 `JAVA_TOOL_OPTIONS`（第 18 章的 javaagent 會佔用 `KAFKA_OPTS`，兩者不互相覆蓋）：
+> `sudo install -d -o cp-kafka -g confluent -m 0750 /var/lib/kafka/tmp && printf '[Service]\nEnvironment="JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/var/lib/kafka/tmp"\n' | sudo tee /etc/systemd/system/confluent-server.service.d/15-tmpdir.conf`
+> 實測（2026-10-25，kb04）：重啟後 lz4 的原生程式庫改解在 `/var/lib/kafka/tmp`，snappy／zstd／lz4 壓縮的寫入都正常；日誌開頭會多一行 `Picked up JAVA_TOOL_OPTIONS`，屬正常。REST Proxy、C3 同理（各自的資料目錄）。
 
 > 陷阱：如果 exec 顯示的是 `/etc/kafka/server.properties`，代表 drop-in 沒生效。此時啟動會用 RPM 的預設設定起來（沒有加密、沒有認證）。小安在 REST Proxy 和 C3 都踩過這個坑。
 
@@ -3510,6 +3531,24 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "KRaft active controller count is {{ $value }} (expected exactly 1)"
+      # KRaft quorum: Confluent Server has no raft-metrics MBean; the controllers' own metadata metrics show the quorum's health
+      - alert: KafkaControllerMetadataLag
+        expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="confluent-controller"}) > 30000
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: applies the metadata log {{ $value }} ms behind (quorum not keeping up)"
+      - alert: KafkaMetadataErrors
+        expr: max by (instance) (kafka_controller_kafkacontroller_metadataerrorcount{job="confluent-controller"}) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }}: errors while applying the KRaft metadata log"
+      - alert: KafkaControllerLeaderFlapping
+        expr: sum(increase(kafka_controller_kafkacontroller_newactivecontrollerscount{job="confluent-controller"}[15m])) > 2
+        labels: { severity: warning }
+        annotations:
+          summary: "KRaft controller leader changed {{ $value }} times in 15 minutes"
       - alert: KafkaRequestHandlerSaturated
         expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent) < 0.3
         for: 10m
@@ -3554,7 +3593,7 @@ cd ~/kafka-lab && mkdir -p bank-prometheus/confluent && for f in prometheus-scra
 
 ```out
 targets up: 9 / 9
-alert rules: 9
+alert rules: 12
 under-replicated per broker: ['0', '0', '0', '0']
 ```
 
@@ -3567,6 +3606,8 @@ docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
 ```out
 bank-prometheus removed
 ```
+
+> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 24.1 的 `kafka-metadata-quorum describe --replication`。
 
 > 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3 或另外接 lag exporter。
 
@@ -3728,6 +3769,20 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
 | 誰能讀 | 綁了 audit topic DeveloperRead 的群組（lab 是 SystemAdmin 直接讀）；稽核群組用 OP menu 43／45 匯出與查詢 |
 | 量 | `kafka-internal`、`svc-c3` 已排除；只有路由列出的 topic 才記 produce／consume，要擴大範圍前先估磁碟 |
 | 改規則 | 改 `common.tpl` 的 router JSON → 重新加密派送 → 滾動重啟（和這一站一樣） |
+| 可靠度 | 兩個 audit topic 都是 replication factor 3（lab 確認：`kafka-topics --describe`），`min.insync.replicas=1`：稽核寫入不因少一台 broker 而停；原廠建議稽核量大或要求隔離時，送到**專用的稽核叢集**（`confluent.security.event.logger.exporter.kafka.bootstrap.servers` 指過去） |
+
+確認 replication factor（換 broker、縮減之後也看一次）：
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for t in confluent-audit-log-events confluent-audit-log-events_sensitive; do kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --topic $t 2>/dev/null | head -1 | grep -oE 'Topic: [^[:space:]]+|ReplicationFactor: [0-9]+|min.insync.replicas=[0-9]+' | paste -sd' '; done
+```
+
+```out
+Topic: confluent-audit-log-events ReplicationFactor: 3 min.insync.replicas=1
+Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.replicas=1
+```
 
 # 20. 第二十站：驗收與收尾
 
@@ -4378,7 +4433,7 @@ cd ~/pki && NEW=bank-issuing-new.pem && CUR=$(awk '/BEGIN CERT/{n++} n==2' certs
 ```out
 現在的中繼：PoC Bank Issuing CA G2（簽發者 PoC Bank Root CA G2）key=…
 新的中繼：  PoC Bank Issuing CA G2（簽發者 PoC Bank Root CA G3）key=…（和上一行相同）
-kafka-internal: leaf=…（不變） chain=ok
+kafka-internal: leaf=7E8C05F2（不變） chain=ok
 （7 行，全部 ok）
 ```
 
@@ -4417,7 +4472,7 @@ cd ~/pki && OLD=old-$(date +%Y%m%d-%H%M) && install -d -m 0700 $OLD/certs && for
 
 ```out
 svc-ops 管理 client：14 個 topic
-kafka-internal 查 quorum：LeaderId: …
+kafka-internal 查 quorum：LeaderId: 1
 breakglass：保管庫已更新
 app-legacy-billing 新鏈：REST=200；舊鏈（G2 還信）：REST=200
 ```
@@ -4469,6 +4524,8 @@ cd ~/pki && LAST=$(ls -d old-* | tail -1) && echo "舊鏈 → REST：$(curl -s -
 alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 套件庫：200、保管庫：200
 ```
+
+> 實測（2026-10-25，lab，接在 21.3 之後做）：三個階段 12 塊指令全部一次通過；換鏈期間 REST、MDS、C3 都維持 200，舊鏈與新鏈的應用程式憑證在階段二都能用，階段三之後舊鏈被拒。銀行端（Windows 的 openssl）算出的 key 雜湊和 ops02 算的不同，是 PEM 換行字元不同造成的，各自那一邊的兩行相同就對了。
 
 > 這就是 21.0 說的「拿掉舊根一定排在每個端點都換好鏈之後」：舊鏈的 leaf 本身沒問題，被拒是因為它夾帶的中繼指向已經不信的 G2。應用程式（REST 走 mTLS 的那些）的 p12 也一樣要換鏈，否則階段三那一刻就斷。
 
@@ -4616,6 +4673,8 @@ ops02 confluent-server-8.3.2-1.noarch confluent-cli-8.3.2-1.x86_64
 
 和第 5 站一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。**c3-01 不動**（原廠沒有寫 C3 2.6 支援 Java 25）。
 
+> Java 25 在 CP 8.3 的相容表上是「支援」，原廠部署文件的建議版本仍是 21。這一段是照銀行「升 8.3 時一起換 25」的要求做；銀行沒有這個要求時，留在 21 就好（只做第一、三段）。
+
 先 controller（每輪重查 leader、leader 最後）：
 
 ```bash
@@ -4715,7 +4774,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 
 ```out
 類型：trial
-到期：…，剩 … 天
+到期：2026-11-23 22:13:29，剩 29 天
 ```
 
 > 只解開、不驗簽章：簽章由 broker 自己驗。這裡只是讀到期日給監控用。
@@ -4754,7 +4813,7 @@ chmod 0700 ~/conf/license-check.sh && bash ~/conf/license-check.sh; echo "rc=$?"
 ```
 
 ```out
-快到期：license trial 到期 …，剩 … 天
+快到期：license trial 到期 2026-11-23，剩 29 天
 rc=2
 ```
 
@@ -4767,8 +4826,8 @@ printf '[Unit]\nDescription=Confluent license expiry check\n\n[Service]\nType=on
 ```
 
 ```out
-下次執行：…
-syslog：快到期：license trial 到期 …，剩 … 天
+下次執行：Sun 2026-10-25 08:00:00 CST
+syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 ```
 
 > `SuccessExitStatus=2`：「快到期」不算服務失敗（不然 systemd 會把它標成 failed，維運以為是腳本壞了）；真正要告警的是 syslog 那一行。
@@ -4841,7 +4900,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 NodeId  DirectoryId  LogEndOffset  Lag  …  Status
 1       …            …             0    …  Leader
 2       …            …             0    …  Follower
-3       …            …             …    …  Follower      （Lag 一直變大）
+3       OwqboMUaS4C4y6JYkevW7w  30349  37   …  Follower      （Lag 一直變大）
 MDS：200
 ```
 
@@ -4852,13 +4911,13 @@ MDS：200
 舊成員是「3＋舊的 directory id」，從 24.1 的輸出取：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config $HOME/conf/client-internal.properties" && OLD_DIR=$(kafka-metadata-quorum $Q describe --replication | awk '$1==3 {print $2}') && echo "移出 3 / $OLD_DIR" && kafka-metadata-quorum $Q remove-controller --controller-id 3 --controller-directory-id $OLD_DIR && sleep 5 && kafka-metadata-quorum $Q describe --status | grep -o '"id": [0-9]*' | head -5 | paste -sd' ' | sed 's/^/成員與觀察者：/'
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config $HOME/conf/client-internal.properties" && OLD_DIR=$(kafka-metadata-quorum $Q describe --replication | awk '$1==3 {print $2}') && echo "移出 3 / $OLD_DIR" && kafka-metadata-quorum $Q remove-controller --controller-id 3 --controller-directory-id $OLD_DIR && sleep 5 && kafka-metadata-quorum $Q describe --status | grep CurrentVoters | grep -o '"id": [0-9]*' | cut -d' ' -f2 | paste -sd' ' | sed 's/^/目前的成員：/'
 ```
 
 ```out
-移出 3 / …
-Removed KRaft controller 3 with directory id …
-成員與觀察者：…
+移出 3 / OwqboMUaS4C4y6JYkevW7w
+Removed  KRaft controller 3 with directory id OwqboMUaS4C4y6JYkevW7w
+目前的成員：1 2
 ```
 
 ## 24.4 重新格式化成觀察者、啟動、追上
@@ -4872,12 +4931,14 @@ source ~/conf/kraft.env && ssh kc03.poc.lab "sudo bash -c 'run() { if [ -e /etc/
 ```
 
 ```out
-Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version …
-kc03 active dir=…（新的 directory id，和 OLD_DIR 不同）
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+kc03 active dir=eELCq6OM-4WuTdfGQSmOgQ（新的 directory id，和 OLD_DIR 不同）
 kc03：Lag=0 Observer
 ```
 
 ## 24.5 加回成員
+
+> 實測（2026-10-25，lab）：從清空資料到重新成為成員約 5 分鐘（格式化、啟動、追上 3 萬多筆 metadata、add-controller），期間 MDS、REST、C3 都維持 200。
 
 @role 小安 | ops02 | cpadmin
 
@@ -4888,11 +4949,11 @@ ssh kc03.poc.lab "sudo bash -c '( cat /etc/confluent/kafka/server.properties; ec
 ```
 
 ```out
-Added KRaft controller 3 with directory id …
-NodeId  DirectoryId  LogEndOffset  Lag  …  Status
-1       …            …             0    …  Leader
-2       …            …             0    …  Follower
-3       …（新的）     …             0    …  Follower
+Added controller 3 with directory id eELCq6OM-4WuTdfGQSmOgQ and endpoints: CONTROLLER://kc03.poc.lab:9093
+NodeId  DirectoryId             LogEndOffset  Lag  …  Status
+2       MXVN7iSgSY6OKFf8XzxQ-Q  30989         0    …  Leader
+1       fjcdbW_fTOCfGbYZur21vQ  30989         0    …  Follower
+3       eELCq6OM-4WuTdfGQSmOgQ  30989         0    …  Follower
 ```
 
 最後確認：kc03 的監控端點、整體健康（14.0 的檢查清單）：
@@ -4902,7 +4963,7 @@ CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && echo "kc03 7071：$(curl -s
 ```
 
 ```out
-kc03 7071：…個指標
+kc03 7071：582個指標
 kb01 MDS=200 kb02 MDS=200 kb03 MDS=200 kb04 MDS=200
 ```
 
@@ -4929,7 +4990,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 ```out
 Self-Balancing：Balancer status: ENABLED
 under-replicated：0
-kb04（104）上的 replica：…
+kb04（104）上的 replica：80
 ```
 
 ## 25.2 縮減：拿掉 kb04
@@ -4954,24 +5015,26 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 ```
 
 ```out
-Initiated broker removal on brokers [104]
-Broker 104 removal status - SUCCESS.
+Initiating remove brokers call...
+Started remove broker task for brokers [104].
+Broker 104 removal status - SUCCESS. Sub-task statuses:
+  Broker Replica Exclusion: COMPLETED
   Partition Reassignment: COMPLETED
   Broker Shutdown: COMPLETED
-  …
+  …（lab：80 個 replica 約 2 分鐘搬完；另一次 70 個花了 14 分鐘，因為當時 Self-Balancing 還在搬前一輪的資料）
 kb04 confluent-server：inactive / disabled
 ```
 
-確認：104 上沒有 replica、沒有 under-replicated、kb04 不在 quorum 的觀察者裡：
+確認：104 上沒有 replica、沒有 under-replicated、叢集裡已經沒有 104（quorum 的觀察者清單會留著 104 最後一次 fetch 的紀錄一段時間，不能拿來確認）：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && echo "104 上的 replica：$(kafka-topics $A --describe 2>/dev/null | awk '/Replicas:/ {for (i=1;i<=NF;i++) if ($i=="Replicas:") {n=split($(i+1),r,","); for (j=1;j<=n;j++) if (r[j]==104) c++}} END {print c+0}')" && echo "under-replicated：$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -c 'Partition:')" && echo "觀察者：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication | awk '$NF=="Observer" {print $1}' | sort | paste -sd' ')"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && echo "104 上的 replica：$(kafka-topics $A --describe 2>/dev/null | awk '/Replicas:/ {for (i=1;i<=NF;i++) if ($i=="Replicas:") {n=split($(i+1),r,","); for (j=1;j<=n;j++) if (r[j]==104) c++}} END {print c+0}')" && echo "under-replicated：$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -c 'Partition:')" && echo "叢集裡的 broker：$(kafka-broker-api-versions $A 2>/dev/null | grep -o '(id: [0-9]*' | grep -o '[0-9]*' | sort | paste -sd' ')"
 ```
 
 ```out
 104 上的 replica：0
 under-replicated：0
-觀察者：101 102 103
+叢集裡的 broker：101 102 103
 ```
 
 > 永久縮減時，還要把 kb04 從所有 bootstrap 名單拿掉（REST Proxy、C3、MDS URL、OP menu、應用程式的設定），重新產生並滾動重啟；名單裡留著一台不存在的主機，client 會略過它，但每次連線都多一次逾時。lab 接著要加回來，所以名單不動。
@@ -4987,28 +5050,226 @@ source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka
 ```
 
 ```out
-Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version …
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
 kb04 MDS=200
 ```
 
-Self-Balancing 發現空的 broker 會自己開始搬（不用下指令），等到 104 上有 replica、而且沒有 under-replicated：
+Self-Balancing 發現空的 broker 會自己開始搬（不用下指令）。它不是馬上動：lab 等了十幾分鐘才開始，之後分批搬、要再一段時間才平均（實測加回 30 分鐘時 101–103 各約 130、104 約 45，還在增加）。這裡等到 104 上有 replica、而且沒有 under-replicated：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && on104() { kafka-topics $A --describe 2>/dev/null | awk '/Replicas:/ {for (i=1;i<=NF;i++) if ($i=="Replicas:") {n=split($(i+1),r,","); for (j=1;j<=n;j++) if (r[j]==104) c++}} END {print c+0}'; } && for i in $(seq 1 60); do n=$(on104); u=$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -c 'Partition:'); [ "$n" -gt 0 ] && [ "$u" = 0 ] && break; sleep 30; done; echo "104 上的 replica：$n、under-replicated：$u（約 $((i*30)) 秒）" && kafka-rebalance-cluster $A --describe 2>/dev/null | grep -iE 'status|broker' | head -5
 ```
 
 ```out
-104 上的 replica：…、under-replicated：0（約 … 秒）
-…
+104 上的 replica：15、under-replicated：0（約 1050 秒）
+Uneven load balance status:
+  HealUnevenLoadTrigger: EMPTY_BROKER
 ```
 
-背景寫入的結果（整段縮減與擴充期間）：
+背景寫入的結果（整段縮減與擴充期間，最大延遲出現在 replica 搬移時）：
 
 ```bash
 for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep 10; done; tail -1 ~/scale-load.log; echo "錯誤：$(grep -ciE 'error|exception' ~/scale-load.log)"
 ```
 
 ```out
-60000 records sent, … records/sec (… KB/sec), … ms avg latency, … ms max latency, …
+60000 records sent, 49.999167 records/sec (0.01 MB/sec), 10.33 ms avg latency, 1132.00 ms max latency, 10 ms 50th, 14 ms 95th, 19 ms 99th, 164 ms 99.9th.
 錯誤：0
 ```
+
+# 26. 第二十六站：日常備份
+
+要備份的東西分成三類，各走各的路：
+
+| 類別 | 內容 | 怎麼備 | 誰做 |
+|---|---|---|---|
+| 叢集中繼資料 | RBAC、ACL、topic 與設定、SCRAM 帳號清單與配額、features、broker 動態設定 | 操作機每天排程匯出（本章），保留 30 天；變更前另外手動跑一次當快照 | 小安裝好之後自動跑 |
+| 各台的設定 | `/etc/confluent`、systemd drop-in、`/etc/kafka` 的 log4j2 | 銀行既有的主機備份系統（客戶模式下 cpadmin 的私鑰只在變更時段的 ssh-agent 裡，操作機的排程 ssh 不進各台） | 銀行主機團隊 |
+| 機敏資料 | `~/pki` 的私鑰、`~/secrets`、master key | **事件觸發**：安裝、換憑證、換密碼的當下交 CyberArk 保管（第 16 章 master key 的做法），不排程 | 小安＋Secrets 團隊 |
+
+訊息本身不做檔案備份：叢集內靠 replication factor 3、`min.insync.replicas=2`；異地備援（Cluster Linking）依銀行的 RPO／RTO 另議。
+
+匯出用的身分是新發的 `svc-backup` 憑證，**只能看、不能改、讀不到訊息內容**。不用 super user 的 `svc-ops`：排程每天自動跑，身分越小越好。
+
+## 26.1 發 svc-backup 憑證
+
+@role 小安 | ops02 | cpadmin
+
+和第 9 站同一套：加進 `requests.txt`（之後第 21 章換發時會一起換）、產生私鑰與 CSR：
+
+```bash
+cd ~/pki && { grep -q '^svc-backup ' requests.txt || echo 'svc-backup         clientAuth             -' >> requests.txt; } && (umask 077; openssl genrsa -out keys/svc-backup.key 2048 2>/dev/null) && openssl req -new -key keys/svc-backup.key -sha256 -subj "/CN=svc-backup/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=clientAuth" -out requests/svc-backup.csr && echo "svc-backup: csr ok"
+```
+
+```out
+svc-backup: csr ok
+```
+
+@role 銀行 CA 窗口 | Windows 終端 | 本機
+
+銀行用目前的簽發 CA 簽（lab 做過第 21 章之後是 `ca/g2/sign.sh`；沒做過是 `ca/sign.sh`）：
+
+```bash
+cd ~/kafka-lab && docker cp lab-ops02-1:/home/cpadmin/pki/requests/svc-backup.csr "$(cygpath -m "$PWD/ca/exchange/svc-backup.csr")" && bash ca/g2/sign.sh ca/exchange/svc-backup.csr ca/exchange/svc-backup.crt && docker cp "$(cygpath -m "$PWD/ca/exchange/svc-backup.crt")" lab-ops02-1:/home/cpadmin/pki/incoming/svc-backup.crt && docker exec lab-ops02-1 chown cpadmin:cpadmin /home/cpadmin/pki/incoming/svc-backup.crt && echo delivered
+```
+
+```out
+signed svc-backup.csr -> svc-backup.crt  (CN = svc-backup, O = PoC Bank, C = TW; EKU clientAuth)
+delivered
+```
+
+@role 小安 | ops02 | cpadmin
+
+檢查（私鑰、CN、EKU、憑證鏈）、做 p12；client 設定從管理用的那份複製，換成 svc-backup 的 keystore：
+
+```bash
+cd ~/pki && k1=$(openssl x509 -in incoming/svc-backup.crt -pubkey -noout | sha256sum | cut -c1-16) && k2=$(openssl pkey -in keys/svc-backup.key -pubout | sha256sum | cut -c1-16) && echo "key=$([ $k1 = $k2 ] && echo ok || echo MISMATCH) cn=$(openssl x509 -in incoming/svc-backup.crt -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/') eku=$(openssl x509 -in incoming/svc-backup.crt -noout -ext extendedKeyUsage | tail -1 | tr -d ' ') chain=$(openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted <(awk '/BEGIN CERT/{n++} n>=2' incoming/svc-backup.crt) incoming/svc-backup.crt 2>&1 | grep -c ': OK')" && install -m 0644 incoming/svc-backup.crt certs/svc-backup.crt && openssl pkcs12 -export -name svc-backup -inkey keys/svc-backup.key -in certs/svc-backup.crt -out certs/svc-backup.p12 -passout file:store.pass && chmod 0600 certs/svc-backup.p12 && (umask 077; sed 's#/svc-ops.p12#/svc-backup.p12#' ~/conf/client-admin.properties > ~/conf/client-backup.properties) && echo "client-backup.properties: $(grep -c svc-backup ~/conf/client-backup.properties) 處指向 svc-backup"
+```
+
+```out
+key=ok cn=svc-backup eku=TLSWebClientAuthentication chain=1
+client-backup.properties: 1 處指向 svc-backup
+```
+
+## 26.2 最小權限：SecurityAdmin＋兩條 ACL
+
+@role 小安 | ops02 | cpadmin
+
+lab 逐項試過（2026-10-25）：
+
+| 要匯出的 | 需要的操作 | 給法 |
+|---|---|---|
+| role binding | MDS 查詢 | RBAC `SecurityAdmin`（只能看：`DescribeAccess`、`SecurityMetadata Describe`；試建 binding 回 403） |
+| topic 清單與設定、partition 分布 | Topic 的 `Describe`、`DescribeConfigs` | KRaft ACL（第 10 站 `access.rule.providers` 有開 `KRAFT_ACL`） |
+| SCRAM 帳號清單、配額、broker 動態設定、ACL 清單 | Cluster 的 `Describe`、`DescribeConfigs` | KRaft ACL |
+| features | 不用額外權限 | — |
+
+> 為什麼 topic 設定不用 RBAC 角色：內建角色裡有 `DescribeConfigs` 的都連帶能建立、刪除或改設定（例如 `DeveloperManage`），沒有唯讀的；`DeveloperRead` 沒有 `DescribeConfigs`，而且讀得到訊息內容。ACL 可以只給這兩個操作。
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CID=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && confluent iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster $CID >/dev/null && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --topic '*' >/dev/null && kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --cluster >/dev/null && confluent iam rbac role-binding list --principal User:svc-backup --kafka-cluster $CID | tail -n +3 && echo "ACL：$(kafka-acls $A --list --principal User:svc-backup 2>/dev/null | grep -c 'operation=') 條"
+```
+
+```out
+  User:svc-backup | SecurityAdmin | Cluster       |      |
+ACL：4 條
+```
+
+反向：讀不到訊息、建不了 topic、改不了 role binding（CLI 用暫時的 HOME 登入 svc-backup，不蓋掉操作機原本的登入）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && B="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-backup.properties" && echo "讀訊息：$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9094 --consumer.config ~/conf/client-backup.properties --topic orders.events --from-beginning --max-messages 1 --timeout-ms 10000 2>&1 | grep -o '[A-Za-z]*AuthorizationException' | head -1)" && echo "建 topic：$(kafka-topics $B --create --topic backup-sneak --partitions 1 --replication-factor 3 2>&1 | grep -o '[A-Za-z]*AuthorizationException' | head -1)" && CID=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && T=$(mktemp -d) && HOME=$T confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-backup.crt --client-key-path ~/pki/keys/svc-backup.key >/dev/null && echo "改 role binding：$(HOME=$T confluent iam rbac role-binding create --principal User:svc-backup --role SystemAdmin --kafka-cluster $CID 2>&1 | grep -o '40[0-9] [A-Za-z]*' | head -1)"; rm -rf $T
+```
+
+```out
+讀訊息：GroupAuthorizationException
+建 topic：TopicAuthorizationException
+改 role binding：403 Forbidden
+```
+
+## 26.3 匯出腳本
+
+@role 小安 | ops02 | cpadmin
+
+每一項存成一個文字檔，最後算 `SHA256SUMS`（比對兩天的備份就看它）；超過 30 天的自動刪掉；成功或失敗都寫 syslog（tag `confluent-backup`）。**整段貼到 EOF**：
+
+```bash
+cat > ~/conf/metadata-backup.sh <<'EOF'
+#!/usr/bin/env bash
+# 每天匯出叢集中繼資料（RBAC、ACL、topic 與設定、SCRAM 帳號與配額、features、broker 動態設定）到 ~/backup/metadata/<時間>/
+# 身分：svc-backup（SecurityAdmin 只能看 role binding；ACL 只有 Describe、DescribeConfigs）；沒有密碼，不讀訊息內容
+# 結束碼：0 全部匯出、1 有任何一項失敗（看 syslog tag confluent-backup）
+KEEP_DAYS=${KEEP_DAYS:-30}
+BACKUP_ROOT=${BACKUP_ROOT:-$HOME/backup/metadata}
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-backup.properties"
+out=$BACKUP_ROOT/$(date +%Y%m%d-%H%M); install -d -m 0700 "$out"; failed=""
+# save <檔名> <指令…>：輸出存檔；失敗或空的就記下來，錯誤訊息留在 <檔名>.err
+save() { local file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
+save topics.txt         kafka-topics $A --describe
+save topic-configs.txt  kafka-configs $A --describe --entity-type topics
+save users.txt          kafka-configs $A --describe --entity-type users      # SCRAM 只有機制與迭代次數，沒有密碼；配額
+save broker-configs.txt kafka-configs $A --describe --entity-type brokers --entity-default
+# 比對兩天的備份靠 sha256：會變的雜訊（features 的 Epoch）拿掉、ACL 的順序不固定所以排序
+features() { kafka-features $A describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
+acls() { kafka-acls $A --list | grep . | sort; }
+save features.txt       features
+save acls.txt           acls
+# RBAC：confluent CLI 用自己的 HOME，免得蓋掉操作機上原本的登入身分
+export HOME_CLI=$BACKUP_ROOT/.cli; install -d -m 0700 "$HOME_CLI"
+cli() { HOME=$HOME_CLI confluent "$@"; }
+cluster_id=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+rbac() {
+  cli login --url https://kb01.poc.lab:8090 --certificate-authority-path "$HOME/pki/certs/bank-root.pem" --certificate-only \
+    --client-cert-path "$HOME/pki/certs/svc-backup.crt" --client-key-path "$HOME/pki/keys/svc-backup.key" >/dev/null || return 1
+  local role principal
+  for principal in $(for role in $(cli iam rbac role list -o json | grep -o '"name": *"[A-Za-z]*"' | cut -d'"' -f4); do
+                       cli iam rbac role-binding list --role "$role" --kafka-cluster "$cluster_id" -o json 2>/dev/null; done |
+                     grep -o '"principal": *"[^"]*"' | cut -d'"' -f4 | sort -u); do
+    echo "== $principal"; cli iam rbac role-binding list --principal "$principal" --kafka-cluster "$cluster_id" | tail -n +3
+  done
+}
+save rbac.txt rbac
+(cd "$out" && sha256sum -- *.txt > SHA256SUMS)
+find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '20*' -mtime +"$KEEP_DAYS" -exec rm -rf {} +
+if [ -n "$failed" ]; then logger -t confluent-backup -p user.err "中繼資料匯出有失敗：$failed（$out）"; echo "失敗：$failed"; exit 1; fi
+logger -t confluent-backup -p user.info "中繼資料已匯出：$out"; echo "$out"
+EOF
+chmod 0700 ~/conf/metadata-backup.sh && d=$(bash ~/conf/metadata-backup.sh) && echo "$d" && cd "$d" && for f in *.txt; do printf '%-18s %4s 行\n' $f $(wc -l < $f); done && echo "RBAC 的 principal：$(grep -c '^== ' rbac.txt) 個；SHA256SUMS：$(wc -l < SHA256SUMS) 個檔" && echo "密碼字樣：$(grep -ciE 'password=|salt|stored_key' *.txt | awk -F: '{s+=$2} END {print s}')"
+```
+
+```out
+/home/cpadmin/backup/metadata/20261025-0102
+acls.txt              6 行
+broker-configs.txt    2 行
+features.txt          8 行
+rbac.txt             35 行
+topic-configs.txt    66 行
+topics.txt          160 行
+users.txt             7 行
+RBAC 的 principal：11 個；SHA256SUMS：7 個檔
+密碼字樣：0
+```
+
+> `users.txt` 的 SCRAM 那幾行只有機制與迭代次數（`SCRAM-SHA-512=iterations=8192`），沒有密碼也沒有雜湊。帳號被刪掉時，這份清單告訴你要重建哪些帳號，密碼另向 Secrets 團隊取（第 15、16 章）。
+
+## 26.4 每天凌晨 2 點自動跑
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+printf '[Unit]\nDescription=Confluent cluster metadata export\n\n[Service]\nType=oneshot\nUser=cpadmin\nExecStart=/home/cpadmin/conf/metadata-backup.sh\n' | sudo tee /etc/systemd/system/confluent-metadata-backup.service >/dev/null && printf '[Unit]\nDescription=Daily Confluent cluster metadata export\n\n[Timer]\nOnCalendar=*-*-* 02:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' | sudo tee /etc/systemd/system/confluent-metadata-backup.timer >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable --now confluent-metadata-backup.timer >/dev/null 2>&1 && sudo systemctl start confluent-metadata-backup.service && echo "下次執行：$(systemctl show confluent-metadata-backup.timer -p NextElapseUSecRealtime --value)" && echo "syslog：$(sudo journalctl -t confluent-backup -n 1 --no-pager -o cat)"
+```
+
+```out
+下次執行：Sun 2026-10-25 02:00:00 CST
+syslog：中繼資料已匯出：/home/cpadmin/backup/metadata/20261025-0103
+```
+
+> 備份目錄在操作機上；正式環境請銀行的主機備份系統把 `~/backup/metadata` 一起收走（裡面沒有密碼，只有清單與設定）。
+
+## 26.5 用備份：哪裡變了
+
+@role 小安 | ops02 | cpadmin
+
+比對最近兩次的備份，哪些檔有變一眼看出來（精簡的 OS 沒有 `diff`，用 sha256 與 `join`）；以 topic 為例列出多出來的。lab 在兩次匯出之間新建了 `orders.backup-demo`：
+
+```bash
+cd ~/backup/metadata && set -- $(ls -d 20* | tail -2) && echo "比對 $1 → $2" && join -1 2 -2 2 <(sort -k2 $1/SHA256SUMS) <(sort -k2 $2/SHA256SUMS) | awk '{printf "%-18s %s\n", $1, ($2 == $3 ? "相同" : "有變")}' && echo "topics.txt 多出來的：$(grep -o 'Topic: [^[:space:]]*' $2/topics.txt | sort -u | grep -vxFf <(grep -o 'Topic: [^[:space:]]*' $1/topics.txt | sort -u) | paste -sd' ')"
+```
+
+```out
+比對 20261025-0107 → 20261025-0108
+acls.txt           相同
+broker-configs.txt 相同
+features.txt       相同
+rbac.txt           相同
+topic-configs.txt  有變
+topics.txt         有變
+users.txt          相同
+topics.txt 多出來的：Topic: orders.backup-demo
+```
+
+> features 的 `Epoch` 每次都不同、ACL 列出的順序不固定，腳本已經拿掉與排序，否則每天都會顯示「有變」。
+
+還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。

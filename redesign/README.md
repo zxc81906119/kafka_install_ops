@@ -280,16 +280,21 @@
   - 每台升級前：移除已廢棄的 `message.format.version` 等設定、備份 `/etc`；KRaft 升級需從 7.7.1 以後；所有元件同版，不跨版混用。
   - 官方寫法是 `yum remove` 舊版再 `install` 新版；我們的設定不在 RPM 的預設路徑（`/etc/confluent/…`），比照 cpctl 用 `dnf install` 新版並更新 versionlock，實測時確認設定與 drop-in 不被覆蓋。
 
-### 日常備份（2026-10-24 定案，待實作）
+### 日常備份（2026-10-24 定案；2026-10-25 已實作：手把手第 26 章，lab 實跑）
 
 - **三類分工**（使用者定案）：
   - 叢集中繼資料（RBAC、topic 與設定、配額、SCRAM 帳號清單、features）：**操作機排程每天匯出**（systemd timer，保留 N 天）＋ **OP menu 立即匯出**（變更前的快照，紀錄是本人；擴充現有 44「匯出權限清單」）。
   - 各台 `/etc/confluent` 與 drop-in：**銀行既有的主機備份系統**（客戶模式 cpadmin 私鑰只在變更時段的 agent 裡，操作機的排程無法 ssh 進各台）；lab 用每台自己的 timer 模擬。
   - 機敏資料（`~/pki`、`~/secrets`、master key）：**事件觸發**，安裝、換憑證、換密碼時交 CyberArk 保管，不排程（同第 16 站 master key 的做法）。
-- 排程身分：**新發唯讀的 `svc-backup` 應用憑證**（使用者定案），不用 super user 的 svc-ops。查原廠：SecurityAdmin 可「查看他人 role binding、不能管理」；topic 設定、配額、SCRAM 清單需要的最低權限待 lab 實測。
+- 排程身分：**新發唯讀的 `svc-backup` 應用憑證**（使用者定案），不用 super user 的 svc-ops。lab 實測的最小權限：RBAC `SecurityAdmin`（看 role binding；建 binding 回 403）＋ KRaft ACL：Topic `*` 與 Cluster 的 `Describe`、`DescribeConfigs`。內建 RBAC 角色沒有「只有 DescribeConfigs」的（`DeveloperManage` 連帶能建／刪／改，`DeveloperRead` 沒有 DescribeConfigs 且讀得到訊息），所以這兩項用 ACL。反向驗證：讀訊息、建 topic、改 role binding 都被拒。
+- 實作：操作機 `~/conf/metadata-backup.sh`＋systemd timer（每天 02:00，保留 30 天，syslog tag `confluent-backup`）；7 個文字檔＋SHA256SUMS，比對兩天的備份用 sha256＋join（精簡 OS 沒有 diff）；features 的 Epoch 拿掉、ACL 排序，否則每天都「有變」。OP menu 立即匯出（擴充 44）**尚未做**。
 - 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO 決定（尚未列入客戶問題清單）。
 
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
+
+**2026-10-25 進度（lab 實跑）**：license 監控（第 23 章＋`23-license.sh`）、controller 替換（第 24 章＋`24-controller-replace.sh`）、broker 縮減／擴充（第 25 章＋`25-broker-scale.sh`）、日常備份（第 26 章）、換鏈（21.4＋`21-cert-rotate.sh chain`）都已實作並實跑。補強：第 6 章資料碟檔案系統檢查、10.3 `java.io.tmpdir` 選配（kb04 實測）、第 10 章明確設定 `metadata.log.dir`（kc01、kb01 實測）、第 18 章 KRaft quorum 告警、第 19 章稽核 topic RF 3 確認、第 22 章 JDK 25 註記。
+- **更正**：下面「README 說『不以 JMX 提供 raft 指標』與原廠文件矛盾」不成立。Apache Kafka 有 `kafka.server:type=raft-metrics`，但 Confluent Server 8.3.2 的 controller 上沒有這組 MBean（jshell 連進 JVM 列出全部 MBean 確認）；quorum 告警改用 controller 的 `LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`（第 18 章新增 3 條規則，行內 Prometheus 實測載入 12 條）。
+- 第 19 章：兩個稽核 topic 本來就是 RF 3（`min.insync.replicas=1`），不用改；文件補上檢查指令與「可送專用稽核叢集」。
 
 - 新章（先做）：**License 套用與到期監控**、**Controller 替換／增減（dynamic quorum）**、**Broker 擴充／縮減（Self-Balancing）**。都照「手打實跑 → 手把手 → 腳本」。
   - 已定案但這次沒選先做：日常備份、OS 修補、C3 升級；另列待議：滾動重啟 SOP、容量規劃、災難備援（Cluster Linking，lab 記憶體要評估）、Tiered Storage。

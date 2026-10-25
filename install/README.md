@@ -1,6 +1,6 @@
 # install/ — 照手把手文件一章一支的安裝腳本
 
-`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–21 章的每一章，對應一支 `steps/NN-*.sh`（手把手只教手打指令，兩者的對照在下面「每一站」）。
+`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–26 章的每一章，對應一支 `steps/NN-*.sh`（手把手只教手打指令，兩者的對照在下面「每一站」）。
 腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
 
 **作業系統**：以 RHEL 9 為準（lab 用 Rocky Linux 9 從零跑到第 20 站）。RHEL 10 是 Confluent Platform 8.2 起官方支援的，但這些腳本**沒有在 RHEL 10 實測過**；要上 RHEL 10 之前至少先驗 versionlock 外掛、原廠公鑰匯入與驗章、C3 前置套件，以及 CPU 是否支援 x86-64-v3。
@@ -20,7 +20,9 @@ install/
   templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、Prometheus 設定
   steps/01–14         核心：下載到 C3、總檢查
   steps/15–20         延伸：15 Conjur provider（含下載機建 jar 的 15-…-jar）、16 Secret Protection（+Summon、+AD 密碼注入）、17 OP menu、18 JMX exporter、19 稽核日誌、20 驗收
-  steps/21–22         隨時：21 憑證輪替（status｜leaf｜trust-sync）、22 升級（plan｜backup｜packages｜jdk｜finalize｜rollback）；照順序安裝時略過
+  steps/21–26         隨時：21 憑證輪替（status｜leaf｜chain｜trust-sync）、22 升級（plan｜backup｜packages｜jdk｜finalize｜rollback）、
+                      23 license 監控（status｜check｜schedule）、24 換 controller（status｜replace）、25 broker 增減（status｜remove｜add）、
+                      26 日常備份（grant｜run｜schedule｜compare）；照順序安裝時略過
   tools/load.sh       演練用持續流量：start／stop／report（直連遺失幾筆、REST 失敗幾次）
   lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：conjur / sp / opmenu / prometheus / coldboot）
   lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動；EXT=1 再接 15–20
@@ -61,8 +63,12 @@ install/
 | 18 | `--only 18` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/` |
 | 19 | `--only 19` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15／16 留下的）處理 |
 | 20 | `--only 20` | 印「驗收：N / N 項通過」；冷開機（20.4）交給機房演練 |
-| 21 | `bash install/steps/21-cert-rotate.sh status｜leaf｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；換 CA 三階段 = `trust-sync` → `leaf` → `trust-sync` |
+| 21 | `bash install/steps/21-cert-rotate.sh status｜leaf｜chain 新中繼.pem｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；`chain` 用在中繼沒換私鑰（leaf 不重簽、只把新中繼重包進 p12）；換 CA 三階段 = `trust-sync` → `leaf`（或 `chain`）→ `trust-sync`。先看手把手 21.0 判斷是哪一種 |
 | 22 | `bash install/steps/22-upgrade.sh plan｜backup｜packages｜jdk 25｜finalize 4.3｜rollback 主機 版本` | 不在安裝順序裡。先改 `site.env` 的 `CP_VERSION`；每段結束跑第 20 站；finalize 要帶 `CONFIRM_CLUSTER_ID`（不能退）；rollback 只在 finalize 之前 |
+| 23 | `bash install/steps/23-license.sh status｜check｜schedule` | 不在安裝順序裡。`schedule` 裝操作機的 systemd timer（每天 08:00 跑 `check`，寫 syslog tag `confluent-license`）；rc 0 正常、2 剩不到 `LICENSE_WARN_DAYS`（預設 90）天、1 過期或讀不到 |
+| 24 | `bash install/steps/24-controller-replace.sh status｜replace kc03` | 不在安裝順序裡。同名主機（換碟或換機器且已照 3、5、7、8、10 站準備好）：移出舊成員 → 清空並以觀察者格式化 → 追上 → `add-controller`；一次一台 |
+| 25 | `bash install/steps/25-broker-scale.sh status｜remove kb04｜add kb04` | 不在安裝順序裡。`remove` 由 Self-Balancing 搬走 replica、停用服務；`add` 清空並以觀察者格式化、啟動，Self-Balancing 自動搬回；永久縮減後改 `BROKERS`、重跑 12、13、17 站 |
+| 26 | `bash install/steps/26-metadata-backup.sh grant｜run｜schedule｜compare` | 不在安裝順序裡。`svc-backup` 憑證由第 9 站一起發（`conf/certs.txt`）；`grant` 給最小權限（SecurityAdmin＋Topic／Cluster 的 Describe、DescribeConfigs ACL）並做反向檢查；`schedule` 裝每天 02:00 的 timer（和手把手 26.4 同名，裝哪一個都是同一個 timer）；備份在 `~/backup/metadata/`，保留 `KEEP_DAYS`（預設 30）天 |
 
 ## lab 與客戶環境的設定差異（conf/site.env）
 

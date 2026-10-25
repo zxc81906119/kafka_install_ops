@@ -5,6 +5,8 @@ broker.rack=${RACK}
 controller.quorum.bootstrap.servers=${CONTROLLER_QUORUM}
 controller.listener.names=CONTROLLER
 log.dirs=/var/lib/kafka/data
+# metadata log (__cluster_metadata) stays here even if more log.dirs are added later (default = first log.dirs entry)
+metadata.log.dir=/var/lib/kafka/data
 
 ############################# Listeners #############################
 listeners=INTERNAL://${HOST_FQDN}:9092,TOKEN://${HOST_FQDN}:9094,CLIENT://${HOST_FQDN}:9095,LDAP://${HOST_FQDN}:9096
