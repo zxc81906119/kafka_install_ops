@@ -50,7 +50,7 @@
 | 層 | 編號 | 控管 |
 |---|---|---|
 | 1 值班查看 | 10 leader 與 partition 分布、11 cluster 與身分鏈健康檢查、12 topic 狀態、13 consumer lag、14 topic 設定、15 application 連線、16 磁碟用量、17 certificate 到期日、18 收集 diagnostics、19 生效中的設定 | 唯讀;16、18 碰主機,需 HOST 權限 |
-| 2 服務操作 | 21 重啟 broker(先檢查 under-replicated / offline)、22 重啟 REST Proxy 或 C3、23 看日誌、27 滾動重啟 | HOST 權限(Operator 以上);21、22、27 需確認 |
+| 2 服務操作 | 21 重啟 broker(先檢查 under-replicated / offline)、22 重啟 REST Proxy 或 C3（REST：設了 `OPMENU_LB_HOST` 時，那台還有從 LB 進來的連線就拒絕，要先請 LB 團隊停用，手把手 12.1）、23 看日誌、27 滾動重啟 | HOST 權限(Operator 以上);21、22、27 需確認 |
 | 3 變更作業 | 31 建 topic、32 改 retention、33 刪 topic、34 新增 service account、35 更換密碼、36 重設 consumer 位置、37 下架 service account | ADMIN 權限;需確認;受並行鎖與變更時窗 |
 | 4 授權與緊急 | 41 查看權限、42 指派或移除權限、43 匯出 audit、44 匯出權限清單（加 snapshot 為變更前完整快照，格式同每日備份）、45 查詢 audit、91 緊急模式 | 41/42/44/91 ADMIN、43/45 AUDIT;91 必填原因、逐條記錄 |
 

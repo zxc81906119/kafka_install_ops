@@ -33,6 +33,7 @@ fi
 # ── node 與服務 ──
 d OPMENU_CONTROLLER_HOSTS ''                                            # KRaft controller 的主機(空白分隔);要 ClusterAdmin 才查得到,Operator 查不到,所以要填(沒有獨立 controller 就留空)
 d OPMENU_BROKER_SERVICES ''                                             # 21 可重啟的 broker(主機:服務名);必填:這是重啟、ssh 的允許清單,不從 cluster 推算
+d OPMENU_LB_HOST         ''                                             # REST Proxy 前的負載平衡(FQDN)；有填的話 22 重啟 REST 前先確認 LB 已經停用那一台
 d OPMENU_AUX_SERVICES    ''                                             # 22 可重啟的 REST Proxy / C3(主機:服務名);cluster 裡沒有這些資訊,要填
 d OPMENU_HOSTS           ''                                             # node 清單;空 = BROKER_SERVICES 與 AUX_SERVICES 的主機 + OPMENU_CONTROLLER_HOSTS
 d OPMENU_DATA_DIR        '/var/lib/kafka/data'                          # 16 磁碟用量看的目錄(各 broker 通常有自己的 log.dirs;不同時請填)

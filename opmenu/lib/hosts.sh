@@ -22,6 +22,8 @@ be_service_logs()    { local host="${1%%:*}" svc="${1##*:}" n="${2:-50}"; v_any_
 be_disk_usage() { local h; for h in $OPMENU_HOSTS; do printf '%-28s ' "$h"; _ssh "$h" "df -h '$OPMENU_DATA_DIR' 2>/dev/null | tail -1 | awk '{print \"磁碟用量 \" \$5 \"  剩餘 \" \$4}'"; done; }
 be_collect_diag() { local d="$1" h; mkdir -p "$d"; for h in $OPMENU_HOSTS; do _ssh "$h" "sudo -n journalctl -u 'confluent-*' -n 500 --no-pager" > "$d/$h.log" 2>&1; done; }
 be_hosts() { echo "$OPMENU_HOSTS"; }
+# be_lb_connections <主機>：那台 8082 上從負載平衡進來的連線數；沒設 OPMENU_LB_HOST 就不印（不檢查）
+be_lb_connections() { local ip; [ -n "${OPMENU_LB_HOST:-}" ] || return 0; ip=$(getent hosts "$OPMENU_LB_HOST" | awk '{print $1}'); [ -n "$ip" ] || return 0; _ssh "$1" "ss -Htn state established '( sport = :8082 )'" | grep -c " $ip:"; }
 # be_cert_list：各端點實際出示的憑證（不是操作機上的檔案）。端點清單 OPMENU_TLS_ENDPOINTS，空 = 由服務清單推算
 _tls_endpoints() {
   [ -n "${OPMENU_TLS_ENDPOINTS:-}" ] && { echo "$OPMENU_TLS_ENDPOINTS"; return; }

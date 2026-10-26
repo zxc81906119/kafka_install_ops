@@ -99,11 +99,12 @@ ssh-keyscan -t ed25519 "${cluster_fqdns[@]}" 2>/dev/null | sort | sudo install -
 sudo install -d -m 2775 -o root -g opmenu /var/log/opmenu
 # 設定檔只填推算不出來的值：連線位址、可重啟的服務清單、保管庫
 export ENV_LABEL=$OPMENU_ENV_LABEL OPMENU_SECRETS VAULT_URL VAULT_ACCOUNT VAULT_POLICY BOOTSTRAP_LDAP=$BROKER_LDAP
-export BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS
+export BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS LB_FQDN
+LB_FQDN=$(fqdn "$LB_HOST")   # 選單 22 重啟 REST 前確認 LB 已經停用那一台
 BROKER_SERVICES=$(for host in $BROKERS; do printf '%s:confluent-server ' "$(fqdn "$host")"; done | sed 's/ $//')
 AUX_SERVICES=$(for host in $RESTS; do printf '%s:confluent-kafka-rest ' "$(fqdn "$host")"; done; printf '%s:confluent-control-center' "$C3_FQDN")
 CONTROLLER_HOSTS=$(for host in $CONTROLLERS; do fqdn "$host"; done | paste -sd' ')
-render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL OPMENU_SECRETS BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS VAULT_URL VAULT_ACCOUNT VAULT_POLICY \
+render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL OPMENU_SECRETS BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS LB_FQDN VAULT_URL VAULT_ACCOUNT VAULT_POLICY \
   || die "render opmenu.conf"
 sudo install -m 0644 "$CONF_DIR/opmenu.conf" /etc/opmenu/opmenu.conf
 listed_items=$(sudo runuser -u "$MENU_USER" -- /opt/opmenu/opmenu.sh --list 2>/dev/null | wc -l)
