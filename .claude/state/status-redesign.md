@@ -19,7 +19,7 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
   都通過，但都是在上述修正**之前**。第 16 章修正後在 lab 上重跑：passphrase 檢查兩次都「是」，16.10 bind 驗證 200。
 
 ## 下一步
-0. C3 告警實測結論見 redesign/README.md「C3 內建 Alertmanager 的 webhook 自訂 JSON」：UI 不能自訂、手改會被 C3 重啟蓋掉、方案 C（CONFIG_PATH drop-in）可行但 UI 之後建的動作不生效；**方案 E（Prometheus 同時送兩個 Alertmanager）兩邊都生效**（實測）。另發現第 13 章缺 otlp.promote_resource_attributes（已修，需從零重跑第 13 章驗證）。待使用者選方案、是否把 E 寫進手冊第 18 章。
+0. （已驗證）provider 第 21 章修正與第 13 章 otlp 修正都在從零重跑通過。C3 告警實測結論見 redesign/README.md「C3 內建 Alertmanager 的 webhook 自訂 JSON」：UI 不能自訂、手改會被 C3 重啟蓋掉、方案 C（CONFIG_PATH drop-in）可行但 UI 之後建的動作不生效；**方案 E（Prometheus 同時送兩個 Alertmanager）兩邊都生效**（實測）。另發現第 13 章缺 otlp.promote_resource_attributes（已修，需從零重跑第 13 章驗證）。待使用者選方案、是否把 E 寫進手冊第 18 章。
 1. ~~客戶模式從零全書重跑~~ 2026-10-25 22:40 通過：0–21 247 塊、23–28 34 塊，0 失敗；11.2／16.x／20.6／26.5 輸出逐行確認。之後再看一次 Conjur 模式第 16 章。
 2. 升級演練 2026-10-26 完成：手把手第 22 章（8.2.4 起點）12 塊全過；腳本版 run-upgrade-drill.sh 全段 38/38×4、直連 6053 筆 0 遺失、**REST 失敗 4 次**（02:13:33–36，JDK 25 段重啟 REST；手冊與腳本都沒有先從 LB 拿掉 REST，只靠 nginx max_fails）→ 待使用者決定排空做法。run-customer.sh 結束碼修正 f41f053。
 3. CyberArk 缺口 4：使用者決定不做（維持 20.5 離線保管）。
@@ -28,10 +28,10 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
    - ① 2026-10-26 13:06 通過：客戶 0–21 319 塊、23–28 39 塊、8.2.4（腳本）→ 第 22 章 24 塊，0 失敗；五步共 14 輪全部「排空 0 秒、200」，12.1 演練 94 次 0 失敗。
    - ② 2026-10-26 14:35 通過：腳本版升級演練，LB 交握 8 次全部自動回覆；直連 6384 筆 0 遺失、**REST 1232 次 0 失敗**（上一輪沒排空是 4 失敗）、驗收 38/38×4。
    - ③ Conjur 手把手 0–21、23–28 通過（319+39 塊，0 失敗）。
-   - ④ provider 0–22：**第一次跑第 21 章，21.3.3 失敗**：服務啟動連 Conjur 走 JDK 的 cacerts，階段二 Conjur 憑證改由 G2 簽後 cacerts 沒有新根 → `PKIX path building failed`，整個叢集起不來（手冊原本只有一則「沒實測」的註記）。已在 21.3.2／21.3.4／21.4.2／21.4.5 補 provider 專用的 cacerts 指令（階段一加新根、階段三刪舊根），並用新指令修復 lab（11 台、服務全回來、MDS 200）。**修正後的第 21 章尚未從零完整重跑**。
+   - ④ provider 0–22：2026-10-27 從零重跑通過（324 塊、253 執行、0 失敗，五步 20 輪 REST 全 200）。上一輪在 21.3.3 倒掉（JDK cacerts 沒有新根，PKIX path building failed）已修（423a97f）：21.3.2／21.3.4／21.4.2／21.4.5 的 provider 專用 cacerts 區塊逐台驗證（加新根後每台 2、刪舊根後每台 1），階段二重啟後 controller／broker 全 active、MDS 200。第 13 章新加的 otlp 設定與標籤檢查也通過（剛啟動 5，穩定後 7）。
 - 從未 push。
 
 ## 環境狀態
-- lab: 空閒（2026-10-26 23:50，provider 模式，停在第 21 章階段二中途，叢集健康）。C3 告警實測做完並已還原（drop-in、測試 action／trigger、接收端都清掉）。
+- lab: 空閒（2026-10-27 05:00，provider 模式第 0–21 章做完，叢集健康：controller／broker active、MDS 200、C3 200）。
 - 密碼檔：`~/kafka-lab/secrets.env`、`~/kafka-lab/pvwa/`；ops02 `~/secrets/`、`~/pki/store.pass`。
 - `install/tools/lint.sh` 沒有 shellcheck 時用 `koalaman/shellcheck:v0.10.0`。
