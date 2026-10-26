@@ -304,6 +304,13 @@
 - 腳本（49690bb）：rolling_restart／22／27 重啟 REST 前寫交握檔 `~/lb-requests/<主機>.down|up` 等 LB 團隊回覆（`LB_CONTROL=handshake|none`），lab 由 `bank-sim lb-watch` 回覆。OP menu 22（638dd07）：那台還有 LB 連線就拒絕。
 - 實測：腳本版升級演練（2026-10-26）REST 1232 次 **0 失敗**（之前 4 失敗）、直連 6384 筆 0 遺失；手把手全書（客戶）五步 14 輪全部 200。
 
+### C3 內建 Alertmanager 的 webhook 自訂 JSON（2026-10-26 討論，使用者決定先不處理）
+
+- C3 內建 Alertmanager 是 0.34.0，webhook 支援 `payload` 自訂 JSON（lab 實測：map 寫法與字串寫法、`range`、`toJson` 都可用）。陷阱：字串寫法遇到含雙引號的告警文字會被當成「一個 JSON 字串」送出；map 寫法會把像數字的字串轉成數字；一個通知群組只送一次 POST。
+- `alertmanager-generated.yml` 由 C3 產生，C3 重啟後會重寫（觀察到）；手改的內容會不會被蓋掉尚未實測。C3 UI 的 Generic Webhook 只有 URL 欄位（由程式推斷，沒點過 UI），不能設 payload。
+- 選項：A 只用 UI（預設格式）；C systemd drop-in `Environment=CONFIG_PATH=…` 讓 Alertmanager 讀自己的檔（C3 UI 建的通知動作會失效；未在 systemd 實測）；A+D C3 UI webhook 指到轉換點；銀行自己的 Alertmanager。
+- 待辦（若重啟此議題）：lab 空下來後實測手改 payload 重啟 C3 後是否保留；實測 CONFIG_PATH drop-in。
+
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
 **2026-10-25 進度（lab 實跑）**：license 監控（第 23 章＋`23-license.sh`）、controller 替換（第 24 章＋`24-controller-replace.sh`）、broker 縮減／擴充（第 25 章＋`25-broker-scale.sh`）、日常備份（第 26 章）、換鏈（21.4＋`21-cert-rotate.sh chain`）都已實作並實跑。補強：第 6 章資料碟檔案系統檢查、10.3 `java.io.tmpdir` 選配（kb04 實測）、第 10 章明確設定 `metadata.log.dir`（kc01、kb01 實測）、第 18 章 KRaft quorum 告警、第 19 章稽核 topic RF 3 確認、第 22 章 JDK 25 註記。
