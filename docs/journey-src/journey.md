@@ -3265,11 +3265,11 @@ service.env: root:root 600
 最後確認 passphrase 真的有用上（16.2 的陷阱）：在副本上試著輪替一次，正式檔不動。兩個都要是「是」；前一個是「否」代表 master key 不是用 PVWA 那組 passphrase 產生的，照 16.7「遺失怎麼辦」重新產生、重新加密：
 
 ```bash
-T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "用 PVWA 的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
+T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "目前的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
 ```
 
 ```out
-用 PVWA 的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
+目前的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
 ```
 
 ## 16.6 演練：輪替 master key
@@ -3451,14 +3451,14 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-輪替完照 16.5 最後那個檢查再做一次：新的 passphrase（PVWA 現行版本）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
+輪替完照 16.5 最後那個檢查再做一次：新的 passphrase（保管庫的現行版本）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
 
 ```bash
-T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "用 PVWA 的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
+T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "目前的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
 ```
 
 ```out
-用 PVWA 的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
+目前的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
 ```
 
 > 回滾：在刪掉 `.bak` 之前，把 `security.properties.bak` 和 `master.key.bak` 用 16.4 的方式派送回去、再滾動重啟一次，就回到舊 master key。所以 `.bak` 要等全部驗證完才刪。
