@@ -87,4 +87,7 @@ for host in $RESTS; do
 done
 via_lb=$(rest_app_curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters")
 if [ "$via_lb" = 200 ]; then ok "經負載平衡（$REST_VIP）: $via_lb"; else fail "經負載平衡: $via_lb"; fi
+
+section "12.1 之後重啟 REST Proxy 用的小腳本（先由 LB 團隊停用那一台，見手把手 12.1）"
+install -m 0700 "$TEMPLATE_DIR/rest-restart.sh" "$CONF_DIR/rest-restart.sh" && ok "$CONF_DIR/rest-restart.sh"
 finish_step
