@@ -19,6 +19,7 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
   都通過，但都是在上述修正**之前**。第 16 章修正後在 lab 上重跑：passphrase 檢查兩次都「是」，16.10 bind 驗證 200。
 
 ## 下一步
+0. C3 告警實測結論見 redesign/README.md「C3 內建 Alertmanager 的 webhook 自訂 JSON」：UI 不能自訂、手改會被 C3 重啟蓋掉、方案 C（CONFIG_PATH drop-in）可行但 UI 之後建的動作不生效。待使用者選方案。
 1. ~~客戶模式從零全書重跑~~ 2026-10-25 22:40 通過：0–21 247 塊、23–28 34 塊，0 失敗；11.2／16.x／20.6／26.5 輸出逐行確認。之後再看一次 Conjur 模式第 16 章。
 2. 升級演練 2026-10-26 完成：手把手第 22 章（8.2.4 起點）12 塊全過；腳本版 run-upgrade-drill.sh 全段 38/38×4、直連 6053 筆 0 遺失、**REST 失敗 4 次**（02:13:33–36，JDK 25 段重啟 REST；手冊與腳本都沒有先從 LB 拿掉 REST，只靠 nginx max_fails）→ 待使用者決定排空做法。run-customer.sh 結束碼修正 f41f053。
 3. CyberArk 缺口 4：使用者決定不做（維持 20.5 離線保管）。
@@ -31,6 +32,6 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
 - 從未 push。
 
 ## 環境狀態
-- lab: 空閒（2026-10-26 23:00，provider 模式，停在第 21 章階段二中途，叢集健康：10 台服務 active、MDS 200、C3 UI 200）。等 C3 告警實測用，之後需要從零重建才能驗證第 21 章修正。
+- lab: 空閒（2026-10-26 23:50，provider 模式，停在第 21 章階段二中途，叢集健康）。C3 告警實測做完並已還原（drop-in、測試 action／trigger、接收端都清掉）。
 - 密碼檔：`~/kafka-lab/secrets.env`、`~/kafka-lab/pvwa/`；ops02 `~/secrets/`、`~/pki/store.pass`。
 - `install/tools/lint.sh` 沒有 shellcheck 時用 `koalaman/shellcheck:v0.10.0`。

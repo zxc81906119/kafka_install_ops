@@ -304,12 +304,17 @@
 - 腳本（49690bb）：rolling_restart／22／27 重啟 REST 前寫交握檔 `~/lb-requests/<主機>.down|up` 等 LB 團隊回覆（`LB_CONTROL=handshake|none`），lab 由 `bank-sim lb-watch` 回覆。OP menu 22（638dd07）：那台還有 LB 連線就拒絕。
 - 實測：腳本版升級演練（2026-10-26）REST 1232 次 **0 失敗**（之前 4 失敗）、直連 6384 筆 0 遺失；手把手全書（客戶）五步 14 輪全部 200。
 
-### C3 內建 Alertmanager 的 webhook 自訂 JSON（2026-10-26 討論，使用者決定先不處理）
+### C3 內建 Alertmanager 的 webhook 自訂 JSON（2026-10-26 實測；使用者尚未選方案）
 
-- C3 內建 Alertmanager 是 0.34.0，webhook 支援 `payload` 自訂 JSON（lab 實測：map 寫法與字串寫法、`range`、`toJson` 都可用）。陷阱：字串寫法遇到含雙引號的告警文字會被當成「一個 JSON 字串」送出；map 寫法會把像數字的字串轉成數字；一個通知群組只送一次 POST。
-- `alertmanager-generated.yml` 由 C3 產生，C3 重啟後會重寫（觀察到）；手改的內容會不會被蓋掉尚未實測。C3 UI 的 Generic Webhook 只有 URL 欄位（由程式推斷，沒點過 UI），不能設 payload。
-- 選項：A 只用 UI（預設格式）；C systemd drop-in `Environment=CONFIG_PATH=…` 讓 Alertmanager 讀自己的檔（C3 UI 建的通知動作會失效；未在 systemd 實測）；A+D C3 UI webhook 指到轉換點；銀行自己的 Alertmanager。
-- 待辦（若重啟此議題）：lab 空下來後實測手改 payload 重啟 C3 後是否保留；實測 CONFIG_PATH drop-in。
+lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），結論分三層：
+
+1. **Alertmanager 本身可以**：webhook 的 `payload` 自訂 JSON 可用（map 寫法、字串寫法、`range`、`toJson`）。陷阱：map 寫法會把含 `: ` 的值當 YAML 解成物件、把像數字的字串轉成數字（`"007"`→7）；字串寫法遇到含雙引號的文字會整串被當成一個 JSON 字串送出 → 一律用字串寫法加 `{{ toJson … }}`。一個通知群組一個 POST，要一筆告警一個 POST 用 `group_by: ['...']`。範本取不到 `.GroupKey`（預設格式有 groupKey）。
+2. **C3 UI／API 的 Generic Webhook 不能設自訂內容**：前端表單只有「Webhook URL」，送給後端的是 `{webhook:{url, genericWebhook:{}}}`；C3 寫進 Alertmanager 的 `webhook_configs` 只有 `url`，所以走 UI 時送出的一定是 Alertmanager 預設格式（version 4）。C3 的「測試」鈕（`POST /2.0/alerts/actions/verify`）是 C3 的 Java 程式自己送的（User-Agent Apache-HttpClient），內容是佔位範例。UI 可建的條件共 23 種（broker／topic／consumer／cluster 狀態、延遲、under-replicated、offline partitions 等）。
+3. **手改 `alertmanager-generated.yml` 不可行**：C3 在「改告警設定」與「**C3 啟動後約 1 分鐘**」重寫整份（逐位元組還原成它自己產生的版本）；重啟 C3 後手改的 payload 被蓋掉。只重啟 Alertmanager 則保留。C3 不會持續覆蓋（放 5 分鐘不變）。
+4. **方案 C（可行）**：systemd drop-in `Environment=CONFIG_PATH=/etc/confluent/alertmanager`，目錄內放自己的 `alertmanager-generated.yml`（Alertmanager 以 cp-control-center 讀）與複製來的 `web-config-am.yml`。實測：重啟 C3 後我們的檔不動、Alertmanager 仍送自訂 JSON（User-Agent Alertmanager/0.34.0）。代價：C3 UI 之後建的動作寫進 C3 自己的檔，**不會生效**（Alertmanager 不讀），C3 通知 reload 時 Alertmanager 重新讀我們的檔，不報錯。
+5. 其他：ops02 連 c3-01:9093 被防火牆擋（設計如此），測試要在 c3-01 本機用 `/etc/confluent/ssl/{ca.pem,cp-server.crt,cp-server.key}` 做 mTLS。C3 REST API 需要 Bearer token（向 MDS `/security/1.0/authenticate` 用 AD 帳密換），basic auth 回 401。trigger 的 body 是 protobuf JSON：`{name, clusterId, brokerClusters:{brokerClusters:[id]}, brokerMetric, condition, longValue}`。
+
+選項（待使用者決定，之前使用者說先不處理）：A 只用 C3 UI（預設格式，要特定格式得加轉換點）；C 方案如上；A+D C3 UI webhook 指到轉換點；銀行自己的 Alertmanager／Dynatrace Events API。詳見 2026-10-26 對話：Dynatrace 對應（ProblemTitle→alertname／summary、ProblemDetailsText→annotations.description（我們規則缺，要補）、State→firing/resolved 轉 OPEN/RESOLVED、ProblemSeverity→要接收端決定、ProblemImpact→要在規則加 impact 標籤）。
 
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
