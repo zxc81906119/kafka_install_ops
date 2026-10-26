@@ -2423,10 +2423,10 @@ REMOTE
 ```
 
 ```out
-指標帶 kafka_broker_id 標籤的節點數：7（等了約 10 秒）
+指標帶 kafka_broker_id 標籤的節點數：5（等了約 10 秒）
 ```
 
-7 是 4 台 broker 加 3 台 controller（各自的 node id）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 的告警不會有作用。
+只要大於 0 就代表標籤有帶上來。數字會隨 telemetry 陸續送進來而增加，穩定後是 7（4 台 broker 加 3 台 controller，各自的 node id；實測剛啟動 10 秒時是 5）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 的告警不會有作用。
 
 Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~/secrets/ad-test-users.pass`）。憑證是銀行 CA 簽的，瀏覽器沒裝銀行根憑證會有警告，lab 先略過。Alertmanager 的 9093 只開給同一台的 C3，從操作機連不到是正常的。
 
