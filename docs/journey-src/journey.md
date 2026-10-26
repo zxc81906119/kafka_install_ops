@@ -5258,7 +5258,7 @@ breakglass：保管庫已更新
 
 ## 21.3 換 CA（三階段）
 
-> 走第 15 章（Conjur provider）的環境還多一份信任清單：各台 **JDK 的 `cacerts`**（15.3 匯入的銀行根，provider 連 Conjur 用）。階段一要把新根也匯進去（另一個 alias），階段三刪掉舊根的 alias。走第 16 章的不受影響（本章的 lab 是第 16 章路徑，這一條沒有實測）。
+> 走第 15 章（Conjur provider）的環境還多一份信任清單：各台 **JDK 的 `cacerts`**（15.3 匯入的銀行根，provider 連 Conjur 用）。階段一要把新根也匯進去（另一個 alias），階段三刪掉舊根的 alias，指令在各階段的紫色「只在 provider」區塊（2026-10-26 在 lab 實測：沒做的話階段二重啟後整個叢集起不來）。走第 16 章的不受影響。
 
 銀行換根憑證（或換簽發 CA）時，不能一次全換：只要有一台還不信新的根，它就會拒絕新憑證。三個階段，每段結束時所有元件都同時信任新舊兩個根：
 
@@ -5325,6 +5325,25 @@ chmod 0700 ~/conf/rolling-restart.sh && echo rolling-restart.sh ok
 ```
 
 我方的信任清單：truststore 加一個 alias `bank-root-g2`；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
+
+@only provider
+
+@role 小安 | ops02 | cpadmin
+
+provider 模式（第 15 章）：服務啟動時連 Conjur 走 **JDK 自己的 `cacerts`**，不是 `truststore.p12`。階段二 Conjur 的憑證會改由新 CA 簽，所以這一步要先把新根（bundle 的第二張）也匯進每台 JDK 的 `cacerts`，**在滾動重啟之前**做；不然階段二一重啟，服務連不上 Conjur（`PKIX path building failed`），整個叢集都起不來：
+
+```bash
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'csplit -s -z -f /tmp/root- /etc/pki/ca-trust/source/anchors/bank-root.pem "/BEGIN CERT/" "{*}" && sudo /opt/java/current/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias bank-root-g2 -file /tmp/root-01 >/dev/null 2>&1; rm -f /tmp/root-0*; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
+```
+
+```out
+ops02: cacerts 裡的銀行根 2
+（11 行，每台都是 2：舊根和新根都信任）
+```
+
+@only all
+
+@role 小安 | ops02 | cpadmin
 
 ```bash
 cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g2 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && sudo install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && sudo install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
@@ -5643,6 +5662,25 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 
 truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem 只留新根，派送、滾動重啟：
 
+@only provider
+
+@role 小安 | ops02 | cpadmin
+
+provider 模式：JDK 的 `cacerts` 也拿掉舊根（alias `bank-root`），在滾動重啟之前：
+
+```bash
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo /opt/java/current/bin/keytool -delete -cacerts -storepass changeit -alias bank-root >/dev/null 2>&1; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
+```
+
+```out
+ops02: cacerts 裡的銀行根 1
+（11 行，每台都是 1：只剩新根）
+```
+
+@only all
+
+@role 小安 | ops02 | cpadmin
+
 ```bash
 cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && keytool -delete -alias bank-root -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass && echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && sudo install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && sudo install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
 ```
@@ -5776,6 +5814,25 @@ ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01
 @role 小安 | ops02 | cpadmin
 
 truststore 加 alias `bank-root-g3`（bundle 的第二張），C3 與 OP menu 的 ca.pem 換成 bundle，派送、滾動重啟（21.3.2 寫的那支 `rolling-restart.sh`）：
+
+@only provider
+
+@role 小安 | ops02 | cpadmin
+
+provider 模式：和 21.3.2 一樣，先把新根（G3）匯進每台 JDK 的 `cacerts`，在滾動重啟之前：
+
+```bash
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'csplit -s -z -f /tmp/root- /etc/pki/ca-trust/source/anchors/bank-root.pem "/BEGIN CERT/" "{*}" && sudo /opt/java/current/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias bank-root-g3 -file /tmp/root-01 >/dev/null 2>&1; rm -f /tmp/root-0*; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
+```
+
+```out
+ops02: cacerts 裡的銀行根 2
+（11 行，每台都是 2：舊根和新根都信任）
+```
+
+@only all
+
+@role 小安 | ops02 | cpadmin
 
 ```bash
 cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g3 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && sudo install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && sudo install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
@@ -6047,6 +6104,25 @@ cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 re
 ```out
 ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01:1
 ```
+
+@role 小安 | ops02 | cpadmin
+
+@only provider
+
+@role 小安 | ops02 | cpadmin
+
+provider 模式：JDK 的 `cacerts` 拿掉 G2（alias `bank-root-g2`），在滾動重啟之前：
+
+```bash
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo /opt/java/current/bin/keytool -delete -cacerts -storepass changeit -alias bank-root-g2 >/dev/null 2>&1; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
+```
+
+```out
+ops02: cacerts 裡的銀行根 1
+（11 行，每台都是 1：只剩新根）
+```
+
+@only all
 
 @role 小安 | ops02 | cpadmin
 
