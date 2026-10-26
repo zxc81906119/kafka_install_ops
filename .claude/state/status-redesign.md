@@ -22,9 +22,10 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
 1. ~~客戶模式從零全書重跑~~ 2026-10-25 22:40 通過：0–21 247 塊、23–28 34 塊，0 失敗；11.2／16.x／20.6／26.5 輸出逐行確認。之後再看一次 Conjur 模式第 16 章。
 2. 升級演練 2026-10-26 完成：手把手第 22 章（8.2.4 起點）12 塊全過；腳本版 run-upgrade-drill.sh 全段 38/38×4、直連 6053 筆 0 遺失、**REST 失敗 4 次**（02:13:33–36，JDK 25 段重啟 REST；手冊與腳本都沒有先從 LB 拿掉 REST，只靠 nginx max_fails）→ 待使用者決定排空做法。run-customer.sh 結束碼修正 f41f053。
 3. CyberArk 缺口 4：使用者決定不做（維持 20.5 離線保管）。
+4. REST 重啟前先由 LB 停用（使用者選 A，2026-10-26）：手把手 12.1 與 16 處已改（4324245）、install 會建兩支小工具（下一個 commit）；待辦：install 的 rolling_restart／22／27 與 OP menu 重啟 REST 也要先停用。
 - 從未 push。
 
 ## 環境狀態
-- lab: 閒置（升級演練結束，8.3.2 finalize、JDK 25）。複製進 landing 的升級套件已刪除（原檔在 landing-extra）。
+- lab: **使用中（Claude）**：驗證 REST 排空（4324245）：客戶模式 0–21、23–28 從零 → 8.2.4（腳本）→ 手把手第 22 章。landing-extra 的升級套件會暫時複製進 landing，跑完自動刪。
 - 密碼檔：`~/kafka-lab/secrets.env`、`~/kafka-lab/pvwa/`；ops02 `~/secrets/`、`~/pki/store.pass`。
 - `install/tools/lint.sh` 沒有 shellcheck 時用 `koalaman/shellcheck:v0.10.0`。

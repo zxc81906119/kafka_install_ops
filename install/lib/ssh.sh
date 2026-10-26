@@ -65,6 +65,39 @@ restart_and_wait() {
   return 1
 }
 
+# lb_member <主機> down|up：請 LB 團隊停用／恢復這台 REST Proxy（手把手 12.1）。
+#   LB_CONTROL=handshake：寫請求檔 $LB_REQUEST_DIR/<主機>.<down|up>，等 LB 團隊回覆 <請求>.done（有終端機時按 Enter 就算回覆）
+#   LB_CONTROL=none：環境沒有 LB，只記一筆警告
+lb_member() {
+  local host=$1 action=$2 request waited answer verb
+  case $action in down) verb=停用;; up) verb=恢復;; *) fail "lb_member：$action"; return 1;; esac
+  if [ "${LB_CONTROL:-handshake}" = none ]; then warn "LB_CONTROL=none：沒有請 LB 團隊$verb $host"; return 0; fi
+  install -d -m 0700 "$LB_REQUEST_DIR"
+  request=$LB_REQUEST_DIR/$host.$action
+  rm -f "$request.done"; : > "$request"
+  if [ -t 0 ]; then
+    ask_bank "LB 團隊：$verb REST Proxy $host（pool member $(fqdn "$host"):8082）"
+    read -r -p "LB 團隊$verb完成後按 Enter：" answer; touch "$request.done"
+  else
+    log "等 LB 團隊$verb $host（請求 $request；做完後 touch $request.done）"
+    for waited in $(seq 0 2 "${LB_WAIT_SECONDS:-1800}"); do [ -f "$request.done" ] && break; sleep 2; done
+  fi
+  if [ -f "$request.done" ]; then rm -f "$request" "$request.done"; ok "LB 團隊已$verb $host"; return 0; fi
+  fail "$host：${LB_WAIT_SECONDS:-1800} 秒內 LB 團隊沒有回覆（$verb）"; return 1
+}
+
+# lb_drained <主機>：等那台 8082 上從負載平衡進來的連線歸零（最多 60 秒）；歸零了才可以重啟
+lb_drained() {
+  local host=$1 lb_ip connections waited
+  lb_ip=$(getent hosts "$(fqdn "$LB_HOST")" | awk '{print $1}')
+  for waited in $(seq 0 2 60); do
+    connections=$(ssh_run "$host" "ss -Htn state established '( sport = :8082 )'" | grep -c " $lb_ip:")
+    [ "$connections" = 0 ] && { ok "$host：LB 的連線已排空（等了 ${waited} 秒）"; return 0; }
+    sleep 2
+  done
+  fail "$host：60 秒後 LB 還有 $connections 條連線進來（LB 團隊停用了嗎？）"; return 1
+}
+
 # rolling_restart <角色…>：依序滾動重啟，角色可以是 controllers brokers rests c3（照給的順序）。
 # 一台起來、健康了才做下一台；每台結果用 ok／fail 記下（需要 lib/log.sh）。全部健康回 0。
 rolling_restart() {
@@ -81,9 +114,11 @@ rolling_restart() {
                      case $result in *after*) ok "$result";; *) fail "$result"; failures=$((failures + 1));; esac
                    done;;
       rests)       HEALTH_CURL_OPTIONS=$(rest_app_curl_options)
-                   for host in $RESTS; do
+                   for host in $RESTS; do   # 先請 LB 團隊停用、排空，才重啟；健康了再恢復（手把手 12.1）
+                     lb_member "$host" down && lb_drained "$host" || { failures=$((failures + 1)); break; }
                      result=$(restart_and_wait "$host" confluent-kafka-rest "https://$(fqdn "$host"):8082/v3/clusters")
-                     case $result in *after*) ok "$result";; *) fail "$result"; failures=$((failures + 1));; esac
+                     case $result in *after*) ok "$result";; *) fail "$result"; failures=$((failures + 1)); break;; esac
+                     lb_member "$host" up || { failures=$((failures + 1)); break; }
                    done
                    HEALTH_CURL_OPTIONS="";;
       c3)          result=$(restart_and_wait "$C3_HOST" confluent-control-center "https://$C3_FQDN:9021/" 420)   # C3 第一次起來最慢

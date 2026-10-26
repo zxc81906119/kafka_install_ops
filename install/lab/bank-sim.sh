@@ -251,5 +251,18 @@ sign_next() {   # 21.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參
   as_root_on "$OPS_HOST" 'chown cpadmin:cpadmin /home/cpadmin/pki/next/incoming/*; ls /home/cpadmin/pki/next/incoming | wc -l'
 }
 
+lb_watch() {   # 12.1（lab）：扮演 LB 團隊：操作機出現 ~/lb-requests/<主機>.<down|up> 就照做、回覆 .done；$LAB/lb-watch.stop 出現就結束
+  local request host action stop_file=${1:-$LAB/lb-watch.stop}
+  rm -f "$stop_file"; announce "LB 團隊待命（結束：touch $stop_file）"
+  while [ ! -f "$stop_file" ]; do
+    for request in $(as_cpadmin_on_ops 'cd ~/lb-requests 2>/dev/null && for f in *.down *.up; do [ -f "$f" ] && [ ! -f "$f.done" ] && echo "$f"; done' 2>/dev/null); do
+      host=${request%.*}; action=${request##*.}
+      bash "$LAB/lb-member.sh" "$host" "$action" && as_cpadmin_on_ops "touch ~/lb-requests/$request.done"
+    done
+    sleep 2
+  done
+}
+
 case ${1:-} in push|intake|prepare|sign|reset|conjur|sp|opmenu|prometheus|coldboot) "$1";;
+  lb-watch) lb_watch "${2:-}";;
   sign-next) sign_next "${2:-ca}";; pvwa-key) pvwa_key;; *) sed -n '2,11p' "$0"; echo "  延伸：conjur（15.1）sp（16.1/16.8）opmenu（17.1）prometheus（18.5）coldboot（20.4）"; exit 1;; esac

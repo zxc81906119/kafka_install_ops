@@ -16,6 +16,11 @@ FROM_VERSION=${FROM_VERSION:-8.2.4}
 TO_VERSION=${TO_VERSION:-8.3.2}
 NEW_JDK_MAJOR=${NEW_JDK_MAJOR:-25}
 started_at=$(date +%s)
+# 扮演 LB 團隊（手把手 12.1）：腳本重啟 REST 前會寫 ~/lb-requests/ 的請求，bank-sim lb-watch 照做後回覆
+LB_TEAM_STOP="${LAB:-$HOME/kafka-lab}/lb-watch.stop.$$"   # 每支 runner 自己的結束訊號（升級演練裡面還會再叫 run-customer.sh）
+bash "$LAB_TOOLS_DIR/bank-sim.sh" lb-watch "$LB_TEAM_STOP" >> "${LAB:-$HOME/kafka-lab}/lb-watch.log" 2>&1 &
+LB_TEAM_PID=$!
+trap 'touch "$LB_TEAM_STOP"; kill $LB_TEAM_PID 2>/dev/null' EXIT
 
 # 在操作機以 cpadmin 跑一段指令（帶工程師的 ssh-agent）；印標題與結束碼
 on_ops() {

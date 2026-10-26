@@ -59,6 +59,10 @@ patch_one() {
   if [ "$host" = "$OPS_HOST" ]; then result=$(bash -s <<<"$PATCH_HOST"); else result=$(ssh_script "$host" <<<"$PATCH_HOST"); fi
   [[ $result == updated=* ]] || { fail "$host dnf update 失敗"; return 1; }
   log "$host：$result"
+  local drained=0
+  if [[ $host == rest* ]] && { [[ $result == *reboot=yes* ]] || ! [[ $result == *services=none* ]]; }; then
+    lb_member "$host" down && lb_drained "$host" || return 1; drained=1   # 手把手 12.1
+  fi
   if [[ $result == *reboot=yes* ]]; then
     [ "$host" = "$OPS_HOST" ] && { warn "操作機自己要重開機：其他主機都做完了，請手動 sudo systemctl reboot"; return 0; }
     ssh_run "$host" 'sudo systemctl reboot' || true
@@ -70,6 +74,8 @@ patch_one() {
     done
   fi
   if wait_healthy "$host"; then ok "$host 健康"; else fail "$host 修補後沒有恢復健康"; return 1; fi
+  [ "$drained" = 1 ] && { lb_member "$host" up || return 1; }
+  return 0
 }
 
 plan() {

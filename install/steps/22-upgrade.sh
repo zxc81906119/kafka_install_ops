@@ -88,8 +88,10 @@ change_packages_and_restart() {
   result=$(ssh_script "$host" VERSION="$version" DNF_ACTION="$dnf_action" UNIT="$unit" PROPS="$props" MAIN_PACKAGE="$main_package" <<<"$CHANGE_PACKAGES")
   case $result in "$version config=same exec=$props") ok "$host：$result";; *) fail "$host：$result（不重啟）"; return 1;; esac
   # C3 的套件裡也有 Prometheus、Alertmanager：一起重啟，才會跑新版的執行檔
+  case $host in rest*) lb_member "$host" down && lb_drained "$host" || return 1;; esac   # REST：先請 LB 團隊停用（手把手 12.1）
   case $host in c3*) ssh_run "$host" "sudo systemctl restart prometheus alertmanager $unit";; *) ssh_run "$host" "sudo systemctl restart $unit";; esac
   if wait_healthy "$host"; then ok "$host：重啟後健康"; else fail "$host：重啟後沒有健康"; return 1; fi
+  case $host in rest*) lb_member "$host" up || return 1;; esac
 }
 
 # controller 一台一台，每輪重查 leader（過程中會換人），leader 留到最後
@@ -193,8 +195,10 @@ jdk() {
     local host=$1 linked process_java
     copy_to_tmp "$host" "$jdk_tar" || { fail "$host scp"; return 1; }
     linked=$(ssh_script "$host" JDK_TAR_NAME="$(basename "$jdk_tar")" JDK_DIR="$jdk_dir" <<<"$SWITCH_JDK")
+    case $host in rest*) lb_member "$host" down && lb_drained "$host" || return 1;; esac
     ssh_run "$host" "sudo systemctl restart $(unit_of "$host")"
     wait_healthy "$host" || { fail "$host：換 JDK 後沒有健康"; return 1; }
+    case $host in rest*) lb_member "$host" up || return 1;; esac
     process_java=$(ssh_run "$host" "sudo readlink /proc/\$(systemctl show $(unit_of "$host") -p MainPID --value)/exe")
     case $process_java in "/opt/java/$jdk_dir/bin/java") ok "$host：$linked，程序用 $process_java";; *) fail "$host：程序用 $process_java";; esac
   }

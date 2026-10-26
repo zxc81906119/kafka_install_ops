@@ -24,6 +24,11 @@ PVWA_DIR=$LAB/pvwa
 OPS_CONTAINER=lab-ops02-1
 AGENT_SOCKET=/home/cpadmin/.ssh/engineer-agent.sock   # 工程師這次作業的 ssh-agent（容器重開就沒了）
 started_at=$(date +%s)
+# 扮演 LB 團隊（手把手 12.1）：腳本重啟 REST 前會寫 ~/lb-requests/ 的請求，bank-sim lb-watch 照做後回覆
+LB_TEAM_STOP="${LAB:-$HOME/kafka-lab}/lb-watch.stop.$$"   # 每支 runner 自己的結束訊號（升級演練裡面還會再叫 run-customer.sh）
+bash "$LAB_TOOLS_DIR/bank-sim.sh" lb-watch "$LB_TEAM_STOP" >> "${LAB:-$HOME/kafka-lab}/lb-watch.log" 2>&1 &
+LB_TEAM_PID=$!
+trap 'touch "$LB_TEAM_STOP"; kill $LB_TEAM_PID 2>/dev/null' EXIT
 
 # stage <段號> <標題>：段號小於 FROM 或大於 TO 就略過這一段（回 1），否則印標題（回 0）
 stage() {
