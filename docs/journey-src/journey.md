@@ -2285,6 +2285,11 @@ rule_files:
   - "recording_rules-generated.yml"
   - "trigger_rules-generated.yml"
 scrape_configs:
+otlp:
+  promote_resource_attributes: ["host.hostname", "java.version", "kafka.broker.id", "kafka.cluster.id", "kafka.version", "type"]
+storage:
+  tsdb:
+    out_of_order_time_window: 10m
 EOF
 cd /etc/confluent-control-center && sudo chown root:confluent web-config-prom.yml web-config-am.yml prometheus-generated.yml && sudo chmod 0640 web-config-prom.yml web-config-am.yml prometheus-generated.yml && sudo chown cp-control-center:confluent alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml && sudo chmod 0640 alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml && sudo install -d -m 0755 /etc/systemd/system/prometheus.service.d && printf "[Service]\nEnvironment=\"METRICS_RETENTION_DAYS=2d\"\nEnvironment=\"PROMETHEUS_HOST=0.0.0.0\"\nEnvironment=\"PROMETHEUS_PORT=9090\"\n" | sudo tee /etc/systemd/system/prometheus.service.d/10-override.conf >/dev/null && sudo systemctl daemon-reload && echo "c3-01: prometheus config ok"'
 ```
@@ -2294,6 +2299,8 @@ c3-01: prometheus config ok
 ```
 
 > 陷阱：`*-generated.yml` 若是 root 擁有，C3 啟動會報 `AccessDeniedException`。
+>
+> 陷阱：上面最後兩段（`otlp`、`storage`）是從 C3 套件預設的 `prometheus-generated-local.yml` 抄來的，**不能省**。broker 用 OTLP 把指標送進 Prometheus，`promote_resource_attributes` 才會把資源屬性 `kafka.cluster.id`、`kafka.broker.id` 變成指標標籤。沒有它，指標沒有叢集標籤，C3 畫面上建的 trigger（告警條件）都帶 `kafka_cluster_id=…` 去比對，**永遠比對不到資料，告警不會觸發**，而畫面看起來一切正常（2026-10-26 lab 實測：補上之後 40 秒內帶標籤的資料點從 0 變成 7 萬多筆）。
 
 C3 設定檔（整段貼到 EOF）：
 
@@ -2401,6 +2408,25 @@ prometheus=200
 c3 ui=200 after ~30s
 （第一次啟動 30–120 秒都正常）
 ```
+
+確認指標真的帶有叢集標籤（上面那個陷阱的檢查）。ops02 連不到 c3-01 的 9090（防火牆只對外開 9021），所以在 c3-01 上用它自己的憑證查：
+
+```bash
+ssh c3-01.poc.lab bash -s <<'REMOTE'
+Q='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
+for i in $(seq 1 18); do
+  n=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/cp-server.crt --key /etc/confluent/ssl/cp-server.key --data-urlencode "query=$Q" https://c3-01.poc.lab:9090/api/v1/query | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
+  [ -n "$n" ] && [ "$n" -gt 0 ] && break; sleep 10
+done
+echo "指標帶 kafka_broker_id 標籤的節點數：${n:-0}（等了約 $((i*10)) 秒）"
+REMOTE
+```
+
+```out
+指標帶 kafka_broker_id 標籤的節點數：7（等了約 10 秒）
+```
+
+7 是 4 台 broker 加 3 台 controller（各自的 node id）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 的告警不會有作用。
 
 Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~/secrets/ad-test-users.pass`）。憑證是銀行 CA 簽的，瀏覽器沒裝銀行根憑證會有警告，lab 先略過。Alertmanager 的 9093 只開給同一台的 C3，從操作機連不到是正常的。
 

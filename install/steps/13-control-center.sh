@@ -102,5 +102,20 @@ for attempt in $(seq 1 30); do
   sleep 10
 done
 if [ "$c3_ui" = 200 ]; then ok "c3 ui=200，約 $((attempt * 10)) 秒"; else fail "c3 ui=$c3_ui（sudo journalctl -u confluent-control-center -n 100）"; fi
+
+# 指標要帶 kafka_broker_id 標籤（prometheus-generated.yml 的 otlp.promote_resource_attributes）。沒有的話，C3 畫面上建的
+# trigger 永遠比對不到資料、告警不會觸發，而畫面看起來一切正常。c3 主機的 9090 要 mTLS，用它自己的憑證在本機查
+labelled_nodes=$(ssh_script "$C3_HOST" C3_FQDN="$C3_FQDN" <<'EOF'
+query='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
+for attempt in $(seq 1 18); do
+  count=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/cp-server.crt --key /etc/confluent/ssl/cp-server.key \
+    --data-urlencode "query=$query" "https://$C3_FQDN:9090/api/v1/query" | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
+  [ -n "$count" ] && [ "$count" -gt 0 ] && break
+  sleep 10
+done
+echo "${count:-0}"
+EOF
+)
+if [ "${labelled_nodes:-0}" -gt 0 ]; then ok "指標帶 kafka_broker_id 標籤的節點數：$labelled_nodes"; else fail "指標沒有 kafka_broker_id 標籤：檢查 prometheus-generated.yml 的 otlp.promote_resource_attributes，以及 broker 的 telemetry 有沒有送到 C3"; fi
 log "瀏覽器開 https://$C3_FQDN:9021（lab：https://localhost:19021），用 alice 登入（密碼在 $SECRETS_DIR/ad-test-users.pass）"
 finish_step

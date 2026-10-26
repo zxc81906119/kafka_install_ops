@@ -19,7 +19,7 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
   都通過，但都是在上述修正**之前**。第 16 章修正後在 lab 上重跑：passphrase 檢查兩次都「是」，16.10 bind 驗證 200。
 
 ## 下一步
-0. C3 告警實測結論見 redesign/README.md「C3 內建 Alertmanager 的 webhook 自訂 JSON」：UI 不能自訂、手改會被 C3 重啟蓋掉、方案 C（CONFIG_PATH drop-in）可行但 UI 之後建的動作不生效。待使用者選方案。
+0. C3 告警實測結論見 redesign/README.md「C3 內建 Alertmanager 的 webhook 自訂 JSON」：UI 不能自訂、手改會被 C3 重啟蓋掉、方案 C（CONFIG_PATH drop-in）可行但 UI 之後建的動作不生效；**方案 E（Prometheus 同時送兩個 Alertmanager）兩邊都生效**（實測）。另發現第 13 章缺 otlp.promote_resource_attributes（已修，需從零重跑第 13 章驗證）。待使用者選方案、是否把 E 寫進手冊第 18 章。
 1. ~~客戶模式從零全書重跑~~ 2026-10-25 22:40 通過：0–21 247 塊、23–28 34 塊，0 失敗；11.2／16.x／20.6／26.5 輸出逐行確認。之後再看一次 Conjur 模式第 16 章。
 2. 升級演練 2026-10-26 完成：手把手第 22 章（8.2.4 起點）12 塊全過；腳本版 run-upgrade-drill.sh 全段 38/38×4、直連 6053 筆 0 遺失、**REST 失敗 4 次**（02:13:33–36，JDK 25 段重啟 REST；手冊與腳本都沒有先從 LB 拿掉 REST，只靠 nginx max_fails）→ 待使用者決定排空做法。run-customer.sh 結束碼修正 f41f053。
 3. CyberArk 缺口 4：使用者決定不做（維持 20.5 離線保管）。
