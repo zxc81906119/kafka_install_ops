@@ -1026,6 +1026,31 @@ nginx: configuration file /etc/nginx/nginx.conf test is successful
 
 C3 那段只是讓 Windows 瀏覽器透過 lab 的連接埠對應連到 C3；正式環境維運人員直連 C3。
 
+之後每次重啟 REST Proxy，都要先請 LB 團隊把那一台停用、重啟完再恢復（12.1）。正式環境是 LB 團隊在行內設備上停用／啟用 pool member；lab 用一支小腳本扮演：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+cat > ~/kafka-lab/lb-member.sh <<'EOF'
+#!/usr/bin/env bash
+# lb-member.sh <rest01|rest02> down|up|status —— lab：扮演 LB 團隊停用／恢復一台 REST Proxy
+# 正式環境是 LB 團隊在行內的負載平衡設備上停用／啟用 pool member。nginx：server 後面加 down 再 reload，進行中的連線讓它跑完
+h=$1 act=${2:-status}; f=/etc/nginx/stream.d/cp.conf
+case $act in
+  down) e="/server $h.poc.lab:8082 /{/ down;/!s/;\$/ down;/}";;
+  up)   e="/server $h.poc.lab:8082 /s/ down;/;/";;
+  status) e="";;
+  *) echo "用法：$0 <rest01|rest02> down|up|status"; exit 2;;
+esac
+MSYS_NO_PATHCONV=1 docker exec lab-lb01-1 sh -c "{ [ -z '$e' ] || { sed -i '$e' $f && nginx -t -q && nginx -s reload 2>/dev/null; }; } && sleep 1 && echo \"LB：\$(grep -oE 'server rest0[12][^;]*' $f | sed -E 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//; s/server //; s/ down/（停用）/' | paste -sd' ' -)\""
+EOF
+chmod +x ~/kafka-lab/lb-member.sh && bash ~/kafka-lab/lb-member.sh rest01 status
+```
+
+```out
+LB：rest01 rest02
+```
+
 # 4. 第四站：上架到內部套件庫
 
 @role 小安 | ops02 | cpadmin
@@ -2098,6 +2123,125 @@ via LB: 200
 
 > 陷阱：`enable --now` 對已經在跑的服務不會重啟。設定改了要明確 `restart`，所以上面多了一行。
 
+## 12.1 之後每次重啟 REST Proxy：先請 LB 團隊停用那一台
+
+nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（升級演練實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（16、18、21、22、27 章）都照這個順序：
+
+1. LB 團隊停用 rest01 → 2. 小安等連線排空、重啟 rest01、確認 200 → 3. LB 團隊恢復 rest01、停用 rest02 → 4. 小安重啟 rest02 → 5. LB 團隊恢復 rest02
+
+**待銀行確認**：行內 LB 是哪一種設備、變更時段能否由 LB 團隊配合停用／恢復成員（問題清單 5.6）。
+
+@role 小安 | ops02 | cpadmin
+
+小安這邊寫成一支小腳本：先看那台的 8082 還有沒有從 LB 進來的連線（等到 0 才動；60 秒還有就停下，多半是 LB 還沒停用），再做重啟前要做的事（`-c` 複製檔案過去、`-b` 在那台執行，例如換證、升級套件），重啟（`-r` 改成重開機），等到 200：
+
+```bash
+cat > ~/conf/rest-restart.sh <<'EOF'
+#!/usr/bin/env bash
+# rest-restart.sh <rest01|rest02> [-c "本機檔案…"] [-b '在那台先執行的指令'] [-r]
+# 前提：這台已經由 LB 團隊停用（lb-member.sh <主機> down）。順序：等 LB 那邊進來的連線排空 → -c 的檔案 scp 到那台的 /tmp/
+# → 在那台執行 -b → 重啟 confluent-kafka-rest（-r：改成重開機）→ 等到 REST 回 200。排空等不到就停下，什麼都不做
+h=$1; shift; copy=""; before=":"; reboot=0
+while getopts c:b:r o; do case $o in c) copy=$OPTARG;; b) before=$OPTARG;; r) reboot=1;; *) echo "用法：$0 <主機> [-c 檔案] [-b 指令] [-r]"; exit 2;; esac; done
+lb=$(getent hosts lb01.poc.lab | awk '{print $1}')
+for waited in $(seq 0 2 60); do n=$(ssh $h.poc.lab "ss -Htn state established '( sport = :8082 )'" | grep -c " $lb:"); [ "$n" = 0 ] && break; sleep 2; done
+[ "$n" = 0 ] || { echo "$h：60 秒後 LB 還有 $n 條連線進來，LB 團隊停用了嗎？沒有重啟"; exit 1; }
+if [ -n "$copy" ]; then scp -q $copy $h.poc.lab:/tmp/ || { echo "$h：複製檔案失敗，沒有重啟"; exit 1; }; fi
+ssh $h.poc.lab "$before" || { echo "$h：重啟前的步驟失敗，沒有重啟"; exit 1; }
+start=$(date +%s)
+if [ $reboot = 1 ]; then
+  ssh $h.poc.lab 'sudo systemctl reboot' 2>/dev/null; sleep 15
+  for i in $(seq 1 60); do ssh -o ConnectTimeout=5 $h.poc.lab true 2>/dev/null && break; sleep 5; done
+else
+  ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'
+fi
+for i in $(seq 1 60); do
+  code=$(curl -s -m 5 --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)
+  [ "$code" = 200 ] && break; sleep 3
+done
+echo "$h：排空等了 ${waited} 秒，$([ $reboot = 1 ] && echo 重開機 || echo 重啟)後 REST $code（約 $(( $(date +%s) - start )) 秒）"
+[ "$code" = 200 ]
+EOF
+chmod 0700 ~/conf/rest-restart.sh && echo rest-restart.sh ok
+```
+
+```out
+rest-restart.sh ok
+```
+
+演練一次：背景每 0.2 秒經 LB 打一次 REST，照五步走完，最後數非 200 的次數：
+
+```bash
+: > /tmp/lbprobe.log; nohup bash -c 'while :; do echo "$(date +%T) $(curl -s -m 5 --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w %{http_code} https://rest.poc.lab:8082/v3/clusters)" >> /tmp/lbprobe.log; sleep 0.2; done' >/dev/null 2>&1 & echo $! > /tmp/lbprobe.pid; echo "探測開始"
+```
+
+```out
+探測開始
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+kill $(cat /tmp/lbprobe.pid); sleep 1; echo "經 LB 打了 $(wc -l < /tmp/lbprobe.log) 次，非 200：$(grep -vc ' 200$' /tmp/lbprobe.log)"
+```
+
+```out
+經 LB 打了 … 次，非 200：0
+```
+
+> 對照：不排空、直接重啟兩台，同樣的探測 lab 實測 68 次裡 1 次失敗（請求剛好落在重啟的那一刻）。應用程式若用長連線（HTTP keep-alive），排空會等到它們斷線為止；60 秒還沒斷，腳本停下不重啟，要和應用程式團隊確認再做。
+
 # 13. 第十三站：Control Center
 
 @role 小安 | ops02 | cpadmin
@@ -2667,14 +2811,66 @@ kb01 MDS=200 after ~80s
 ```
 
 ```bash
-for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*5))s"
+ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*5))s"
 ```
 
 ```out
-rest01 REST=200
-rest02 REST=200
 c3 ui=200 after ~120s
 ```
+
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 ## 15.6 驗證：主機上沒有明文、provider 真的有去 Conjur
 
@@ -2986,7 +3182,7 @@ kc01: refs=11 plaintext=0 env=/etc/confluent/service.env
 @role 小安 | ops02 | cpadmin
 
 ```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"; done; for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 36); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*5))s"; echo "alice login: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 36); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*5))s"; echo "alice login: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
 ```
 
 ```out
@@ -2994,11 +3190,63 @@ kc01 active
 （3 行）
 kb01 MDS=200 after ~20s
 （4 行，20–50 秒）
-rest01 REST=200
-rest02 REST=200
 c3 ui=200 after ~80s
 alice login: 200
 ```
+
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 master key 不會出現在 `systemctl show`（它在 EnvironmentFile 裡，不是 `Environment=`），也不在任何 properties：
 
@@ -3137,7 +3385,7 @@ master key stored, hash 7d21e4…（和 16.2 那一把不同）
 然後照 16.5 再滾動重啟一次（指令相同），每台起得來就代表新 master key 解得開：
 
 ```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 36); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; echo "alice login after master key rotation: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; rm -f ~/secrets/security.properties.bak ~/secrets/master.key.bak
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 36); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; echo "alice login after master key rotation: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; rm -f ~/secrets/security.properties.bak ~/secrets/master.key.bak
 ```
 
 ```out
@@ -3145,11 +3393,63 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
-rest01 REST=200
-rest02 REST=200
 c3 ui=200
 alice login after master key rotation: 200
 ```
+
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 輪替完照 16.5 最後那個檢查再做一次：新的 passphrase（PVWA 現行版本）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
 
@@ -3250,7 +3550,7 @@ kc01: exec=/usr/local/bin/summon service.env=gone
 滾動重啟，然後從程序的環境變數證明 master key 在那裡、磁碟上卻沒有：
 
 ```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 main pid $p = $(ps -o comm= -p $p); java child has MASTER_KEY in env: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^CONFLUENT_SECURITY_MASTER_KEY=") ; on disk: $(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l) files"'
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 main pid $p = $(ps -o comm= -p $p); java child has MASTER_KEY in env: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^CONFLUENT_SECURITY_MASTER_KEY=") ; on disk: $(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l) files"'
 ```
 
 ```out
@@ -3258,11 +3558,63 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
-rest01 REST=200
-rest02 REST=200
 c3 ui=200
 kb01 main pid 7764 = summon; java child has MASTER_KEY in env: 1 ; on disk: 0 files
 ```
+
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 主程序是 Summon，Java 是它的子程序，`systemctl stop` 送的訊號 Summon 會轉給子程序，停機和原本一樣。現在主機上和 master key 有關的只剩 `/etc/conjur.identity`（主機的 Conjur 身分）：這就是 secret zero，和第 15 站的 host API key 是同一把。
 
@@ -3944,7 +4296,7 @@ kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 61 lines
 @role 小安 | ops02 | cpadmin
 
 ```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -sk --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"; done
+for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
 ```
 
 ```out
@@ -3952,9 +4304,62 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
-rest01 REST=200
-rest02 REST=200
 ```
+
+REST Proxy 照 12.1 一台一台重啟：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 沒帶帳密要被拒（401），帶了要看到指標；憑證鏈用銀行根憑證驗（不用 -k）：
 
@@ -4729,13 +5134,78 @@ kb01 MDS=200 9092=new 9095=new
 REST Proxy 與 C3（REST 的健康檢查用應用程式的**舊**憑證，證明舊 leaf 在換發期間仍然有效）：
 
 ```bash
-cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in rest01 rest02; do scp -q certs/cp-server.p12 certs/svc-rest.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters) 8082=$([ "$(served $h.poc.lab:8082)" = $NEW_SRV ] && echo new || echo OLD)"; done; scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
 ```
 
 ```out
-rest01 REST=200 8082=new
-rest02 REST=200 8082=new
 c3-01 UI=200 9021=new 9090=new
+```
+
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+REST Proxy 照 12.1 一台一台換：新的 `cp-server.p12`、`svc-rest.p12` 複製過去、裝好再重啟。
+
+```bash
+cd ~/pki/next && ~/conf/rest-restart.sh rest01 -c "certs/cp-server.p12 certs/svc-rest.p12" -b 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12'
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+cd ~/pki/next && ~/conf/rest-restart.sh rest02 -c "certs/cp-server.p12 certs/svc-rest.p12" -b 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12'
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+確認兩台 REST 都出示新憑證：
+
+```bash
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in rest01 rest02; do echo "$h 8082=$([ "$(served $h.poc.lab:8082)" = $NEW_SRV ] && echo new || echo OLD)"; done
+```
+
+```out
+rest01 8082=new
+rest02 8082=new
 ```
 
 ### 21.2.5 換成正本、交出去的那幾張
@@ -4833,7 +5303,7 @@ ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01
 ```bash
 cat > ~/conf/rolling-restart.sh <<'EOF'
 #!/usr/bin/env bash
-# 依序滾動重啟：controller → broker → REST Proxy → C3；一台健康了才做下一台
+# 依序滾動重啟：controller → broker → C3；一台健康了才做下一台。REST Proxy 不在這裡：照 12.1 一台一台先從 LB 停用再重啟
 APP_CERT=(--cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key)
 for h in kc01 kc02 kc03; do
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
@@ -4844,11 +5314,6 @@ for h in kb01 kb02 kb03 kb04; do
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
   for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done
   echo "$h MDS=$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
-done
-for h in rest01 rest02; do
-  ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest'
-  for i in $(seq 1 30); do [ "$(curl -s "${APP_CERT[@]}" -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done
-  echo "$h REST=$(curl -s "${APP_CERT[@]}" -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)"
 done
 ssh c3-01.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'
 for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done
@@ -4869,10 +5334,64 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
-rest01 REST=200
-rest02 REST=200
 c3-01 UI=200
 ```
+
+
+REST Proxy 照 12.1 一台一台重啟：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 > 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（第 18.4 站交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
 
@@ -4980,13 +5499,78 @@ kb01 MDS=200 9092=new 9095=new
 **21.2.4 REST Proxy 與 C3**
 
 ```bash
-cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in rest01 rest02; do scp -q certs/cp-server.p12 certs/svc-rest.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters) 8082=$([ "$(served $h.poc.lab:8082)" = $NEW_SRV ] && echo new || echo OLD)"; done; scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
 ```
 
 ```out
-rest01 REST=200 8082=new
-rest02 REST=200 8082=new
 c3-01 UI=200 9021=new 9090=new
+```
+
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+REST Proxy 照 12.1 一台一台換：新的 `cp-server.p12`、`svc-rest.p12` 複製過去、裝好再重啟。
+
+```bash
+cd ~/pki/next && ~/conf/rest-restart.sh rest01 -c "certs/cp-server.p12 certs/svc-rest.p12" -b 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12'
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+cd ~/pki/next && ~/conf/rest-restart.sh rest02 -c "certs/cp-server.p12 certs/svc-rest.p12" -b 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12'
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+確認兩台 REST 都出示新憑證：
+
+```bash
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in rest01 rest02; do echo "$h 8082=$([ "$(served $h.poc.lab:8082)" = $NEW_SRV ] && echo new || echo OLD)"; done
+```
+
+```out
+rest01 8082=new
+rest02 8082=new
 ```
 
 **21.2.5 換成正本**
@@ -5064,9 +5648,65 @@ cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pe
 ```out
 truststore：bank-root-g2
 kc01 active
-（滾動重啟 10 行，全部健康）
+（滾動重啟 8 行，全部健康；REST Proxy 在下面另外做）
 c3-01 UI=200
 ```
+
+
+REST Proxy 照 12.1 一台一台重啟：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 最後反向驗證：舊 CA 簽的憑證（21.2 第一次換發留在 `old-` 底下的那張應用程式憑證）連 REST Proxy 要被拒；新的要能用；AD、套件庫、保管庫照常（它們在階段二已經換成 G2）：
 
@@ -5142,9 +5782,65 @@ cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pe
 ```out
 truststore：bank-root-g2 bank-root-g3
 kc01 active
-（滾動重啟 10 行，全部健康）
+（滾動重啟 8 行，全部健康；REST Proxy 在下面另外做）
 c3-01 UI=200
 ```
+
+
+REST Proxy 照 12.1 一台一台重啟：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 ### 21.4.3 階段二之一：銀行換上新中繼，自己的伺服器換鏈
 
@@ -5212,13 +5908,78 @@ kb01 MDS=200 9092=new 9095=new
 REST Proxy 與 C3（C3 的 `cp-server.key` 沒變，照樣一起放，指令和 21.2.4 一致）：
 
 ```bash
-cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && for h in rest01 rest02; do scp -q certs/cp-server.p12 certs/svc-rest.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 30); do [ "$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h REST=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$h.poc.lab:8082/v3/clusters) 8082=$([ "$(via $h.poc.lab:8082)" = "$G3" ] && echo new || echo OLD)"; done; scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(via c3-01.poc.lab:9021)" = "$G3" ] && echo new || echo OLD) 9090=$([ "$(via c3-01.poc.lab:9090)" = "$G3" ] && echo new || echo OLD)"
+cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(via c3-01.poc.lab:9021)" = "$G3" ] && echo new || echo OLD) 9090=$([ "$(via c3-01.poc.lab:9090)" = "$G3" ] && echo new || echo OLD)"
 ```
 
 ```out
-rest01 REST=200 8082=new
-rest02 REST=200 8082=new
 c3-01 UI=200 9021=new 9090=new
+```
+
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+REST Proxy 照 12.1 一台一台換：新的 `cp-server.p12`、`svc-rest.p12` 複製過去、裝好再重啟。
+
+```bash
+cd ~/pki/next && ~/conf/rest-restart.sh rest01 -c "certs/cp-server.p12 certs/svc-rest.p12" -b 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12'
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+cd ~/pki/next && ~/conf/rest-restart.sh rest02 -c "certs/cp-server.p12 certs/svc-rest.p12" -b 'for f in cp-server.p12 svc-rest.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12'
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+確認兩台 REST 都出示新憑證：
+
+```bash
+cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && for h in rest01 rest02; do echo "$h 8082=$([ "$(via $h.poc.lab:8082)" = "$G3" ] && echo new || echo OLD)"; done
+```
+
+```out
+rest01 8082=new
+rest02 8082=new
 ```
 
 換成正本：私鑰不動，只換 `.crt`／`.p12`；舊的留在 `~/pki/old-<日期時間>/certs/`（階段三的反向驗證會用到）。緊急身分的 PEM 更新到保管庫；`app-legacy-billing` 的新 p12 交給應用程式團隊，**一定要在階段三之前換上**：
@@ -5294,9 +6055,65 @@ cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pe
 ```out
 truststore：bank-root-g3
 kc01 active
-（滾動重啟 10 行，全部健康）
+（滾動重啟 8 行，全部健康；REST Proxy 在下面另外做）
 c3-01 UI=200
 ```
+
+
+REST Proxy 照 12.1 一台一台重啟：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 反向驗證：**同一張 leaf、同一把私鑰**，配舊鏈（中繼由 G2 簽）要被拒，配新鏈要通過；AD、套件庫、保管庫照常：
 
@@ -5441,16 +6258,79 @@ source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --cer
 | Name | _confluent-command |
 ```
 
-兩台 REST Proxy 一台一台換（負載平衡會把流量送到另一台），最後是操作機自己的 `kafka-*` 與 `confluent` 指令：
+先換操作機自己的 `kafka-*` 與 `confluent` 指令：
 
 ```bash
-for h in rest01 rest02; do ssh $h.poc.lab 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; sudo systemctl restart confluent-kafka-rest'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://$h.poc.lab:8082/v3/clusters)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-kafka-rest') REST 200（約 $((i*5)) 秒）"; done; pkgs=$(rpm -qa 'confluent-*' --qf '%{NAME}-8.3.2 '); sudo dnf -q versionlock delete 'confluent-*' >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; echo "ops02 $(rpm -q confluent-server confluent-cli | paste -sd' ')"
+pkgs=$(rpm -qa 'confluent-*' --qf '%{NAME}-8.3.2 '); sudo dnf -q versionlock delete 'confluent-*' >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; echo "ops02 $(rpm -q confluent-server confluent-cli | paste -sd' ')"
 ```
 
 ```out
-rest01 confluent-kafka-rest-8.3.2-1.noarch REST 200（約 15 秒）
-rest02 confluent-kafka-rest-8.3.2-1.noarch REST 200（約 15 秒）
 ops02 confluent-server-8.3.2-1.noarch confluent-cli-8.3.2-1.x86_64
+```
+
+
+兩台 REST Proxy 照 12.1 一台一台換：先從 LB 停用、升級套件、重啟：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01 -b 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload'
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02 -b 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload'
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+for h in rest01 rest02; do echo "$h $(ssh $h.poc.lab 'rpm -q confluent-kafka-rest')"; done
+```
+
+```out
+rest01 confluent-kafka-rest-8.3.2-1.noarch
+rest02 confluent-kafka-rest-8.3.2-1.noarch
 ```
 
 第一段結束：照第 20 章 20.1–20.3 再驗一次（實測全數通過）。這時 features 還是 8.2，隨時可以照 22.9 退回。
@@ -5475,17 +6355,81 @@ kc01 java=/opt/java/jdk-25.0.5+8/bin/java Lag=0
 （3 台，每台約 15 秒）
 ```
 
-再 broker、REST Proxy、操作機：
+再 broker、操作機（REST Proxy 在下面另外做）：
 
 ```bash
-JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04 rest01 rest02; do case $h in kb*) unit=confluent-server; url=https://$h.poc.lab:8090/v1/metadata/id; opt="";; *) unit=confluent-kafka-rest; url=https://$h.poc.lab:8082/v3/clusters; opt="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key";; esac; scp -q "$JDK_TAR" $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo systemctl restart $unit"; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' $opt $url)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "$h java=$(ssh $h.poc.lab "sudo readlink /proc/\$(systemctl show $unit -p MainPID --value)/exe") 200（約 $((i*5)) 秒）under-replicated=$u"; done; sudo tar -xzf "$JDK_TAR" -C /opt/java && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && echo "ops02 $(java -version 2>&1 | head -1)"; echo "c3-01 $(ssh c3-01.poc.lab 'readlink /opt/java/current')"
+JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do case $h in kb*) unit=confluent-server; url=https://$h.poc.lab:8090/v1/metadata/id; opt="";; *) unit=confluent-kafka-rest; url=https://$h.poc.lab:8082/v3/clusters; opt="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key";; esac; scp -q "$JDK_TAR" $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo systemctl restart $unit"; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' $opt $url)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "$h java=$(ssh $h.poc.lab "sudo readlink /proc/\$(systemctl show $unit -p MainPID --value)/exe") 200（約 $((i*5)) 秒）under-replicated=$u"; done; sudo tar -xzf "$JDK_TAR" -C /opt/java && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && echo "ops02 $(java -version 2>&1 | head -1)"; echo "c3-01 $(ssh c3-01.poc.lab 'readlink /opt/java/current')"
 ```
 
 ```out
 kb01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 20 秒）under-replicated=0
-（broker 4 台、REST 2 台）
 ops02 openjdk version "25.0.5" … LTS
 c3-01 /opt/java/jdk-21.0.x+y
+```
+
+
+REST Proxy 照 12.1 一台一台換：先從 LB 停用、解壓新 JDK、切 `current`、重啟：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && ~/conf/rest-restart.sh rest01 -c "$JDK_TAR" -b "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current"
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && ~/conf/rest-restart.sh rest02 -c "$JDK_TAR" -b "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current"
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+for h in rest01 rest02; do echo "$h java=$(ssh $h.poc.lab 'readlink -f /opt/java/current')"; done
+```
+
+```out
+rest01 java=/opt/java/jdk-25.0.5+8
+rest02 java=/opt/java/jdk-25.0.5+8
 ```
 
 > 陷阱：走第 15 章（Conjur provider）的環境，provider 連 Conjur 靠的是 **JDK 自己的 `cacerts`**（15.3 匯入了銀行根）。新解壓的 JDK 25 沒有那份匯入，重啟前要照 15.3 對 `/opt/java/<新目錄>/lib/security/cacerts` 再匯一次，否則服務連不到 Conjur。走第 16 章的不受影響（本輪 lab 是第 16 章路徑，這一條沒有實測）。
@@ -6140,10 +7084,10 @@ kc01 更新 6 個；要重開機：否；要重啟的平台服務：無；conflu
 
 @role 小安 | ops02 | cpadmin
 
-REST 一台一台（另一台照常服務）；C3 修補期間畫面短暫不能用（只有一台）；操作機最後，自己修自己：
+REST 兩台先更新套件（這時不重啟），C3 修補期間畫面短暫不能用（只有一台），操作機最後、自己修自己；REST 的重啟在下面照 12.1 做：
 
 ```bash
-for h in rest01 rest02 c3-01; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-kafka-rest*) ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest';; *confluent-control-center*|*prometheus*|*alertmanager*) ssh $h.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done';; esac; done; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; bash ~/conf/os-patch-host.sh
+for h in rest01 rest02; do ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh | tee ~/conf/patch-$h.out; done; for h in c3-01; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-kafka-rest*) ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest';; *confluent-control-center*|*prometheus*|*alertmanager*) ssh $h.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done';; esac; done; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; bash ~/conf/os-patch-host.sh
 ```
 
 ```out
@@ -6153,6 +7097,62 @@ c3-01 更新 6 個；要重開機：否；要重啟的平台服務：無；confl
   REST 經 LB=200 C3=200
 ops02 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
 ```
+
+
+REST Proxy 的套件上面已經更新（JVM 不受影響）；重啟（或要重開機的話重開機）照 12.1 一台一台來。兩台都是「要重開機：否、要重啟的平台服務：無」時，這五步可以略過：
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest01 $(grep -q '要重開機：是' ~/conf/patch-rest01.out && echo -r)
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 小安 | ops02 | cpadmin
+
+```bash
+~/conf/rest-restart.sh rest02 $(grep -q '要重開機：是' ~/conf/patch-rest02.out && echo -r)
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 小安 | ops02 | cpadmin
 
 > 實測（2026-10-25，lab）：11 台各 6 個 OS 套件（含 openssh-server，修補過程中 ssh 連線不斷），Confluent 版本都沒變、不用重開機、沒有平台服務要重啟；之後第 20 章驗收全過。openssh-server 更新後 sshd 由 RPM 自己重啟，所以 `-s` 雖然會列 sshd，這裡只看平台服務。
 

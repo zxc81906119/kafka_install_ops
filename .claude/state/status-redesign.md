@@ -19,14 +19,12 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
   都通過，但都是在上述修正**之前**。第 16 章修正後在 lab 上重跑：passphrase 檢查兩次都「是」，16.10 bind 驗證 200。
 
 ## 下一步
-1. 客戶模式從零全書重跑（0–21、23–28），驗證 11.2、16.x、20.6、26.5 的新寫法；再看一次 Conjur 模式第 16 章。
-2. 升級演練：`~/kafka-lab/landing-extra/*` 搬回 `landing`，`run-upgrade-drill.sh`；再 `CP_VERSION=8.2.4 TO=17 run-customer.sh`
-   後 `run-full.sh customer 22 23`。
+1. ~~客戶模式從零全書重跑~~ 2026-10-25 22:40 通過：0–21 247 塊、23–28 34 塊，0 失敗；11.2／16.x／20.6／26.5 輸出逐行確認。之後再看一次 Conjur 模式第 16 章。
+2. 升級演練 2026-10-26 完成：手把手第 22 章（8.2.4 起點）12 塊全過；腳本版 run-upgrade-drill.sh 全段 38/38×4、直連 6053 筆 0 遺失、**REST 失敗 4 次**（02:13:33–36，JDK 25 段重啟 REST；手冊與腳本都沒有先從 LB 拿掉 REST，只靠 nginx max_fails）→ 待使用者決定排空做法。run-customer.sh 結束碼修正 f41f053。
 3. CyberArk 缺口 4：使用者決定不做（維持 20.5 離線保管）。
 - 從未 push。
 
 ## 環境狀態
-- lab: **使用中（Claude）**。第 16 章是在做完第 21 章的 lab 上倒回重跑的：稽核寫入（confluent-audit）的 SCRAM 在 kb* 上一直
-  失敗（16.3 舊寫法沒換 `AUDIT_PASSWORD`，已修），這個 lab 狀態不再用，下一輪從零重建。
+- lab: 閒置（升級演練結束，8.3.2 finalize、JDK 25）。複製進 landing 的升級套件已刪除（原檔在 landing-extra）。
 - 密碼檔：`~/kafka-lab/secrets.env`、`~/kafka-lab/pvwa/`；ops02 `~/secrets/`、`~/pki/store.pass`。
 - `install/tools/lint.sh` 沒有 shellcheck 時用 `koalaman/shellcheck:v0.10.0`。

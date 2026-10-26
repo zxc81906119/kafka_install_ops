@@ -296,6 +296,13 @@
 - 同日確認：cpadmin 先用 `NOPASSWD` sudo；CPM 的 reconcile 帳號不用 cpadmin。
 - 同日確認：super user 等級的私鑰（`svc-ops`、MDS token 簽章私鑰）**不另外放 PVWA safe**，維持 20.5「安裝完成後移到離線保管」。
 
+### REST Proxy 重啟前先從 LB 停用（2026-10-26 定案，lab 實測）
+
+- 升級演練（腳本版）換 JDK 時重啟 REST，經 LB 失敗 4 次：nginx 社群版只有被動檢查（`max_fails`），NGINX Plus 才有主動檢查；就算有主動檢查也是停了才發現。
+- 定案 A：每次重啟 REST 都是「LB 團隊停用 rest01 → 小安排空、重啟、200 → 恢復 rest01、停用 rest02 → … → 恢復」（手把手 12.1；lab 用 `~/kafka-lab/lb-member.sh` 扮演 LB 團隊，操作機 `~/conf/rest-restart.sh` 等 LB 連線歸零才動，60 秒沒歸零就停下）。lab 實測經 LB 每 0.2 秒一次：排空 99 次 0 失敗；對照組不排空 68 次 1 失敗。套用在 15.5、16.5、16.6、16.8、18.3、21（三處換證＋rolling-restart.sh 四處）、22.6、22.7、27.4。
+- 問銀行：LB 設備與變更時段的配合方式（問題清單 5.6）。
+- 待辦：`install/` 的 rolling_restart、22-upgrade、27-os-patch 也要照做；OP menu 重啟 REST 的項目同樣要先停用。
+
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
 **2026-10-25 進度（lab 實跑）**：license 監控（第 23 章＋`23-license.sh`）、controller 替換（第 24 章＋`24-controller-replace.sh`）、broker 縮減／擴充（第 25 章＋`25-broker-scale.sh`）、日常備份（第 26 章）、換鏈（21.4＋`21-cert-rotate.sh chain`）都已實作並實跑。補強：第 6 章資料碟檔案系統檢查、10.3 `java.io.tmpdir` 選配（kb04 實測）、第 10 章明確設定 `metadata.log.dir`（kc01、kb01 實測）、第 18 章 KRaft quorum 告警、第 19 章稽核 topic RF 3 確認、第 22 章 JDK 25 註記。
