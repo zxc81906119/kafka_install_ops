@@ -301,7 +301,8 @@
 - 升級演練（腳本版）換 JDK 時重啟 REST，經 LB 失敗 4 次：nginx 社群版只有被動檢查（`max_fails`），NGINX Plus 才有主動檢查；就算有主動檢查也是停了才發現。
 - 定案 A：每次重啟 REST 都是「LB 團隊停用 rest01 → 小安排空、重啟、200 → 恢復 rest01、停用 rest02 → … → 恢復」（手把手 12.1；lab 用 `~/kafka-lab/lb-member.sh` 扮演 LB 團隊，操作機 `~/conf/rest-restart.sh` 等 LB 連線歸零才動，60 秒沒歸零就停下）。lab 實測經 LB 每 0.2 秒一次：排空 99 次 0 失敗；對照組不排空 68 次 1 失敗。套用在 15.5、16.5、16.6、16.8、18.3、21（三處換證＋rolling-restart.sh 四處）、22.6、22.7、27.4。
 - 問銀行：LB 設備與變更時段的配合方式（問題清單 5.6）。
-- 待辦：`install/` 的 rolling_restart、22-upgrade、27-os-patch 也要照做；OP menu 重啟 REST 的項目同樣要先停用。
+- 腳本（49690bb）：rolling_restart／22／27 重啟 REST 前寫交握檔 `~/lb-requests/<主機>.down|up` 等 LB 團隊回覆（`LB_CONTROL=handshake|none`），lab 由 `bank-sim lb-watch` 回覆。OP menu 22（638dd07）：那台還有 LB 連線就拒絕。
+- 實測：腳本版升級演練（2026-10-26）REST 1232 次 **0 失敗**（之前 4 失敗）、直連 6384 筆 0 遺失；手把手全書（客戶）五步 14 輪全部 200。
 
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
