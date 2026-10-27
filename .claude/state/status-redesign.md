@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-25 晚上（lab 使用中：Claude）
+Updated: 2026-10-27（lab 關閉：Docker Desktop 沒開；沒有人在用）
 
 ## 現在在做什麼
 手把手（`docs/journey-src/journey.md`，第 0–28 章，三種模式 customer／conjur／provider）＋ `install/` 一章一支的腳本，
@@ -29,6 +29,8 @@ Updated: 2026-10-25 晚上（lab 使用中：Claude）
    - ② 2026-10-26 14:35 通過：腳本版升級演練，LB 交握 8 次全部自動回覆；直連 6384 筆 0 遺失、**REST 1232 次 0 失敗**（上一輪沒排空是 4 失敗）、驗收 38/38×4。
    - ③ Conjur 手把手 0–21、23–28 通過（319+39 塊，0 失敗）。
    - ④ provider 0–22：2026-10-27 從零重跑通過（324 塊、253 執行、0 失敗，五步 20 輪 REST 全 200）。上一輪在 21.3.3 倒掉（JDK cacerts 沒有新根，PKIX path building failed）已修（423a97f）：21.3.2／21.3.4／21.4.2／21.4.5 的 provider 專用 cacerts 區塊逐台驗證（加新根後每台 2、刪舊根後每台 1），階段二重啟後 controller／broker 全 active、MDS 200。第 13 章新加的 otlp 設定與標籤檢查也通過（剛啟動 5，穩定後 7）。
+6. 2026-10-27 和客戶討論後的主機存取做法（PSMP 代登 root、一組 SSH 金鑰放操作機 root 0400、每台 `cpuser`、sudoers 白名單、私鑰不放 CyberArk 也不備份）已記在 redesign/README.md「和客戶討論後的主機存取做法」；**手冊、install/、OP menu 還是舊設計（cpadmin、ssh-agent、SSH Key Manager）**，客戶正式採用後才改，改了要從零重跑。產出：`docs/Confluent-CyberArk登入與主機存取設計.docx`（來源 docs/access-src/）、`docs/Confluent-Kafka客戶資訊整理.pptx`（來源 docs/deck-src/customer-info.js）。細節見 log/2026-10-27-access-design-docs.md。
+7. 待辦（要 lab）：驗證換金鑰／公鑰佈署／鎖定密碼只靠金鑰的指令；install/steps/17-opmenu.sh 的 sudoers 改成逐一列出服務（現行 `confluent-*` 會放行多個 unit）；客戶與 Conjur 模式重跑第 13 章（otlp 修正只在 provider 驗證過）；provider 模式第 22 章。待使用者決定：webhook 方案（A／A＋D／C／E）與是否寫進第 18 章、`docs/evidence/` 是否納入版控。
 - 從未 push。
 
 ## 環境狀態

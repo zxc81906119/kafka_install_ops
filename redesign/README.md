@@ -323,6 +323,23 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 
 選項（待使用者決定，之前使用者說先不處理）：A 只用 C3 UI（預設格式，要特定格式得加轉換點）；C 方案如上；A+D C3 UI webhook 指到轉換點；銀行自己的 Alertmanager／Dynatrace Events API。詳見 2026-10-26 對話：Dynatrace 對應（ProblemTitle→alertname／summary、ProblemDetailsText→annotations.description（我們規則缺，要補）、State→firing/resolved 轉 OPEN/RESOLVED、ProblemSeverity→要接收端決定、ProblemImpact→要在規則加 impact 標籤）。
 
+### 和客戶討論後的主機存取做法（2026-10-27；手冊與腳本尚未改）
+
+和客戶討論後的做法，與上面「操作機對各主機的 SSH 金鑰，交給 CyberArk 管」那一段（金鑰只放 ssh-agent、不落地、SSH Key Manager 換金鑰）不同。客戶的 CyberArk：有 PAM（PVWA、PSMP、CPM），人員用 AD 帳密登入並已套用 MFA；沒有 CP、CCP、Conjur（對外文件一律不提之後會不會買）。
+
+1. **人員進操作機**：登入 CyberArk 後由 PSMP 代登進操作機，進去就是 root；沒有另外的堡壘機。
+2. **一組 SSH 金鑰**：私鑰只放操作機 root（0400），連各主機（含操作機自己）都用它；公鑰放各主機安裝與維運 user 的 `authorized_keys`，可加 `from="操作機 IP"`、`restrict`、`pty`；登入不輸入密碼。
+3. **安裝與維運 user 每台都叫 `cpuser`**（取代 cpadmin）：本機帳號、鎖定密碼、只靠金鑰、sshd 對它關閉密碼驗證；每台相同 UID／GID。
+4. **sudo**：sudoers 限制指令、NOPASSWD。安裝與升級期是全權（`/etc/sudoers.d/cpuser`），交付後只留窄規則（`cpuser-ops`：重啟、查看狀態、查日誌）。窄規則逐一列出服務名稱，不用 `confluent-*`：sudoers 的 `*` 會比對空格，`systemctl restart confluent-* ` 會連 `confluent-server sshd` 一起放行。`install/steps/17-opmenu.sh` 現行規則還是萬用字元，待改。
+5. **私鑰不放 CyberArk、不另外備份**：操作機重建時重新產生金鑰對，由 OS 團隊重新佈署公鑰。換金鑰人工做，新舊並存、不中斷（加新公鑰 → 逐台測新金鑰 → 換私鑰 → 刪舊公鑰）。
+6. **OP menu**：OS 身分是 root，進選單時再用本人 AD 帳密。Kafka 動作走本人帳密，權限與稽核在 Kafka 端強制；碰主機那段在 root 前提下只是流程控管，繞得過，追溯靠 CyberArk 登入紀錄與 PSMP 錄影。討論過「OP menu 改依 OS 帳號（op／sp 開頭）分選單」：那要 PSMP 代登成角色帳號、私鑰改由專用服務帳號持有，也會放棄「Kafka 動作記到本人」；本案不採用。
+7. **CPM 與零停機輪替**：CPM 還在，所以 A/B 兩組帳密與 CPM 自動輪替仍衝突（CPM 不知道哪組在用）。`svc-mds-bind` 維持單帳號、CPM 輪替，接受 MDS 查 AD 的短暫失敗；要零停機才改 A/B、關掉該帳號的 CPM 自動變更。SCRAM 應用帳號 CPM 沒有 Kafka plugin，一律人工。
+8. **客戶提到「私鑰放不同 file system」**：先不討論，不放進文件。我方判斷：分開本身沒有安全效果（人員是 root，已掛載的都讀得到）；要防離線讀取要靠加密，要防備份外流要排除備份。
+
+**尚未改的地方**（客戶正式採用後才改，改了要從零重跑）：手冊 3.1／16.x 的 ssh-agent 貼法、20.6 SSH Key Manager 演練、cpadmin 全部改 cpuser；`install/` 腳本與 `install/lab/bank-sim.sh`；OP menu 的 ssh-agent 流程；sudoers 窄規則改成逐一列出。
+
+**已產出的文件**：`docs/Confluent-CyberArk登入與主機存取設計.docx`（資拓宏宇風格，來源 `docs/access-src/`，`node ../journey-src/build.js access.md ../<輸出>.docx ./diagrams.js`）、`docs/Confluent-Kafka客戶資訊整理.pptx`（來源 `docs/deck-src/customer-info.js`，16 頁，桌面草稿重新分析版，修正對照在最後一頁）。換金鑰、公鑰佈署、鎖定密碼只靠金鑰登入的指令尚未在 lab 驗證。
+
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 
 **2026-10-25 進度（lab 實跑）**：license 監控（第 23 章＋`23-license.sh`）、controller 替換（第 24 章＋`24-controller-replace.sh`）、broker 縮減／擴充（第 25 章＋`25-broker-scale.sh`）、日常備份（第 26 章）、換鏈（21.4＋`21-cert-rotate.sh chain`）都已實作並實跑。補強：第 6 章資料碟檔案系統檢查、10.3 `java.io.tmpdir` 選配（kb04 實測）、第 10 章明確設定 `metadata.log.dir`（kc01、kb01 實測）、第 18 章 KRaft quorum 告警、第 19 章稽核 topic RF 3 確認、第 22 章 JDK 25 註記。

@@ -7,21 +7,22 @@
 const fs = require('fs');
 const path = require('path');
 const { Resvg } = require('@resvg/resvg-js');
-const D = require('./diagrams');
+// 不帶參數：手把手。其他文件：node build.js <來源.md> <輸出.docx> [diagrams.js]
+const D = require(process.argv[4] ? path.resolve(process.argv[4]) : './diagrams');
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell,
   WidthType, ShadingType, BorderStyle, LevelFormat, TableOfContents, Footer, Header, PageNumber,
   PageBreak, TabStopType, ImageRun,
 } = require('docx');
 
-const SRC = path.join(__dirname, 'journey.md');
-const OUT = path.join(__dirname, '..', 'Confluent-安裝旅程-手把手.docx');
+const SRC = process.argv[2] ? path.resolve(process.argv[2]) : path.join(__dirname, 'journey.md');
+const OUT = process.argv[3] ? path.resolve(process.argv[3]) : path.join(__dirname, '..', 'Confluent-安裝旅程-手把手.docx');
 
-const FONT = 'Microsoft JhengHei';
+let FONT = 'Microsoft JhengHei';
 const MONO = 'Consolas';
 const C = { ink: '1F2937', muted: '6B7280', accent: '0F6E56', codeBg: 'F3F4F6', codeBorder: 'D1D5DB',
   outBg: 'F8FAFC', outBorder: 'CBD5E1', noteBg: 'EFF6FF', noteBar: '3B82F6', warnBg: 'FFF7ED', warnBar: 'F59E0B', headBg: 'E5E7EB',
-  usBg: 'E1F5EE', usInk: '085041', bankBg: 'FAEEDA', bankInk: '633806' };
+  usBg: 'E1F5EE', usInk: '085041', bankBg: 'FAEEDA', bankInk: '633806', headInk: '1F2937' };
 const PAGE_W = 11906, MARGIN = 1134, CONTENT_W = PAGE_W - 2 * MARGIN;
 
 function runs(text, base = {}) {
@@ -116,7 +117,7 @@ function table(rows) {
     children: r.map((t, i) => new TableCell({ width: { size: widths[i], type: WidthType.DXA }, borders,
       shading: head ? { type: ShadingType.CLEAR, fill: C.headBg, color: 'auto' } : undefined,
       margins: { top: 50, bottom: 50, left: 90, right: 90 },
-      children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: runs(t || '', { size: 18, bold: head }) })] })) });
+      children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: runs(t || '', head ? { size: 18, bold: true, color: C.headInk } : { size: 18 }) })] })) });
   return [new Table({ width: { size: CONTENT_W, type: WidthType.DXA }, columnWidths: widths, rows: [mk(header, true), ...body.map(r => mk(r, false))] }),
     new Paragraph({ spacing: { before: 0, after: 120 }, children: [] })];
 }
@@ -196,7 +197,10 @@ function parse(md) {
 function cover(meta) {
   const p = (text, opts) => new Paragraph({ alignment: AlignmentType.LEFT, ...opts, children: [new TextRun({ text, ...opts.run })] });
   return [
-    new Paragraph({ spacing: { before: 2600 }, children: [] }),
+    ...(meta.logo ? [new Paragraph({ spacing: { after: 120 }, children: [new ImageRun({ type: 'png', data: fs.readFileSync(path.resolve(path.dirname(SRC), meta.logo)), transformation: { width: 82, height: 74 } })] })] : []),
+    ...(meta.company ? [p(meta.company, { spacing: { before: 0, after: 0 }, run: { color: C.accent, size: 30, bold: true } }),
+      new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 24, color: C.brand || C.accent, space: 1 } }, spacing: { after: 0 }, children: [] })] : []),
+    new Paragraph({ spacing: { before: meta.company ? 2000 : 2600 }, children: [] }),
     p(meta.kicker, { spacing: { after: 200 }, run: { color: C.accent, size: 24, bold: true } }),
     p(meta.title, { spacing: { after: 240 }, run: { size: 52, bold: true, color: C.ink } }),
     p(meta.subtitle, { spacing: { after: 600 }, run: { size: 26, color: C.muted } }),
@@ -210,6 +214,7 @@ function cover(meta) {
 const md = fs.readFileSync(SRC, 'utf8');
 const metaMatch = /^<!--meta\n([\s\S]*?)\n-->\n/.exec(md);
 const meta = JSON.parse(metaMatch[1]);
+if (meta.theme) { Object.assign(C, meta.theme.colors || {}); if (meta.theme.font) FONT = meta.theme.font; }
 const body = parse(md.slice(metaMatch[0].length));
 
 const doc = new Document({
@@ -233,7 +238,7 @@ const doc = new Document({
   sections: [{
     properties: { titlePage: true, page: { size: { width: PAGE_W, height: 16838 }, margin: { top: 1134, bottom: 1134, left: MARGIN, right: MARGIN } } },
     headers: { default: new Header({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: meta.header, size: 16, color: C.muted })] })] }) },
-    footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: [PageNumber.CURRENT, ' / ', PageNumber.TOTAL_PAGES], size: 16, color: C.muted })] })] }) },
+    footers: { default: new Footer({ children: [new Paragraph({ alignment: meta.company ? AlignmentType.LEFT : AlignmentType.CENTER, tabStops: [{ type: TabStopType.RIGHT, position: CONTENT_W }], children: [...(meta.company ? [new TextRun({ text: meta.company, size: 16, color: C.muted }), new TextRun({ text: '\t', size: 16 })] : []), new TextRun({ children: [PageNumber.CURRENT, ' / ', PageNumber.TOTAL_PAGES], size: 16, color: C.muted })] })] }) },
     children: [...cover(meta), ...body],
   }],
 });

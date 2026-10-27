@@ -325,4 +325,6 @@ D.upgrade = () => svg(800, 300, [
   box(540, 190, 240, 80, "每台的步驟", ["versionlock 解開 → 換套件 → 鎖回", "daemon-reload → 重啟 → 等健康"], "gray"),
 ].join(""));
 
+// helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
+Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;
