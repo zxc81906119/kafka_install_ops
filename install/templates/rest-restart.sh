@@ -10,6 +10,8 @@ for waited in $(seq 0 2 60); do n=$(ssh $h.poc.lab "ss -Htn state established '(
 if [ -n "$copy" ]; then scp -q $copy $h.poc.lab:/tmp/ || { echo "$h：複製檔案失敗，沒有重啟"; exit 1; }; fi
 ssh $h.poc.lab "$before" || { echo "$h：重啟前的步驟失敗，沒有重啟"; exit 1; }
 start=$(date +%s)
+# lab 的主機是容器：共用 WSL2 的核心，systemctl reboot 會失敗（Could not activate remote peer），所以 -r 在容器上改成重啟服務
+if [ $reboot = 1 ] && ssh $h.poc.lab 'systemd-detect-virt -cq'; then reboot=0; echo "$h：這台是容器，不能重開機，改重啟 confluent-kafka-rest"; fi
 if [ $reboot = 1 ]; then
   ssh $h.poc.lab 'sudo systemctl reboot' 2>/dev/null; sleep 15
   for i in $(seq 1 60); do ssh -o ConnectTimeout=5 $h.poc.lab true 2>/dev/null && break; sleep 5; done

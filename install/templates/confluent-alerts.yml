@@ -5,7 +5,7 @@
 # "source:" says where the rule comes from:
 #   official   = Confluent jmx-monitoring-stacks prometheus-alerts/ (kept, sometimes with the expression fixed for KRaft)
 #   confluent  = Confluent's monitoring guidance (docs.confluent.io "Monitor Kafka", "KRaft metrics")
-#   ours       = added for this installation, backed by a metric that really exists on Confluent Server 8.3.2 / C3 2.6.1
+#   ours       = added for this installation, backed by a metric that really exists on Confluent Server 8.3.2 / C3 2.6.1 (the migration target; re-check 17.7 after migrating from the 8.2.4 baseline)
 # Thresholds and "for:" are starting points: tune them to the bank's paging policy and silence during planned restarts.
 groups:
   - name: confluent-availability

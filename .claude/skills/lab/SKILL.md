@@ -11,7 +11,9 @@ Docker Desktop VM has ~10.7 GB RAM: run nothing else alongside.
 
 - Start/stop: `cd ~/kafka-lab && docker compose -f compose.yml up -d|stop`.
 - From zero: `bash docs/journey-src/tools/run-full.sh customer` (tears down everything except
-  `~/kafka-lab/landing` and `landing-extra`) or `bash install/lab/run-customer.sh`.
+  `~/kafka-lab/landing` and `bank-os`; an old `landing-extra` is merged into `landing`) or `bash install/lab/run-customer.sh`.
+  Both run the **whole path**: baseline (CP 8.2.4, C3 2.5.1, JDK 21, OS 9.6) then migration (chapter 21 → 8.3.2 / C3 2.6.1 / JDK 25, chapter 26 → OS 9.8, chapter 27 C3 swap).
+  Images: `lab-node:96`, `lab-web:96` (never the old `lab-node:1`). Hosts are containers: no real reboot (chapter 26 restarts the platform services instead).
 - Run logs: `~/kafka-lab-runs/`; check them with `docs/journey-src/tools/scan-log.sh <log>`.
 
 ## Entering hosts

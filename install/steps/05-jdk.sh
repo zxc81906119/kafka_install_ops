@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 第 5 站：JDK 21 —— 銀行給的 tar 解到 /opt/java/<版本>，/opt/java/current 指過去，alternatives + profile.d
+# 第 5 站：JDK（安裝基底 JDK_MAJOR，預設 21） —— 銀行給的 tar 解到 /opt/java/<版本>，/opt/java/current 指過去，alternatives + profile.d
 # where: ops02 （root）
 #
 # 做什麼：所有設定一律寫 /opt/java/current，以後換版只改這個連結；java、keytool 用 alternatives 登記（RHEL 標準做法）；
@@ -12,11 +12,11 @@ source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 
 section "壓縮檔與頂層目錄"
-# bank/ 裡可能同時有新舊幾版（之後的 JDK 修補也放這裡）：依版本號排序挑最新的
-JDK_TAR=$(ls "$LANDING"/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz 2>/dev/null | sort -V | tail -1)
+# bank/ 裡有基底（21）與遷移目標（25，第 21 章才用）兩個主版本，之後的 JDK 修補也放這裡：只挑 JDK_MAJOR 的，依版本號排序挑最新的
+JDK_TAR=$(ls "$LANDING"/bank/OpenJDK"${JDK_MAJOR}"U-jdk_x64_linux_hotspot_*.tar.gz 2>/dev/null | sort -V | tail -1)
 [ -n "$JDK_TAR" ] || die "$LANDING/bank 裡沒有 JDK tar"
 (cd "$LANDING/bank" && sha256sum -c --quiet "$(basename "$JDK_TAR").sha256") || die "JDK sha256 不符"
-JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1)   # 例如 jdk-21.0.12+1
+JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1)   # 例如 jdk-21.0.13+9
 ok "tar=$(basename "$JDK_TAR") dir=$JDK_DIR"
 
 # 每台主機上要做的事（操作機本機與遠端共用這一段）。
@@ -54,7 +54,7 @@ echo "$(java -version 2>&1 | head -1) JAVA_HOME=$JAVA_HOME"
 EOF
 )
   case $result in
-    *'version "21'*"JAVA_HOME=/opt/java/current") ok "$host: $result";;
+    *"version \"$JDK_MAJOR"*"JAVA_HOME=/opt/java/current") ok "$host: $result";;
     *) fail "$host: $result";;
   esac
 done

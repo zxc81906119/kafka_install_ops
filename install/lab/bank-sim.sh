@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # install/lab/bank-sim.sh — lab 專用：在 Windows Git Bash 扮演「銀行」，做手把手文件裡橘色標籤的事。
 # 正式環境沒有這支；安裝腳本只會印「請銀行做」。lab 依 docs/journey-src/journey.md 第 0 章建好（~/kafka-lab）。
+#   bash bank-sim.sh landing-layout 把舊的落地區版面（8.3.2 在 rpm/、8.2.4 在 landing-extra/）整理成 rpm/ = 基底、rpm-target/ = 目標
 #   bash bank-sim.sh push      把 install/ 送到 ops02（root，/root/install）與 dl01（root）
+#   bash bank-sim.sh os-content 3.2 銀行 OS 團隊備 OS 內容（拋棄式容器）：~/kafka-lab/bank-os/9.6（安裝基底的完整套件庫）、9.8-updates（9.6 主機升 9.8 需要的更新）、9.8（兩者合併的套件庫）
 #   bash bank-sim.sh intake    2.2 檔案交換：落地區 → ops02 ~/landing（唯讀）
 #   bash bank-sim.sh prepare   3.1 各主機建 cpuser＋sshd 設定＋公鑰（from=）＋安裝期 sudo、3.2 OS 套件庫＋根憑證信任、3.4 AD、3.5 NTP 與 LB
 #   bash bank-sim.sh sign      9.2 銀行 CA 簽 ops02 ~/pki/requests/*.csr → ~/pki/incoming/
+#   bash bank-sim.sh os-sync   26.5 銀行把套件庫同步到 OS_TARGET_VERSION（9.8）：把 os/9.8 換上 repo01 的 /os/
 #   bash bank-sim.sh reset     down -v 後重新 up（從零）；dl01 保留
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
@@ -16,6 +19,27 @@ as_root_on() { docker exec "$(container_of "$1")" bash -c "$2"; }   # 在某台�
 as_root_on_ops() {   # 在操作機以 root 跑一段指令（人員經 PSMP 登入操作機就是 root；lab 直接 docker exec 進去）
   docker exec -w /root "$(container_of "$OPS_HOST")" bash -c "$1"; }
 announce() { printf '\n[bank] %s\n' "$*"; }
+NODE_IMAGE=${NODE_IMAGE:-lab-node:96}   # 主機映像（手把手 0.5.1）；9.6 的 tag 和舊的 9.8 映像分開，才不會誤用舊映像
+OS_DIR=$LAB/bank-os                     # 銀行套件庫的內容（不是我們交付的檔案，所以不在落地區）：9.6（基底）、9.8-updates（更新集合）、9.8（合併後的完整套件庫）
+
+# 落地區版面（遷移主線）：rpm/ = 安裝基底、rpm-target/ = 遷移目標、bank/ = 兩個 JDK、c3/ = 第 27 章帶進來的單一 C3 版本、os/ = 銀行套件庫的內容（lab 才有）。
+# 舊版面（8.3.2 在 rpm/、8.2.4 在 ~/kafka-lab/landing-extra/）整理成新版面；已經是新版面就什麼都不做。只搬檔案，不下載、不刪下載好的東西
+landing_layout() {
+  local landing=$LAB/landing extra=$LAB/landing-extra file
+  announce "落地區版面：rpm/（$CP_VERSION）、rpm-target/（$CP_TARGET_VERSION）、bank/（JDK $JDK_MAJOR、$JDK_TARGET_MAJOR）"
+  mkdir -p "$landing/rpm" "$landing/rpm-target" "$landing/bank"
+  # 目標版本的檔案如果還在 rpm/（舊版面）：搬到 rpm-target/
+  for file in "$landing"/rpm/*-"$CP_TARGET_VERSION"-1.* "$landing"/rpm/confluent-control-center-next-gen-"$C3_TARGET_VERSION"-1.*; do
+    [ -f "$file" ] && mv "$file" "$landing/rpm-target/" && echo "rpm/ → rpm-target/：$(basename "$file")"
+  done
+  # landing-extra（舊的升級演練起點）的 8.2.4 與 JDK 25 併進來；用不到的舊 JDK 21 小版本留在原地
+  if [ -d "$extra" ]; then
+    for file in "$extra"/rpm/*-"$CP_VERSION"-1.*; do [ -f "$file" ] && [ ! -e "$landing/rpm/$(basename "$file")" ] && mv "$file" "$landing/rpm/" && echo "landing-extra/rpm → rpm/：$(basename "$file")"; done
+    for file in "$extra"/bank/OpenJDK"$JDK_TARGET_MAJOR"U-*; do [ -f "$file" ] && [ ! -e "$landing/bank/$(basename "$file")" ] && mv "$file" "$landing/bank/" && echo "landing-extra/bank → bank/：$(basename "$file")"; done
+    rmdir "$extra/rpm" "$extra/bank" "$extra" 2>/dev/null || echo "landing-extra 還剩 $(find "$extra" -type f | wc -l) 個檔（舊版 JDK 等，不會再用到；確認後可整個刪掉）"
+  fi
+  echo "rpm/ $(ls "$landing"/rpm | wc -l) 個、rpm-target/ $(ls "$landing"/rpm-target | wc -l) 個（01 站會補齊 C3 與缺的檔案）"
+}
 
 push() {
   announce "install/ → $OPS_HOST:/root/install、dl01:/root/install"
@@ -49,6 +73,48 @@ printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$CPUSER" > "/etc/sudoers.d/$CPUSER"; chmo
 BANK
 }
 
+# 3.2 / 26.5：銀行 OS 團隊備 OS 內容。全部在拋棄式容器（$NODE_IMAGE，乾淨的 9.6）裡做，結果放 ~/kafka-lab/bank-os/（銀行的東西，不經檔案交換進操作機）：
+#   os/9.6          平台要用的 OS 套件（chrony、firewalld、cyrus-sasl…加相依）＋索引；用 Rocky vault 的 9.6 內容（預設的 repo 會跟著最新小版本走，不能用）
+#   os/9.8-updates  「9.6 主機（裝了上面那些套件）升到 9.8 要的更新」：在容器裡把 9.6 套件裝起來，再對 pub/rocky/9.8 做 dnf update --downloadonly
+#   os/9.8          上面兩者合併＋索引 = 銀行把套件庫同步到 9.8 之後的樣子（os-sync 用）
+# 先下載、再裝工具（順序反了會漏掉工具自己的相依）。已經備好的不重做。
+os_content() {
+  local base=$OS_BASE_VERSION target=$OS_TARGET_VERSION
+  if [ -f "$OS_DIR/$target/repodata/repomd.xml" ] && [ -f "$OS_DIR/$base/repodata/repomd.xml" ]; then announce "OS 內容已備好：$OS_DIR（$base、$target-updates、$target）"; return 0; fi
+  announce "OS 內容：$base 完整套件庫、$base→$target 更新集合（拋棄式容器 lab-mig-oscontent，用完即刪）"
+  rm -rf "$OS_DIR"; mkdir -p "$OS_DIR"
+  docker rm -f lab-mig-oscontent >/dev/null 2>&1
+  docker run --rm --name lab-mig-oscontent -e BASE="$base" -e TARGET="$target" -v "$(windows_path "$OS_DIR"):/out" "$NODE_IMAGE" bash -c '
+set -e
+BASE_REPOS="--disablerepo=* --enablerepo=vault${BASE//./}-baseos,vault${BASE//./}-appstream,vault${BASE//./}-extras"
+t0=$(date +%s)
+ok=0; for try in 1 2 3; do dnf -q $BASE_REPOS download --resolve --arch x86_64 --arch noarch --destdir /out/$BASE/Packages chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion && { ok=1; break; }; echo "鏡像站還沒同步好，60 秒後重試（第 $try 次）" >&2; dnf -q clean metadata; sleep 60; done; [ $ok = 1 ]
+# 工具與「已裝好這批套件的 9.6 主機」是同一件事：全部從剛下載的檔案裝
+dnf -q -y --disablerepo="*" install /out/$BASE/Packages/*.rpm >/dev/null 2>&1
+createrepo_c -q /out/$BASE
+echo "$BASE：$(ls /out/$BASE/Packages | wc -l) 個 RPM，$(du -sm /out/$BASE | cut -f1) MB，$(( $(date +%s) - t0 )) 秒"
+t0=$(date +%s)
+printf "[r-target-baseos]\nname=Rocky $TARGET BaseOS\nbaseurl=https://dl.rockylinux.org/pub/rocky/$TARGET/BaseOS/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n[r-target-appstream]\nname=Rocky $TARGET AppStream\nbaseurl=https://dl.rockylinux.org/pub/rocky/$TARGET/AppStream/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n[r-target-extras]\nname=Rocky $TARGET extras\nbaseurl=https://dl.rockylinux.org/pub/rocky/$TARGET/extras/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n" > /etc/yum.repos.d/rocky-target.repo
+TARGET_REPOS="--disablerepo=* --enablerepo=r-target-baseos,r-target-appstream,r-target-extras"
+mkdir -p /out/$TARGET-updates/Packages /tmp/dl
+# keepcache：dnf 裝完會把下載的檔從下載目錄刪掉；這裡只下載不安裝，仍然先複製一份再建索引
+dnf -q -y $TARGET_REPOS --setopt=keepcache=1 update --downloadonly --downloaddir /tmp/dl >/dev/null 2>&1
+cp -a /tmp/dl/. /out/$TARGET-updates/Packages/
+createrepo_c -q /out/$TARGET-updates
+echo "$TARGET-updates：$(ls /out/$TARGET-updates/Packages | wc -l) 個 RPM，$(du -sm /out/$TARGET-updates | cut -f1) MB，$(( $(date +%s) - t0 )) 秒"
+mkdir -p /out/$TARGET/Packages && cp -a /out/$BASE/Packages/. /out/$TARGET/Packages/ && cp -a /out/$TARGET-updates/Packages/. /out/$TARGET/Packages/ && createrepo_c -q /out/$TARGET
+echo "$TARGET（合併）：$(ls /out/$TARGET/Packages | wc -l) 個 RPM"'
+}
+
+# 26.5（lab）：銀行把套件庫同步到 OS_TARGET_VERSION：os/9.8 換上 repo01 的 /os/（正式環境是 Satellite／Nexus 同步，或 reposync 後 createrepo）
+os_sync() {
+  [ -f "$OS_DIR/$OS_TARGET_VERSION/repodata/repomd.xml" ] || { echo "$OS_DIR/$OS_TARGET_VERSION 沒有：先 bash bank-sim.sh os-content"; return 1; }
+  announce "26.5 銀行套件庫同步到 $OS_TARGET_VERSION：$(ls "$OS_DIR/$OS_TARGET_VERSION/Packages" | wc -l) 個 RPM"
+  as_root_on "$REPO_HOST" 'rm -rf /var/www/repo/os/*'
+  docker cp "$(windows_path "$OS_DIR/$OS_TARGET_VERSION")/." "$(container_of "$REPO_HOST"):/var/www/repo/os/"
+  as_root_on "$REPO_HOST" 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os/Packages | wc -l'
+}
+
 prepare() {
   # 3.1：操作機（root）已在 /secure/ssh 產生金鑰對（第 3 站）。公鑰行 = from="<操作機 IP>,127.0.0.1,::1" + 公鑰；
   # OS 團隊在每台主機（含操作機自己）建 cpuser 並放這一行；repo01 的 repodeploy 放同一行
@@ -71,18 +137,11 @@ prepare() {
     docker exec "$(container_of repo01)" systemctl restart httpd
   fi
 
-  announce "3.2 OS 套件庫（repo01 /os/）：有現成的 $LAB/bank-os-repo 就直接用，沒有才從 Rocky repo 抓"
-  if [ ! -f "$LAB/bank-os-repo/repodata/repomd.xml" ]; then
-    docker run --rm -v "$(windows_path "$LAB/bank-os-repo"):/out" lab-node:1 bash -c '
-set -e
-R="--disablerepo=* --enablerepo=baseos,appstream,extras"
-ok=0; for try in 1 2 3; do dnf -q $R download --resolve --arch x86_64 --arch noarch --destdir /out/Packages chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion && { ok=1; break; }; echo "鏡像站還沒同步好，60 秒後重試（第 $try 次）" >&2; dnf -q clean metadata; sleep 60; done; [ $ok = 1 ]
-dnf -q -y $R install createrepo_c >/dev/null
-createrepo_c -q /out
-ls /out/Packages | wc -l'
-  fi
-  docker cp "$(windows_path "$LAB/bank-os-repo")/." "$(container_of "$REPO_HOST"):/var/www/repo/os/"
-  as_root_on "$REPO_HOST" 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
+  announce "3.2 OS 套件庫（repo01 /os/）：$OS_BASE_VERSION 的完整內容（$OS_DIR/$OS_BASE_VERSION；沒有就先備）"
+  [ -f "$OS_DIR/$OS_BASE_VERSION/repodata/repomd.xml" ] || os_content
+  as_root_on "$REPO_HOST" 'rm -rf /var/www/repo/os/*'
+  docker cp "$(windows_path "$OS_DIR/$OS_BASE_VERSION")/." "$(container_of "$REPO_HOST"):/var/www/repo/os/"
+  as_root_on "$REPO_HOST" 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os; ls /var/www/repo/os/Packages | wc -l'
   announce "3.2 根憑證進每台主機的信任清單 + bank-os.repo"
   for h in $ALL_HOSTS; do
     docker cp "$(windows_path "$LAB/ca/root.crt")" "$(container_of "$h"):/etc/pki/ca-trust/source/anchors/bank-root.pem"
@@ -163,7 +222,7 @@ http.server.HTTPServer(('0.0.0.0', 8080), H).serve_forever()
 PY
   # 主機名稱 → 容器 IP（Prometheus 容器不在 compose 裡，要自己給）
   for h in $KAFKA_HOSTS $RESTS $C3_HOST; do hosts="$hosts --add-host $(fqdn "$h"):$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$h")")"; done
-  docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(windows_path "$dir/webhook"):/w:ro" lab-node:1 python3 -u /w/receiver.py >/dev/null
+  docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(windows_path "$dir/webhook"):/w:ro" $NODE_IMAGE python3 -u /w/receiver.py >/dev/null
   docker run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(windows_path "$dir/alertmanager/alertmanager.yml"):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null
   # shellcheck disable=SC2086
   docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $hosts -v "$(windows_path "$dir/prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null
@@ -203,6 +262,9 @@ lb_watch() {   # 12.1（lab）：扮演 LB 團隊：操作機出現 ~/lb-request
 }
 
 case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboot) "$1";;
+  os-content) os_content;;
+  os-sync) os_sync;;
+  landing-layout) landing_layout;;
   monitoring-stop) monitoring_stop;;
   lb-watch) lb_watch "${2:-}";;
-  sign-next) sign_next "${2:-ca}";; *) sed -n '2,11p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next lb-watch"; exit 1;; esac
+  sign-next) sign_next "${2:-ca}";; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next lb-watch"; exit 1;; esac

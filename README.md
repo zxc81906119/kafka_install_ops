@@ -1,20 +1,23 @@
-# Confluent Platform 8.3 企業版 — 銀行離線安裝 PoC
+# Confluent Platform 企業版 — 銀行離線安裝與遷移 PoC（8.2 → 8.3）
 
-在完全離線的銀行環境安裝 Confluent Platform 企業版的**手動程序**，以及照同一條路寫成的安裝腳本。lab 在 Windows 11 的 Docker Desktop 上以容器模擬 RHEL 9 主機與銀行各團隊（AD、CA、套件庫、CyberArk PVWA），從零自建、照手冊逐章實跑驗證。
+在完全離線的銀行環境安裝 Confluent Platform 企業版、再遷移到新版的**手動程序**，以及照同一條路寫成的安裝腳本。主線是「先裝**安裝基底**，再**遷移**到目標版本」：lab 在 Windows 11 的 Docker Desktop 上以容器模擬 RHEL 9 主機與銀行各團隊（AD、CA、套件庫、CyberArk PVWA），從零自建、照手冊逐章實跑驗證。
 
-| 元件 | 版本 | 數量 |
-|---|---|---|
-| Confluent Platform（Confluent Server，KRaft） | 8.3.2（升級演練起點 8.2.4） | controller ×3、broker ×4 |
-| REST Proxy | 8.3.2 | ×2，前置 L4 負載平衡 |
-| Control Center（內建 Prometheus／Alertmanager，只供 C3 畫面用） | 2.6.1 | ×1 |
-| 監控：JMX exporter（4 種程序）＋ 銀行的 Prometheus、Alertmanager、Grafana | exporter 1.0.1；Confluent 官方 jmx-monitoring-stacks 固定 commit | 我方交付設定，銀行提供三套系統 |
-| JDK | 21（銀行以 tar 提供，裝到 `/opt/java/<dir>` + `/opt/java/current`） | 所有 Java 節點 |
+| 元件 | 安裝基底（第 1–20 章） | 遷移目標（第 21、26、27 章） | 數量 |
+|---|---|---|---|
+| Confluent Platform（Confluent Server，KRaft） | 8.2.4 | 8.3.2 | controller ×3、broker ×4 |
+| REST Proxy | 8.2.4 | 8.3.2 | ×2，前置 L4 負載平衡 |
+| Control Center（內建 Prometheus／Alertmanager，只供 C3 畫面用） | 2.5.1 | 2.6.1 | ×1 |
+| 監控：JMX exporter（4 種程序）＋ 銀行的 Prometheus、Alertmanager、Grafana | exporter 1.0.1；Confluent 官方 jmx-monitoring-stacks 固定 commit | 同左 | 我方交付設定，銀行提供三套系統 |
+| JDK（銀行以 tar 提供，裝到 `/opt/java/<dir>` + `/opt/java/current`） | 21 | 25（8.2.x 不支援 Java 25，所以基底只能是 21；8.3.x 支援 25，原廠建議版本仍是 21） | 所有 Java 節點（C3 留在 21） |
+| 作業系統（RHEL 9） | 9.6 | 9.8（小版本更新） | 所有主機 |
+
+C3 的版本由原廠相容表決定：2.5.x 支援 CP 到 8.2.x，2.6.x 支援到 8.3.x，所以 CP 升 8.3 之前 C3 先升到 2.6.1。lab 的主機是 Rocky 9（vault 的 9.6 → 現行的 9.8），不是 RHEL，容器不能真的重開機。
 
 ## 文件
 
 | 文件 | 給誰 | 來源 |
 |---|---|---|
-| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0–27 章） | `docs/journey-src/journey.md`（`node build.js`） |
+| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0–27 章；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
 | `docs/Confluent-請銀行確認的事項.docx` | 銀行各團隊：待確認事項與我方預設 | `docs/questions-src/questions.md`（`node build.js`） |
 | `docs/Confluent-RPM安裝流程.pptx` | 銀行主管：RPM 安裝流程 14 頁 | `docs/deck-src/install.js`、`install-steps.js` |
 | `redesign/README.md` | 設計決策、教訓、待確認事項的紀錄 | 手寫 |
@@ -54,7 +57,7 @@ docs/journey-src/   手把手來源 journey.md、圖 diagrams.js、build.js；to
 docs/questions-src/ 請銀行確認的事項（questions.md → build.js）
 docs/deck-src/      RPM 安裝流程簡報
 install/            照手冊一章一支的安裝腳本（install.sh、steps/01–26、conf/site.env），說明見 install/README.md
-                    install/lab/：lab 專用（bank-sim.sh 扮演銀行、run-customer.sh 從零跑、升級演練）
+                    install/lab/：lab 專用（bank-sim.sh 扮演銀行、run-customer.sh 從零跑整條主線＝基底＋遷移）
 opmenu/             維運選單（OP menu）原始碼；經離線引進流程送進操作機（手把手第 16 章）
 redesign/           設計討論紀錄
 ```
@@ -62,8 +65,8 @@ redesign/           設計討論紀錄
 ## lab
 
 - 照手把手第 0 章在 `~/kafka-lab/` 自建（compose 專案 `lab`，14 台容器 + 下載機 `dl01`）。不依賴本 repo 的任何檔案。
-- 照文件實跑：`bash docs/journey-src/tools/run-full.sh customer [起始章] [結束章]`（從第 0 章開始會先拆掉整個 lab，只留落地區）。
-- 照腳本實跑：`bash install/lab/run-customer.sh`、`bash install/lab/run-upgrade-drill.sh`（從 8.2.4 升級）。
+- 照文件實跑：`bash docs/journey-src/tools/run-full.sh customer [起始章] [結束章]`（從第 0 章開始會先拆掉整個 lab，只留落地區 `~/kafka-lab/landing`〔`rpm/` = 基底、`rpm-target/` = 目標、`bank/` = 兩個 JDK〕和 OS 內容的下載快取 `bank-os/`）。
+- 照腳本實跑：`bash install/lab/run-customer.sh`（從零跑整條主線：裝 8.2.4／9.6、驗收、遷移到 8.3.2／JDK 25、OS 更新到 9.8、再驗收；升級不再是另一個演練）。
 
 ## 日常維運：操作機上的 OP menu
 

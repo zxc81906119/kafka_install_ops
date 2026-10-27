@@ -259,7 +259,7 @@
 - 範圍：**Confluent 小版與 patch**（滾動升級、回滾、features 升版）、**Control Center**、**JDK**（銀行交付新版 tar）、**OS 修補**（滾動 dnf update，Confluent 與 JDK 由 versionlock 保護）。
 - **JDK 情境＝升 8.3 時一起從 21 換到 25**（使用者定案）。8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（官方相容表）→ 分三段：① 8.2.4→8.3.2（維持 JDK 21，可 `dnf downgrade` 回滾）② JDK 21→25 逐台滾動（切 `/opt/java/current`，退回＝切回 21）③ 兩段都驗過才 features 升版（finalize）。要回 8.2 時先切回 JDK 21 再 downgrade。**C3 留在 JDK 21**（官方未寫 C3 2.6 支援 25）。
 - 形式：和憑證輪替（第 20 章）一樣，先寫手把手新章（手打、lab 實跑），再寫 `install/steps/21-*.sh`（隨時執行，不在安裝順序裡）。
-- lab 演練：用 `install/` 以 **8.2.4** 從零裝一套（硬碟上 `packages/rpm/confluent/` 有整套 8.2.4，或照第 1 站重新下載），再照新章升到 8.3.2；持續流量下量測遺失與失敗。C3 與 JDK 的演練要另外下載舊一版（C3 2.6.0 或更早、另一個 JDK 21.x）。
+- （已併入主線，見最後一節「安裝基底改 8.2.x…」）lab 演練：用 `install/` 以 **8.2.4** 從零裝一套（硬碟上 `packages/rpm/confluent/` 有整套 8.2.4，或照第 1 站重新下載），再照新章升到 8.3.2；持續流量下量測遺失與失敗。C3 與 JDK 的演練要另外下載舊一版（C3 2.6.0 或更早、另一個 JDK 21.x）。
 - 官方做法（CP 8.3 升級文件，2026-10-24 查）：
   - 順序：**Control Center 最先** → broker 逐台 → controller 逐台 → REST Proxy（所有 broker 升完後）→ 應用程式最後。照官方。
   - REST Proxy（RBAC）升級前先在 `_confluent-command` topic 加 ResourceOwner role binding。
@@ -466,3 +466,33 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
   17 改看各端點**實際出示**的憑證（openssl s_client，`OPMENU_TLS_ENDPOINTS`），不再讀主機上的檔案，換發後忘了重啟會被看出來。
   全項目回歸 `install/lab/opmenu-items-test.sh`：37/37（每個項目實跑，加驗 17 的 18 個端點、34/35/37 的實際登入結果；21／22／27 真的重啟）。
   要問客戶：交接檔怎麼交給 Secrets 團隊（PVWA 由誰登錄）、交接後由誰刪。
+
+## 安裝基底改 8.2.x，主線遷移到 8.3.x／JDK 25／OS 9.8（2026-10-27 定案）
+
+**決定**（使用者 2026-10-27 夜間，不再問）：原本「裝 8.3.2＋JDK 21 在 Rocky 9.8，升級另當一次演練」改成**主線就是遷移**。第 1–20 章裝**安裝基底**，第 21、26、27 章遷移到目標版本，章號 0–27 與站號 01–26 不變。
+前面「升級與日常修補」一節裡的「lab 演練：用 install/ 以 8.2.4 從零裝一套再升」與 `run-upgrade-drill.sh`**已併入主線**（`install/lab/run-customer.sh` 一條路跑完，`run-upgrade-drill.sh`、`run-all.sh` 已刪），升級不再是選配。
+
+| 層 | 安裝基底（第 1–20 章） | 遷移目標 | 在哪一章 | 依據／限制 |
+|---|---|---|---|---|
+| Confluent Platform | 8.2.4 | 8.3.2 | 21 | 套件滾動升級→JDK→finalize（features 4.3，之後不能退） |
+| Control Center | **2.5.1** | 2.6.1 | 21.3（先升）、27 | 原廠相容表（docs.confluent.io Versions and interoperability，2026-10-28 查）：C3 2.5.x＝CP 7.5.11 以上、7.6.8 以上，到 8.2.x；2.6.x＝7.5.15 以上到 8.3.x。2.5.x 不支援 8.3，所以 CP 升 8.3 之前 C3 一定先升；2.6.x 也涵蓋 8.2.x，所以 C3 先升到 2.6.1 配著 8.2.4 仍在支援範圍內 |
+| JDK | 21 | 25 | 21.7 | 8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（原廠建議仍是 21）。基底只能是 21；C3 留在 21（原廠沒寫 C3 2.6 支援 25） |
+| OS（RHEL 9） | 9.6 | 9.8 | 26.0–26.5 | 小版本更新；Confluent 與 JDK 被 versionlock／tar 擋住，只動 OS 套件 |
+
+**C3 基底版本的證據**：2.5.x 的最新版是 2.5.1（2026-06-23）；原廠 release notes 2.5.0–2.6.1 沒有 OTLP／telemetry 設定的變更、沒有標示 breaking change。兩個 RPM 都只相依 bash；把 2.5.1 和 2.6.1 RPM 的 `/etc/confluent-control-center/` 逐檔比對（2026-10-28，各取前 30 MB 的 payload），唯一差別是 `control-center-dev.properties` 多一行 `confluent.controlcenter.docs.host`（2.6.0 新增，我們不用 dev 檔）；`prometheus-generated-local.yml` 的 `otlp`／`storage` 兩段兩版逐字相同，所以第 13 章設定兩版通用。2.6.1 的升級注意：舊的 JavaMail 寄信功能移除（我們不用 C3 的告警動作，不影響）。已知問題：CP 8.3.x 上用 OAuth client assertion 的元件起不來（我們不用 OAuth）。
+
+**落地區版面**：`landing/rpm/` = 基底（CP 8.2.4×10＋C3 2.5.1）、`landing/rpm-target/` = 目標（8.3.2×10＋C3 2.6.1）、`landing/bank/` = JDK 21 與 25、`landing/c3/` = 第 27 章帶進來的單一 C3 版本（2.6.0，演練用）。SHA256SUMS 涵蓋 `rpm rpm-target tools gpg-keys monitoring`（72 行）。兩套一次掃描、一次送進去（約 6 GB），遷移時只在內部套件庫上架（21.1），不用再開單。`landing-extra/` 取消。
+OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫的內容**，不是我們交付的檔案，所以不在落地區：lab 放在 `~/kafka-lab/bank-os/{9.6,9.8-updates,9.8}`，由 `bank-sim.sh os-content` 在拋棄式容器裡備好；`landing/os-packages.txt` 只是給銀行的清單（9.6 的版本號）。
+
+**lab 的事實與陷阱**（2026-10-27/28 驗證）：
+- `rockylinux/rockylinux:9.6` 映像裡預設 repo 的 mirrorlist 用 `$releasever`（=9），`dnf install` 會裝到**最新的 9.8 套件**，必須改用 vault（`dl.rockylinux.org/vault/rocky/9.6/{BaseOS,AppStream,extras}`）；9.6 不在 `pub/`，9.8 不在 vault。映像 tag 改 `lab-node:96`、`lab-web:96`，舊的 9.8 映像是 `lab-node:1`，不會被誤用。vault 9.6 裡的套件比映像新（glibc el9_6.14 → el9_6.24），映像建置時 `dnf update` 一次，起點才是「9.6 最新修補」。
+- 拋棄式容器驗證（`rockylinux:9.6` → `lab-mig-node:96`）：9.6 套件集合（同一份套件清單、先下載再裝工具）71 個 RPM、20 MB、約 53–97 秒；裝好之後對 `pub/rocky/9.8` 做 `dnf update --downloadonly`：148 個待更新、更新集合 152 個 RPM、78 MB、約 160 秒（無 kernel：容器沒有）；用本地 repo（createrepo）`dnf update` 9 秒到 `/etc/rocky-release` = 9.8；versionlock 鎖住的 `jq` 不動（與 Confluent 的 versionlock 同機制）；systemd 容器更新 glibc／systemd 後仍是 running、sshd／chronyd active；`dnf needs-restarting -r` 說要重開機（glibc、systemd、dbus-broker）。9.6、9.8 的 RPM 簽章都用同一把 `RPM-GPG-KEY-Rocky-9`，`gpgcheck=1` 可以維持。
+- 容器不能重開機：`systemctl reboot` 回「Call to Reboot failed: Could not activate remote peer」（logind 被 mask）；`systemd-detect-virt -c` 在 lab 回 `wsl`。第 26 章、`26-os-patch.sh`、`rest-restart.sh -r` 遇到容器就改重啟平台服務（讓 JVM 載入新的 glibc）。**這不是重開機的驗證**：開機順序、fstab、網卡、核心模組、kernel 更新都沒測到，正式環境第一次要排變更窗口並先在測試環境走一遍。
+- dnf 陷阱：用 `--downloaddir` 下載的更新集合，如果同一個目錄又拿來當 `file://` repo 並執行 `dnf update`，RPM 在裝完後會被刪掉（實測目錄只剩 repodata）。先複製出一份再建索引。
+- Rocky 不是 RHEL：訂閱管理（`subscription-manager release --set`）、Satellite content view 的行為 lab 都沒有；RHEL 小版本不支援降版，回滾答案是更新前的 VM 快照。
+
+**程序（對應手把手）**：21.1 目標版本上架（基底留著）→ 21.3 C3 先換（`c3-change.sh` 在這裡建，27 沿用）→ 21.4–21.6 套件（broker→controller→REST→操作機）→ 21.7 JDK 25 → 21.8 finalize → 21.10 確認版本、記下新基準（`21-upgrade.sh adopt` 改 `site.env`）；26.0 銀行同步套件庫到 9.8 → 26.1 預覽（`dnf upgrade --assumeno`）→ 26.2–26.4 逐台更新 → 26.5 驗證、限制、回滾、換成別的小版本；27 單獨換 C3 版本（2.6.0 退回、升回 2.6.1）。`install/lab/run-customer.sh` 一條路：基底→驗收→憑證換發→遷移（每段驗收、持續流量）→ 22–25 → OS 9.8（持續流量）→ 27 → 驗收。
+
+**尚未驗證（要等從零重跑）**：整條路在 lab 上的實跑（手把手與腳本都是）、第 17 章在 8.2.4／2.5.1 上的指標覆蓋（表格是 8.3.2／2.6.1 的實測）、C3 2.5.1 → 2.6.1 的換版本行為（generated 檔擁有者）、小版本更新在 11 台上的時間與持續流量數字、各章 `out` 區塊的新數字（第 21 章的實測數字仍是 2026-10-26 升級演練的，標在文中）。
+
+**待問客戶**（已進問題清單）：行內套件庫現在的 RHEL 小版本、是釘版還是追最新、何時同步（3.5）；JDK 要不要換 25（3.4）；兩套 RPM 約 6 GB 能否一次送（2.5）。

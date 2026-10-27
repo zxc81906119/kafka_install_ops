@@ -135,9 +135,9 @@ D.intake = () => svg(760, 220, [
 // 6. bank preparation
 D.bankprep = () => svg(760, 300, [
   region(20, 20, 720, 260, '銀行端在安裝前要備妥的六件事（lab 裡由你扮演）', 'amber'),
-  box(40, 60, 220, 60, '主機與帳號', ['11 台 RHEL 9 最小安裝', 'cpuser + SSH 公鑰 + sudo'], 'amber'),
+  box(40, 60, 220, 60, '主機與帳號', ['11 台 RHEL 9.6 最小安裝', 'cpuser + SSH 公鑰 + sudo'], 'amber'),
   box(280, 60, 220, 60, 'OS 套件來源', ['repo01 /os/：chrony、firewalld', 'C3 前置、工具'], 'amber'),
-  box(520, 60, 200, 60, 'JDK 21', ['交付 tar 到操作機', '由我方安裝'], 'amber'),
+  box(520, 60, 200, 60, 'JDK 21 與 25', ['兩個 tar 交付到操作機', '21 先裝、25 遷移時用'], 'amber'),
   box(40, 140, 220, 60, 'AD', ['群組 kafka-admins/operators/devs', '唯讀帳號 svc-mds-bind'], 'amber'),
   box(280, 140, 220, 60, '憑證', ['根憑證放進每台信任清單', 'CSR 來就簽'], 'amber'),
   box(520, 140, 200, 60, 'NTP、負載平衡', ['repo01 兼 NTP', 'lb01 → rest01/rest02'], 'amber'),
@@ -305,7 +305,7 @@ D.certrotate = () => svg(800, 300, [
 
 // 22. upgrade: three phases, rollback only before finalize
 D.upgrade = () => svg(800, 300, [
-  box(20, 30, 240, 120, "一：套件 8.2.4 → 8.3.2", ["JDK 維持 21", "C3 → broker 逐台 →", "controller 逐台（leader 最後）", "→ REST → 操作機"], "blue"),
+  box(20, 30, 240, 120, "一：套件 8.2.4 → 8.3.2", ["JDK 維持 21", "C3 2.5.1 → 2.6.1 先，再 broker →", "controller 逐台（leader 最後）", "→ REST → 操作機"], "blue"),
   arrow(260, 90, 288, 90),
   box(290, 30, 220, 120, "二：JDK 21 → 25", ["切 /opt/java/current", "controller、broker、REST、", "操作機逐台重啟", "C3 留在 21"], "teal"),
   arrow(510, 90, 538, 90),

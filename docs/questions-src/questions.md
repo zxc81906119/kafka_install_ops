@@ -1,5 +1,5 @@
 <!--meta
-{"kicker":"Confluent Platform 8.3.2 企業版 · 離線安裝","title":"請銀行確認的事項","subtitle":"安裝前要先有答案的問題，以及沒有答案時我們的做法","header":"Confluent Platform 8.3.2 安裝 · 請銀行確認的事項","author":"zxc81906119","facts":[["適用版本","Confluent Platform 8.3.2、Control Center 2.6.1、JDK 21"],["驗證環境","RHEL 9 相容環境（Rocky Linux 9）模擬 11 台主機，離線安裝全程實跑"],["已知前提","主機不接 AD、只有固定帳號；CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登、CPM 輪替 root 與 svc-mds-bind），沒有 CCP、Conjur"],["文件日期","2026-10-24"]]}
+{"kicker":"Confluent Platform 企業版 · 離線安裝與遷移（8.2 → 8.3）","title":"請銀行確認的事項","subtitle":"安裝前要先有答案的問題，以及沒有答案時我們的做法","header":"Confluent Platform 安裝與遷移 · 請銀行確認的事項","author":"zxc81906119","facts":[["適用版本","安裝基底：Confluent Platform 8.2.4、Control Center 2.5.1、JDK 21、RHEL 9.6；遷移目標：8.3.2、2.6.1、JDK 25、RHEL 9.8（以銀行實際的小版本為準）"],["驗證環境","RHEL 9 相容環境（Rocky Linux 9）模擬 11 台主機，離線安裝全程實跑"],["已知前提","主機不接 AD、只有固定帳號；CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登、CPM 輪替 root 與 svc-mds-bind），沒有 CCP、Conjur"],["文件日期","2026-10-24"]]}
 -->
 [[toc]]
 
@@ -17,6 +17,7 @@
 | 2.2 | 檔案交換的方式與單次大小上限？ | 整批約 3.1 GB | 超過上限就分批送，每批附各自的雜湊清單 |
 | 2.3 | 放行標準：RPM 有原廠 GPG 簽章＋SHA256，是否足夠？jar、tar、GitHub 上的監控檔沒有原廠簽章，怎麼放行？ | 決定我們要準備哪些證明 | 附 SHA256SUMS 與驗證報告（RPM 原廠簽章逐一驗過、jar 比對 Maven 的雜湊、監控檔記下 commit 並列入 SHA256SUMS；監控檔都是純文字（YAML、JSON），可逐一審閱） |
 | 2.4 | 之後補帶檔案（修補版、升級版）的申請流程與時程？ | 升級、修補都要再走一次 | 每次升級前兩週提出 |
+| 2.5 | 我們先裝 Confluent Platform 8.2.4，再遷移到 8.3.2：兩套 RPM（各約 3 GB，其中 `confluent-security` 與 Control Center 各超過 1 GB）加兩個 JDK 合計約 6 GB，能否一次掃描、一次送進來？ | 遷移時才補帶要再等一輪開單；單檔大小上限會卡住 | 一次送兩套（安裝基底與遷移目標分在兩個目錄），遷移時直接上架；若平台有單次容量上限，分兩批 |
 
 # 3. 套件來源與 JDK（OS 團隊）
 
@@ -25,7 +26,8 @@
 | 3.1 | OS 套件從哪裡裝：Satellite、制品庫（Nexus／Artifactory）、還是 web server？`.repo` 由誰設定？ | 每台主機要能 `dnf install` | 對 dnf 都一樣；由 OS 團隊設定 `.repo`，我們只檢查裝得到 |
 | 3.2 | 下列 OS 套件是否都在套件來源裡：chrony、firewalld、cyrus-sasl、openssl-devel、python3-dnf-plugin-versionlock、gettext、createrepo_c？ | 安裝與 Control Center 需要 | 缺的請 OS 團隊補進套件來源 |
 | 3.3 | Confluent 的 RPM 上架到行內制品庫，還是由操作機自建一個套件目錄？由誰上架？ | 決定上架步驟與權限 | 操作機建好索引，經 ssh 推到銀行的 web server 一個目錄；不需要在 web server 上裝工具 |
-| 3.4 | JDK 21 由誰提供？tar 還是 RPM？版本？之後誰負責更新？ | Confluent 需要 JDK 21 | 銀行交付 tar，我們安裝到 `/opt/java/` 並登記 `alternatives`；更新時再交付新版 |
+| 3.4 | JDK 由誰提供？tar 還是 RPM？版本？之後誰負責更新？Confluent Platform 8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（原廠建議仍是 21）：遷移到 8.3 時要不要一起換到 JDK 25？ | 安裝基底一定是 JDK 21（8.2.x 不支援 25）；25 是遷移時才用，選 25 要和原廠支援確認 | 銀行交付 JDK 21 與 JDK 25 兩個 tar，我們安裝到 `/opt/java/` 並登記 `alternatives`；沒有要求用 25 時遷移只做套件與 finalize，JDK 留在 21 |
+| 3.5 | 行內的 RHEL 9 套件庫現在是哪個小版本（例如 9.4、9.6）？套件庫是釘在特定小版本，還是追 RHEL 9 的最新？多久同步一次、誰操作？變更窗口前能否先同步到目標小版本？ | 我們的安裝基底假設是 9.6、遷移目標 9.8（lab 的假設）；`dnf update` 會一路更新到套件庫有的最新小版本，不是你以為的那一版；小版本更新要先有目標內容 | 步驟與小版本無關（手把手 26.0–26.5）：以銀行實際的小版本為準；套件庫若追最新，請釘住（或在變更窗口前同步到要的那一版）。更新前每台先做 VM 快照；更新時 Confluent 套件由 versionlock 鎖住，JDK 是 tar，兩者不受影響 |
 
 # 4. 主機與帳號（OS 團隊、資安）
 

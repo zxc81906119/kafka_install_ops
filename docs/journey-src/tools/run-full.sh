@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # run-full.sh <customer> [起始章] [結束章（不含）]  —— 照手把手的指令塊在 lab 上實跑（Windows Git Bash）
 #
-#   bash run-full.sh customer          從第 0 章跑到最後：先把 lab 整個拆掉（保留落地區 ~/kafka-lab/landing、landing-extra）
+#   bash run-full.sh customer          從第 0 章跑到最後（= 整條遷移主線：基底 CP 8.2.4／JDK 21／OS 9.6 → 第 21、26、27 章遷移到 8.3.2／JDK 25／OS 9.8）：
+#                                      先把 lab 整個拆掉（只保留落地區 ~/kafka-lab/landing 和銀行 OS 內容的下載快取 ~/kafka-lab/bank-os；舊的 landing-extra 會整理進 landing）
 #   bash run-full.sh customer 15 20    只跑第 15–19 章（不拆 lab，接著現有的狀態）
 #
 # 模式只剩 customer（CyberArk 只有 PAM）。執行檔與紀錄放 $OUT_DIR（預設 ~/kafka-lab-runs/），
@@ -25,13 +26,15 @@ sed -i "s#<放 opmenu/ 原始碼的目錄>#$REPO_DIR#" "$runner"
 
 # 從第 0 章開始：拆掉整個 lab（容器、volume、下載機、第 17 章的 lab-mon-* 監控容器），只留落地區
 if [ "$FROM" = 0 ]; then
-  echo "拆掉 lab（保留 $LAB/landing、landing-extra）"
+  echo "拆掉 lab（保留 $LAB/landing 與 $LAB/bank-os；舊版面的 landing-extra 併進 landing）"
   if [ -f "$LAB/compose.yml" ]; then
     docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null 2>&1   # 接在 lab_labnet 上，不先收掉 down -v 刪不掉網路
     (cd "$LAB" && docker compose -f compose.yml down -v >/dev/null 2>&1)
   fi
   docker rm -f dl01 bank-prometheus >/dev/null 2>&1
-  [ -d "$LAB" ] && find "$LAB" -mindepth 1 -maxdepth 1 ! -name landing ! -name landing-extra -exec rm -rf {} +
+  [ -d "$LAB" ] && find "$LAB" -mindepth 1 -maxdepth 1 ! -name landing ! -name landing-extra ! -name bank-os -exec rm -rf {} +
+  # 舊版面（8.3.2 在 landing/rpm、8.2.4 在 landing-extra/）→ landing/rpm = 基底、landing/rpm-target = 目標（只搬檔案）
+  bash "$(cygpath -m "$REPO_DIR/install/lab/bank-sim.sh")" landing-layout || exit 1
 fi
 
 echo "執行 $runner（紀錄 $log）"

@@ -40,7 +40,7 @@ ask_bank "3.1 OS 團隊（依變更單；每台主機，含操作機自己 $OPS_
          "    c. 上面那一行公鑰行放進 /home/$SSH_USER/.ssh/authorized_keys（目錄 0700、檔 0600、擁有者 $SSH_USER）；$REPO_HOST 上 $REPO_DEPLOY_USER 的 authorized_keys 也放同一行。" \
          "    d. 安裝與升級期的 sudo：/etc/sudoers.d/$SSH_USER 寫 $SSH_USER ALL=(ALL) NOPASSWD: ALL（0440，visudo -cf 檢查）；交付時移除（第 16、19 站）。" \
          "3.2 OS 團隊：每台主機信任銀行根憑證（$BANK_ROOT_CA + update-ca-trust），並有指向 OS 套件庫的 .repo（含 os-packages.txt 的套件）。" \
-         "3.3 OS 團隊：JDK 21 的 tar 與 .sha256 放到 $LANDING/bank/。" \
+         "3.3 OS 團隊：JDK $JDK_MAJOR（安裝基底）與 JDK $JDK_TARGET_MAJOR（遷移目標，第 21 章用）的 tar 與 .sha256 放到 $LANDING/bank/。" \
          "3.4 AD 團隊：群組 kafka-admins、kafka-operators、kafka-devs；唯讀帳號 $AD_BIND_DN；測試人員 alice/bob/carol；" \
          "    LDAPS 憑證由銀行 CA 簽；密碼交付到 $SECRETS_DIR/ldap-bind.pass（查詢帳號）、ad-test-users.pass（測試人員），0600。" \
          "3.5 網路團隊：行內 NTP（$NTP_SERVER）可用；負載平衡 $LB_HOST 的 8082 轉到 ${RESTS// /、} 的 8082，$REST_VIP 指到它。"
@@ -74,9 +74,11 @@ EOF
 done
 
 section "確認 3.3：JDK tar 與 sha256"
-jdk_tar=$(ls "$LANDING"/bank/*.tar.gz 2>/dev/null | head -1)
-if [ -n "$jdk_tar" ] && (cd "$LANDING/bank" && sha256sum -c --quiet ./*.sha256); then ok "JDK：$(basename "$jdk_tar") sha256 相符"
-else fail "JDK tar 不在 $LANDING/bank 或 sha256 不符"; fi
+for jdk_major in "$JDK_MAJOR" "$JDK_TARGET_MAJOR"; do
+  jdk_tar=$(ls "$LANDING"/bank/OpenJDK"${jdk_major}"U-*.tar.gz 2>/dev/null | sort -V | tail -1)
+  if [ -n "$jdk_tar" ] && (cd "$LANDING/bank" && sha256sum -c --quiet "$(basename "$jdk_tar").sha256"); then ok "JDK $jdk_major：$(basename "$jdk_tar") sha256 相符"
+  else fail "JDK $jdk_major 的 tar 不在 $LANDING/bank 或 sha256 不符"; fi
+done
 
 section "確認 3.4：LDAPS 憑證鏈、密碼檔"
 ldaps_verify=$(openssl s_client -connect "$AD_FQDN:$AD_LDAPS_PORT" -CAfile "$BANK_ROOT_CA" </dev/null 2>/dev/null | grep "Verify return code")

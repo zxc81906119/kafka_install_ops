@@ -1,11 +1,11 @@
 <!--meta
 {
-  "kicker": "Confluent Platform 8.3 離線安裝",
+  "kicker": "Confluent Platform 離線安裝與遷移（8.2 → 8.3）",
   "title": "小安的安裝旅程",
   "subtitle": "手把手走一遍：從外網下載到 Control Center 亮燈，每一步誰做、敲什麼、看到什麼",
   "author": "PoC 團隊",
   "header": "Confluent Platform 安裝旅程 — 手把手",
-  "facts": [["版本", "Confluent Platform 8.3.2、Control Center 2.6.1、Java 21"], ["環境", "11 台 RHEL 9 主機（lab 以容器模擬，環境從零自建）"], ["對象", "第一次安裝 Confluent Kafka 的工程師"], ["日期", "2026-10-21"]]
+  "facts": [["版本", "安裝基底：Confluent Platform 8.2.4、Control Center 2.5.1、Java 21、RHEL 9.6；遷移目標：8.3.2、2.6.1、Java 25、RHEL 9.8"], ["環境", "11 台 RHEL 9 主機（lab 以容器模擬，環境從零自建）"], ["對象", "第一次安裝 Confluent Kafka 的工程師"], ["日期", "2026-10-21"]]
 }
 -->
 [[toc]]
@@ -55,11 +55,25 @@
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
 - 指令都是一行可以整段貼上的；多行的 `heredoc`（`<<'EOF' … EOF`）要整段一起貼。
 - 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。正本在 PVWA；操作機上的是作業用的副本。從 PVWA 取出貼上時一律用**不顯示的寫法**（密碼見 3.4、15.2），PSMP 的錄影才不會錄到。
+- **主線是「先裝基底、再遷移」**：第 1–20 章裝的是安裝基底，第 21、26、27 章把它遷移到目標版本，每一段之後都跑第 19 章的驗收。兩組版本的來由與限制在下面「版本路徑」。
 - 主線是本案客戶的情境：銀行的 CyberArk 只有 PAM（PVWA、PSMP、CPM），平台密碼由人從 PVWA 取放；操作機到各主機的 ssh 金鑰是操作機自己的，不放 CyberArk（3.1）。
 
 - 指令很長是為了「整段貼上就能跑」。看不懂沒關係，先照做；每一站開頭說這站要做什麼，結尾說看到什麼代表成功。
 
 > 陷阱：在各主機上（以 cpuser 登入）確認用的 `ls`、`stat` 看 `/etc/confluent/ssl`、`/var/lib/kafka` 這類 0750 的目錄要加 `sudo`，不然會 Permission denied，誤以為前一步失敗。操作機上你是 root，不需要。
+
+### 版本路徑：安裝基底與遷移目標
+
+| 層 | 安裝基底（第 1–20 章裝的） | 遷移目標（第 21、26、27 章） | 為什麼 |
+|---|---|---|---|
+| Confluent Platform | 8.2.4 | 8.3.2 | 第 21 章：套件滾動升級、finalize |
+| Control Center | 2.5.1 | 2.6.1 | 原廠相容表：2.5.x 支援到 CP 8.2.x，2.6.x 才支援到 8.3.x，所以 CP 升 8.3 之前 C3 先升（21.3、27） |
+| JDK | 21 | 25 | 8.2.x 只支援 Java 17／21，**不支援 25**，所以基底一定是 21；8.3.x 才支援 25（原廠建議版本仍是 21）（21.7） |
+| OS（RHEL 9） | 9.6 | 9.8 | 第 26.5 節：小版本更新；Confluent 與 JDK 被 versionlock、tar 擋住，只動 OS 套件 |
+
+基底的 Confluent、C3、JDK 版本寫在 `install/conf/site.env`（`CP_VERSION`、`C3_VERSION`、`JDK_MAJOR`），目標版本是同一檔的 `*_TARGET_*`。做完遷移後把基底值改成目標值（21.10），之後新增主機照第 8 站才會裝到現行版本。
+
+**lab 的限制先講清楚**：lab 的主機是 Rocky Linux 9 的容器，不是 RHEL；容器共用 WSL2 的核心，不能真的重開機（26.5 會講怎麼替代）；Rocky 的 9.6 套件來自它的 vault 倉庫，9.8 來自現行倉庫。正式環境是銀行的 RHEL 9.x 與銀行自己的套件庫，版本以銀行實際的為準（問題清單有問）。
 
 ### 名詞小抄（看到不懂的回來查）
 
@@ -88,7 +102,7 @@
 
 | 目錄 | 放什麼 |
 |---|---|
-| `~/landing/` | 銀行送進來的檔案（唯讀）：RPM、jar、公鑰、SHA256SUMS、`bank/` 裡的 JDK |
+| `~/landing/` | 銀行送進來的檔案（唯讀）：`rpm/`（安裝基底的 RPM）、`rpm-target/`（遷移目標的 RPM）、jar、公鑰、SHA256SUMS、`bank/` 裡的兩個 JDK（21、25） |
 | `~/repo/` | 要上架到套件庫的目錄（含索引） |
 | `~/jdk/` | `java.sh`（profile.d 用） |
 | `~/pki/` | 私鑰 `keys/`、申請單 `requests/`、銀行回覆 `incoming/`、成品 `certs/`、keystore 密碼 `store.pass` |
@@ -101,8 +115,8 @@
 | 站 | 時間 | 慢在哪 |
 |---|---|---|
 | 0 建 lab | 20–30 分 | 建映像檔要連外網下載 |
-| 1 下載 | 30–60 分 | 3 GB 從外網抓；lab 的 Windows 資料夾讀寫慢 |
-| 2–4 進內網、銀行準備、上架 | 20 分 | 搬 3 GB、建索引 |
+| 1 下載 | 60–90 分 | 兩套各約 3 GB 從外網抓；lab 的 Windows 資料夾讀寫慢 |
+| 2–4 進內網、銀行準備、上架 | 30 分 | 搬 6 GB、建索引 |
 | 5–8 JDK、檢查、OS 調校、裝套件 | 30 分 | 11 台逐一 dnf install |
 | 9 憑證 | 15 分 | — |
 | 10–13 設定、啟動、權限、REST、C3 | 40 分 | 每段啟動要等健康檢查；C3 第一次起來 1–2 分鐘 |
@@ -112,13 +126,13 @@
 | 18 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
 | 19 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
 | 20 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
-| 21 升級 | 50 分 | 套件一輪、JDK 一輪滾動重啟（每台 15 秒到 2 分鐘）；controller 要等 quorum 追上 |
+| 21 遷移到新版 | 70 分 | C3、套件一輪、JDK 一輪滾動重啟（每台 15 秒到 2 分鐘）；controller 要等 quorum 追上 |
 | 22 license 監控 | 5 分 | — |
 | 23 換 controller | 10 分 | 新的那台要追上 metadata log |
 | 24 增減 broker | 40 分 | Self-Balancing 搬資料（加回後十幾分鐘才開始搬） |
 | 25 日常備份 | 10 分 | — |
-| 26 OS 修補 | 10 分 | 逐台 dnf update；要重開機的話每台多幾分鐘 |
-| 27 升級 C3 | 10 分 | C3 只有一台，畫面約 1 分鐘不能用 |
+| 26 OS 修補與小版本更新 | 10 分（每月修補）／30 分（9.6 → 9.8） | 逐台 dnf update；要重開機的話每台多幾分鐘 |
+| 27 單獨換 C3 版本 | 10 分 | C3 只有一台，畫面約 1 分鐘不能用 |
 
 ## 0.5 自己把 lab 建起來
 
@@ -127,7 +141,7 @@
 需要 Docker Desktop 和 Git Bash。整個 lab 放在家目錄的 `kafka-lab/`，不依賴任何現成的專案；下面每個檔案都是用 heredoc 寫出來的，整段貼到 `EOF` 即可。先開一個 Git Bash，做兩個全域設定（之後所有 Windows 端指令都在這個視窗）：
 
 ```bash
-export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing,bank-os-repo} && cd ~/kafka-lab && pwd
+export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} && cd ~/kafka-lab && pwd
 ```
 
 ```out
@@ -138,12 +152,39 @@ export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,imag
 
 ### 0.5.1 主機映像檔：模擬「裸機 RHEL 9」
 
-每台主機都是同一個映像：Rocky 9 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。安裝與維運用的帳號 `cpuser` 不在映像裡，和銀行開給我們的主機一樣，是第 3 章由銀行 OS 團隊建立。沒有 JDK、沒有 Confluent、公開 repo 關閉，和銀行開給我們的主機一樣。
+每台主機都是同一個映像：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。安裝與維運用的帳號 `cpuser` 不在映像裡，和銀行開給我們的主機一樣，是第 3 章由銀行 OS 團隊建立。沒有 JDK、沒有 Confluent、公開 repo 關閉，和銀行開給我們的主機一樣。
+
+> 重點：**Rocky 的 9.6 映像裡預設的 repo 設定指向「最新的 9.x」**（mirrorlist 用 `$releasever` = 9），不動它的話 `dnf install` 裝到的是 9.8 的套件。所以先換成 vault 的 9.6 倉庫（`dl.rockylinux.org/vault/rocky/9.6`），再 `dnf update` 到 9.6 的最新修補，主機才是乾淨的 9.6。映像、下載機、後面 3.2 銀行套件庫的內容都用同一份 vault 設定。映像的 tag 用 `lab-node:96`：舊的 9.8 映像（`lab-node:1`）不會被誤用。
 
 ```bash
+cat > images/node/rocky-vault-96.repo <<'EOF'
+[vault96-baseos]
+name=Rocky 9.6 BaseOS (vault)
+baseurl=https://dl.rockylinux.org/vault/rocky/9.6/BaseOS/$basearch/os/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+enabled=1
+
+[vault96-appstream]
+name=Rocky 9.6 AppStream (vault)
+baseurl=https://dl.rockylinux.org/vault/rocky/9.6/AppStream/$basearch/os/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+enabled=1
+
+[vault96-extras]
+name=Rocky 9.6 extras (vault)
+baseurl=https://dl.rockylinux.org/vault/rocky/9.6/extras/$basearch/os/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+enabled=1
+EOF
 cat > images/node/Dockerfile <<'EOF'
-FROM rockylinux/rockylinux:9.8
-RUN dnf -y install systemd openssh-server openssh-clients sudo tar gzip openssl procps-ng nmap-ncat hostname iproute less which findutils dnf-plugins-core ca-certificates \
+FROM rockylinux/rockylinux:9.6
+COPY rocky-vault-96.repo /etc/yum.repos.d/rocky-vault-96.repo
+RUN rm -f /etc/yum.repos.d/rocky.repo /etc/yum.repos.d/rocky-addons.repo /etc/yum.repos.d/rocky-devel.repo /etc/yum.repos.d/rocky-extras.repo \
+    && dnf -y update \
+    && dnf -y install systemd openssh-server openssh-clients sudo tar gzip openssl procps-ng nmap-ncat hostname iproute less which findutils dnf-plugins-core ca-certificates \
     && dnf clean all && rm -f /etc/yum.repos.d/*.repo.rpmnew
 RUN printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf \
     && systemctl enable sshd \
@@ -152,11 +193,12 @@ RUN printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthent
 STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/sbin/init"]
 EOF
-docker build -t lab-node:1 "$(cygpath -m "$PWD/images/node")" 2>&1 | tail -1
+docker build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | tail -1 && docker run --rm lab-node:96 cat /etc/rocky-release
 ```
 
 ```out
- => => naming to docker.io/library/lab-node:1
+ => => naming to docker.io/library/lab-node:96
+Rocky Linux release 9.6 (Blue Onyx)
 ```
 
 映像裡沒有 cpuser，也沒有 sudo 規則：帳號、sshd 設定、公鑰、安裝期的完整 sudo（對應「變更窗口內由 OS 團隊開放」，正式環境做完要收回）都在 3.1 由銀行 OS 團隊的區塊做。
@@ -167,8 +209,8 @@ docker build -t lab-node:1 "$(cygpath -m "$PWD/images/node")" 2>&1 | tail -1
 
 ```bash
 cat > images/web/Dockerfile <<'EOF'
-FROM lab-node:1
-RUN dnf -y --enablerepo=baseos,appstream install httpd mod_ssl && dnf clean all \
+FROM lab-node:96
+RUN dnf -y --enablerepo=vault96-baseos,vault96-appstream install httpd mod_ssl && dnf clean all \
     && sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo \
     && useradd -m -s /bin/bash repodeploy && install -d -o repodeploy -g repodeploy -m 0755 /var/www/repo \
     && rm -f /etc/httpd/conf.d/welcome.conf /etc/httpd/conf.d/ssl.conf \
@@ -196,11 +238,11 @@ Listen 443 https
     </Directory>
 </VirtualHost>
 EOF
-docker build -t lab-web:1 "$(cygpath -m "$PWD/images/web")" 2>&1 | tail -1
+docker build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | tail -1
 ```
 
 ```out
- => => naming to docker.io/library/lab-web:1
+ => => naming to docker.io/library/lab-web:96
 ```
 
 憑證 `repo.crt`、`repo.key` 等銀行 CA 建好後再簽（0.5.5）。
@@ -260,7 +302,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssh-server 
     && printf '#!/bin/sh\n/usr/sbin/sshd\nexec nginx -g "daemon off;"\n' > /usr/local/sbin/lb-entrypoint && chmod 0755 /usr/local/sbin/lb-entrypoint
 ENTRYPOINT ["/usr/local/sbin/lb-entrypoint"]
 EOF
-docker build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | tail -1 && docker images --format '{{.Repository}}:{{.Tag}}' | grep -c '^lab-'
+docker build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | tail -1 && docker images --format '{{.Repository}}:{{.Tag}}' | grep -cE '^lab-(node:96|web:96|ad:1|lb:1)$'
 ```
 
 ```out
@@ -364,7 +406,7 @@ x-hosts: &hosts
   - "c3-01.poc.lab=172.35.0.51"
   - "c3-01=172.35.0.51"
 x-node: &node
-  image: lab-node:1
+  image: lab-node:96
   domainname: poc.lab
   privileged: true
   cgroup: host
@@ -387,7 +429,7 @@ services:
       - ops-secure:/secure/ssh
   repo01:
     <<: *node
-    image: lab-web:1
+    image: lab-web:96
     hostname: repo01
     networks: { labnet: { ipv4_address: 172.35.0.14 } }
     volumes:
@@ -460,10 +502,10 @@ docker compose -f compose.yml up -d 2>&1 | grep -c Started
 
 ### 0.5.7 下載機
 
-下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區：
+下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 1 站列給銀行的 OS 套件版本才是 9.6 的：
 
 ```bash
-docker run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:1 sleep infinity >/dev/null && docker exec dl01 bash -c 'dnf config-manager --set-enabled baseos appstream extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.3/'
+docker run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && docker exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
 ```
 
 ```out
@@ -500,24 +542,31 @@ docker exec -it lab-repo01-1 bash
 
 ![download]
 
-小安的第一個任務：把 Confluent 的套件抓下來，而且只抓需要的。Java 和 OS 套件不下載，那是銀行的事。
+小安的第一個任務：把 Confluent 的套件抓下來，而且只抓需要的。這次要抓**兩套**：安裝基底（Confluent Platform 8.2.4＋Control Center 2.5.1）放 `/out/rpm`，遷移目標（8.3.2＋2.6.1）放 `/out/rpm-target`，一次掃描、一次送進去，遷移（第 21 章）時就不用再開一次單。Java 和 OS 套件不下載，那是銀行的事（lab 的下載機只替銀行抓兩個 JDK，見 1.5）。
 
 ## 1.1 設定 Confluent repo、匯入原廠公鑰
 
 @role 小安 | dl01 | root
 
 ```bash
-mkdir -p /out/rpm /out/gpg-keys /out/tools && curl -fsSL https://packages.confluent.io/rpm/8.3/archive.key -o /out/gpg-keys/confluent.asc && curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key -o /out/gpg-keys/confluent-c3.asc && rpm --import /out/gpg-keys/confluent.asc /out/gpg-keys/confluent-c3.asc && rpm -q gpg-pubkey --qf '%{SUMMARY}\n' | grep -i confluent
+mkdir -p /out/rpm /out/rpm-target /out/gpg-keys /out/tools && curl -fsSL https://packages.confluent.io/rpm/8.2/archive.key -o /out/gpg-keys/confluent.asc && curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key -o /out/gpg-keys/confluent-c3.asc && rpm --import /out/gpg-keys/confluent.asc /out/gpg-keys/confluent-c3.asc && rpm -q gpg-pubkey --qf '%{SUMMARY}\n' | grep -i confluent
 ```
 
 ```out
 Confluent Packaging <packages@confluent.io> public key
 ```
 
-兩個網址給的其實是同一把公鑰，所以只會出現一行。
+三個網址（8.2、8.3、C3）給的其實是同一把公鑰（sha256 相同），所以只會出現一行；8.2 和 8.3 共用，只存一份 `confluent.asc`。
 
 ```bash
 cat > /etc/yum.repos.d/confluent.repo <<'EOF'
+[confluent-8.2]
+name=Confluent 8.2
+baseurl=https://packages.confluent.io/rpm/8.2
+gpgcheck=1
+gpgkey=https://packages.confluent.io/rpm/8.2/archive.key
+enabled=1
+
 [confluent-8.3]
 name=Confluent 8.3
 baseurl=https://packages.confluent.io/rpm/8.3
@@ -532,76 +581,87 @@ gpgcheck=1
 gpgkey=https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key
 enabled=1
 EOF
-dnf list --showduplicates confluent-server confluent-control-center-next-gen | grep -E '8\.3\.|2\.6\.'
+dnf list --showduplicates confluent-server confluent-control-center-next-gen | grep -E '8\.(2\.4|3\.2)|2\.(5\.1|6\.1)'
 ```
 
 ```out
-confluent-control-center-next-gen.noarch         2.6.0-1           confluent-c3
+confluent-control-center-next-gen.noarch         2.5.1-1           confluent-c3
 confluent-control-center-next-gen.noarch         2.6.1-1           confluent-c3
-confluent-server.noarch                          1:8.3.0-1         confluent-8.3
-confluent-server.noarch                          1:8.3.1-1         confluent-8.3
+confluent-server.noarch                          1:8.2.4-1         confluent-8.2
 confluent-server.noarch                          1:8.3.2-1         confluent-8.3
 ```
 
-會列出同一主版的所有小版本，確認 8.3.2 和 2.6.1 在清單裡就好。
+確認 8.2.4、8.3.2、2.5.1、2.6.1 四個都在清單裡就好（grep 只留了這四行）。
+
+> **為什麼基底的 C3 是 2.5.1，不是最新的 2.6.1**（原廠相容表，docs.confluent.io「Versions and interoperability」，2026-10-28 查）：Control Center 2.5.x 支援 Confluent Platform「7.5.11 以上、7.6.8 以上，到 8.2.x」；2.6.x 才支援「到 8.3.x」（2.6.x 的下限寫 7.5.15 以上，所以 2.6.x 也能配 8.2.x）。安裝基底是 CP 8.2.4，用 2.5 系列最新的 2.5.1，**和 CP 的相容範圍剛好對上**；遷移到 8.3 之前 C3 必須先升到 2.6.x（21.3）。2.5.1 與 2.6.1 的 RPM 只相依 bash，套件預設設定檔（`/etc/confluent-control-center/`）逐檔比對只差 `control-center-dev.properties` 多一行 `confluent.controlcenter.docs.host`（我們不用 dev 檔），所以第 13 章的 Prometheus／Alertmanager 設定兩個版本通用。
 
 > 第一次執行會先下載 repo 的中繼資料（幾十 MB），等一兩分鐘是正常的。
 
-## 1.2 下載：指定精確版本
+## 1.2 下載：兩套精確版本
 
 @role 小安 | dl01 | root
 
-`--resolve` 會把 Confluent 自己的相依一起抓；因為下載機和正式主機是同版、同樣最小安裝，它不會多抓也不會漏抓。
+`--resolve` 會把 Confluent 自己的相依一起抓；因為下載機和正式主機是同樣最小安裝，它不會多抓也不會漏抓。**每一套只開自己的 repo**（`--disablerepo='*' --enablerepo=…`）：8.2 和 8.3 的 repo 同時開著時，`--resolve` 可能把另一版的 `confluent-common` 抓進來。先抓安裝基底到 `/out/rpm`：
 
 ```bash
-dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2 confluent-control-center-next-gen-2.6.1
+dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm --disablerepo='*' --enablerepo=confluent-8.2,confluent-c3 confluent-server-8.2.4 confluent-security-8.2.4 confluent-kafka-rest-8.2.4 confluent-cli-8.2.4 confluent-control-center-next-gen-2.5.1
 ```
 
-約 3 GB，lab 裡因為落地區是 Windows 資料夾，最後核對檔案那段會慢（看起來像卡在 99%），耐心等它結束。
+再抓遷移目標到 `/out/rpm-target`：
 
 ```bash
-ls /out/rpm | sort && ls /out/rpm | wc -l
+dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm-target --disablerepo='*' --enablerepo=confluent-8.3,confluent-c3 confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2 confluent-control-center-next-gen-2.6.1
+```
+
+每套約 3 GB，lab 裡因為落地區是 Windows 資料夾，最後核對檔案那段會慢（看起來像卡在 99%），耐心等它結束。
+
+```bash
+for d in rpm rpm-target; do echo "== $d"; ls /out/$d | sort; ls /out/$d | wc -l; done
 ```
 
 ```out
-confluent-ce-kafka-http-server-8.3.2-1.noarch.rpm
-confluent-cli-8.3.2-1.x86_64.rpm
-confluent-common-8.3.2-1.noarch.rpm
-confluent-control-center-next-gen-2.6.1-1.noarch.rpm
-confluent-kafka-rest-8.3.2-1.noarch.rpm
-confluent-metadata-service-8.3.2-1.noarch.rpm
-confluent-rest-utils-8.3.2-1.noarch.rpm
-confluent-security-8.3.2-1.noarch.rpm
-confluent-server-8.3.2-1.noarch.rpm
-confluent-server-rest-8.3.2-1.noarch.rpm
-confluent-telemetry-8.3.2-1.noarch.rpm
+== rpm
+confluent-ce-kafka-http-server-8.2.4-1.noarch.rpm
+confluent-cli-8.2.4-1.x86_64.rpm
+confluent-common-8.2.4-1.noarch.rpm
+confluent-control-center-next-gen-2.5.1-1.noarch.rpm
+confluent-kafka-rest-8.2.4-1.noarch.rpm
+confluent-metadata-service-8.2.4-1.noarch.rpm
+confluent-rest-utils-8.2.4-1.noarch.rpm
+confluent-security-8.2.4-1.noarch.rpm
+confluent-server-8.2.4-1.noarch.rpm
+confluent-server-rest-8.2.4-1.noarch.rpm
+confluent-telemetry-8.2.4-1.noarch.rpm
+11
+== rpm-target
+（同樣 11 個，版本是 8.3.2 與 control-center-next-gen-2.6.1）
 11
 ```
 
-11 個，全部是 `confluent-*`。
+兩套各 11 個，全部是 `confluent-*`。
 
 ## 1.3 驗原廠簽章、確認相依
 
 @role 小安 | dl01 | root
 
 ```bash
-rpm -K /out/rpm/*.rpm
+rpm -K /out/rpm/*.rpm /out/rpm-target/*.rpm
 ```
 
 ```out
-/out/rpm/confluent-ce-kafka-http-server-8.3.2-1.noarch.rpm: digests signatures OK
-（每一行都是 digests signatures OK）
+/out/rpm/confluent-ce-kafka-http-server-8.2.4-1.noarch.rpm: digests signatures OK
+（22 行，每一行都是 digests signatures OK）
 ```
 
 Confluent 的 RPM 需要哪些非 Confluent 的東西？答案應該只有 bash 和 glibc：
 
 ```bash
-rpm -qpR /out/rpm/*.rpm 2>/dev/null | grep -vE '^(confluent-|rpmlib\(|config\()' | sort -u | xargs -d '\n' rpm -q --whatprovides | sort -u
+rpm -qpR /out/rpm/*.rpm /out/rpm-target/*.rpm 2>/dev/null | grep -vE '^(confluent-|rpmlib\(|config\()' | sort -u | xargs -d '\n' rpm -q --whatprovides | sort -u
 ```
 
 ```out
 bash-5.1.8-9.el9.x86_64
-glibc-2.34-168.el9_8.x86_64
+glibc-2.34-168.el9_6.24.x86_64
 （版本號依映像而異，重點是只有這兩個）
 ```
 
@@ -629,21 +689,21 @@ SHA=f376263fc6d7270185ab6abab9a8c379079e2a92 && mkdir -p /out/monitoring /tmp/jm
 commit f376263fc6d7: 47 個檔，dashboard 32 個
 ```
 
-平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行：
+平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行。**版本號是下載機的 OS repo（停在 9.6，0.5.7）的內容**：銀行的套件庫之後同步到 9.8 時這幾個會更新（26.5）：
 
 ```bash
 dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u | tee /out/os-packages.txt
 ```
 
 ```out
-chrony	4.8-1.el9	baseos
-createrepo_c	0.20.1-4.el9	appstream
-cyrus-sasl	2.1.27-22.el9_7	appstream
-cyrus-sasl	2.1.27-22.el9_7	baseos
-firewalld	1.3.4-20.el9_8	baseos
-gettext	0.21-8.el9	baseos
-openssl-devel	3.5.8-2.el9_8	appstream
-python3-dnf-plugin-versionlock	4.3.0-26.el9	baseos
+chrony	4.6.1-1.el9	vault96-baseos
+createrepo_c	0.20.1-2.el9	vault96-appstream
+cyrus-sasl	2.1.27-21.el9	vault96-appstream
+cyrus-sasl	2.1.27-21.el9	vault96-baseos
+firewalld	1.3.4-15.el9_6	vault96-baseos
+gettext	0.21-8.el9	vault96-baseos
+openssl-devel	3.2.2-6.el9_5.1	vault96-appstream
+python3-dnf-plugin-versionlock	4.3.0-20.el9	vault96-baseos
 ```
 
 | 套件 | 哪些主機 | 為什麼 |
@@ -659,31 +719,32 @@ python3-dnf-plugin-versionlock	4.3.0-26.el9	baseos
 
 @role 銀行 OS 團隊（lab 由下載機代勞） | dl01 | root
 
-正式環境 JDK 是銀行交付的；lab 沒有銀行，就用這台下載機從 Adoptium 抓最新的 Temurin 21，連同官方的 sha256 一起放到 `/out/bank/`，當作「銀行給的檔案」：
+正式環境 JDK 是銀行交付的；lab 沒有銀行，就用這台下載機從 Adoptium 抓 Temurin，連同官方的 sha256 一起放到 `/out/bank/`，當作「銀行給的檔案」。**要兩個**：JDK 21 給安裝基底（第 5 站）；JDK 25 留到遷移（21.7）才裝——8.2.x 不支援 Java 25，所以基底一定是 21，但 25 先一起帶進來，遷移時不用再送一次：
 
 ```bash
-mkdir -p /out/bank && meta=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/21/hotspot?os=linux&architecture=x64&image_type=jdk&vendor=eclipse") && url=$(echo "$meta" | grep -o '"link": *"[^"]*\.tar\.gz"' | head -1 | cut -d'"' -f4) && sha=$(echo "$meta" | grep -o '"checksum": *"[0-9a-f]\{64\}"' | head -1 | cut -d'"' -f4) && f=$(basename "$url") && curl -fsSL -o "/out/bank/$f" "$url" && echo "$sha  $f" > "/out/bank/$f.sha256" && (cd /out/bank && sha256sum -c --quiet "$f.sha256" && echo "jdk-ok: $f")
+mkdir -p /out/bank && for v in 21 25; do meta=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/$v/hotspot?os=linux&architecture=x64&image_type=jdk&vendor=eclipse") && url=$(echo "$meta" | grep -o '"link": *"[^"]*\.tar\.gz"' | head -1 | cut -d'"' -f4) && sha=$(echo "$meta" | grep -o '"checksum": *"[0-9a-f]\{64\}"' | head -1 | cut -d'"' -f4) && f=$(basename "$url") && curl -fsSL -o "/out/bank/$f" "$url" && echo "$sha  $f" > "/out/bank/$f.sha256" && (cd /out/bank && sha256sum -c --quiet "$f.sha256" && echo "jdk-ok: $f"); done
 ```
 
 ```out
 jdk-ok: OpenJDK21U-jdk_x64_linux_hotspot_21.0.x_y.tar.gz
+jdk-ok: OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz
 ```
 
-檔名裡的版本號跟著 Adoptium 當下的最新版走，之後的指令都用萬用字元找它，不用改。
+檔名裡的版本號跟著 Adoptium 當下的最新版走，之後的指令用 `OpenJDK21U-*`、`OpenJDK25U-*` 加萬用字元找它，不用改。
 
 ## 1.6 整批的雜湊清單
 
 @role 小安 | dl01 | root
 
 ```bash
-cd /out && find rpm tools gpg-keys monitoring -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS && wc -l SHA256SUMS
+cd /out && find rpm rpm-target tools gpg-keys monitoring -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS && wc -l SHA256SUMS
 ```
 
 ```out
-61 SHA256SUMS
+72 SHA256SUMS
 ```
 
-11 個 RPM、1 個 jar、2 把公鑰、47 個官方監控檔（含 `COMMIT`）（JDK 是銀行的檔案，有自己的 sha256，不列在這裡）。這份 `SHA256SUMS` 之後每一關都會再用一次。下載機的工作到此結束。
+22 個 RPM（基底 11、目標 11）、1 個 jar、2 把公鑰、47 個官方監控檔（含 `COMMIT`）（JDK 是銀行的檔案，有自己的 sha256，不列在這裡）。這份 `SHA256SUMS` 之後每一關都會再用一次。下載機的工作到此結束。
 
 # 2. 第二站：把東西送進銀行
 
@@ -693,7 +754,7 @@ cd /out && find rpm tools gpg-keys monitoring -type f | LC_ALL=C sort | xargs sh
 
 @role 銀行 資安 | 行內掃描平台 | —
 
-正式環境：落地區的檔案上傳到行內的惡意程式掃描平台取得 OK 報告，開單時附上安裝檔、掃描報告、`SHA256SUMS`。注意 `confluent-security`（1.13 GB）和 C3（1.0 GB）單檔都超過 1 GB，要先確認平台的大小上限。lab 裡略過。
+正式環境：落地區的檔案上傳到行內的惡意程式掃描平台取得 OK 報告，開單時附上安裝檔、掃描報告、`SHA256SUMS`。注意 `confluent-security`（約 1 GB）和 C3（約 1 GB）單檔都超過 1 GB，要先確認平台的大小上限；兩套合計約 6 GB。lab 裡略過。
 
 ## 2.2 檔案交換：送到操作機
 
@@ -706,9 +767,11 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/
 ```
 
 ```out
-65
-3.1G	/root/landing
+78
+6.2G	/root/landing
 ```
+
+78 個檔：兩套 RPM 各 11、1 個 jar、2 把公鑰、47 個官方監控檔、`SHA256SUMS`、`os-packages.txt`、`bank/` 的兩個 JDK 各兩個檔（tar 與 .sha256）。
 
 ## 2.3 進內網後再驗一次
 
@@ -721,25 +784,25 @@ cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) f
 ```
 
 ```out
-61 files OK
+72 files OK
 ```
 
 `rpm -K` 只認 rpm 資料庫裡的公鑰，所以要先匯入：
 
 ```bash
-rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc && rpm -K ~/landing/rpm/*.rpm
+rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc && rpm -K ~/landing/rpm/*.rpm ~/landing/rpm-target/*.rpm
 ```
 
 ```out
-/root/landing/rpm/confluent-ce-kafka-http-server-8.3.2-1.noarch.rpm: digests signatures OK
-（11 行都 OK）
+/root/landing/rpm/confluent-ce-kafka-http-server-8.2.4-1.noarch.rpm: digests signatures OK
+（22 行都 OK）
 ```
 
 ## 2.4 之後再帶進來的檔案
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 21 章的新版 RPM 與 JDK。流程和第 2 站一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）：
+延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 27 章單獨換 C3 版本時的單一 RPM。遷移用的新版 RPM 與 JDK 25 已經在第 1、2 站一起進來了（`rpm-target/`、`bank/`），第 21 章只是把它們上架。流程和第 2 站一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）：
 
 ```bash
 D=opmenu && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
@@ -910,25 +973,25 @@ not from a permitted host (host=kb01.poc.lab, ip=172.35.0.31, public key ED25…
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-正式環境這是 Satellite 或 Nexus；lab 用 repo01 的 `/os/` 路徑模擬。先在一個乾淨容器把需要的 OS 套件抓下來並建索引。**先下載、再裝工具**，順序反了會漏掉工具自己的相依：
+正式環境這是 Satellite 或 Nexus；lab 用 repo01 的 `/os/` 路徑模擬。銀行的套件庫**起初是 9.6 的內容**（安裝基底，26.5 才同步到 9.8）。先在一個乾淨容器把需要的 OS 套件從 Rocky vault 的 9.6 抓下來並建索引，放在 `~/kafka-lab/bank-os/9.6`（這是銀行套件庫的內容，不是我們交付的檔案，所以不在落地區）。**先下載、再裝工具**，順序反了會漏掉工具自己的相依：
 
 ```bash
-cd ~/kafka-lab && docker run --rm -v "$(cygpath -m "$PWD/bank-os-repo"):/out" lab-node:1 bash -c '
+cd ~/kafka-lab && mkdir -p bank-os/9.6 && docker run --rm -v "$(cygpath -m "$PWD/bank-os/9.6"):/out" lab-node:96 bash -c '
 set -e
-R="--disablerepo=* --enablerepo=baseos,appstream,extras"
+R="--disablerepo=* --enablerepo=vault96-baseos,vault96-appstream,vault96-extras"
 ok=0; for try in 1 2 3; do dnf -q $R download --resolve --arch x86_64 --arch noarch --destdir /out/Packages chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion && { ok=1; break; }; echo "鏡像站還沒同步好，60 秒後重試（第 $try 次）" >&2; dnf -q clean metadata; sleep 60; done; [ $ok = 1 ]
-dnf -q -y $R install createrepo_c >/dev/null
+dnf -q -y --disablerepo="*" install /out/Packages/*.rpm >/dev/null
 createrepo_c -q /out
-ls /out/Packages | wc -l' && docker cp "$(cygpath -m "$PWD/bank-os-repo")/." lab-repo01-1:/var/www/repo/os/ && docker exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
+ls /out/Packages | wc -l' && docker cp "$(cygpath -m "$PWD/bank-os/9.6")/." lab-repo01-1:/var/www/repo/os/ && docker exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
 ```
 
 ```out
-88
+71
 Packages
 repodata
 ```
 
-數字是當下 Rocky repo 解析出來的套件數，約 85–90 都正常。
+數字是 9.6 的 vault 解析出來的套件數（實測 71；「已經在映像裡的套件」不會重抓，所以比完整的相依少）。裝工具那行是用剛下載的檔案裝（`--disablerepo="*"`，不連網）：容器裡因此有 `createrepo_c`，而且狀態等於「裝好這批套件的 9.6 主機」，26.5 會用同樣的方法算出升到 9.8 要的更新集合。
 
 銀行的根憑證（0.5.5 建的 `ca/root.crt`）放進每台主機的信任清單，並給每台一份指向套件庫的 repo 設定：
 
@@ -950,11 +1013,11 @@ ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 
 正式環境的 RHEL 主機本來就信任行內 CA、也已經註冊到 Satellite，這兩件事是主機範本的一部分。
 
-## 3.3 JDK 21：銀行交付的 tar
+## 3.3 JDK 21 與 25：銀行交付的 tar
 
 @role 銀行 OS 團隊 | — | —
 
-銀行只交付壓縮檔，不裝、不設定。lab 裡那個檔案在 1.5 已經由下載機抓好，隨落地區一起送到了操作機的 `~/landing/bank/`，附銀行提供的 sha256。小安先核對一次：
+銀行只交付壓縮檔，不裝、不設定。lab 裡那兩個檔案在 1.5 已經由下載機抓好，隨落地區一起送到了操作機的 `~/landing/bank/`，附銀行提供的 sha256。**JDK 21 是現在要裝的（第 5 站）；JDK 25 是遷移（21.7）才用**，先放著。小安先核對一次：
 
 @role 小安 | ops02 | root
 
@@ -965,6 +1028,8 @@ cd ~/landing/bank && sha256sum -c --quiet *.sha256 && ls
 ```out
 OpenJDK21U-jdk_x64_linux_hotspot_21.0.x_y.tar.gz
 OpenJDK21U-jdk_x64_linux_hotspot_21.0.x_y.tar.gz.sha256
+OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz
+OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz.sha256
 ```
 
 ## 3.4 AD：群組、唯讀查詢帳號、LDAPS 憑證
@@ -1162,13 +1227,13 @@ dnf -q --repofrompath=cp-test,https://repo01.poc.lab/confluent/ --repo=cp-test -
 
 ![hostfiles]
 
-銀行給的 tar 在 `~/landing/bank/`。決定：解壓到 `/opt/java/<版本目錄>`，再做一個固定的連結 `/opt/java/current` 指向它，所有設定一律寫 `/opt/java/current`，以後換版只改連結。`java`、`keytool` 用 alternatives 登記（RHEL 的標準做法），`/etc/profile.d/java.sh` 設 `JAVA_HOME`；服務自己的 systemd 設定還會再明確寫一次 `JAVA_HOME`，不受全域切換影響。
+銀行給的 tar 在 `~/landing/bank/`（有 21 和 25 兩個，這一站只裝 **21**：8.2.x 不支援 Java 25；25 在第 21 章遷移時才換上去）。決定：解壓到 `/opt/java/<版本目錄>`，再做一個固定的連結 `/opt/java/current` 指向它，所有設定一律寫 `/opt/java/current`，以後換版只改連結。`java`、`keytool` 用 alternatives 登記（RHEL 的標準做法），`/etc/profile.d/java.sh` 設 `JAVA_HOME`；服務自己的 systemd 設定還會再明確寫一次 `JAVA_HOME`，不受全域切換影響。
 
-先看壓縮檔的頂層目錄名稱，並準備 `profile.d` 的檔案（`bank/` 裡有新舊幾版時，`sort -V | tail -1` 挑版本最新的）：
+先看壓縮檔的頂層目錄名稱，並準備 `profile.d` 的檔案（`bank/` 裡同一個主版本有新舊幾版時，`sort -V | tail -1` 挑版本最新的）：
 
 ```bash
 JDK_TAR=$(ls ~/landing/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && echo "tar=$(basename $JDK_TAR) dir=$JDK_DIR" && install -d -m 0700 ~/jdk && cat > ~/jdk/java.sh <<'EOF'
-# JDK 21 for Confluent Platform (/opt/java/current). Services set JAVA_HOME in their systemd drop-in.
+# JDK for Confluent Platform (/opt/java/current; 21 at install, 25 after the chapter 21 migration). Services set JAVA_HOME in their systemd drop-in.
 [ -n "$JAVA_HOME" ] || export JAVA_HOME=/opt/java/current
 EOF
 printf 'JDK_TAR=%s
@@ -1220,7 +1285,7 @@ for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h
 ```
 
 ```out
-ops02   rocky-9.8 cpu=8 mem=10953MB tmp_free=2048MB tmp_noexec=0
+ops02   rocky-9.6 cpu=8 mem=10953MB tmp_free=2048MB tmp_noexec=0
 （11 行，tmp_noexec 都是 0）
 ```
 
@@ -1382,6 +1447,8 @@ c3-01: 7071/tcp 9021/tcp 9090/tcp
 
 @role 小安 | ops02 | root
 
+裝的是**安裝基底**（Confluent Platform 8.2.4、Control Center 2.5.1，來自 `~/landing/rpm/`）；套件庫（第 4 站）此時只有這一套。目標版本（8.3.2、2.6.1）到第 21 章才上架。
+
 每台放原廠公鑰、寫 repo 設定（11 台含操作機，gpgcheck 開著）：
 
 ```bash
@@ -1412,7 +1479,7 @@ ops02: 1 repo, 1 keys
 | C3 | confluent-control-center-next-gen + cyrus-sasl、openssl-devel | 無 |
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 ops02; do case $h in kc*|kb*) p="confluent-server-8.3.2 confluent-security-8.3.2";; rest*) p="confluent-kafka-rest-8.3.2 confluent-security-8.3.2";; c3*) p="confluent-control-center-next-gen-2.6.1 cyrus-sasl openssl-devel";; ops*) p="confluent-server-8.3.2 confluent-security-8.3.2 confluent-cli-8.3.2";; esac; ssh $h.poc.lab "sudo dnf -q -y --setopt=install_weak_deps=False install $p >/dev/null && echo \"\$(hostname): \$(rpm -qa 'confluent-*' | wc -l) confluent packages\""; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 ops02; do case $h in kc*|kb*) p="confluent-server-8.2.4 confluent-security-8.2.4";; rest*) p="confluent-kafka-rest-8.2.4 confluent-security-8.2.4";; c3*) p="confluent-control-center-next-gen-2.5.1 cyrus-sasl openssl-devel";; ops*) p="confluent-server-8.2.4 confluent-security-8.2.4 confluent-cli-8.2.4";; esac; ssh $h.poc.lab "sudo dnf -q -y --setopt=install_weak_deps=False install $p >/dev/null && echo \"\$(hostname): \$(rpm -qa 'confluent-*' | wc -l) confluent packages\""; done
 ```
 
 ```out
@@ -1423,7 +1490,7 @@ c3-01: 1 confluent packages
 ops02: 10 confluent packages
 ```
 
-每台約一兩分鐘。鎖版本（只鎖 Confluent；C3 的兩個 OS 套件跟著 OS 修補，不鎖）：
+每台約一兩分鐘。鎖版本（只鎖 Confluent；C3 的兩個 OS 套件跟著 OS 修補，不鎖）。這個鎖在第 21 章遷移時由腳本先解開、換完版本再鎖回；第 26 章的 OS 更新（9.6 → 9.8）靠它確保 Confluent 不被動到：
 
 ```bash
 for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo dnf -q -y install python3-dnf-plugin-versionlock >/dev/null && for p in $(rpm -qa "confluent-*"); do sudo dnf -q versionlock add "$p" >/dev/null; done; echo "$(hostname): $(sudo dnf -q versionlock list | grep -c confluent) locked"'; done; for h in kb01 rest01 c3-01; do ssh $h.poc.lab 'echo "$(hostname): $(getent passwd cp-kafka cp-kafka-rest cp-control-center 2>/dev/null | cut -d: -f1 | tr "\n" " ") group=$(getent group confluent | cut -d: -f1) kafka_pkg=$(rpm -q confluent-server >/dev/null 2>&1 && echo yes || echo no)"'; done
@@ -1849,12 +1916,12 @@ source ~/conf/kraft.env && IC="1@kc01.poc.lab:9093:$DIR_ID_kc01,2@kc02.poc.lab:9
 ```
 
 ```out
-Formatting dynamic metadata voter directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+Formatting dynamic metadata voter directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
 kc01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx
 …
-Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
 kb01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx node.id=101
-（7 台 cluster.id 相同）
+（7 台 cluster.id 相同。metadata 版本字串跟著安裝的版本走：基底 8.2.4 預期是 4.2-IV1A（features describe 顯示 CP-8.2-IV1A），遷移到 8.3.2 之後新格式化的（第 23、24 章）才是 4.3-IV0B；字串以實際為準，從零重跑時對一次）
 ```
 
 格式化只做一次，重跑會被 `already formatted` 擋下，這是保護。
@@ -2182,7 +2249,7 @@ via LB: 200
 
 ## 12.1 之後每次重啟 REST Proxy：先請 LB 團隊停用那一台
 
-nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（升級演練實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26 章）都照這個順序：
+nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（遷移實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26 章）都照這個順序：
 
 1. LB 團隊停用 rest01 → 2. 小安等連線排空、重啟 rest01、確認 200 → 3. LB 團隊恢復 rest01、停用 rest02 → 4. 小安重啟 rest02 → 5. LB 團隊恢復 rest02
 
@@ -2206,6 +2273,8 @@ for waited in $(seq 0 2 60); do n=$(ssh $h.poc.lab "ss -Htn state established '(
 if [ -n "$copy" ]; then scp -q $copy $h.poc.lab:/tmp/ || { echo "$h：複製檔案失敗，沒有重啟"; exit 1; }; fi
 ssh $h.poc.lab "$before" || { echo "$h：重啟前的步驟失敗，沒有重啟"; exit 1; }
 start=$(date +%s)
+# lab 的主機是容器：共用 WSL2 的核心，systemctl reboot 會失敗（Could not activate remote peer），所以 -r 在容器上改成重啟服務
+if [ $reboot = 1 ] && ssh $h.poc.lab 'systemd-detect-virt -cq'; then reboot=0; echo "$h：這台是容器，不能重開機，改重啟 confluent-kafka-rest"; fi
 if [ $reboot = 1 ]; then
   ssh $h.poc.lab 'sudo systemctl reboot' 2>/dev/null; sleep 15
   for i in $(seq 1 60); do ssh -o ConnectTimeout=5 $h.poc.lab true 2>/dev/null && break; sleep 5; done
@@ -2359,6 +2428,8 @@ c3-01: prometheus config ok
 >
 > 陷阱：上面最後兩段（`otlp`、`storage`）是從 C3 套件預設的 `prometheus-generated-local.yml` 抄來的，**不能省**。broker 用 OTLP 把指標送進 Prometheus，`promote_resource_attributes` 才會把資源屬性 `kafka.cluster.id`、`kafka.broker.id` 變成指標標籤。沒有它，指標沒有叢集標籤，C3 畫面上依叢集、broker 篩選的圖表都比對不到資料，而畫面看起來一切正常（2026-10-26 lab 實測：補上之後 40 秒內帶標籤的資料點從 0 變成 7 萬多筆）。
 
+> 這一章裝的 C3 是**基底的 2.5.1**。2.5.1 套件預設的 `prometheus-generated-local.yml` 就有同樣的 `otlp`、`storage` 兩段，和 2.6.1 逐字相同（2026-10-28 把兩個 RPM 的 `/etc/confluent-control-center/` 逐檔比對，唯一差別是 `control-center-dev.properties` 多一行 `confluent.controlcenter.docs.host`；`control-center.properties` 與 systemd 的三個 unit 檔相同）。所以這一章的設定在 2.5.1 與遷移後的 2.6.1 都適用，21.3 換 C3 版本時不用改設定，只要把 C3 自己寫的 4 個 generated 檔擁有者改回來。
+
 C3 設定檔（整段貼到 EOF）：
 
 ```bash
@@ -2492,7 +2563,8 @@ Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~
 到這裡平台已經能用，但還不能交付。後面分兩段：
 
 - **交付前一定要做**：第 15 站把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 16 站維運選單；第 17 站監控（JMX exporter，交付行內 Prometheus、Alertmanager、Grafana 的設定）；第 18 站稽核日誌；第 22.2 的 license 到期排程、第 25 站每日備份；最後第 19 站驗收與收尾。
-- **上線之後依需要**：第 20 站憑證輪替（每年）、第 21 站升級 Confluent 與 JDK、第 23 站換 controller、第 24 站增減 broker、第 26 站 OS 修補、第 27 站升級 Control Center。
+- **遷移到目標版本**（主線，裝完基底的下一步）：第 21 站遷移 Confluent 與 JDK（8.2.4 → 8.3.2、JDK 21 → 25，C3 2.5.1 → 2.6.1）、第 26 站 OS 小版本更新（9.6 → 9.8）；每一段之後再跑第 19 站驗收。
+- **上線之後依需要**：第 20 站憑證輪替（每年）、第 23 站換 controller、第 24 站增減 broker、第 26 站每月 OS 修補、第 27 站單獨換 Control Center 版本。
 
 @role 小安 | ops02 | root
 
@@ -3603,7 +3675,7 @@ cat > ~/monitoring/to-bank/prometheus/confluent-alerts.yml <<'EOF'
 # "source:" says where the rule comes from:
 #   official   = Confluent jmx-monitoring-stacks prometheus-alerts/ (kept, sometimes with the expression fixed for KRaft)
 #   confluent  = Confluent's monitoring guidance (docs.confluent.io "Monitor Kafka", "KRaft metrics")
-#   ours       = added for this installation, backed by a metric that really exists on Confluent Server 8.3.2 / C3 2.6.1
+#   ours       = added for this installation, backed by a metric that really exists on Confluent Server 8.3.2 / C3 2.6.1 (the migration target; re-check 17.7 after migrating from the 8.2.4 baseline)
 # Thresholds and "for:" are starting points: tune them to the bank's paging policy and silence during planned restarts.
 groups:
   - name: confluent-availability
@@ -3954,10 +4026,10 @@ echo "prometheus.yml $(wc -l < prometheus/prometheus.yml) 行、receiver.py $(wc
 prometheus.yml 4 行、receiver.py 8 行
 ```
 
-起四個容器。映像檔 `prom/prometheus`、`prom/alertmanager`、`grafana/grafana` 是銀行自己的事（正式環境不是我們帶進去的），lab 從 Docker Hub 拉；webhook 接收端用 lab 的 `lab-node:1`。Grafana 開匿名 Admin 只為了 lab 好操作，並發佈到 Windows 的 13000：
+起四個容器。映像檔 `prom/prometheus`、`prom/alertmanager`、`grafana/grafana` 是銀行自己的事（正式環境不是我們帶進去的），lab 從 Docker Hub 拉；webhook 接收端用 lab 的 `lab-node:96`。Grafana 開匿名 Admin 只為了 lab 好操作，並發佈到 Windows 的 13000：
 
 ```bash
-cd ~/kafka-lab/bank-monitoring && W() { cygpath -m "$PWD/$1"; } && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(W webhook):/w:ro" lab-node:1 python3 -u /w/receiver.py >/dev/null && docker run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(W alertmanager/alertmanager.yml):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null && docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $HOSTS -v "$(W prometheus/prometheus.yml):/etc/prometheus/prometheus.yml:ro" -v "$(W prometheus/confluent):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null && docker run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(W grafana/provisioning):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null && sleep 60 && docker ps --format '{{.Names}} {{.Status}}' | grep -E 'lab-mon-(prometheus|alertmanager|grafana|webhook)' | sort
+cd ~/kafka-lab/bank-monitoring && W() { cygpath -m "$PWD/$1"; } && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(W webhook):/w:ro" lab-node:96 python3 -u /w/receiver.py >/dev/null && docker run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(W alertmanager/alertmanager.yml):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null && docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $HOSTS -v "$(W prometheus/prometheus.yml):/etc/prometheus/prometheus.yml:ro" -v "$(W prometheus/confluent):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null && docker run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(W grafana/provisioning):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null && sleep 60 && docker ps --format '{{.Names}} {{.Status}}' | grep -E 'lab-mon-(prometheus|alertmanager|grafana|webhook)' | sort
 ```
 
 ```out
@@ -3974,7 +4046,7 @@ lab-mon-webhook Up About a minute
 四件事：每個 job 有幾個 target 是 up；告警規則載入且沒有錯；Alertmanager 認得 Prometheus；Grafana 有 32 個 dashboard、datasource 連得到 Prometheus。從 lab 的容器裡用 `curl` 查（容器內有 Python 可以整理輸出）：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:1 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
+docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
 import json, sys, collections
 up = collections.Counter(); total = collections.Counter()
 for t in json.load(sys.stdin)[\"data\"][\"activeTargets\"]:
@@ -4003,7 +4075,7 @@ Grafana dashboard: 32 個
 Grafana 的 dashboard 真的查得到資料：用 Grafana 自己的查詢介面（`/api/ds/query`，和畫面上 panel 走同一條路）跑 KRaft dashboard 的「Current Leader」panel 的查詢，`$env` 換成 `lab`：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:1 bash -c 'curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "{\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"Prometheus\"},\"expr\":\"sum(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})/count(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})\",\"instant\":true}],\"from\":\"now-5m\",\"to\":\"now\"}" | python3 -c "import json, sys; r = json.load(sys.stdin)[\"results\"][\"A\"]; print(\"status\", r[\"status\"], \"current leader（controller node id）=\", r[\"frames\"][0][\"data\"][\"values\"][1][0])"'
+docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "{\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"Prometheus\"},\"expr\":\"sum(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})/count(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})\",\"instant\":true}],\"from\":\"now-5m\",\"to\":\"now\"}" | python3 -c "import json, sys; r = json.load(sys.stdin)[\"results\"][\"A\"]; print(\"status\", r[\"status\"], \"current leader（controller node id）=\", r[\"frames\"][0][\"data\"][\"values\"][1][0])"'
 ```
 
 ```out
@@ -4040,7 +4112,7 @@ docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/
 先看**預設格式**：整包 JSON，`alerts` 是陣列（一個通知群組可能有很多筆），欄位是 Alertmanager 的 version 4：
 
 ```bash
-docker logs lab-mon-webhook 2>&1 | grep '^POST /default' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:1 python3 -c "
+docker logs lab-mon-webhook 2>&1 | grep '^POST /default' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:96 python3 -c "
 import json, sys
 head, body = sys.stdin.read().split('\n', 1)
 d = json.loads(body)
@@ -4076,7 +4148,7 @@ print(json.dumps({'status': a['status'], 'labels': a['labels'], 'annotations': a
 再看**自訂格式**：一筆告警一個扁平的 JSON，欄位是前面範本組出來的；`description` 裡的雙引號、冒號、`007` 都完整保留，JSON 沒壞：
 
 ```bash
-docker logs lab-mon-webhook 2>&1 | grep '^POST /dynatrace' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:1 python3 -c "
+docker logs lab-mon-webhook 2>&1 | grep '^POST /dynatrace' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:96 python3 -c "
 import json, sys
 head, body = sys.stdin.read().split('\n', 1)
 print(head)
@@ -4102,7 +4174,7 @@ print(json.dumps(json.loads(body), ensure_ascii=False, indent=1))"
 解除：把測試規則拿掉、重新載入。Prometheus 對被拿掉的規則不會補送「已解除」，Alertmanager 要等告警過期（Prometheus 送的告警帶約 4 分鐘的有效期）才自己解除，再在下一輪通知送出 resolved：自訂格式的 `State` 變 `RESOLVED`，預設格式的 `status` 變 `resolved`。（真實的告警是條件消失，Prometheus 會直接送 resolved，不用等這麼久。）等 5 分鐘左右：
 
 ```bash
-cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.yml && docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 290; docker logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | docker run --rm -i lab-node:1 python3 -c "import re, sys; [print(re.match(r'POST (\S+)', l).group(1).ljust(11), re.search(r'\"(?:State|status)\":\"(\w+)\"', l).group(1)) for l in sys.stdin]"
+cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.yml && docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 290; docker logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | docker run --rm -i lab-node:96 python3 -c "import re, sys; [print(re.match(r'POST (\S+)', l).group(1).ljust(11), re.search(r'\"(?:State|status)\":\"(\w+)\"', l).group(1)) for l in sys.stdin]"
 ```
 
 ```out
@@ -4196,7 +4268,7 @@ for f in sorted(glob.glob(os.path.join(folder, "*.json"))):
     print("%-34s %6d %6d  %s" % (os.path.basename(f), n, ok, ("; ".join(missing[:6]) + (" …" if len(missing) > 6 else "")) if detail else ""))
 print("合計 %d 個 dashboard、%d 個 panel、%d 個有資料" % (total["dash"], total["panels"], total["data"]))
 EOF
-docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD"):/w:ro" lab-node:1 python3 /w/dashboard-coverage.py http://lab-mon-prometheus:9090 /w/grafana/provisioning/dashboards
+docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD"):/w:ro" lab-node:96 python3 /w/dashboard-coverage.py http://lab-mon-prometheus:9090 /w/grafana/provisioning/dashboards
 ```
 
 ```out
@@ -4236,7 +4308,7 @@ zookeeper-cluster.json                 11      0
 合計 32 個 dashboard、816 個 panel、253 個有資料
 ```
 
-怎麼讀這張表（Confluent Server 8.3.2 與 C3 2.6.1，lab 單 controller、單 broker、單 REST、單 C3 的實測；**RBAC、稽核、Tiered Storage 沒開，要在正式叢集上補驗**）：
+怎麼讀這張表（Confluent Server 8.3.2 與 C3 2.6.1，也就是**遷移目標**的版本；lab 單 controller、單 broker、單 REST、單 C3 的實測。**安裝基底（8.2.4／2.5.1）的指標覆蓋沒有逐一重驗**：exporter 規則是版本無關的，但哪些 MBean 有資料以 8.2.4 實際為準，遷移完成後（21.10）再跑一次 17.7、17.9 對照；**RBAC、稽核、Tiered Storage 沒開，要在正式叢集上補驗**）：
 
 | dashboard（檔名） | 有資料／總數 | 判讀 |
 |---|---|---|
@@ -4452,6 +4524,8 @@ Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.repl
 ![acceptance]
 
 每一站結尾都有自己的檢查，但交付前要有一份**一次跑完、結果能附在驗收文件裡**的清單。四組：平台健康、安全（正向與反向都測）、應用程式端、維運。最後是收尾：安裝期間留在操作機與主機上的東西，哪些要留、哪些要收。
+
+這份驗收不綁版本：裝完**安裝基底**（8.2.4）跑一次，第 21 章遷移的每一段（C3 與套件、JDK 25、finalize）之後各跑一次，第 26 章 OS 更新到 9.8 之後再跑一次，結果都要全數通過。
 
 ## 19.1 平台健康
 
@@ -4678,6 +4752,7 @@ touch /tmp/probe.stop; sleep 3; read n f < /tmp/probe.result; echo "探針：換
 - **每次換發都產生新私鑰**，不重用舊的 CSR。
 - 檔名、路徑、keystore 密碼都和原本一樣，所以 properties 一個字都不用改（Secret Protection 的密文也不用重算）。
 - 新的東西先放在 `~/pki/next/`，派送完、驗證過，才換成 `~/pki/` 的正本；舊的留在 `~/pki/old-<日期>/`。
+- **遷移前後都適用**：這一章在安裝基底（JDK 21）和遷移之後（JDK 25）指令完全一樣。服務信任的是自己的 `truststore.p12`，不碰 JDK 的 `cacerts`，所以換 JDK 不影響信任；`keytool` 一律走 `/opt/java/current`。lab 的順序是基底驗收完先換一次 leaf（第 21 章之前），遷移完成後的驗收會再證明新版與新 JDK 照樣接受這些憑證。
 
 ## 20.0 銀行說要換憑證時，先判斷是哪一種
 
@@ -5750,31 +5825,46 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 > 這就是 20.0 說的「拿掉舊根一定排在每個端點都換好鏈之後」：舊鏈的 leaf 本身沒問題，被拒是因為它夾帶的中繼指向已經不信的 G2。應用程式（REST 走 mTLS 的那些）的 p12 也一樣要換鏈，否則階段三那一刻就斷。
 
-# 21. 第二十一站：升級 Confluent 與 JDK
+# 21. 第二十一站：遷移到新版 Confluent 與 JDK
 
 ![upgrade]
 
-平台上線之後，Confluent 每季會出新版，JDK 也會跟著更新。這一站用一次真實的情境走完：**Confluent Platform 8.2.4 → 8.3.2**，同時把 **JDK 21 換成 25**（8.3 才支援 Java 25，8.2 不支援；注意原廠對 8.3 的**建議**版本仍是 21，25 是「支援」，選 25 要和原廠支援確認）。Control Center 這次版本不變（2.6.1 支援 7.5.15 到 8.3.x），維持 JDK 21。
+安裝基底（第 1–20 章）裝的是 **Confluent Platform 8.2.4**、**Control Center 2.5.1**、**JDK 21**。這一站是主線的下一步：遷移到 **Confluent Platform 8.3.2**，C3 同時升到 **2.6.1**，並把 **JDK 21 換成 25**。順序和原因：
 
-> 本章的前提：要有一套**舊版**才有東西可升。照書做下來的是 8.3.2，演練時從第 1 章重來一次，把各章指令裡的 `8.3.2` 換成 `8.2.4`（第 1.2 節下載、第 8 章安裝與 versionlock），C3 維持 2.6.1；套件庫裡兩個版本都留著。
+- **C3 先升**：原廠相容表上 C3 2.5.x 只支援到 CP 8.2.x，2.6.x 才支援到 8.3.x（2.6.x 的範圍是 7.5.15 到 8.3.x，所以 2.6.1 配著 8.2.4 也在支援範圍內）。CP 一升到 8.3，2.5.1 就落在支援範圍外，所以 C3 要在 broker 之前換（21.3）。
+- **JDK 25 在 CP 升完之後才換**：8.2.x 只支援 Java 17／21，8.3.x 才支援 25；注意原廠對 8.3 的**建議**版本仍是 21，25 是「支援」，選 25 要和原廠支援確認（銀行沒有這個要求時，留在 21 就好，只做第一、三段）。C3 留在 JDK 21（原廠沒有寫 C3 2.6 支援 Java 25）。
+- **OS 小版本（9.6 → 9.8）不在這一章**，是第 26 章的 26.5：Confluent 套件被 versionlock 鎖住、JDK 是 tar，OS 更新碰不到它們，所以兩條線可以分開做；本章每一段結束都跑第 19 章的驗收。
+
+> 前提：安裝基底已經裝好並通過第 19 章驗收；目標版本的 RPM 與 JDK 25 已經在第 1、2 站隨落地區進來（`~/landing/rpm-target/`、`~/landing/bank/`），這一章 21.1 才把它們上架。第 20 章的憑證輪替做過沒做過都行，順序沒有相依。
 
 分三段，每段結束都可以停下來驗收：
 
 | 段 | 做什麼 | 出問題怎麼退 |
 |---|---|---|
-| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3 → broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（21.9） |
+| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3（2.5.1 → 2.6.1）→ broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（21.9） |
 | 二 | JDK 21 → 25：controller、broker、REST Proxy、操作機逐台切換 `/opt/java/current`；C3 留在 21 | 連結切回 21、重啟 |
 | 三 | finalize：features 升到 4.3（`kafka-features upgrade --release-version 4.3`） | **不能退**：之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降回去可能要從備份還原 |
 
 要回 8.2 時順序反過來：先把 JDK 切回 21（8.2 不支援 25），再 `dnf downgrade`。所以**前兩段都驗收過才做第三段**。
 
-> 實測（lab，全程持續流量）：約 48 分鐘。直連應用程式送出 14,009 筆、讀回 14,009 筆，遺失 0；經負載平衡的 REST 2,684 次中失敗 2 次（HTTP 402，都發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 19 章的驗收，都全數通過。
+> 實測（lab，全程持續流量，2026-10-26 的升級演練，當時 C3 不動；這一版多了 C3 先升的一步，從零重跑後以新數字為準）：約 48 分鐘。直連應用程式送出 14,009 筆、讀回 14,009 筆，遺失 0；經負載平衡的 REST 2,684 次中失敗 2 次（HTTP 402，都發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 19 章的驗收，都全數通過。
 
-## 21.1 升級前檢查
+## 21.1 目標版本上架與升級前檢查
 
 @role 小安 | ops02 | root
 
-確認現在的版本、quorum、套件庫裡有沒有新版、有沒有沒追上的複本，以及 8.3 已經拿掉的設定（`message.format.version` 這類留在設定檔裡，8.3 會起不來）：
+目標版本的 RPM 已經在落地區（`~/landing/rpm-target/`，第 2 站核對過 sha256 與簽章）。把它們加進內部套件庫：**基底版本不刪，回滾要用**，只推 `confluent/` 這個目錄：
+
+```bash
+(cd ~/landing && sha256sum -c --quiet SHA256SUMS) && cp ~/landing/rpm-target/*.rpm ~/repo/confluent/ && createrepo_c -q --update ~/repo/confluent && tar -C ~/repo -cf - confluent | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/repo -xpf -' && ssh c3-01.poc.lab 'echo "套件庫裡的 confluent-server：$(sudo dnf -q --refresh --showduplicates list confluent-server 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/^1://; s/-1\$//" | sort -uV | paste -sd" " -)"; echo "套件庫裡的 C3：$(sudo dnf -q --showduplicates list confluent-control-center-next-gen 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/-1\$//" | sort -uV | paste -sd" " -)"'
+```
+
+```out
+套件庫裡的 confluent-server：8.2.4 8.3.2
+套件庫裡的 C3：2.5.1 2.6.1
+```
+
+確認現在的版本、quorum、套件庫裡有沒有新版、有沒有沒追上的複本，以及 8.3 已經拿掉的設定（`message.format.version` 這類留在設定檔裡，8.3 會起不來；基底的範本本來就沒有，這裡再確認一次）：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe 2>/dev/null | grep confluent.metadata.version | tr -s ' \t' ' ' && kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep LeaderId && dnf -q --refresh list --showduplicates confluent-server 2>/dev/null | grep confluent-internal | tr -s ' ' && echo "under-replicated: $(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do printf '%s:%s ' $h "$(ssh $h.poc.lab 'sudo grep -cE "^(message.format.version|message.downconversion.enable|message.timestamp.difference.max.ms|log.message.format.version)" /etc/confluent/kafka/server.properties')"; done; echo
@@ -5789,8 +5879,6 @@ confluent-server.noarch 1:8.3.2-1 confluent-internal
 under-replicated: 0
 kc01:0 kc02:0 kc03:0 kb01:0 kb02:0 kb03:0 kb04:0
 ```
-
-新版的 RPM 和 JDK 照第 1–4 站的流程帶進來：下載機抓 `confluent-*-8.3.2`、照 1.5 把 `latest/21` 換成 `latest/25` 抓 JDK 25 交給銀行、掃描交換、上架。套件庫裡**舊版要留著**，回滾要用。
 
 ## 21.2 備份
 
@@ -5807,21 +5895,37 @@ kc01 28K  kc02 28K  kc03 28K  kb01 32K  kb02 32K  kb03 32K  kb04 32K  rest01 28K
 /root/upgrade-backup/20261024-1401
 ```
 
-## 21.3 第一段：Control Center 先
+## 21.3 第一段：Control Center 先（2.5.1 → 2.6.1）
 
 @role 小安 | ops02 | root
 
-原廠要求 C3 比 broker、controller 先升。這次 C3 版本不變，只要確認它活著、版本在 8.3 的相容範圍內（2.6.x 支援到 8.3.x）。C3 有新版時就在這一步照 21.4 的方式換套件、重啟。
+原廠要求 C3 比 broker、controller 先升，而且 2.5.1 不支援 8.3，所以這一步一定要先做。C3 只有一台，升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看）。設定檔不用改（第 13 章的設定 2.5.1 與 2.6.1 通用）。
+
+換版本的步驟寫成 `~/conf/c3-change.sh`，升級與回滾是同一段，只差 `dnf install` 或 `dnf downgrade`（第 27 章還會用到）：解鎖 → 換版本 → 鎖回新的版本 → `daemon-reload`（RPM 會換掉 unit 檔）→ 把 C3 自己要寫的 4 個 generated 檔改回 `cp-control-center`（RPM 換版本會把它們改回 root）→ 確認設定檔沒被動、`ExecStart` 還是指著我們的設定 → 重啟 Prometheus、Alertmanager、C3 → 等畫面 200：
 
 ```bash
-ssh c3-01.poc.lab 'rpm -q confluent-control-center-next-gen; systemctl is-active confluent-control-center'; echo "UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+cat > ~/conf/c3-change.sh <<'EOF'
+#!/usr/bin/env bash
+# c3-change.sh <版本> <install|downgrade>：在 c3-01 換 C3 套件版本、重啟、等畫面 200
+V=$1 A=$2
+ssh c3-01.poc.lab "p=/etc/confluent/control-center/control-center.properties; before=\$(sudo sha256sum \$p | cut -c1-12); sudo dnf -q versionlock delete confluent-control-center-next-gen >/dev/null; sudo dnf -q -y --refresh $A confluent-control-center-next-gen-$V >/dev/null && sudo dnf -q versionlock add confluent-control-center-next-gen-$V >/dev/null; sudo systemctl daemon-reload; cd /etc/confluent-control-center && for f in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do sudo chown cp-control-center:confluent \$f && sudo chmod 0640 \$f; done; echo \"\$(rpm -q confluent-control-center-next-gen) config=\$([ \"\$before\" = \"\$(sudo sha256sum \$p | cut -c1-12)\" ] && echo same || echo CHANGED) exec=\$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties' | head -1) lock=\$(sudo dnf -q versionlock list | grep control-center)\"; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart \$u; done"
+for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done
+echo "UI=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)（約 $((i*5)) 秒）；Prometheus 指標 $(curl -s -m 10 --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) 種"
+EOF
+chmod 0700 ~/conf/c3-change.sh && echo "C3 現在：$(ssh c3-01.poc.lab 'rpm -q confluent-control-center-next-gen')" && bash ~/conf/c3-change.sh 2.6.1 install && ssh c3-01.poc.lab 'cd /etc/confluent-control-center && echo "C3 自己寫的 4 個檔：$(sudo stat -c %U alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml | sort -u | paste -sd, -)"' && echo "alice 登入 MDS（C3 用同一套）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
 ```
 
 ```out
-confluent-control-center-next-gen-2.6.1-1.noarch
-active
-UI=200
+C3 現在：confluent-control-center-next-gen-2.5.1-1.noarch
+confluent-control-center-next-gen-2.6.1-1.noarch config=same exec=/etc/confluent/control-center/control-center.properties lock=confluent-control-center-next-gen-0:2.6.1-1.*
+UI=200（約 30–35 秒）；Prometheus 指標 125 種（歷史指標沒有因換版本而消失）
+C3 自己寫的 4 個檔：cp-control-center
+alice 登入 MDS（C3 用同一套）：200
 ```
+
+> 陷阱（lab 實測，2.6.0／2.6.1 之間的換版本）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。2.5.1 → 2.6.1 用的是同一段，從零重跑時再確認這個行為。
+
+> 此時 C3（2.6.1）配著 CP 8.2.4：在原廠支援範圍內（2.6.x：7.5.15 到 8.3.x），第一段中途、也就是 broker 只升了一部分時 C3 看到的是新舊混合的叢集，這是原廠建議的順序。
 
 ## 21.4 第一段：broker 逐台
 
@@ -6091,7 +6195,7 @@ confluent.metadata.version CP-8.3-IV0B
 
 @role 小安 | ops02 | root
 
-任何一段出問題、features 還沒升（`describe` 看到的還是 `CP-8.2-…`），就逐台退：先把 JDK 切回 21，再把套件 `downgrade` 回 8.2.4、重新鎖、`daemon-reload`、重啟。順序和升級相反（操作機、REST Proxy → controller → broker，C3 最後）。實測拿 kb04 單台演練（其他台都是 8.3.2）：
+任何一段出問題、features 還沒升（`describe` 看到的還是 `CP-8.2-…`），就逐台退：先把 JDK 切回 21，再把套件 `downgrade` 回 8.2.4、重新鎖、`daemon-reload`、重啟。順序和升級相反（操作機、REST Proxy → controller → broker；C3 不用退，2.6.x 也支援 8.2.x，真的要退照第 27 章的 `c3-change.sh`）。實測拿 kb04 單台演練（其他台都是 8.3.2）：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-21* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.2.4 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y downgrade $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
@@ -6101,9 +6205,27 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.x+y/bin/java MDS 200（約 15–20 秒）
 ```
 
-退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。演練完再照 21.4、21.7 把它升回去。
+退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。回滾驗證完，再照 21.4、21.7 把它升回去。
 
 > 回滾：finalize 之後就不能用這個方法了。真的要退，得用 21.2 的備份與原廠支援的還原程序，所以 finalize 一定排在前兩段都驗收、觀察一段時間之後。
+
+## 21.10 遷移完成：確認版本、記下新的基準
+
+@role 小安 | ops02 | root
+
+三段都驗收過、觀察一段時間之後，用一張表確認每台主機的版本都是預期的（Confluent 與 JDK 是目標版本；C3 的 JDK 一直留在 21）：
+
+```bash
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname) java=$(readlink /opt/java/current | sed s#/opt/java/##) confluent=$(rpm -qa "confluent-*" --qf "%{VERSION}\n" | sort -u | paste -sd,) os=$(. /etc/os-release; echo $VERSION_ID)"'; done
+```
+
+```out
+kc01 java=jdk-25.0.x+y confluent=8.3.2 os=9.6
+（kb01–kb04、rest01、rest02 同上）
+c3-01 java=jdk-21.0.x+y confluent=2.6.1 os=9.6
+```
+
+`os=9.6` 還沒動，那是第 26 章的事。**記下新的基準**：之後新增或換掉主機（第 23、24 章）要裝**現行版本**——第 5 站裝 JDK 25（`OpenJDK25U-*`）、第 8 站的版本號換成 8.3.2 與 2.6.1，不是這本書前面寫的 8.2.4／2.5.1。用 `install/` 腳本的話，改 `conf/site.env` 的 `CP_VERSION`、`C3_VERSION`、`JDK_MAJOR` 三個值就行（`21-upgrade.sh adopt` 會代改）。
 
 # 22. 第二十二站：License 到期監控
 
@@ -6199,7 +6321,7 @@ controller 的 quorum 是動態的（第 10 站用 `--initial-controllers` 格�
 | 情況 | 要做的事 |
 |---|---|
 | 同一台主機，資料碟壞了換新 | 本章：移出舊成員 → 重新格式化（觀察者）→ 追上 → 加入 |
-| 換一台新機器，沿用同一個主機名稱 | 先照第 3、5、7、8 站把新機器準備好（銀行的帳號、套件庫、JDK、OS 調校、套件），派送憑證與設定（第 10 站），再做本章 |
+| 換一台新機器，沿用同一個主機名稱 | 先照第 3、5、7、8 站把新機器準備好（銀行的帳號、套件庫、JDK、OS 調校、套件；**裝現行版本**：遷移後是 JDK 25、Confluent 8.3.2，見 21.10），派送憑證與設定（第 10 站），再做本章 |
 | 換成不同名稱的主機 | 另外要重簽 `kafka-internal`（SAN 列了所有主機名稱，20.2），所有節點的 `controller.quorum.bootstrap.servers` 改成新名單並滾動重啟；本章未演練 |
 
 > 一次只換一台。換的過程中 quorum 只剩兩個成員，兩個都要在才能選出 leader：**這段時間不要重啟 kc01、kc02**。
@@ -6620,9 +6742,18 @@ orders.backup-demo 還在嗎：0
 
 還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。
 
-# 26. 第二十六站：OS 修補
+# 26. 第二十六站：OS 修補與小版本更新
 
 銀行每月的 OS 修補照常由銀行的套件庫（Satellite／Nexus／web server）發布；平台這邊要做的只是「一台一台修、該重開就重開、健康了才做下一台」。Confluent 套件被 versionlock 鎖住（第 8 站），JDK 是 tar（第 5 站），所以 `dnf update` 只會動 OS 套件；C3 的前置套件 `cyrus-sasl`、`openssl-devel` 跟著 OS 修補走（不鎖）。
+
+這一章處理兩種情境，**步驟完全一樣**，差別只在套件庫裡有什麼、更新量多大、幾乎一定要重開機：
+
+| 情境 | 例子 | 更新量 | 重開機 |
+|---|---|---|---|
+| 每月修補 | 9.6 內的安全更新 | 幾個到幾十個套件 | 偶爾（核心、glibc、systemd 更新時） |
+| **小版本更新**（主線，26.5） | RHEL 9.6 → 9.8 | 一百多個套件（lab 實測 148 個，含 glibc、systemd、openssh、openssl） | 一定（glibc、systemd、核心都換） |
+
+主線裡這一章接在第 21 章之後：Confluent 已是 8.3.2、JDK 已是 25，現在把 OS 從安裝基底的 **9.6 更新到 9.8**。26.0 是銀行的事（把套件庫同步到 9.8），26.1–26.4 是更新本身，26.5 是驗證、重開機的限制、回滾與「別的小版本怎麼套用」。
 
 | 順序 | 主機 | 修完之後 |
 |---|---|---|
@@ -6630,28 +6761,58 @@ orders.backup-demo 還在嗎：0
 | 2 | controller 逐台，leader 最後 | 等 quorum 的 Lag 回到 0 |
 | 3 | REST Proxy、C3、操作機 | REST 經 LB 200、C3 200 |
 
-要不要重開機、要不要重啟服務，用 `dnf needs-restarting` 判斷，不靠人記：`-r` 看核心程式庫（kernel、glibc、systemd…）有沒有更新，`-s` 列出用到被更新程式庫、需要重啟的服務。JVM 自帶 TLS 實作，OS 的 openssl 更新通常不會把 Confluent 服務列進 `-s`。
+要不要重開機、要不要重啟服務，用 `dnf needs-restarting` 判斷，不靠人記：`-r` 看核心程式庫（kernel、glibc、systemd…）有沒有更新，`-s` 列出用到被更新程式庫、需要重啟的服務。JVM 自帶 TLS 實作，OS 的 openssl 更新通常不會把 Confluent 服務列進 `-s`；但 JVM 載入的 glibc 換了，**服務要重啟（或重開機）才會用到新的**。
 
-> lab 是容器，不能真的重開機（核心是 WSL2 的）；遇到「要重開機：是」時，正式環境是 `sudo systemctl reboot` 再等健康，lab 改用 `docker restart lab-<主機>-1`。
+> **lab 是容器，不能真的重開機**（核心是 WSL2 的，`systemctl reboot` 會失敗：Could not activate remote peer）；kernel 更新也不會生效，因為容器根本沒有自己的核心。26.2–26.4 的指令用 `systemd-detect-virt -c` 判斷主機是不是容器：是的話，「要重開機：是」改成重啟該主機的平台服務（讓 JVM 載入新的 glibc），正式環境才是 `sudo systemctl reboot`。這是 lab 能做到的最接近的替代，**不等於重開機的驗證**：開機順序、fstab、網卡、核心模組、systemd unit 的 enable 狀態都沒有被測到，正式環境第一次做小版本更新請排在變更窗口，並先在測試環境走一遍。
+
+## 26.0 銀行先把套件庫同步到要更新的版本
+
+@role 銀行 OS 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+前提：銀行的套件庫已經有這一輪要更新到的內容。每月修補是銀行例行的同步；小版本更新就是把套件庫同步到 9.8（Satellite 換 content view、Nexus 同步新的 proxy 倉庫、web server 重新 reposync，各家做法不同，從主機看都是同一個 `bank-os` repo）。我方要確認兩件事：**套件庫裡有 `rocky-release`／`redhat-release` 的 9.8**（沒有就代表只是同一小版本內的修補，不是小版本更新），以及 **`confluent-*` 不在更新清單裡**（26.1 檢查）。
+
+lab 沒有銀行的套件庫同步，就自己做：在一個乾淨的 9.6 容器裡，把 3.2 下載的 9.6 套件裝起來（等於「裝好這批套件的 9.6 主機」），對 Rocky 的 9.8 倉庫（`pub/rocky/9.8`）做 `dnf update --downloadonly`，就得到「9.6 主機升到 9.8 要的更新集合」。把更新集合和 9.6 的內容合併、重建索引，換上 repo01 的 `/os/`。`--downloadonly` 只下載不安裝；下載的檔案先複製到銀行的目錄、再建索引：
+
+```bash
+cd ~/kafka-lab && docker run --rm -v "$(cygpath -m "$PWD/bank-os"):/out" lab-node:96 bash -c '
+set -e
+t0=$(date +%s)
+dnf -q -y --disablerepo="*" install /out/9.6/Packages/*.rpm >/dev/null
+printf "[r98-baseos]\nname=Rocky 9.8 BaseOS\nbaseurl=https://dl.rockylinux.org/pub/rocky/9.8/BaseOS/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n[r98-appstream]\nname=Rocky 9.8 AppStream\nbaseurl=https://dl.rockylinux.org/pub/rocky/9.8/AppStream/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n[r98-extras]\nname=Rocky 9.8 extras\nbaseurl=https://dl.rockylinux.org/pub/rocky/9.8/extras/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n" > /etc/yum.repos.d/rocky-98.repo
+mkdir -p /out/9.8-updates/Packages /tmp/dl
+dnf -q -y --disablerepo="*" --enablerepo=r98-baseos,r98-appstream,r98-extras update --downloadonly --downloaddir /tmp/dl >/dev/null 2>&1
+cp -a /tmp/dl/. /out/9.8-updates/Packages/ && createrepo_c -q /out/9.8-updates
+mkdir -p /out/9.8/Packages && cp -a /out/9.6/Packages/. /out/9.8/Packages/ && cp -a /out/9.8-updates/Packages/. /out/9.8/Packages/ && createrepo_c -q /out/9.8
+echo "9.8 更新集合：$(ls /out/9.8-updates/Packages | wc -l) 個 RPM、$(du -sm /out/9.8-updates | cut -f1) MB（$(( $(date +%s) - t0 )) 秒）；合併後的套件庫 $(ls /out/9.8/Packages | wc -l) 個 RPM"' && docker exec lab-repo01-1 bash -c 'rm -rf /var/www/repo/os/*' && docker cp "$(cygpath -m "$PWD/bank-os/9.8")/." lab-repo01-1:/var/www/repo/os/ && docker exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; echo "repo01 /os/：$(ls /var/www/repo/os/Packages | wc -l) 個 RPM；rocky-release：$(ls /var/www/repo/os/Packages | grep rocky-release)"'
+```
+
+```out
+9.8 更新集合：152 個 RPM、78 MB（約 160 秒）；合併後的套件庫 223 個 RPM
+repo01 /os/：223 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
+```
+
+> 說明：更新集合是 152 個 RPM（148 個要更新的套件加上相依），只有 78 MB，因為這批主機的套件只有最小安裝加上平台要用的工具；真正的 RHEL 主機裝的東西多，數字會大很多，請銀行的 OS 團隊用同樣的方法（在代表性的主機上 `dnf update --downloadonly`）估算。套件庫合併後同時有 9.6 和 9.8 的版本，dnf 會挑最新的。
+
+> 陷阱：dnf 會快取套件庫的中繼資料 48 小時，剛同步完主機可能還看到舊的清單。26.1 之後的指令都帶 `--refresh`。
 
 ## 26.1 修補前：看有哪些更新、Confluent 有沒有鎖住
 
 @role 小安 | ops02 | root
 
+每台印出：目前的 OS 版本、套件庫裡 release 套件的版本（小版本更新時會比目前的新）、可更新幾個、其中跟平台有關的幾個、鎖住幾個 confluent 套件，再用 `dnf upgrade --assumeno` 預覽交易（只看摘要，不執行）：
+
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" && for h in kc01 kb01 rest01 c3-01 ops02; do ssh $h.poc.lab 'echo "$(hostname)：可更新 $(sudo dnf -q check-update --refresh 2>/dev/null | grep -c "^[a-zA-Z0-9]") 個（$(sudo dnf -q check-update 2>/dev/null | awk "/^[a-zA-Z0-9]/{print \$1}" | sed "s/\.[^.]*$//" | sort -u | paste -sd" " -)）；鎖住 $(sudo dnf -q versionlock list 2>/dev/null | grep -c confluent) 個 confluent 套件"'; done
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" && for h in kc01 kb01 rest01 c3-01 ops02; do ssh $h.poc.lab 'u=$(sudo dnf -q check-update --refresh 2>/dev/null | awk "/^[a-zA-Z0-9]/{print \$1}" | sed "s/\.[^.]*\$//"); echo "$(hostname)：OS $(. /etc/os-release; echo $VERSION_ID)，套件庫的 release 套件 $(sudo dnf -q repoquery --latest-limit 1 --qf %{version} $(rpm -q --whatprovides system-release --qf "%{NAME}\n" | head -1) 2>/dev/null | head -1)；可更新 $(grep -c . <<<"$u") 個（平台相關：$(grep -xE "glibc|systemd|openssh-server|kernel|rocky-release|redhat-release|openssl-libs" <<<"$u" | paste -sd" ")）；其中 confluent-* $(grep -c "^confluent-" <<<"$u") 個；鎖住 $(sudo dnf -q versionlock list 2>/dev/null | grep -c confluent) 個 confluent 套件"; sudo dnf upgrade --assumeno 2>&1 | grep -E "^Upgrade +[0-9]+ Package"'; done
 ```
 
 ```out
 under-replicated：0
-kc01：可更新 6 個（acl libacl openssh openssh-clients openssh-server vim-minimal）；鎖住 9 個 confluent 套件
-kb01：可更新 6 個（acl libacl openssh openssh-clients openssh-server vim-minimal）；鎖住 9 個 confluent 套件
-rest01：可更新 6 個（…同上）；鎖住 4 個 confluent 套件
-c3-01：可更新 6 個（…同上）；鎖住 1 個 confluent 套件
-ops02：可更新 6 個（…同上）；鎖住 10 個 confluent 套件
+kc01：OS 9.6，套件庫的 release 套件 9.8；可更新 148 個（平台相關：glibc openssh-server rocky-release systemd）；其中 confluent-* 0 個；鎖住 9 個 confluent 套件
+Upgrade  148 Packages
+（kb01、rest01、c3-01、ops02 同上，數字依各台裝的套件而不同；confluent-* 一律 0 個）
 ```
 
-> 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 站重新鎖。Confluent 的升級只走第 21 章。
+> 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 站重新鎖。Confluent 的升級只走第 21 章。每月修補時「套件庫的 release 套件」和目前的 OS 版本相同，可更新的數量就小得多（原本實測：6 個，含 openssh-server，修補過程中 ssh 連線不斷）。
 
 ## 26.2 broker 逐台
 
@@ -6664,18 +6825,32 @@ cat > ~/conf/os-patch-host.sh <<'EOF'
 #!/usr/bin/env bash
 # 在一台主機上：dnf update（Confluent 由 versionlock 擋住）→ 判斷要不要重開機、哪些平台服務要重啟
 n=$(sudo dnf -q check-update --refresh 2>/dev/null | grep -c '^[a-zA-Z0-9]')
+os_before=$(. /etc/os-release; echo $VERSION_ID)
 sudo dnf -y -q update >/dev/null 2>&1 || { echo "$(hostname) dnf update 失敗"; exit 1; }
 reboot=$(sudo dnf needs-restarting -r >/dev/null 2>&1 && echo 否 || echo 是)
 services=$(sudo dnf needs-restarting -s 2>/dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u | paste -sd, -)
-echo "$(hostname) 更新 $n 個；要重開機：$reboot；要重啟的平台服務：${services:-無}；confluent 版本：$(rpm -qa 'confluent-*' --qf '%{VERSION}\n' | sort -u | paste -sd, -)"
+echo "$(hostname) 更新 $n 個；OS $os_before>$(. /etc/os-release; echo $VERSION_ID)；要重開機：$reboot；要重啟的平台服務：${services:-無}；confluent 版本：$(rpm -qa 'confluent-*' --qf '%{VERSION}\n' | sort -u | paste -sd, -)"
 EOF
-chmod 0700 ~/conf/os-patch-host.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-server*) ssh $h.poc.lab 'sudo systemctl restart confluent-server';; esac; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && [ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" = 0 ] && break; sleep 10; done; echo "  $h MDS=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
+cat > ~/conf/os-reboot.sh <<'EOF'
+#!/usr/bin/env bash
+# os-reboot.sh <主機>：重開機並等 ssh 回來。主機是容器（lab）時 systemctl reboot 不能用，改重啟該主機的平台服務
+h=$1
+if ssh $h.poc.lab 'systemd-detect-virt -cq'; then
+  echo "  $h 是容器，不能重開機：改重啟平台服務"
+  ssh $h.poc.lab 'for u in confluent-server confluent-kafka-rest confluent-control-center; do systemctl cat $u >/dev/null 2>&1 || continue; [ $u = confluent-control-center ] && sudo systemctl restart prometheus alertmanager; sudo systemctl restart $u; done'
+else
+  ssh $h.poc.lab 'sudo systemctl reboot' 2>/dev/null; sleep 20
+  for i in $(seq 1 60); do ssh -o ConnectTimeout=5 $h.poc.lab true 2>/dev/null && break; sleep 5; done
+fi
+EOF
+chmod 0700 ~/conf/os-patch-host.sh ~/conf/os-reboot.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) bash ~/conf/os-reboot.sh $h;; *confluent-server*) ssh $h.poc.lab 'sudo systemctl restart confluent-server';; esac; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && [ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" = 0 ] && break; sleep 10; done; echo "  $h MDS=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
 ```
 
 ```out
-kb01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+kb01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+  kb01 是容器，不能重開機：改重啟平台服務
   kb01 MDS=200
-（4 台）
+（4 台；正式環境沒有「是容器」那行，而是重開機後等 ssh 回來，每台多幾分鐘）
 ```
 
 ## 26.3 controller 逐台，leader 最後
@@ -6683,15 +6858,15 @@ kb01 更新 6 個；要重開機：否；要重啟的平台服務：無；conflu
 @role 小安 | ops02 | root
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config $HOME/conf/client-internal.properties" && leader=kc0$(kafka-metadata-quorum $Q describe --status 2>/dev/null | awk '/LeaderId/{print $2}') && for h in $(echo kc01 kc02 kc03 | tr ' ' '\n' | grep -vx $leader) $leader; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-server*) ssh $h.poc.lab 'sudo systemctl restart confluent-server';; esac; id=${h#kc0}; for i in $(seq 1 60); do [ "$(kafka-metadata-quorum $Q describe --replication 2>/dev/null | awk -v id=$id '$1==id {print $4}')" = 0 ] && break; sleep 5; done; echo "  $h Lag=$(kafka-metadata-quorum $Q describe --replication 2>/dev/null | awk -v id=$id '$1==id {print $4}')$([ $h = $leader ] && echo '（leader，最後做）')"; done
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config $HOME/conf/client-internal.properties" && leader=kc0$(kafka-metadata-quorum $Q describe --status 2>/dev/null | awk '/LeaderId/{print $2}') && for h in $(echo kc01 kc02 kc03 | tr ' ' '\n' | grep -vx $leader) $leader; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) bash ~/conf/os-reboot.sh $h;; *confluent-server*) ssh $h.poc.lab 'sudo systemctl restart confluent-server';; esac; id=${h#kc0}; for i in $(seq 1 60); do [ "$(kafka-metadata-quorum $Q describe --replication 2>/dev/null | awk -v id=$id '$1==id {print $4}')" = 0 ] && break; sleep 5; done; echo "  $h Lag=$(kafka-metadata-quorum $Q describe --replication 2>/dev/null | awk -v id=$id '$1==id {print $4}')$([ $h = $leader ] && echo '（leader，最後做）')"; done
 ```
 
 ```out
-kc02 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+kc02 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
   kc02 Lag=0
-kc03 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+kc03 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
   kc03 Lag=0
-kc01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+kc01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
   kc01 Lag=0（leader，最後做）
 ```
 
@@ -6702,19 +6877,19 @@ kc01 更新 6 個；要重開機：否；要重啟的平台服務：無；conflu
 REST 兩台先更新套件（這時不重啟），C3 修補期間畫面短暫不能用（只有一台），操作機最後、自己修自己；REST 的重啟在下面照 12.1 做：
 
 ```bash
-for h in rest01 rest02; do ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh | tee ~/conf/patch-$h.out; done; for h in c3-01; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) ssh $h.poc.lab 'sudo systemctl reboot';; *confluent-kafka-rest*) ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest';; *confluent-control-center*|*prometheus*|*alertmanager*) ssh $h.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done';; esac; done; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; bash ~/conf/os-patch-host.sh
+for h in rest01 rest02; do ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh | tee ~/conf/patch-$h.out; done; for h in c3-01; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) bash ~/conf/os-reboot.sh $h;; *confluent-kafka-rest*) ssh $h.poc.lab 'sudo systemctl restart confluent-kafka-rest';; *confluent-control-center*|*prometheus*|*alertmanager*) ssh $h.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done';; esac; done; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; bash ~/conf/os-patch-host.sh
 ```
 
 ```out
-rest01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
-rest02 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
-c3-01 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：2.6.1
+rest01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+rest02 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+c3-01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：2.6.1
   REST 經 LB=200 C3=200
-ops02 更新 6 個；要重開機：否；要重啟的平台服務：無；confluent 版本：8.3.2
+ops02 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
 ```
 
 
-REST Proxy 的套件上面已經更新（JVM 不受影響）；重啟（或要重開機的話重開機）照 12.1 一台一台來。兩台都是「要重開機：否、要重啟的平台服務：無」時，這五步可以略過：
+REST Proxy 的套件上面已經更新（JVM 不受影響）；重啟（或要重開機的話重開機）照 12.1 一台一台來。小版本更新時兩台一定是「要重開機：是」，這五步要做（`-r` 在 lab 的容器上自動改成重啟服務）；每月修補兩台都是「要重開機：否、要重啟的平台服務：無」時可以略過：
 
 @role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -6769,23 +6944,53 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | root
 
-> 實測（2026-10-25，lab）：11 台各 6 個 OS 套件（含 openssh-server，修補過程中 ssh 連線不斷），Confluent 版本都沒變、不用重開機、沒有平台服務要重啟；之後第 19 章驗收全過。openssh-server 更新後 sshd 由 RPM 自己重啟，所以 `-s` 雖然會列 sshd，這裡只看平台服務。
+> 每月修補的實測（2026-10-25，同一小版本內，lab）：11 台各 6 個 OS 套件（含 openssh-server，修補過程中 ssh 連線不斷），Confluent 版本都沒變、不用重開機、沒有平台服務要重啟；之後第 19 章驗收全過。openssh-server 更新後 sshd 由 RPM 自己重啟，所以 `-s` 雖然會列 sshd，這裡只看平台服務。
 
 最後照第 19 章驗收一次（19.1–19.3）。
 
-# 27. 第二十七站：升級 Control Center
+## 26.5 小版本更新（9.6 → 9.8）：驗證、限制、回滾、換成別的小版本
 
-Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Platform 頻繁，可以單獨升級。和第 21 章不同的地方：
+@role 小安 | ops02 | root
+
+26.0–26.4 已經把每台更新完了。這一節是小版本更新特有的收尾。**開始前的前提**（26.0、26.1 已經確認）：銀行的套件庫有 9.8 的內容；Confluent 的 versionlock 數量等於已裝的 confluent 套件數、更新清單裡沒有 `confluent-*`；JDK 是 tar，`dnf` 碰不到。
+
+**驗證**：每台的 OS 版本是 9.8、versionlock 數量沒變、服務是 active；叢集沒有 under-replicated；REST 經 LB 與 C3 都回 200：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname) $(. /etc/os-release; echo $PRETTY_NAME) 鎖 $(sudo dnf -q versionlock list | grep -c confluent)／裝 $(rpm -qa "confluent-*" | wc -l) $(for u in confluent-server confluent-kafka-rest confluent-control-center; do systemctl cat $u >/dev/null 2>&1 && echo "$u=$(systemctl is-active $u)"; done | paste -sd" ")"'; done; echo "ops02 $(. /etc/os-release; echo $PRETTY_NAME)"; echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)；REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+```
+
+```out
+kc01 Rocky Linux 9.8 (Blue Onyx) 鎖 9／裝 9 confluent-server=active
+（kc02、kc03、kb01–kb04 同上；rest01、rest02 是「鎖 4／裝 4 confluent-kafka-rest=active」；c3-01 是「鎖 1／裝 1 confluent-control-center=active」）
+ops02 Rocky Linux 9.8 (Blue Onyx)
+under-replicated：0；REST 經 LB=200 C3=200
+```
+
+再跑一次第 19 章的驗收（19.1–19.3），結果要全數通過。持續流量（`install/tools/load.sh`）在更新期間的數字：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次，從零重跑後以實測為準（尚無實測）；REST 照 12.1 一台一台從 LB 停用再重啟，預期和第 21 章一樣沒有失敗。
+
+**lab 做不到的事（要老實說）**：
+- 容器不能重開機，kernel 沒有更新（容器沒有自己的核心）。lab 只驗證「套件更新的指令、順序、versionlock 擋住 Confluent、服務在新的 glibc／systemd 套件下重啟後是健康的」，**沒有驗證**重開機本身：開機順序、`fstab` 掛載、網卡命名、核心模組、`systemctl enable` 過的服務是否自己起來（19.4 的冷開機演練只涵蓋「容器一起停、一起開」，不是 OS 的開機）。
+- Rocky 不是 RHEL：套件名稱、`needs-restarting` 的輸出與 RHEL 相同，但訂閱管理（`subscription-manager release --set`）、Satellite content view 的行為 lab 都沒有。
+- 更新集合的大小（152 個、78 MB）是這批最小安裝主機的數字，真正的 RHEL 主機不同。
+
+**回滾**：真正可行的答案是**更新前的快照**（VM 快照、LVM 快照或裸機映像），在 26.1 之前每台先做；小版本更新途中某台出問題，就還原那一台的快照，再照 26.2–26.4 重做。不要依賴 `dnf history undo`：它對 kernel、glibc、systemd 這類核心元件不可靠，而且 Red Hat 不支援把 RHEL 小版本降回去（`dnf downgrade` 整個小版本也一樣）。controller 或 broker 的機器整台壞了，走第 23 章（換 controller）或第 24 章（broker 加回）重建，不要硬救。Confluent 這一側不用回滾：版本沒動。
+
+**換成別的小版本（例如銀行的套件庫是 9.4 → 9.6、9.2 → 9.4）**：步驟完全一樣，只要換三個值：(1) 26.0 銀行同步的目標版本；(2) 26.1 檢查「套件庫的 release 套件」是不是你要的那一版——**套件庫如果不是釘在特定小版本（例如直接追 RHEL 9 最新），`dnf update` 會一路更新到它有的最新小版本**，不是你以為的那一版，要請銀行把套件庫（或主機的 releasever）釘住；(3) 查原廠的 OS 支援表，確認該小版本在 Confluent Platform 8.3 的支援範圍內（原廠表上 RHEL 9.x 為支援；以銀行實際的版本對表）。`install/` 的對應是 `steps/26-os-patch.sh plan｜apply｜verify <版本>`，預設的 OS 版本在 `conf/site.env` 的 `OS_BASE_VERSION`、`OS_TARGET_VERSION`。
+
+# 27. 第二十七站：單獨更換 Control Center 版本
+
+Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Platform 頻繁，可以單獨更換。遷移主線裡 C3 已經在 21.3 從 2.5.1 升到 2.6.1（那是 CP 升 8.3 的前提）；這一章是**之後**的情況：C3 出新的 2.6.x 修補版、或原廠要求換版本時，單獨處理，不動 CP。和第 21 章不同的地方：
 
 | 項目 | 說明 |
 |---|---|
-| 相容性 | 先查原廠的相容表：新版 C3 要支援目前的 CP 版本（2.6.x 支援到 CP 8.3.x）。CP 要升級時，**C3 先升**（21.3） |
+| 相容性 | 先查原廠的相容表：新版 C3 要支援目前的 CP 版本（2.6.x：CP 7.5.15 到 8.3.x；2.5.x 只到 8.2.x，所以**不能**把已經是 8.3 的叢集的 C3 退回 2.5.x）。CP 要升級時，**C3 先升**（21.3） |
 | 停機 | 只有一台：升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看） |
 | 資料 | 內建 Prometheus 的歷史指標在 C3 的資料目錄，換套件不會清掉 |
 | JDK | C3 留在 JDK 21（21.7） |
 | 回滾 | `dnf downgrade` 回舊版（舊版的 RPM 一直留在套件庫，第 4 站） |
 
-lab 上已經是原廠最新的 2.6.1，所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 27.3。
+lab 上已經是原廠最新的 2.6.1（21.3 升好的），所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾；2.6.0 也在 CP 8.3 的支援範圍內），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 27.3。
 
 ## 27.1 下載、驗簽章
 
@@ -6826,25 +7031,17 @@ cp ~/landing/c3/*.rpm ~/repo/confluent/ && createrepo_c -q --update ~/repo/confl
 ```
 
 ```out
-套件庫裡的 C3：2.6.0-1 2.6.1-1
+套件庫裡的 C3：2.5.1-1 2.6.0-1 2.6.1-1
 ```
 
 ## 27.3 （lab 演練用）退回 2.6.0：也就是回滾程序
 
 @role 小安 | ops02 | root
 
-解鎖 → 換版本 → 鎖回新的版本 → `daemon-reload`（RPM 會換掉 unit 檔）→ 把 C3 自己要寫的 4 個 generated 檔改回 `cp-control-center`（RPM 換版本會把它們改回 root）→ 確認設定檔沒被動、`ExecStart` 還是指著我們的設定 → 重啟 Prometheus、Alertmanager、C3 → 等畫面 200。升級與回滾是同一段，只差 `dnf install` 或 `dnf downgrade`：
+步驟都在 21.3 建好的 `~/conf/c3-change.sh`（解鎖 → 換版本 → 鎖回 → `daemon-reload` → 4 個 generated 檔擁有者改回 `cp-control-center` → 確認設定檔沒被動 → 重啟 Prometheus、Alertmanager、C3 → 等畫面 200）。升級與回滾是同一段，只差 `dnf install` 或 `dnf downgrade`。腳本還沒有的話（單獨跑這一章時）先照 21.3 建：
 
 ```bash
-cat > ~/conf/c3-change.sh <<'EOF'
-#!/usr/bin/env bash
-# c3-change.sh <版本> <install|downgrade>：在 c3-01 換 C3 套件版本、重啟、等畫面 200
-V=$1 A=$2
-ssh c3-01.poc.lab "p=/etc/confluent/control-center/control-center.properties; before=\$(sudo sha256sum \$p | cut -c1-12); sudo dnf -q versionlock delete confluent-control-center-next-gen >/dev/null; sudo dnf -q -y --refresh $A confluent-control-center-next-gen-$V >/dev/null && sudo dnf -q versionlock add confluent-control-center-next-gen-$V >/dev/null; sudo systemctl daemon-reload; cd /etc/confluent-control-center && for f in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do sudo chown cp-control-center:confluent \$f && sudo chmod 0640 \$f; done; echo \"\$(rpm -q confluent-control-center-next-gen) config=\$([ \"\$before\" = \"\$(sudo sha256sum \$p | cut -c1-12)\" ] && echo same || echo CHANGED) exec=\$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties' | head -1) lock=\$(sudo dnf -q versionlock list | grep control-center)\"; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart \$u; done"
-for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done
-echo "UI=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)（約 $((i*5)) 秒）；Prometheus 指標 $(curl -s -m 10 --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) 種"
-EOF
-chmod 0700 ~/conf/c3-change.sh && bash ~/conf/c3-change.sh 2.6.0 downgrade
+[ -x ~/conf/c3-change.sh ] && bash ~/conf/c3-change.sh 2.6.0 downgrade
 ```
 
 ```out

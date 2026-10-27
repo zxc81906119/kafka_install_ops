@@ -1,10 +1,13 @@
-# untitled7 — Confluent Platform 8.3 離線安裝 PoC（銀行）
+# untitled7 — Confluent Platform 離線安裝與遷移 PoC（銀行，8.2 → 8.3）
 
 > **語言規則（最優先，每一則都適用）**：所有給使用者看的文字一律用**繁體中文**，英文只用在技術名詞與指令
 > （dnf、RPM、versionlock、MDS、CyberArk、`kafka-features` …）。包括：做事過程中的進度說明、背景工作回報、
 > 表格、最後的總結、問題選項。不要因為工具輸出或上一則是英文就跟著改用英文。使用者不需要再提醒。
 
-PoC for installing Confluent Platform 8.3.2 + Control Center 2.6.1 fully offline at a bank.
+PoC for installing Confluent Platform fully offline at a bank, as a **baseline + migration** path (decided 2026-10-27):
+baseline CP 8.2.4 + Control Center 2.5.1 + JDK 21 + OS 9.6 (chapters 1–20), then migrate to CP 8.3.2 + C3 2.6.1 + JDK 25 + OS 9.8
+(chapter 21 packages/JDK/finalize, chapter 26 OS minor update, chapter 27 C3 version swap). JDK 25 is not supported by 8.2.x, hence the baseline JDK 21;
+C3 2.5.x supports CP up to 8.2.x and 2.6.x up to 8.3.x, so C3 is upgraded first. Versions live in `install/conf/site.env` (`CP_VERSION` … baseline, `*_TARGET_*` target).
 Simulated hosts run in Docker Desktop on Windows 11 (project `lab`, built from `~/kafka-lab`); driven from Git Bash.
 Details of the architecture and every component: @README.md
 
@@ -31,11 +34,11 @@ Details of the architecture and every component: @README.md
 - `docs/questions-src/questions.md` → `docs/Confluent-請銀行確認的事項.docx` (`node build.js`).
 - `docs/deck-src/install.js` + `install-steps.js` → `docs/Confluent-RPM安裝流程.pptx` (14-page deck for bank managers).
 - `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/01–26`, `conf/site.env`);
-  `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh`, `run-upgrade-drill.sh`).
+  `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh` = the whole path from zero: baseline → acceptance → migration → OS 9.8 → C3; no separate upgrade drill).
 - `opmenu/` — OP menu source (the **only** copy; never edit a sibling project such as `untitled6`).
 - `redesign/README.md` — design decisions, lessons, open questions.
 - Generated documents: edit the sources, then rebuild (skill `build-docs`).
-- Not in git: `*.p12|*.pem|*.key|*.crt`, `secrets.env`, licences, packages (the lab's landing zone is `~/kafka-lab/landing`).
+- Not in git: `*.p12|*.pem|*.key|*.crt`, `secrets.env`, licences, packages (the lab's landing zone is `~/kafka-lab/landing`: `rpm/` = baseline set, `rpm-target/` = migration target set, `bank/` = both JDK tars; the bank's OS repo content is `~/kafka-lab/bank-os/{9.6,9.8-updates,9.8}`, outside the landing zone).
 
 ## Branches
 - `redesign` — current work. The old cpctl PoC (`installer/`, `docker/` cp-poc/cp-man labs, `windows/` tools, old
@@ -44,7 +47,7 @@ Details of the architecture and every component: @README.md
 - Commit only when asked; never push unless asked; never commit secrets, licence or packages.
 
 ## Lab facts
-- One lab: project `lab` (14 containers + `dl01`, subnets 172.35/172.36), built from `~/kafka-lab` per journey chapter 0.
+- One lab: project `lab` (14 containers + `dl01`, subnets 172.35/172.36), built from `~/kafka-lab` per journey chapter 0. Host image `lab-node:96` (Rocky 9.6 from the vault; the old 9.8 image is `lab-node:1`, never reuse it), web image `lab-web:96`.
   Docker Desktop VM has ~10.7 GB, so never run anything else alongside it.
 - Enter hosts: `docker exec -it -w /root lab-ops02-1 bash` (ops02 as **root** = what PSMP gives a person; no PVWA/PSMP in the lab),
   `docker exec -it lab-<host>-1 bash` (root, "bank" actions). Prefix docker commands with `MSYS_NO_PATHCONV=1`
@@ -63,7 +66,7 @@ Details of the architecture and every component: @README.md
 ## Design decisions in force (details: redesign/README.md)
 - RPM install only; Confluent packages are the only files we bring in; OS packages come from the bank's repo
   (Satellite / Nexus / plain httpd — all look the same to dnf).
-- JDK 21 is delivered by the bank as a tar; we install to `/opt/java/<dir>` + `/opt/java/current`, register
+- JDKs (21 for the baseline, 25 for the migration) are delivered by the bank as tars; we install to `/opt/java/<dir>` + `/opt/java/current`, register
   `java`/`keytool` with `alternatives`, set `JAVA_HOME` in `/etc/profile.d/java.sh` and in each systemd drop-in.
 - Only Confluent packages and the JDK are version-locked; C3's `cyrus-sasl`/`openssl-devel` follow OS patching.
 - Apps connect directly with SCRAM; apps via REST Proxy must use client certificates (REST has no password path).
@@ -82,6 +85,9 @@ Details of the architecture and every component: @README.md
 - MDS token key pair is fixed (rotate only on compromise); cpuser sudo is `NOPASSWD` during install; CPM's reconcile account is not cpuser.
 
 ## Gotchas learned the hard way
+- A Rocky 9.6 image's default repo files point at the **latest 9.x** (mirrorlist with `$releasever` = 9): `dnf install` there installs 9.8 packages. Freeze to the vault (`dl.rockylinux.org/vault/rocky/9.6`, repo ids `vault96-*`); 9.8 lives in `pub/rocky/9.8`, 9.6 is not in `pub`.
+- Lab hosts are containers on the WSL2 kernel: `systemctl reboot` fails ("Could not activate remote peer"); `systemd-detect-virt -c` answers `wsl`/`docker`. Chapter 26 / `26-os-patch.sh` / `rest-restart.sh -r` restart the platform services instead. A kernel update cannot be tested in the lab.
+- `dnf update` from a `file://` repo that is also the `--downloaddir` can delete the RPMs it just used: copy the downloaded set before indexing/using it.
 - Before `systemctl start` of an RPM service, confirm the drop-in is in effect:
   `systemctl show <unit> -p ExecStart` must point to **our** properties file, else the RPM default config starts
   (REST Proxy came up as plain HTTP that way).

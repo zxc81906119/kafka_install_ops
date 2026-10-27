@@ -1,6 +1,10 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-28 00:50（沒有動 lab；`lab-mon-*` 容器還在，舊叢集已壞，等人從零重建）
+Updated: 2026-10-28 02:00（沒有動 lab；`lab-mon-*` 容器還在，舊叢集已壞，等人從零重建。本輪的拋棄式 `lab-mig-*` 容器與映像已清掉）
+
+**剛做完（2026-10-28 凌晨）：版本路徑重整——主線改成「安裝基底 → 遷移」**（使用者 10/27 夜間定案）：基底 CP 8.2.4＋C3 2.5.1＋JDK 21＋OS 9.6（第 1–20 章），遷移到 8.3.2＋C3 2.6.1＋JDK 25＋OS 9.8（第 21、26、27 章）。動到：手把手第 0–5、8、13、17（註記）、19、20（註記）、21（改寫成主線，新增 21.1 上架／21.3 C3 先升／21.10 收尾）、23、26（新增 26.0 套件庫同步、26.5 驗證與限制）、27（改成單獨換 C3 版本）；install 的 site.env（基底與 `*_TARGET_*`）、01／02／03／05／21／26 站、`templates/rest-restart.sh`；lab 的 bank-sim（`os-content`、`os-sync`、`landing-layout`、映像 `lab-node:96`）、`run-customer.sh`（整條路；`run-upgrade-drill.sh`、`run-all.sh` 已刪）、run-full.sh；問題清單 2.5／3.4／3.5；redesign 新一節；README／CLAUDE.md／skills。細節與證據：`log/2026-10-28-migration-path.md`、`redesign/README.md` 最後一節。
+- **沒有從零重跑**：手把手與腳本的整條新路都沒在 lab 上實跑（舊 lab 是壞的）；各章 `out` 區塊是預期值（第 21 章實測數字是 10/26 舊演練的，文中已標）。拋棄式驗證只涵蓋 OS 的 9.6 套件集合／9.8 更新集合／本地 repo 更新到 9.8／versionlock／systemd 容器更新後仍健康。
+- 待從零重跑時留意：①`landing-layout` 整理舊落地區（8.3.2→rpm-target、landing-extra 的 8.2.4→rpm）；②C3 2.5.1→2.6.1 換版本後 4 個 generated 檔擁有者；③26 的更新在 11 台上的時間與持續流量數字；④第 17 章指標覆蓋在 8.2.4／2.5.1 的差異。
 
 **剛做完（2026-10-27 夜～28 凌晨）：主機存取新做法（cpuser、一組金鑰放 `/secure/ssh`、PVWA＋PSMP 進操作機是 root、sudoers 逐一列出、手動換金鑰）已進手冊與腳本**，取代 cpadmin／ssh-agent／SSH Key Manager 那一套：journey.md（第 0、3、15、16、19.4–19.6 章與全書的 ops02 身分／路徑，圖與 build.js／run-chapter.js）、install/（lib/ssh.sh、site.env、03／16／19 站、bank-sim／run-customer／run-all／run-upgrade-drill、opmenu 測試、README）、opmenu/（金鑰檔取代 ssh-agent；sudo 寫法固定；測試 test-ssh-key／test-sudo-forms）、問題清單、README／CLAUDE.md／skills。**只做了靜態檢查，沒有 commit，沒有從零重跑**；該驗證的清單見 redesign/README.md「新做法已進手冊與腳本」與 log/2026-10-27-access-in-manual.md。
 
