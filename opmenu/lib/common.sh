@@ -101,9 +101,9 @@ core_load_ssh_key() {
   core_log SSH_KEY_LOADED login "$OPMENU_SSH_KEY_SECRET ttl=${OPMENU_SSH_KEY_TTL:-14400}"
 }
 core_unload_ssh_key() { [ -n "${OP_SSH_AGENT_PID:-}" ] || return 0; ssh-agent -k >/dev/null 2>&1; kill "$OP_SSH_AGENT_PID" 2>/dev/null; unset OP_SSH_AGENT_PID SSH_AUTH_SOCK SSH_AGENT_PID; return 0; }
-# 私鑰什麼時候取：auto 時，manual（人工從 PVWA 貼上）等到真的要碰主機才取，其他來源登入就取
+# 私鑰什麼時候取：auto = on-demand（人工從 PVWA 貼上，等到真的要碰主機才取）；login = 登入就取
 core_ssh_key_on_demand() {
-  case "${OPMENU_SSH_KEY_LOAD:-auto}" in on-demand) return 0;; login) return 1;; *) [ "${OPMENU_SECRETS:-}" = manual ];; esac
+  case "${OPMENU_SSH_KEY_LOAD:-auto}" in on-demand) return 0;; login) return 1;; *) return 0;; esac
 }
 # 這個項目會不會碰主機：OPMENU_MENU_AUTHZ 裡標成 HOST 的（重啟、日誌、磁碟、診斷）
 core_item_touches_host() {

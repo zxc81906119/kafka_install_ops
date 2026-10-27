@@ -6,18 +6,18 @@ description: Operate the Docker-based lab (~/kafka-lab, compose project `lab`): 
 # Lab operations
 
 One lab: compose project `lab` in `~/kafka-lab/` (built by the hands-on guide, chapter 0), 14 containers
-`lab-<host>-1` (ops02, repo01, kc01-03, kb01-04, rest01-02, c3-01, ad01, lb01) + download host `dl01`; with
-Conjur also `lab-conjur-*` (`-f conjur.yml`). Docker Desktop VM has ~10.7 GB RAM: run nothing else alongside.
+`lab-<host>-1` (ops02, repo01, kc01-03, kb01-04, rest01-02, c3-01, ad01, lb01) + download host `dl01`.
+Docker Desktop VM has ~10.7 GB RAM: run nothing else alongside.
 
-- Start/stop: `cd ~/kafka-lab && docker compose -f compose.yml $([ -f conjur.yml ] && echo "-f conjur.yml") up -d|stop`.
-- From zero: `bash docs/journey-src/tools/run-full.sh <customer|conjur|provider>` (tears down everything except
-  `~/kafka-lab/landing` and `landing-extra`) or `bash install/lab/run-customer.sh` / `EXT=1 bash install/lab/run-all.sh`.
+- Start/stop: `cd ~/kafka-lab && docker compose -f compose.yml up -d|stop`.
+- From zero: `bash docs/journey-src/tools/run-full.sh customer` (tears down everything except
+  `~/kafka-lab/landing` and `landing-extra`) or `bash install/lab/run-customer.sh`.
 - Run logs: `~/kafka-lab-runs/`; check them with `docs/journey-src/tools/scan-log.sh <log>`.
 
 ## Entering hosts
 - Operator host as cpadmin: `docker exec -it -u cpadmin -w /home/cpadmin lab-ops02-1 bash`. In customer mode
   cpadmin's private key exists only in the agent: add `-e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock`;
-  after a cold boot re-paste the key from `~/kafka-lab/pvwa/` (guide 20.4).
+  after a cold boot re-paste the key from `~/kafka-lab/pvwa/` (guide 19.4).
 - Any host as root ("bank" work): `MSYS_NO_PATHCONV=1 docker exec lab-<host>-1 bash -c '...'`
 - Download host: `docker exec -it dl01 bash` (`/out` = landing zone).
 - Windows paths for `-v` / `docker cp` / Node: `"$(cygpath -m "$PWD/dir")"`; keep `MSYS_NO_PATHCONV=1`.
@@ -29,7 +29,7 @@ Conjur also `lab-conjur-*` (`-f conjur.yml`). Docker Desktop VM has ~10.7 GB RAM
 - MDS: `curl -sk -o /dev/null -w %{http_code} https://kbNN.poc.lab:8090/v1/metadata/id` → 200
 - REST: legacy cert → 200, other cert → 401, no cert → 000, via `rest.poc.lab` → 200.
 - C3: `https://c3-01.poc.lab:9021/` → 200.
-- Acceptance: guide chapter 20 / `bash install/steps/20-acceptance.sh`.
+- Acceptance: guide chapter 19 / `bash install/steps/19-acceptance.sh`.
 
 ## When things are slow or hang
 1. `MSYS_NO_PATHCONV=1 timeout 15 docker exec lab-ops02-1 sh -c 'timeout 5 ip addr | wc -l'` — if this hangs in

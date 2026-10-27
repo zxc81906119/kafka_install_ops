@@ -129,7 +129,7 @@
   - Summon（CyberArk 開源）可讓 Secret Protection 的 master key 不落地：`ExecStart=summon -p summon-conjur -f secrets.yml <原啟動腳本>`，值只在子程序環境變數；代價是啟動時保管庫要在線；主機上剩 /etc/conjur.identity（host 身分）。接 PAM 的 CCP 沒有官方 provider，可自寫（stdin 給 id、stdout 回值）。
   - **16.9（2026-10-23 lab 驗過）**：Secret Protection 的本質是密文「凍」在 security.properties，CPM 換了 AD 查詢密碼 broker 不會跟上。解法：那一個欄位不加密，由 Summon 把保管庫的值注入環境變數、properties 用 Kafka 內建 `EnvVarConfigProvider`（`config.providers = securepass,env`、`ldap.java.naming.security.credentials = ${env:LDAP_BIND_PASSWORD}`），不需 csid jar。
     驗證：改完滾動重啟後 alice 經 LDAP listener 建 topic 成功（群組查詢靠 bind 帳號、快取為空）、kb01 日誌 0 筆 LDAP 認證錯誤；AD 改密碼＋保管庫更新後只滾動重啟即生效。注意 `confluent secret` 改寫過的 properties 是 `key = value`（有空白）。
-- **密碼放法決策樹（給客戶的三題，2026-10-23）**：
+- **密碼放法決策樹（給客戶的三題，2026-10-23；Conjur／Summon 分支已於 2026-10-27 刪除，客戶情境只剩 16.4 落地加 CPM 人工處理）**：
   1. 有 Conjur？有 → 第 15 站（全部 `${cyberark:…}`，密碼不落地）。沒有 → 2。
   2. 保管庫故障時平台要能重啟？要 → 16.4（master key 落地 service.env）。可接受不行 → 16.8（Summon 不落地）。
   3. AD 查詢密碼由 CPM 管？是 → 加 16.9（該欄位改 Summon 注入），並開 A／B 兩組查詢帳號、CPM 只在放行時輪替。否 → 留在密文，換密碼走 16.3 重算。
@@ -223,11 +223,11 @@
 - **2026-10-23 定案：不排輪替**。只在私鑰外洩時換，用 `install/lab/mds-token-key-rotate.sh` 驗過的程序（排維護時段、事前通知走 REST 的應用程式約半分鐘可能 401）；不寫進手把手。
 - `confluent.metadata.server.token.key.passphrase`（讓 MDS 讀加密私鑰）原廠文件查不到 → 不採用，私鑰維持 PEM 0640 root:confluent；資安若要求加密先問原廠（第 12 節）。
 
-### 憑證輪替（2026-10-23 定案，已實作：手把手第 21 章＋第 21 站，lab 實跑）
+### 憑證輪替（2026-10-23 定案，已實作：手把手第 20 章＋第 20 站，lab 實跑）
 
 - 範圍：**leaf 換發**（同一個 CA，每年到期前）＋ **CA 三階段**（銀行換中繼／根：加新根 → 換 leaf → 移除舊根）。MDS token 金鑰不在此列（見上）。
 - `kafka-internal` **維持 7 台共用一張**（申請單少；風險以 0640 權限＋定期輪替緩解）。
-- 交付：手把手第 21 章（手打指令、lab 實跑）＋ `install/steps/21-cert-rotate.sh`。
+- 交付：手把手第 20 章（手打指令、lab 實跑）＋ `install/steps/20-cert-rotate.sh`。
 
 ### Secret Protection 的 master key 保管（2026-10-23 定案，lab 實測）
 
@@ -235,12 +235,12 @@
 - 為什麼兩樣都要（lab 用測試值實測）：
   - master key = passphrase ＋ 隨機 salt 推導；`confluent secret master-key generate` **每次都換新 salt**，同一個 passphrase 再產生一次是另一把 → **只存 passphrase 救不回 master key**（之前手把手 16.2「CyberArk 保管 passphrase，需要時重新推導」是錯的，已更正）。
   - `confluent secret file rotate --master-key` 要「目前的 master key（環境變數）＋舊 passphrase」兩樣都對才成功 → 只存 master key 就不能用 CLI 輪替。
-  - 兩樣都遺失：產生新 master key、從操作機的明文來源重跑第 16 站重新加密並滾動重啟（不中斷服務）。
+  - 兩樣都遺失：產生新 master key、從操作機的明文來源重跑第 15 站重新加密並滾動重啟（不中斷服務）。
 - 流程：master key 產生後**先交 CyberArk 保管、確認後才派送**。`install/` 新增 `VAULT_ACCESS=api|manual`：
   - api（lab）：腳本把 master key 寫進保管庫（不再只限 Summon）。
   - manual（客戶，只有 PVWA）：passphrase 由小安從 PVWA 取出放 `~/secrets/sp-passphrase.txt`；master key 產生後停下（rc 2），Secrets 團隊存進 PVWA、小安把「雜湊 單號」寫進 `~/secrets/master-key.custody`，再跑一次才派送；換了 master key 雜湊對不上會再停。lab 用隔離複本驗過四種情況。`SUMMON=1` 必須 `VAULT_ACCESS=api`。
 - **只有 PAM 時 CyberArk 的角色＝保管與稽核，不參與執行期**；master key 落地 `service.env`（0600 root），擋得住設定檔外流、擋不住本機 root。要連 root 都擋，需要啟動時向外取的機制（CCP，或 Conjur＋Summon）。寫進手把手 16.7。
-- **輪替（2026-10-25 定案，lab 實測）**：16.6 是原廠的 `confluent secret file rotate --master-key`，必須同時給舊 passphrase 與舊 master key（環境變數），CLI 也無法由 passphrase＋`security.properties` 重算 master key → PVWA 兩個 object 都要保管。**data key 不例行輪替**；懷疑外洩時換密碼本身（第 21 章、16.10）再重新加密。輪替週期問銀行（問題清單 8.7，預設每年＋保管人異動時）。
+- **輪替（2026-10-25 定案，lab 實測）**：15.6 是原廠的 `confluent secret file rotate --master-key`，必須同時給舊 passphrase 與舊 master key（環境變數），CLI 也無法由 passphrase＋`security.properties` 重算 master key → PVWA 兩個 object 都要保管。**data key 不例行輪替**；懷疑外洩時換密碼本身（第 20 章、15.8）再重新加密。輪替週期問銀行（問題清單 8.7，預設每年＋保管人異動時）。
 - **查明（2026-10-25，lab 實測）**：Confluent CLI v4.72 的 `--passphrase`／`--passphrase-new` 不認 `@檔案`（也不認 `-`），把「`@/home/cpadmin/secrets/…`」字串本身當 passphrase：PVWA 的 passphrase 從沒用到、知道路徑＋拿到 security.properties 就算得出 master key；檔名一換（16.6 的 mv）下一次輪替就失敗。改為給值 `"$(cat 檔案)"`（手把手 16.2、16.6、install 16）；16.5、16.6 結尾加「用 PVWA 的 passphrase 還能輪替、錯的被拒」檢查。代價：值短暫出現在行程參數 → 操作機 `/proc` 掛 `hidepid=2`（問題清單 4.6）。
 
 ### 作業系統版本（2026-10-23 定案）
@@ -248,11 +248,11 @@
 - 以 **RHEL 9** 為準（lab：Rocky Linux 9 全程實跑）。RHEL 10.x 在 Confluent Platform 8.2／8.3 官方支援表上是 yes，C3 2.6 文件沒有另外列作業系統。
 - RHEL 10 **先不處理、未實測**；之後要做時至少驗：`python3-dnf-plugin-versionlock`、原廠公鑰匯入與 `rpm -K`、C3 前置套件（cyrus-sasl、openssl-devel）、CPU 需支援 x86-64-v3。
 
-### 升級與日常修補（2026-10-24 定案；Confluent＋JDK 已實作：手把手第 22 章＋第 22 站，lab 實跑）
+### 升級與日常修補（2026-10-24 定案；Confluent＋JDK 已實作：手把手第 21 章＋第 21 站，lab 實跑）
 
 - 範圍：**Confluent 小版與 patch**（滾動升級、回滾、features 升版）、**Control Center**、**JDK**（銀行交付新版 tar）、**OS 修補**（滾動 dnf update，Confluent 與 JDK 由 versionlock 保護）。
 - **JDK 情境＝升 8.3 時一起從 21 換到 25**（使用者定案）。8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（官方相容表）→ 分三段：① 8.2.4→8.3.2（維持 JDK 21，可 `dnf downgrade` 回滾）② JDK 21→25 逐台滾動（切 `/opt/java/current`，退回＝切回 21）③ 兩段都驗過才 features 升版（finalize）。要回 8.2 時先切回 JDK 21 再 downgrade。**C3 留在 JDK 21**（官方未寫 C3 2.6 支援 25）。
-- 形式：和第 21 章一樣，先寫手把手新章（手打、lab 實跑），再寫 `install/steps/22-*.sh`（隨時執行，不在安裝順序裡）。
+- 形式：和憑證輪替（第 20 章）一樣，先寫手把手新章（手打、lab 實跑），再寫 `install/steps/21-*.sh`（隨時執行，不在安裝順序裡）。
 - lab 演練：用 `install/` 以 **8.2.4** 從零裝一套（硬碟上 `packages/rpm/confluent/` 有整套 8.2.4，或照第 1 站重新下載），再照新章升到 8.3.2；持續流量下量測遺失與失敗。C3 與 JDK 的演練要另外下載舊一版（C3 2.6.0 或更早、另一個 JDK 21.x）。
 - 官方做法（CP 8.3 升級文件，2026-10-24 查）：
   - 順序：**Control Center 最先** → broker 逐台 → controller 逐台 → REST Proxy（所有 broker 升完後）→ 應用程式最後。照官方。
@@ -261,22 +261,22 @@
   - 每台升級前：移除已廢棄的 `message.format.version` 等設定、備份 `/etc`；KRaft 升級需從 7.7.1 以後；所有元件同版，不跨版混用。
   - 官方寫法是 `yum remove` 舊版再 `install` 新版；我們的設定不在 RPM 的預設路徑（`/etc/confluent/…`），改用 `dnf install` 新版並更新 versionlock，實測時確認設定與 drop-in 不被覆蓋。
 
-### 日常備份（2026-10-24 定案；2026-10-25 已實作：手把手第 26 章，lab 實跑）
+### 日常備份（2026-10-24 定案；2026-10-25 已實作：手把手第 25 章，lab 實跑）
 
 - **三類分工**（使用者定案）：
   - 叢集中繼資料（RBAC、topic 與設定、配額、SCRAM 帳號清單、features）：**操作機排程每天匯出**（systemd timer，保留 N 天）＋ **OP menu 立即匯出**（變更前的快照，紀錄是本人；擴充現有 44「匯出權限清單」）。
   - 各台 `/etc/confluent` 與 drop-in：**銀行既有的主機備份系統**（客戶模式 cpadmin 私鑰只在變更時段的 agent 裡，操作機的排程無法 ssh 進各台）；lab 用每台自己的 timer 模擬。
-  - 機敏資料（`~/pki`、`~/secrets`、master key）：**事件觸發**，安裝、換憑證、換密碼時交 CyberArk 保管，不排程（同第 16 站 master key 的做法）。
+  - 機敏資料（`~/pki`、`~/secrets`、master key）：**事件觸發**，安裝、換憑證、換密碼時交 CyberArk 保管，不排程（同第 15 站 master key 的做法）。
 - 排程身分：**新發唯讀的 `svc-backup` 應用憑證**（使用者定案），不用 super user 的 svc-ops。lab 實測的最小權限：RBAC `SecurityAdmin`（看 role binding；建 binding 回 403）＋ KRaft ACL：Topic `*` 與 Cluster 的 `Describe`、`DescribeConfigs`。內建 RBAC 角色沒有「只有 DescribeConfigs」的（`DeveloperManage` 連帶能建／刪／改，`DeveloperRead` 沒有 DescribeConfigs 且讀得到訊息），所以這兩項用 ACL。反向驗證：讀訊息、建 topic、改 role binding 都被拒。
 - 實作：操作機 `~/conf/metadata-backup.sh`＋systemd timer（每天 02:00，保留 30 天，syslog tag `confluent-backup`）；7 個文字檔＋SHA256SUMS，比對兩天的備份用 sha256＋join（精簡 OS 沒有 diff）；features 的 Epoch 拿掉、ACL 排序，否則每天都「有變」。OP menu 立即匯出（擴充 44）**尚未做**。
 - 交付：手把手新章＋install 新的一站。資料（訊息）本身不做檔案備份：叢集內靠 RF 3／min.insync 2；異地備援（Cluster Linking）依銀行 RPO／RTO 決定（尚未列入客戶問題清單）。
 
 ### 手冊主線改成客戶情境、全模式實測（2026-10-25 定案）
 
-- 手冊主線＝客戶模式：CyberArk 只有 PAM（PSMP 代登、SSH Key Manager、PVWA 人工取放），密碼與金鑰由人從 PVWA 取放；Conjur／CCP／Summon 改成「銀行有才做」的選配。
+- 手冊主線＝客戶模式：CyberArk 只有 PAM（PSMP 代登、SSH Key Manager、PVWA 人工取放），密碼與金鑰由人從 PVWA 取放；Conjur／CCP／Summon 改成「銀行有才做」的選配（選配已於 2026-10-27 刪除，見下方同日定案）。
 - 客戶有的用客戶的（AD、CA、OS 套件庫、NTP、LB、PAM、主機備份、行內 Prometheus）；客戶沒有的才用我們的機制（例如操作機的 systemd timer）。
 - 銀行未回覆的事項：用我們的預設，文件標「待銀行確認」。
-- 流程：Claude 自檢（順序、內容足夠、要改的內容）→ 直接改 → 從零實測四種模式：客戶模式（手冊全書＋install 全站含 21–28）、有 Conjur 的選配模式、升級演練（8.2.4 起）、Secret Protection 與 Conjur provider 兩條密碼路徑各走一次。每次跑完都用 scan-log.sh 掃。
+- 流程：Claude 自檢（順序、內容足夠、要改的內容）→ 直接改 → 從零實測四種模式（Conjur 與 provider 模式已於 2026-10-27 刪除）：客戶模式（手冊全書＋install 全站含 21–28）、有 Conjur 的選配模式、升級演練（8.2.4 起）、Secret Protection 與 Conjur provider 兩條密碼路徑各走一次。每次跑完都用 scan-log.sh 掃。
 
 ### cp-server 改成純 server 憑證（2026-10-25 討論，使用者決定之後再做）
 
@@ -292,7 +292,7 @@
 ### 只保留現行設計（2026-10-25 定案）
 
 - 只保留現行設計：舊的 cpctl 安裝程式、cp-poc／cp-man 兩個 lab、舊手動安裝手冊、全流程簡報、主機準備清單、另設堡壘機的舊 OP menu 設計都已從 redesign 分支移除（只剩 main 分支的歷史）。
-- 現行設計只有一種：操作機 ops02 同時是維運人員登入點（經 PSMP），OP menu 跑在操作機，碰主機用 cpadmin 金鑰（正本在 PVWA，只放進 ssh-agent），見手把手第 17 章。SSH 金鑰只有 cpadmin 一組。
+- 現行設計只有一種：操作機 ops02 同時是維運人員登入點（經 PSMP），OP menu 跑在操作機，碰主機用 cpadmin 金鑰（正本在 PVWA，只放進 ssh-agent），見手把手第 16 章。SSH 金鑰只有 cpadmin 一組。
 - 同日確認：cpadmin 先用 `NOPASSWD` sudo；CPM 的 reconcile 帳號不用 cpadmin。
 - 同日確認：super user 等級的私鑰（`svc-ops`、MDS token 簽章私鑰）**不另外放 PVWA safe**，維持 20.5「安裝完成後移到離線保管」。
 
@@ -323,6 +323,16 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 
 選項（待使用者決定，之前使用者說先不處理）：A 只用 C3 UI（預設格式，要特定格式得加轉換點）；C 方案如上；A+D C3 UI webhook 指到轉換點；銀行自己的 Alertmanager／Dynatrace Events API。詳見 2026-10-26 對話：Dynatrace 對應（ProblemTitle→alertname／summary、ProblemDetailsText→annotations.description（我們規則缺，要補）、State→firing/resolved 轉 OPEN/RESOLVED、ProblemSeverity→要接收端決定、ProblemImpact→要在規則加 impact 標籤）。
 
+### 只保留客戶情境：刪除 Conjur／provider 模式與 CyberArk 應用面（2026-10-27 定案）
+
+- **刪掉什麼**：手把手第 15 章「把密碼搬進 CyberArk Conjur」（Conjur config provider）、Secret Protection 的 16.8（Summon）與 16.9（AD 查詢密碼經 Conjur 注入）、所有 `@only conjur`／`@only provider` 區塊；`conjur`、`provider` 兩種模式；install 的 `15-conjur-provider*.sh`、`lib/vault.sh`；`run-all.sh`／`EXT=1` 與 `OPMENU_SECRETS=conjur` 後端（opmenu 的 `lib/secrets/conjur.sh`）；lab 的 Conjur 容器。
+- **為什麼**：客戶的 CyberArk 只有 PAM（PSMP、PVWA、CPM、SSH Key Manager），應用面（Conjur、Summon、CCP／CP）完全不用，這些選配沒有人會走，只增加維護與實測成本。
+- **編號位移**：原第 N 章（N ≥ 16）一律變成第 N−1 章：16 Secret Protection→15、17 OP menu→16、18 JMX exporter→17、19 稽核日誌→18、20 驗收→19、21 憑證輪替→20、22 升級→21、23 license→22、24 controller 替換→23、25 broker 擴縮→24、26 中繼資料備份→25、27 OS 修補→26、28 C3 升級→27。手把手現在是第 0–27 章。Secret Protection 內的小節跟著位移，例如原 16.10（bind 驗證）變 15.8。
+- **install 步驟改名**：`install/steps/` 由 01–27 變 01–26，`16-secret-protection.sh`→`15-secret-protection.sh`，以此類推到 `27-*`→`26-*`；原 `15-conjur-provider*.sh` 刪除。
+- **本檔舊內容不改寫**：以下標了日期的歷史段落沿用**當時的舊編號**與當時討論過的 Conjur／provider 做法，視為歷史；現行做法只看手把手與 install。只有單純指向手把手章節的指標（憑證輪替、升級、備份、master key 保管等）已改成新編號。
+- **歷史**：刪除前的完整內容在 git 裡，看刪除這次 commit 之前的版本即可。
+- **待辦**：編號與內容都還沒有在 lab 上重跑（Docker 關閉中），必須從零重跑客戶模式（`run-full.sh customer`、`run-customer.sh`、升級演練）之後，才能說新編號驗證過。
+
 ### 和客戶討論後的主機存取做法（2026-10-27；手冊與腳本尚未改）
 
 和客戶討論後的做法，與上面「操作機對各主機的 SSH 金鑰，交給 CyberArk 管」那一段（金鑰只放 ssh-agent、不落地、SSH Key Manager 換金鑰）不同。客戶的 CyberArk：有 PAM（PVWA、PSMP、CPM），人員用 AD 帳密登入並已套用 MFA；沒有 CP、CCP、Conjur（對外文件一律不提之後會不會買）。
@@ -336,7 +346,7 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 7. **CPM 與零停機輪替**：CPM 還在，所以 A/B 兩組帳密與 CPM 自動輪替仍衝突（CPM 不知道哪組在用）。`svc-mds-bind` 維持單帳號、CPM 輪替，接受 MDS 查 AD 的短暫失敗；要零停機才改 A/B、關掉該帳號的 CPM 自動變更。SCRAM 應用帳號 CPM 沒有 Kafka plugin，一律人工。
 8. **客戶提到「私鑰放不同 file system」**：先不討論，不放進文件。我方判斷：分開本身沒有安全效果（人員是 root，已掛載的都讀得到）；要防離線讀取要靠加密，要防備份外流要排除備份。
 
-**尚未改的地方**（客戶正式採用後才改，改了要從零重跑）：手冊 3.1／16.x 的 ssh-agent 貼法、20.6 SSH Key Manager 演練、cpadmin 全部改 cpuser；`install/` 腳本與 `install/lab/bank-sim.sh`；OP menu 的 ssh-agent 流程；sudoers 窄規則改成逐一列出。
+**尚未改的地方**（客戶正式採用後才改，改了要從零重跑）：手冊 3.1／15.x 的 ssh-agent 貼法、19.6 SSH Key Manager 演練、cpadmin 全部改 cpuser；`install/` 腳本與 `install/lab/bank-sim.sh`；OP menu 的 ssh-agent 流程；sudoers 窄規則改成逐一列出。
 
 **已產出的文件**：`docs/Confluent-CyberArk登入與主機存取設計.docx`（資拓宏宇風格，來源 `docs/access-src/`，`node ../journey-src/build.js access.md ../<輸出>.docx ./diagrams.js`）、`docs/Confluent-Kafka客戶資訊整理.pptx`（來源 `docs/deck-src/customer-info.js`，16 頁，桌面草稿重新分析版，修正對照在最後一頁）。換金鑰、公鑰佈署、鎖定密碼只靠金鑰登入的指令尚未在 lab 驗證。
 
@@ -386,7 +396,7 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 - 91 緊急模式的 opmenu-breakglass 憑證放 CyberArk，執行時經 CCP 取，不落地。
 - 紀錄：本機檔（opxx 本人、項目、時間、結果）；是否送 SIEM 待問客戶（總問題清單第 9 組）。
 - 追溯：選單紀錄（人）＋ CCP 取用紀錄（AppID、時間）＋ 主機 sshd／sudo 日誌（cpadmin 從操作機 IP）。
-- 2026-10-22 已改程式並在 lab 實測（opmenu/，commit 待）：拿掉 docker 後端、ticket、清日誌、維護模式；新增 lib/secrets/{conjur,ccp}.sh；
+- 2026-10-22 已改程式並在 lab 實測（opmenu/，commit 待）：拿掉 docker 後端、ticket、清日誌、維護模式；新增 lib/secrets/{conjur,ccp}.sh（conjur 後端已於 2026-10-27 刪除）；
   登入後 `secret_get` 取 cpadmin 私鑰 `ssh-add -` 進選單自己的 ssh-agent（TTL）、離開時 agent 結束；91 用保管庫的 PEM 憑證（TokenCertificateLoginCallbackHandler、PEM keystore）換 token；
   ssh 只信管理員建的 /etc/opmenu/known_hosts。lab 實測：bob/carol/alice 三種身分的動態選單、隱藏項目直接輸入被擋、23/16/22/21/27 經 cpadmin ssh 成功、kb04 換成兩段式 sudoers 後重啟與看日誌仍可、91 經 Conjur 取憑證成功、離開後無 agent 殘留、磁碟無私鑰。
   踩到：Conjur 身分檔最後一行沒換行 read 失敗；`kafka-topics --describe` 需要 DescribeConfigs → 維運群組要 Operator＋DeveloperManage Topic:*（見 opmenu/README）。

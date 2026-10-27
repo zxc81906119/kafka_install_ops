@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# install/lab/run-customer.sh —— lab：用「客戶模式」從零實跑到第 20 站（Windows Git Bash）
+# install/lab/run-customer.sh —— lab：用「客戶模式」從零實跑到第 19 站（Windows Git Bash）
 #
-#   bash run-customer.sh                  從零（bank-sim reset），裝 site.env 的 CP_VERSION；驗收後接著跑 21、23–27 站，最後再驗收一次
+#   bash run-customer.sh                  從零（bank-sim reset），裝 site.env 的 CP_VERSION；驗收後接著跑 20、22–26 站，最後再驗收一次
 #   CP_VERSION=8.2.4 bash run-customer.sh 指定版本（升級演練：先裝 8.2.4）
 #   FROM=6 bash run-customer.sh           從第 6 段接著跑（段號在每段的 ######## 標題裡）；接著跑時 CP_VERSION 要和第一次一樣
 #   TO=17 bash run-customer.sh            跑到第 17 段（第一次驗收）就停
 #
-# 客戶的 CyberArk 只有 PAM，程式碰不到保管庫，所以 site.env 換成（install/README「lab 與客戶環境的設定差異」）：
-#   SSH_KEY_SOURCE=agent  VAULT_ACCESS=manual  SUMMON=0  LDAP_PASSWORD_VIA_ENV=0  OPMENU_SECRETS=manual
+# 客戶的 CyberArk 只有 PAM，程式碰不到 PVWA，所以 site.env 換成（install/README「lab 與客戶環境的設定差異」）：
+#   SSH_KEY_SOURCE=agent
 # 這幾項只改送進 lab 的那份（ops02、dl01），repo 裡的 site.env 不動。
 #
 # 正式環境由人做的事，這支扮演：
 #   CyberArk     產生 cpadmin 金鑰對（bank-sim pvwa-key），PVWA 在 $LAB/pvwa/
 #   工程師        把 cpadmin 私鑰從 PVWA 貼進操作機的 ssh-agent（不落地）；冷開機後要重貼
-#   Secrets 團隊  產生 passphrase 放進 PVWA；把第 16 站產生的 master key 存進 PVWA
+#   Secrets 團隊  產生 passphrase 放進 PVWA；把第 15 站產生的 master key 存進 PVWA
 #   工程師        從 PVWA 取 passphrase 放進 ~/secrets/sp-passphrase.txt；master key 存好後記下「雜湊 單號」
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
@@ -39,7 +39,7 @@ stage() {
 }
 # 在操作機以 cpadmin 跑 install.sh；帶上工程師 ssh-agent 的位置
 install_on_ops() { docker exec -u cpadmin -w /home/cpadmin -e SSH_AUTH_SOCK="$AGENT_SOCKET" "$OPS_CONTAINER" bash install/install.sh "$@" </dev/null; }
-# 隨時執行的站（21 以後）：直接跑那一支
+# 隨時執行的站（20 以後）：直接跑那一支
 step_on_ops() { local script=$1; shift; docker exec -u cpadmin -w /home/cpadmin -e SSH_AUTH_SOCK="$AGENT_SOCKET" "$OPS_CONTAINER" bash "install/steps/$script" "$@" </dev/null; }
 # expect_wait_for_bank <rc> <站> [前置站]：install.sh 應該停在「第 <站> 站等銀行」（rc 2）。
 # 給了前置站就再確認它已經做完（略過的站不會留完成標記，所以由呼叫的地方指定），不然可能是更早的站在等銀行
@@ -53,12 +53,11 @@ expect_wait_for_bank() {
 
 # 把送進 lab 的 site.env 換成客戶模式（ops02 與 dl01 兩份）
 apply_customer_settings() {
-  local settings="s/^SSH_KEY_SOURCE=.*/SSH_KEY_SOURCE=agent/; s/^VAULT_ACCESS=[a-z]*/VAULT_ACCESS=manual/; s/^SUMMON=.*/SUMMON=0/;"
-  settings+=" s/^LDAP_PASSWORD_VIA_ENV=.*/LDAP_PASSWORD_VIA_ENV=0/; s/^OPMENU_SECRETS=[a-z]*/OPMENU_SECRETS=manual/;"
+  local settings="s/^SSH_KEY_SOURCE=.*/SSH_KEY_SOURCE=agent/;"
   [ -n "${CP_VERSION:-}" ] && settings+=" s/^CP_VERSION=[0-9.]*/CP_VERSION=$CP_VERSION/;"
   docker exec "$OPS_CONTAINER" sed -i "$settings" /home/cpadmin/install/conf/site.env
   docker exec dl01 sed -i "$settings" /root/install/conf/site.env
-  docker exec "$OPS_CONTAINER" grep -E '^(SSH_KEY_SOURCE|VAULT_ACCESS|SUMMON|LDAP_PASSWORD_VIA_ENV|OPMENU_SECRETS|CP_VERSION)=' /home/cpadmin/install/conf/site.env | cut -d' ' -f1
+  docker exec "$OPS_CONTAINER" grep -E '^(SSH_KEY_SOURCE|CP_VERSION)=' /home/cpadmin/install/conf/site.env | cut -d' ' -f1
 }
 
 # 工程師：開這次作業的 ssh-agent，把 PVWA 取出的私鑰貼進去（ssh-add -，從 stdin，不寫檔）
@@ -95,29 +94,29 @@ stage 8 "03–09" && { install_on_ops --from 03 --to 09; expect_wait_for_bank $?
 stage 9 "銀行：CA 簽發" && { $BANK sign; }
 stage 10 "09–14" && { install_on_ops --from 09 --to 14 || exit 1; }
 stage 11 "Secrets 團隊：passphrase 放進 PVWA；工程師取出放進操作機" && { passphrase_from_pvwa; }
-stage 12 "15–16（16 產生 master key 後應停下等保管）" && { install_on_ops --from 15 --to 16; expect_wait_for_bank $? 16 14; }
+stage 12 "15（產生 master key 後應停下等保管）" && { install_on_ops --from 15 --to 15; expect_wait_for_bank $? 15 14; }
 stage 13 "Secrets 團隊：master key 存進 PVWA；工程師記單號" && { master_key_into_pvwa; }
-stage 14 "16–19" && { install_on_ops --from 16 --to 19 || exit 1; }
-stage 15 "銀行：行內 Prometheus 接上（18.5）" && { $BANK prometheus; }
-stage 16 "機房：冷開機（20.4）；工程師重新貼私鑰" && { $BANK coldboot && engineer_loads_key || exit 1; }
-stage 17 "20 驗收" && { install_on_ops --from 20 || exit 1; }
-stage 18 "21 憑證：status、leaf 換發（第一次停在等銀行簽）" && {
-  step_on_ops 21-cert-rotate.sh status || exit 1
-  step_on_ops 21-cert-rotate.sh leaf; [ $? = 2 ] || { echo "21 leaf 第一次應停在等銀行（rc 2）"; exit 1; }
-  $BANK sign-next && step_on_ops 21-cert-rotate.sh leaf || exit 1
+stage 14 "15–18" && { install_on_ops --from 15 --to 18 || exit 1; }
+stage 15 "銀行：行內 Prometheus 接上（17.5）" && { $BANK prometheus; }
+stage 16 "機房：冷開機（19.4）；工程師重新貼私鑰" && { $BANK coldboot && engineer_loads_key || exit 1; }
+stage 17 "19 驗收" && { install_on_ops --from 19 || exit 1; }
+stage 18 "20 憑證：status、leaf 換發（第一次停在等銀行簽）" && {
+  step_on_ops 20-cert-rotate.sh status || exit 1
+  step_on_ops 20-cert-rotate.sh leaf; [ $? = 2 ] || { echo "20 leaf 第一次應停在等銀行（rc 2）"; exit 1; }
+  $BANK sign-next && step_on_ops 20-cert-rotate.sh leaf || exit 1
 }
-stage 19 "23 license：status、schedule" && {
-  step_on_ops 23-license.sh status; rc=$?; [ $rc = 0 ] || [ $rc = 2 ] || exit 1   # 試用版不到 90 天是 rc 2
-  step_on_ops 23-license.sh schedule || exit 1
+stage 19 "22 license：status、schedule" && {
+  step_on_ops 22-license.sh status; rc=$?; [ $rc = 0 ] || [ $rc = 2 ] || exit 1   # 試用版不到 90 天是 rc 2
+  step_on_ops 22-license.sh schedule || exit 1
 }
-stage 20 "26 日常備份：grant、run、schedule、compare" && {
-  step_on_ops 26-metadata-backup.sh grant && step_on_ops 26-metadata-backup.sh run || exit 1
-  sleep 61; step_on_ops 26-metadata-backup.sh schedule && step_on_ops 26-metadata-backup.sh compare || exit 1
+stage 20 "25 日常備份：grant、run、schedule、compare" && {
+  step_on_ops 25-metadata-backup.sh grant && step_on_ops 25-metadata-backup.sh run || exit 1
+  sleep 61; step_on_ops 25-metadata-backup.sh schedule && step_on_ops 25-metadata-backup.sh compare || exit 1
 }
-stage 21 "24 換 controller（kc03 清空重建）" && { step_on_ops 24-controller-replace.sh replace kc03 || exit 1; }
-stage 22 "25 broker 縮減與擴充（kb04）" && { step_on_ops 25-broker-scale.sh remove kb04 && step_on_ops 25-broker-scale.sh add kb04 || exit 1; }
-stage 23 "27 OS 修補" && { step_on_ops 27-os-patch.sh apply || exit 1; }
-stage 24 "20 驗收（21–27 做完再一次）" && { install_on_ops --from 20 || exit 1; }
+stage 21 "23 換 controller（kc03 清空重建）" && { step_on_ops 23-controller-replace.sh replace kc03 || exit 1; }
+stage 22 "24 broker 縮減與擴充（kb04）" && { step_on_ops 24-broker-scale.sh remove kb04 && step_on_ops 24-broker-scale.sh add kb04 || exit 1; }
+stage 23 "26 OS 修補" && { step_on_ops 26-os-patch.sh apply || exit 1; }
+stage 24 "19 驗收（20–26 做完再一次）" && { install_on_ops --from 19 || exit 1; }
 stage 25 "完成" && { install_on_ops --list; }
 # TO= 讓最後幾段被略過時，最後一個 stage 會回 1；走到這裡就是成功
 exit 0

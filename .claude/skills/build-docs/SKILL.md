@@ -23,7 +23,7 @@ dependencies are already installed (`npm ci` only on a fresh clone).
   directly, certificates only via REST; package repo = "內部套件庫（Satellite/Artifactory/Nexus，無則 web server）".
 - Markdown subset accepted by the questions/journey builders: `#`–`###`, paragraphs, `- ` bullets, `1. ` numbers,
   fenced code (journey: ```bash = command block, ```out = expected output), `|` tables, `> ` callouts
-  (`>!` or "注意/陷阱" = warning), `[[toc]]`, `[[pagebreak]]`. Journey only: `@role 誰 | 主機 | 身分` badge lines, `@only customer|conjur|provider[,…]` / `@only all` mode scopes (every @only section needs its own @role),
+  (`>!` or "注意/陷阱" = warning), `[[toc]]`, `[[pagebreak]]`. Journey only: `@role 誰 | 主機 | 身分` badge lines, `@only` mode scopes (only the `customer` mode remains since 2026-10-27; every @only section needs its own @role),
   and `![diagram-id]` images from `diagrams.js`.
 - Diagrams: render to PNG for a visual check before shipping:
   `node -e 'const D=require("./diagrams");const {Resvg}=require("@resvg/resvg-js");...'` then Read the PNGs.

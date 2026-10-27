@@ -63,8 +63,8 @@ if [ "${#FRAGMENT_FILES[@]}" -gt 0 ]; then
 fi
 
 echo "== 3. 開 pipefail 的地方不寫「管線接 grep -q」"
-# 只看指令本身的行：去掉註解行，去掉送到別的 shell 的字串（bash -c "…"、as_root_on、ssh_run、run_as_conjur_admin：那裡沒有 pipefail）
-pipe_grep_lines=$(grep -n -E '\|[[:space:]]*grep -[a-zA-Z]*q' "${SHELL_FILES[@]}" | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v -E 'bash -c "|as_root_on|ssh_run|run_as_conjur_admin')
+# 只看指令本身的行：去掉註解行，去掉送到別的 shell 的字串（bash -c "…"、as_root_on、ssh_run：那裡沒有 pipefail）
+pipe_grep_lines=$(grep -n -E '\|[[:space:]]*grep -[a-zA-Z]*q' "${SHELL_FILES[@]}" | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v -E 'bash -c "|as_root_on|ssh_run')
 if [ -n "$pipe_grep_lines" ]; then
   echo "$pipe_grep_lines"
   echo "   ↑ 改寫成 grep -q 樣式 <<<\"\$(指令)\""

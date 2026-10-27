@@ -1,35 +1,33 @@
 #!/usr/bin/env bash
-# 第 19 站：稽核日誌 —— 專用低權限寫入帳號、敏感 topic 的事件分開放（365 天）、排除平台自己的雜訊
+# 第 18 站：稽核日誌 —— 專用低權限寫入帳號、敏感 topic 的事件分開放（365 天）、排除平台自己的雜訊
 # where: ops02 （cpadmin）
 #
 # 何時用：AUDIT_LOG=1。
 # 做什麼：
-#   19.1 SCRAM 帳號 confluent-audit，只有 confluent-audit-log-events* 的 Write／Manage（不是 super user）
-#   19.2 templates/audit.tpl 接在 common 後面 → 重新產生 7 台 server.properties → 密碼依 15／16 站的模式處理 → 派送、滾動重啟
-#   19.3 製造事件：alice 寫敏感 topic（允許）、app 想讀敏感 topic（拒絕）→ 兩筆都要出現在 _sensitive
-# 密碼怎麼放：看 ~/conf/secrets.mode（15、16 站留下的）
-#   sp     重新加密（新增的 audit 密碼一起進 security.properties）；16.9 開著時 AD 查詢密碼一樣走 env
-#   conjur audit 密碼寫進 Conjur，範本裡改成 ${cyberark:…}
-#   plain  明文（沒做 15／16 的狀態，不建議）
+#   18.1 SCRAM 帳號 confluent-audit，只有 confluent-audit-log-events* 的 Write／Manage（不是 super user）
+#   18.2 templates/audit.tpl 接在 common 後面 → 重新產生 7 台 server.properties → 密碼依第 15 站的模式處理 → 派送、滾動重啟
+#   18.3 製造事件：alice 寫敏感 topic（允許）、app 想讀敏感 topic（拒絕）→ 兩筆都要出現在 _sensitive
+# 密碼怎麼放：看 ~/conf/secrets.mode（第 15 站留下的）
+#   sp     重新加密（新增的 audit 密碼一起進 security.properties）
+#   plain  明文（沒做第 15 站的狀態，不建議）
 # 重跑：安全。改路由規則＝改 templates/audit.tpl 再跑這一站。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 source "$INSTALL_DIR/lib/render.sh"
-source "$INSTALL_DIR/lib/vault.sh"
-if [ "$AUDIT_LOG" != 1 ]; then log "AUDIT_LOG=$AUDIT_LOG：略過第 19 站"; exit 0; fi
+if [ "$AUDIT_LOG" != 1 ]; then log "AUDIT_LOG=$AUDIT_LOG：略過第 18 站"; exit 0; fi
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 SECRETS_MODE_IN_USE=$(cat "$CONF_DIR/secrets.mode" 2>/dev/null || echo plain)
 AUDIT_PASSWORD_FILE=$SECRETS_DIR/confluent-audit.pass
-AUDIT_FRAGMENT=$CONF_DIR/audit.rendered.tpl     # 換好主機清單、密碼變數還留著的片段（第 16 站重跑時也會用到）
+AUDIT_FRAGMENT=$CONF_DIR/audit.rendered.tpl     # 換好主機清單、密碼變數還留著的片段（第 15 站重跑時也會用到）
 AUDIT_CONF_DIR=$CONF_DIR/audit                  # 這一站產出的每台 server.properties
 SENSITIVE_TOPIC=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk -v prefix="$AUDIT_SENSITIVE_PREFIX" 'index($1, prefix) == 1 {print $1; exit}')
-[ -n "$SENSITIVE_TOPIC" ] || die "conf/topics.txt 沒有以 $AUDIT_SENSITIVE_PREFIX 開頭的 topic（19.3 要用它製造事件）"
-log "密碼放法：$SECRETS_MODE_IN_USE（15／16 站留下的）；敏感 topic：$AUDIT_SENSITIVE_PREFIX*（測試用 $SENSITIVE_TOPIC）"
+[ -n "$SENSITIVE_TOPIC" ] || die "conf/topics.txt 沒有以 $AUDIT_SENSITIVE_PREFIX 開頭的 topic（18.3 要用它製造事件）"
+log "密碼放法：$SECRETS_MODE_IN_USE（第 15 站留下的）；敏感 topic：$AUDIT_SENSITIVE_PREFIX*（測試用 $SENSITIVE_TOPIC）"
 
-section "19.1 專用寫入帳號 confluent-audit"
+section "18.1 專用寫入帳號 confluent-audit"
 (umask 077; [ -s "$AUDIT_PASSWORD_FILE" ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$AUDIT_PASSWORD_FILE")
 scram_config="SCRAM-SHA-512=[iterations=8192,password=$(cat "$AUDIT_PASSWORD_FILE")]"
 if kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --alter --entity-type users --entity-name confluent-audit \
@@ -44,16 +42,16 @@ for role in DeveloperWrite DeveloperManage; do
        --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then ok "confluent-audit $role Topic:confluent-audit-log-events PREFIXED"
   else fail "confluent-audit $role"; fi
 done
-[ "$FAIL_COUNT" = 0 ] || die "19.1 失敗"
+[ "$FAIL_COUNT" = 0 ] || die "18.1 失敗"
 
-section "19.2 設定片段：寫入者、路由（$AUDIT_SENSITIVE_PREFIX* → _sensitive）、保留天數"
+section "18.2 設定片段：寫入者、路由（$AUDIT_SENSITIVE_PREFIX* → _sensitive）、保留天數"
 export AUDIT_SENSITIVE_PREFIX BROKER_CLIENT
 # 只換主機清單與 prefix；${STORE_PASSWORD}、${AUDIT_PASSWORD} 留著，下面依密碼放法處理（所以這裡 render 會報「還有沒換掉的」，是預期的）
 render_template "$TEMPLATE_DIR/audit.tpl" "$AUDIT_FRAGMENT" BROKER_CLIENT AUDIT_SENSITIVE_PREFIX 2>/dev/null || true
 [ "$(grep -c 'security.event' "$AUDIT_FRAGMENT")" = 11 ] || die "audit 片段產生失敗"
 
 export CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN
-export HOST_FQDN NODE_ID RACK HOST_SHORT
+export HOST_FQDN NODE_ID RACK
 COMMON_VARS="HOST_FQDN NODE_ID RACK CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN"
 install -d -m 0700 "$AUDIT_CONF_DIR"
 case $SECRETS_MODE_IN_USE in
@@ -65,32 +63,18 @@ case $SECRETS_MODE_IN_USE in
     TEMPLATE_VARS="$COMMON_VARS STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD"
     SOURCE_TEMPLATES=$TEMPLATE_DIR           # 明文範本，渲染後再加密
     AUDIT_TEMPLATE=$AUDIT_FRAGMENT;;
-  conjur)
-    vault_login_as_ops || die "ops 身分登入保管庫失敗"
-    if tr -d '\n' < "$AUDIT_PASSWORD_FILE" | vault_set audit-password; then ok "set $VAULT_POLICY/audit-password"
-    else die "保管庫沒有 audit-password 變數（policy 要先加）"; fi
-    vault_logout
-    sed -e "s|\${STORE_PASSWORD}|\${cyberark:$VAULT_POLICY/store-password:$VAULT_POLICY/store-password}|g" \
-        -e "s|\${AUDIT_PASSWORD}|\${cyberark:$VAULT_POLICY/audit-password:$VAULT_POLICY/audit-password}|g" "$AUDIT_FRAGMENT" > "$CONF_DIR/conjur/audit.tpl"
-    export VAULT_URL VAULT_ACCOUNT VAULT_POLICY CONJUR_API_KEY
-    TEMPLATE_VARS="$COMMON_VARS HOST_SHORT CONJUR_API_KEY VAULT_URL VAULT_ACCOUNT VAULT_POLICY"
-    SOURCE_TEMPLATES=$CONF_DIR/conjur        # 第 15 站改成 ${cyberark:…} 的範本
-    AUDIT_TEMPLATE=$CONF_DIR/conjur/audit.tpl;;
 esac
 if [ "$SECRETS_MODE_IN_USE" = sp ]; then CONFLUENT_SECURITY_MASTER_KEY=$(cat "$SECRETS_DIR/master.key"); export CONFLUENT_SECURITY_MASTER_KEY; fi
 
 for host in $KAFKA_HOSTS; do
-  HOST_FQDN=$(fqdn "$host"); NODE_ID=$(node_id_of "$host"); RACK=$(rack_of "$host"); HOST_SHORT=$host
-  [ "$SECRETS_MODE_IN_USE" = conjur ] && CONJUR_API_KEY=$(ssh_run "$host" "sudo cat $VAULT_HOST_KEY")
+  HOST_FQDN=$(fqdn "$host"); NODE_ID=$(node_id_of "$host"); RACK=$(rack_of "$host")
   case $host in kc*) role_template=$SOURCE_TEMPLATES/controller.tpl;; *) role_template=$SOURCE_TEMPLATES/broker.tpl;; esac
   props_file=$AUDIT_CONF_DIR/$host.properties
   # shellcheck disable=SC2086
   render_templates "$props_file" $TEMPLATE_VARS -- "$role_template" "$SOURCE_TEMPLATES/common.tpl" "$AUDIT_TEMPLATE" || { fail "$host: render"; continue; }
   upload_files=("$props_file")
   if [ "$SECRETS_MODE_IN_USE" = sp ]; then
-    [ "$LDAP_PASSWORD_VIA_ENV" = 1 ] && sed -i 's|^ldap.java.naming.security.credentials=.*|ldap.java.naming.security.credentials=${env:LDAP_BIND_PASSWORD}|' "$props_file"
     encrypt_passwords "$props_file" "$SECRETS_DIR/security.properties" /etc/confluent/secrets/security.properties || { fail "$host: encrypt"; continue; }
-    [ "$LDAP_PASSWORD_VIA_ENV" = 1 ] && ldap_password_from_env "$props_file"
     upload_files+=("$SECRETS_DIR/security.properties")
   fi
   copy_to_tmp "$host" "${upload_files[@]}" || { fail "$host: scp"; continue; }
@@ -110,14 +94,14 @@ EOF
     if [ "$result" = "audit_lines=11 plaintext=0" ]; then ok "$host: $result"; else fail "$host: $result"; fi
   fi
 done
-unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD CONJUR_API_KEY CONFLUENT_SECURITY_MASTER_KEY
+unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD CONFLUENT_SECURITY_MASTER_KEY
 [ "$FAIL_COUNT" = 0 ] || die "派送失敗，不重啟"
 rolling_restart controllers brokers || die "滾動重啟有主機沒健康"
 sleep 20
 audit_topic_count=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --list 2>/dev/null | grep -c '^confluent-audit-log-events')
 if [ "$audit_topic_count" = 2 ]; then ok "audit topic 2 個（預設 + _sensitive）"; else fail "audit topic 只有 $audit_topic_count 個"; fi
 
-section "19.3 製造事件、讀回來"
+section "18.3 製造事件、讀回來"
 # alice 的 client 設定（LDAP listener、AD 帳密）與一個 SCRAM app 的 client 設定，沒有就建
 if [ ! -f "$ALICE_CLIENT_CONF" ]; then
   (umask 077; cat > "$ALICE_CLIENT_CONF" <<EOF

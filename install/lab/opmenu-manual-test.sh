@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# lab 專用：在 ops02 以 cpadmin 跑。需要已裝好的 OP menu（第 17 站）與 ~/.ssh/id_ed25519（模擬從 PVWA 取出的那把）。
-# OP menu 人工模式（OPMENU_SECRETS=manual）實測。在 ops02 以 cpadmin 跑；用 script 開虛擬終端機，模擬維運人員從 PVWA 貼上私鑰。
+# lab 專用：在 ops02 以 cpadmin 跑。需要已裝好的 OP menu（第 16 站）與 ~/.ssh/id_ed25519（模擬從 PVWA 取出的那把）。
+# OP menu 人工模式（唯一的來源）實測。在 ops02 以 cpadmin 跑；用 script 開虛擬終端機，模擬維運人員從 PVWA 貼上私鑰。
 #   A. Kafka 類項目（12 看 topic）：不應該要求貼私鑰
 #   B. 主機類項目（23 看日誌）：應該提示到 PVWA 取 → 貼上 → 正常執行；貼的內容不出現在畫面
 #   C. 主機類項目但什麼都不貼（直接 Ctrl-D）：應該擋下、不執行
@@ -15,9 +15,8 @@ TEST_PASSWORD=$(cat "$SECRETS_DIR/ad-test-users.pass")
 PASS_COUNT=0; FAIL_COUNT=0
 check() { if eval "$2"; then echo "ok   $1"; PASS_COUNT=$((PASS_COUNT + 1)); else echo "FAIL $1"; FAIL_COUNT=$((FAIL_COUNT + 1)); fi; }
 
-# 測試用設定：和正式的一樣，只把來源改成 manual、object 名稱改成 PVWA 上看得到的說明
-sudo sed -e 's|^OPMENU_SECRETS=.*|OPMENU_SECRETS=manual|' \
-         -e 's|^OPMENU_SSH_KEY_SECRET=.*|OPMENU_SSH_KEY_SECRET="Safe KAFKA-OPS / cpadmin-hosts（SSH key）"|' \
+# 測試用設定：和正式的一樣，只把 object 名稱改成 PVWA 上看得到的說明
+sudo sed -e 's|^OPMENU_SSH_KEY_SECRET=.*|OPMENU_SSH_KEY_SECRET="Safe KAFKA-OPS / cpadmin-hosts（SSH key）"|' \
          -e 's|^OPMENU_BREAKGLASS_SECRET=.*|OPMENU_BREAKGLASS_SECRET="Safe KAFKA-OPS / opmenu-breakglass（PEM）"|' \
          /etc/opmenu/opmenu.conf | sudo install -m 0644 /dev/stdin "$MANUAL_CONF"
 

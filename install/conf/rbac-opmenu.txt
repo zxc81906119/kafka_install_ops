@@ -1,4 +1,4 @@
-# 第 17 站 OP menu 需要的額外 role binding（格式同 rbac.txt）
+# 第 16 站 OP menu 需要的額外 role binding（格式同 rbac.txt）
 # 維運群組：健康檢查與重啟前檢查要 DescribeConfigs（Operator 不夠）；開發群組在自己的 prefix 要看得到 topic 明細
 Group:kafka-operators   DeveloperManage Topic:*        LITERAL
 Group:kafka-operators   DeveloperRead   Group:*        LITERAL

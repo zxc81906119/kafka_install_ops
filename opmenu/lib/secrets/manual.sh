@@ -1,4 +1,4 @@
-# secrets/manual.sh —— 機敏資料由人從 CyberArk PVWA 取出後貼上（銀行沒有 CCP／CP 時用）
+# secrets/manual.sh —— 機敏資料由人從 CyberArk PVWA 取出後貼上（唯一的來源）
 #
 # 介面：secret_get <object 名稱>   把貼上的內容印到 stdout；沒有終端機、或什麼都沒貼，回傳非 0 並印原因到 stderr
 #
@@ -6,7 +6,7 @@
 #       貼到畫面上、按 Ctrl-D 結束。內容只經過管線交給 ssh-agent 或暫存檔（0600，用完即刪），不寫進任何設定。
 # 取用紀錄、雙人覆核、變更單號都在 PVWA 那一端；選單這裡只記「哪個 object 被要求、誰要的」。
 #
-# 設定（opmenu.conf）：OPMENU_SECRETS=manual
+# 設定（opmenu.conf）：不需要選擇來源，固定用這支
 #   OPMENU_SSH_KEY_SECRET     PVWA 上 cpadmin 私鑰的 object 名稱（只用來提示，例如 "Safe KAFKA-OPS / cpadmin-hosts"）
 #   OPMENU_BREAKGLASS_SECRET  PVWA 上緊急憑證的 object 名稱
 

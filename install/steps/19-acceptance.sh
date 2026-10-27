@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# 第 20 站：驗收與收尾 —— 一次跑完、結果能附在驗收文件裡：平台健康、安全（正反向）、應用程式端、維運；最後列出要收的東西
+# 第 19 站：驗收與收尾 —— 一次跑完、結果能附在驗收文件裡：平台健康、安全（正反向）、應用程式端、維運；最後列出要收的東西
 # where: ops02 （cpadmin）
 #
 # 做什麼：
-#   20.1 平台健康：服務、quorum、MDS、沒有 under-replicated／offline partition、Self-Balancing、REST、C3、指標、JMX exporter
-#   20.2 安全：該過的過、該擋的擋（AD 帳密、RBAC、REST 憑證、SASL、憑證鏈、明文密碼、master key）
-#   20.3 應用程式端：SCRAM app 直連寫讀；REST app 經負載平衡寫，alice 讀得到
-#   20.4 維運：bob 用選單重啟一台 broker；冷開機交給機房演練（lab：bank-sim.sh coldboot）
-#   20.5 收尾：權限檢查、殘留檔、要留什麼要收什麼
-# 只讀為主；20.3 會寫兩筆測試訊息，20.4 會重啟一台 broker。
+#   19.1 平台健康：服務、quorum、MDS、沒有 under-replicated／offline partition、Self-Balancing、REST、C3、指標、JMX exporter
+#   19.2 安全：該過的過、該擋的擋（AD 帳密、RBAC、REST 憑證、SASL、憑證鏈、明文密碼、master key）
+#   19.3 應用程式端：SCRAM app 直連寫讀；REST app 經負載平衡寫，alice 讀得到
+#   19.4 維運：bob 用選單重啟一台 broker；冷開機交給機房演練（lab：bank-sim.sh coldboot）
+#   19.5 收尾：權限檢查、殘留檔、要留什麼要收什麼
+# 只讀為主；19.3 會寫兩筆測試訊息，19.4 會重啟一台 broker。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
@@ -45,7 +45,7 @@ if [ ! -f "$APP_CLIENT_CONF" ]; then
      "$FIRST_SCRAM_APP" "$(cat "$SECRETS_DIR/$FIRST_SCRAM_APP.pass")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$APP_CLIENT_CONF")
 fi
 
-section "20.1 平台健康"
+section "19.1 平台健康"
 check "controller quorum 有 leader" bash -c "kafka-metadata-quorum --bootstrap-controller $FIRST_CONTROLLER:9093 --command-config $INTERNAL_CLIENT_CONF describe --status | grep -q 'LeaderId: *[0-9]'"
 for host in $KAFKA_HOSTS; do check "$host confluent-server active" ssh_run "$host" 'systemctl is-active -q confluent-server'; done
 for host in $BROKERS; do check "$host MDS 8090 回 200" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$(fqdn "$host"):8090/v1/metadata/id)\" = 200 ]"; done
@@ -62,7 +62,7 @@ if [ "$JMX_EXPORTER" = 1 ]; then
 fi
 health_failures=$FAIL_COUNT
 
-section "20.2 安全：正向與反向"
+section "19.2 安全：正向與反向"
 check "AD 帳密正確 → MDS 給 token（200）" bash -c "[ \"\$(mds_login_code alice '$TEST_USERS_PASSWORD')\" = 200 ]"
 check "AD 密碼錯 → 401" bash -c "[ \"\$(mds_login_code alice wrong-password)\" = 401 ]"
 check "不存在的帳號 → 401" bash -c "[ \"\$(mds_login_code nobody '$TEST_USERS_PASSWORD')\" = 401 ]"
@@ -78,18 +78,13 @@ if [ "$SECRETS_MODE_IN_USE" != plain ]; then
     plaintext_count=$(count_plaintext_passwords <(ssh_run "$host" "sudo cat $(props_path_of "$host")"))
     check "$host 的設定檔沒有明文密碼" test "$plaintext_count" = 0
   done
-  if [ "$SECRETS_MODE_IN_USE" = sp ] && [ "$SUMMON" = 1 ]; then
-    check "${BROKERS%% *} 磁碟上沒有 master key（Summon）" ssh_script "${BROKERS%% *}" <<'EOF'
-[ "$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l)" = 0 ]
-EOF
-  fi
 else
-  warn "SECRETS_MODE=plain：設定檔裡的密碼是明文（0640），正式環境請走第 15 或 16 站"
+  warn "SECRETS_MODE=plain：設定檔裡的密碼是明文（0640），正式環境請走第 15 站"
 fi
 check "/etc/confluent/ssl 是 0750" ssh_run "${BROKERS%% *}" '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]'
 security_failures=$((FAIL_COUNT - health_failures))
 
-section "20.3 應用程式端"
+section "19.3 應用程式端"
 cluster_id=$(curl -s --cacert "$BANK_ROOT_CA" "$MDS_URL/v1/metadata/id" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 test_message="acceptance-$(date +%s)"
 # 每個 app 用自己 prefix 的 topic：app-orders → orders.events；app-legacy-billing → billing.events
@@ -104,36 +99,18 @@ check "$FIRST_REST_APP 經負載平衡 + REST Proxy（mTLS）寫入 $rest_app_to
 check "alice 在 $rest_app_topic 讀到那筆" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9096 --consumer.config $ALICE_CLIENT_CONF --topic $rest_app_topic --group acceptance-alice --from-beginning --timeout-ms 15000 2>/dev/null | grep -q $test_message-rest"
 application_failures=$((FAIL_COUNT - health_failures - security_failures))
 
-section "20.4 維運"
-if [ "$OPMENU" = 1 ] && [ "$OPMENU_SECRETS" = manual ]; then
-  # manual：主機類項目要維運人員在終端機貼上從 PVWA 取出的私鑰，非互動做不到（第 17 站同樣只提醒）
+section "19.4 維運"
+if [ "$OPMENU" = 1 ]; then
+  # 主機類項目要維運人員在終端機貼上從 PVWA 取出的私鑰，非互動做不到（第 16 站同樣只提醒）
   warn "人工驗收項目：維運人員（bob）互動登入選單，選 21 重啟一台 broker、依提示貼上 PVWA 取出的 cpadmin 私鑰；成功後把選單紀錄那一行附在驗收文件"
-elif [ "$OPMENU" = 1 ] && [ -x /opt/opmenu/opmenu.sh ]; then
-  restart_host=$(awk '{print $3}' <<<"$BROKERS"); [ -n "$restart_host" ] || restart_host=${BROKERS##* }
-  menu_result=$(sudo env OPMENU_USER=bob OPMENU_PASS="$TEST_USERS_PASSWORD" OPMENU_YES=1 JAVA_HOME=/opt/java/current HOME=/home/$OPMENU_OS_USER \
-                  runuser -p -u "$OPMENU_OS_USER" -- /opt/opmenu/opmenu.sh --run 21 "$(fqdn "$restart_host"):confluent-server" 2>&1 </dev/null \
-                | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g' | tail -1)
-  case $menu_result in *已重啟*) ok "bob 用選單重啟 $restart_host：$menu_result";; *) fail "bob 用選單重啟 $restart_host：$menu_result";; esac
-  for attempt in $(seq 1 30); do
-    [ "$(http_code -k "https://$(fqdn "$restart_host"):8090/v1/metadata/id")" = 200 ] && break
-    sleep 5
-  done
-  under_replicated=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)
-  if [ "$attempt" -lt 30 ]; then ok "$restart_host 的 MDS 回 200（約 $((attempt * 5)) 秒），under-replicated=$under_replicated"
-  else fail "$restart_host 重啟後沒回來"; fi
 else
   log "OPMENU=0 或選單沒裝：略過選單重啟"
 fi
-# 冷開機的預期依密碼放法不同：Summon／Conjur 啟動時要向保管庫取值；master key 落地 service.env 時不依賴保管庫
-if [ "$SECRETS_MODE" = conjur ] || [ "$SUMMON" = 1 ]; then
-  cold_boot_expectation="broker 等保管庫起來前會重試（Restart=on-failure，每 10 秒）"
-else
-  cold_boot_expectation="master key 在各主機的 service.env，開機不依賴保管庫；controller → broker 依序回來"
-fi
+cold_boot_expectation="master key 在各主機的 service.env，開機不依賴 PVWA；controller → broker 依序回來"
 ask_bank "冷開機（全部主機同時關再開）由機房排程演練。預期：$cold_boot_expectation，" \
          "    C3 等 MDS 起來才啟動（第 13 站的 drop-in）。lab：bash install/lab/bank-sim.sh coldboot"
 
-section "20.5 收尾：留什麼、收什麼"
+section "19.5 收尾：留什麼、收什麼"
 rm -rf /tmp/jmx-* /tmp/*.properties 2>/dev/null
 wrong_permissions=$(find ~ -maxdepth 3 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2>/dev/null)
 if [ -z "$wrong_permissions" ]; then ok "家目錄下的私鑰與密碼檔都是 0600"; else fail "權限不是 0600：$(paste -sd' ' <<<"$wrong_permissions")"; fi

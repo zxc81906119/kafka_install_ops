@@ -18,20 +18,6 @@ as_cpadmin_on_ops() {   # 在操作機以 cpadmin 跑一段指令
   docker exec -u cpadmin -w /home/cpadmin "$(container_of "$OPS_HOST")" bash -c "$1"; }
 announce() { printf '\n[bank] %s\n' "$*"; }
 
-# save_created_api_keys <policy 載入結果.json>：Conjur 對每個新建的身分回一把 API key，各存成 conjur/keys/<名稱>.key（0600）
-#   poc:host:kafka/ops02 → kafka_ops02.key；poc:user:ops@kafka → ops@kafka.key。只用 grep／sed，不靠 python。
-save_created_api_keys() {
-  local result_file=$1 created_role role_id api_key key_name
-  grep -o '"[^"]*":{[^{}]*"api_key":"[^"]*"[^{}]*}' "$result_file" | while IFS= read -r created_role; do
-    role_id=$(sed 's/^"\([^"]*\)".*/\1/' <<<"$created_role")
-    api_key=$(sed 's/.*"api_key":"\([^"]*\)".*/\1/' <<<"$created_role")
-    key_name=$(sed 's/^[^:]*:[^:]*://; s|/|_|g' <<<"$role_id")
-    (umask 077; printf '%s' "$api_key" > "$LAB/conjur/keys/$key_name.key")
-    echo "$role_id"
-  done
-  rm -f "$result_file"
-}
-
 push() {
   announce "install/ → $OPS_HOST:/home/cpadmin/install、dl01:/root/install"
   as_root_on "$OPS_HOST" 'rm -rf /home/cpadmin/install'; docker cp "$(windows_path "$INSTALL")" "$(container_of "$OPS_HOST"):/home/cpadmin/install"
@@ -71,7 +57,7 @@ prepare() {
   fi
   as_root_on "$OPS_HOST" 'k=$(cat '"$public_key_source"'); install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/cpadmin <<<"$k"; install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/repodeploy <<<"$k"; ls /etc/ssh/authorized_keys.d/'
 
-  # repo01 的 HTTPS 憑證要驗得過 ca/root.crt：手把手第 21 章演練過換 CA 的 lab，repo.crt 會是 G2／G3 簽的，用現在的 CA 重簽
+  # repo01 的 HTTPS 憑證要驗得過 ca/root.crt：手把手第 20 章演練過換 CA 的 lab，repo.crt 會是 G2／G3 簽的，用現在的 CA 重簽
   local repo_tls=$LAB/images/web/tls
   if ! openssl verify -CAfile "$(windows_path "$LAB/ca/root.crt")" -untrusted "$(windows_path "$repo_tls/repo.crt")" "$(windows_path "$repo_tls/repo.crt")" >/dev/null 2>&1; then
     announce "3.2 套件庫管理員：repo01 的 HTTPS 憑證驗不過目前的根（之前換過 CA），用現在的 CA 重簽"
@@ -133,88 +119,14 @@ sign() {
 
 reset() {
   announce "lab 從零：down -v（volume 全刪，落地區 $LAB/landing 保留）→ up -d"
-  local compose_files=(-f compose.yml); [ -f "$LAB/conjur.yml" ] && compose_files+=(-f conjur.yml)
-  (cd "$LAB" && docker compose "${compose_files[@]}" down -v --remove-orphans 2>&1 | tail -1; docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)
+  (cd "$LAB" && docker compose -f compose.yml down -v --remove-orphans 2>&1 | tail -1; docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)
   sleep 5; (cd "$LAB" && docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)   # lb01 第一次有時沒起來
   docker start dl01 >/dev/null 2>&1 || true
   docker ps --format '{{.Names}}' | grep -c '^lab-\|^dl01$'
 }
 
-# ---- 延伸站的銀行動作 ----
-run_as_conjur_admin() { docker run --rm --network lab_labnet -v "$(windows_path "$LAB/ca/root.crt"):/root.crt:ro" -v "$(windows_path "$LAB/conjur"):/c" lab-node:1 bash -c "$1"; }
-CONJUR_ADMIN_TOKEN='T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0)'
-
-conjur() {   # 15.1：銀行建 Conjur（扮演 CyberArk）、policy、每台 host 身分、ops 身分
-  announce "15.1 Secrets 團隊：Conjur（conjur.poc.lab，憑證由銀行 CA 簽）、policy kafka、11 台 host 身分、ops 使用者"
-  mkdir -p "$LAB/conjur/tls" "$LAB/conjur/keys"
-  if grep -q '^lab-conjur-1$' <<<"$(docker ps --format '{{.Names}}')" &&[ -s "$LAB/conjur/keys/admin.key" ]; then echo "Conjur 已在跑，略過建置"; else
-    (umask 077; docker run --rm cyberark/conjur data-key generate | tr -d '\r\n' > "$LAB/conjur/data_key"; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$LAB/conjur/db.pass")
-    O=$(windows_path "$LAB/conjur/tls"); openssl req -new -newkey rsa:2048 -nodes -keyout "$O/conjur.key" -out "$O/conjur.csr" -subj "/CN=conjur.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:conjur.poc.lab,DNS:conjur" -addext "keyUsage=digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth" 2>/dev/null
-    bash "$LAB/ca/sign.sh" "$LAB/conjur/tls/conjur.csr" "$LAB/conjur/tls/conjur.crt"
-    printf 'events {}\nhttp {\n  server {\n    listen 443 ssl;\n    server_name conjur.poc.lab;\n    ssl_certificate     /etc/nginx/tls/conjur.crt;\n    ssl_certificate_key /etc/nginx/tls/conjur.key;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    location / { proxy_pass http://conjur:80; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; }\n  }\n}\n' > "$LAB/conjur/nginx.conf"
-    (umask 077; printf 'POSTGRES_PASSWORD=%s\nDATABASE_URL=postgres://postgres:%s@conjur-db/postgres\nCONJUR_DATA_KEY=%s\nCONJUR_AUTHENTICATORS=authn\n' "$(cat "$LAB/conjur/db.pass")" "$(cat "$LAB/conjur/db.pass")" "$(cat "$LAB/conjur/data_key")" > "$LAB/conjur/conjur.env")
-    cat > "$LAB/conjur.yml" <<'EOF'
-services:
-  conjur-db:
-    image: postgres:15
-    env_file: conjur/conjur.env
-    networks: [ labnet ]
-    volumes: [ conjur-db:/var/lib/postgresql/data ]
-    restart: unless-stopped
-  conjur:
-    image: cyberark/conjur:latest
-    command: server
-    env_file: conjur/conjur.env
-    networks: [ labnet ]
-    depends_on: [ conjur-db ]
-    restart: unless-stopped
-  conjur-proxy:
-    image: nginx:1.28-alpine
-    networks:
-      labnet: { ipv4_address: 172.35.0.15, aliases: [ conjur.poc.lab, conjur-proxy ] }
-    volumes:
-      - ./conjur/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./conjur/tls:/etc/nginx/tls:ro
-    depends_on: [ conjur ]
-    restart: unless-stopped
-volumes:
-  conjur-db:
-EOF
-    (cd "$LAB" && docker compose -f compose.yml -f conjur.yml up -d conjur-db conjur conjur-proxy 2>&1 | grep -c Started)
-    for i in $(seq 1 30); do docker exec lab-conjur-1 conjurctl wait >/dev/null 2>&1 && break; sleep 2; done
-    (umask 077; docker exec lab-conjur-1 conjurctl account create poc | grep -o 'API key for admin: .*' | awk '{print $NF}' | tr -d '\r\n' > "$LAB/conjur/keys/admin.key")
-    echo "account poc created; https=$(run_as_conjur_admin 'curl -sS --cacert /root.crt -o /dev/null -w %{http_code} https://conjur.poc.lab/')"
-  fi
-  apps=$(grep -v '^#' "$INSTALL/conf/apps.txt" | awk '$2=="scram"{print $1}')
-  { printf -- '- !policy\n  id: kafka\n  body:\n    - !user ops\n    - !layer hosts\n    - &hosts\n'; for h in $ALL_HOSTS; do printf '      - !host %s\n' "$h"; done
-    printf '    - !grant\n      role: !layer hosts\n      members: *hosts\n    - &vars\n      - !variable store-password\n      - !variable ldap-bind-password\n      - !variable audit-password\n'; for a in $apps; do printf '      - !variable scram/%s\n' "$a"; done
-    printf '    - !permit\n      role: !layer hosts\n      privileges: [ read, execute ]\n      resources: *vars\n    - !permit\n      role: !user ops\n      privileges: [ read, execute, update ]\n      resources: *vars\n'; } > "$LAB/conjur/kafka-policy.yml"
-  run_as_conjur_admin "set -e; $CONJUR_ADMIN_TOKEN; curl -sS --cacert /root.crt -H \"Authorization: Token token=\\\"\$T\\\"\" -X PUT --data-binary @/c/kafka-policy.yml https://conjur.poc.lab/policies/poc/policy/root > /c/keys/policy-result.json"
-  save_created_api_keys "$LAB/conjur/keys/policy-result.json"
-  for h in $ALL_HOSTS; do
-    [ -s "$LAB/conjur/keys/kafka_$h.key" ] || { echo "缺 kafka_$h.key（policy 已載過、身分已存在；要重發用 Conjur rotate API）"; continue; }
-    docker cp "$(windows_path "$LAB/conjur/keys/kafka_$h.key")" "$(container_of "$h"):/root/conjur.key" && as_root_on "$h" 'g=$(getent group confluent >/dev/null && echo confluent || echo root); install -d -m 0750 -o root -g $g /etc/confluent/conjur; install -m 0640 -o root -g $g /root/conjur.key /etc/confluent/conjur/host.key && rm -f /root/conjur.key' && printf '%s ' "$h"
-  done; echo
-  docker cp "$(windows_path "$LAB/conjur/keys/ops@kafka.key")" "$(container_of "$OPS_HOST"):/home/cpadmin/secrets/conjur-ops.key" && as_root_on "$OPS_HOST" 'chown cpadmin:cpadmin /home/cpadmin/secrets/conjur-ops.key && chmod 0600 /home/cpadmin/secrets/conjur-ops.key && echo "ops key -> ~/secrets/conjur-ops.key"'
-}
-
-sp() {   # 16.1 + 16.8：passphrase 與 master-key 兩個變數（lab：Conjur 扮演 PAM Vault）
-  announce "16.1／16.8 Secrets 團隊：變數 kafka/secret-protection/passphrase（銀行產生）、kafka/secret-protection/master-key（ops 可寫、主機可讀）"
-  printf -- '- !variable secret-protection/passphrase\n- !variable secret-protection/master-key\n- !permit\n  role: !user ops\n  privileges: [ read, execute, update ]\n  resources: [ !variable secret-protection/passphrase, !variable secret-protection/master-key ]\n- !permit\n  role: !host ops02\n  privileges: [ read, execute ]\n  resource: !variable secret-protection/passphrase\n- !permit\n  role: !layer hosts\n  privileges: [ read, execute ]\n  resource: !variable secret-protection/master-key\n' > "$LAB/conjur/sp-policy.yml"
-  [ -s "$LAB/conjur/keys/sp-passphrase.txt" ] || (umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > "$LAB/conjur/keys/sp-passphrase.txt")
-  run_as_conjur_admin "set -e; $CONJUR_ADMIN_TOKEN; curl -sS --cacert /root.crt -H \"Authorization: Token token=\\\"\$T\\\"\" -X POST --data-binary @/c/sp-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo 'policy: secret-protection/* added'; curl -sS --cacert /root.crt -H \"Authorization: Token token=\\\"\$T\\\"\" -X POST --data-binary @/c/keys/sp-passphrase.txt https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fpassphrase && echo 'passphrase set'"
-}
-
-opmenu() {   # 17.1：host opmenu + 兩個變數，API key 交到 ops02 root
-  announce "17.1 Secrets 團隊：host kafka/opmenu、變數 kafka/ssh/cpadmin、kafka/breakglass/pem；key → ops02:/root/opmenu.key"
-  printf -- '- !host opmenu\n- !variable ssh/cpadmin\n- !variable breakglass/pem\n- !permit\n  role: !host opmenu\n  privileges: [ read, execute ]\n  resources: [ !variable ssh/cpadmin, !variable breakglass/pem ]\n- !permit\n  role: !user ops\n  privileges: [ read, execute, update ]\n  resources: [ !variable ssh/cpadmin, !variable breakglass/pem ]\n' > "$LAB/conjur/opmenu-policy.yml"
-  run_as_conjur_admin "set -e; $CONJUR_ADMIN_TOKEN; curl -sS --cacert /root.crt -H \"Authorization: Token token=\\\"\$T\\\"\" -X POST --data-binary @/c/opmenu-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka > /c/keys/opmenu-policy.json"
-  save_created_api_keys "$LAB/conjur/keys/opmenu-policy.json"
-  [ -s "$LAB/conjur/keys/kafka_opmenu.key" ] && docker cp "$(windows_path "$LAB/conjur/keys/kafka_opmenu.key")" "$(container_of "$OPS_HOST"):/root/opmenu.key" && echo "opmenu host key -> ops02:/root/opmenu.key" || echo "沒有新的 opmenu key（身分已存在）"
-}
-
-prometheus() {   # 18.5：銀行的 Prometheus 接上來看 target 與規則，看完收掉
-  announce "18.5 監控團隊：用 prom/prometheus 載入小安給的三個檔，看 target 與規則"
+prometheus() {   # 17.5：銀行的 Prometheus 接上來看 target 與規則，看完收掉
+  announce "17.5 監控團隊：用 prom/prometheus 載入小安給的三個檔，看 target 與規則"
   mkdir -p "$LAB/bank-prometheus/confluent"; docker rm -f bank-prometheus >/dev/null 2>&1 || true
   for f in prometheus-scrape.yml alert-rules.yml ca.pem scrape.pass; do docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/monitoring/$f" "$(windows_path "$LAB/bank-prometheus/confluent/$f")"; done
   mv -f "$LAB/bank-prometheus/confluent/prometheus-scrape.yml" "$LAB/bank-prometheus/prometheus.yml"
@@ -231,19 +143,18 @@ prometheus() {   # 18.5：銀行的 Prometheus 接上來看 target 與規則，�
   docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
 }
 
-coldboot() {   # 20.4：機房停電：全部主機（含保管庫）同時關、同時開
-  announce "20.4 冷開機：全部 stop → start，量 broker MDS 與 C3 回來的時間"
-  local compose_files=(-f compose.yml); [ -f "$LAB/conjur.yml" ] && compose_files+=(-f conjur.yml)   # 客戶模式沒有建 Conjur
-  cd "$LAB" && docker compose "${compose_files[@]}" stop 2>&1 | grep -c Stopped; t0=$(date +%s); docker compose "${compose_files[@]}" start 2>&1 | grep -c Started
+coldboot() {   # 19.4：機房停電：全部主機同時關、同時開
+  announce "19.4 冷開機：全部 stop → start，量 broker MDS 與 C3 回來的時間"
+  cd "$LAB" && docker compose -f compose.yml stop 2>&1 | grep -c Stopped; t0=$(date +%s); docker compose -f compose.yml start 2>&1 | grep -c Started
   probe() { docker exec "$(container_of "$OPS_HOST")" bash -c "curl -sk -o /dev/null -w '%{http_code}' $1"; }
   for i in $(seq 1 60); do a=0; for h in $BROKERS; do [ "$(probe "https://$(fqdn "$h"):8090/v1/metadata/id")" = 200 ] && a=$((a+1)); done; [ "$a" = "$(wc -w <<<"$BROKERS")" ] && break; sleep 10; done; echo "broker 的 MDS 都回 200：$(( $(date +%s) - t0 ))s"
   for i in $(seq 1 60); do [ "$(probe "https://$C3_FQDN:9021/")" = 200 ] && break; sleep 10; done; echo "C3 回 200：$(( $(date +%s) - t0 ))s"
   docker exec "$(container_of "${BROKERS%% *}")" bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
 }
 
-sign_next() {   # 21.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
+sign_next() {   # 20.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
   local ca_dir=${1:-ca} csr cert_name
-  announce "21.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
+  announce "20.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
   rm -rf "$LAB/ca/exchange/next"; mkdir -p "$LAB/ca/exchange/next/signed"
   docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/pki/next/requests" "$(windows_path "$LAB/ca/exchange/next/")"
   for csr in "$LAB"/ca/exchange/next/requests/*.csr; do cert_name=$(basename "$csr" .csr); bash "$LAB/$ca_dir/sign.sh" "$csr" "$LAB/ca/exchange/next/signed/$cert_name.crt"; done
@@ -263,6 +174,6 @@ lb_watch() {   # 12.1（lab）：扮演 LB 團隊：操作機出現 ~/lb-request
   done
 }
 
-case ${1:-} in push|intake|prepare|sign|reset|conjur|sp|opmenu|prometheus|coldboot) "$1";;
+case ${1:-} in push|intake|prepare|sign|reset|prometheus|coldboot) "$1";;
   lb-watch) lb_watch "${2:-}";;
-  sign-next) sign_next "${2:-ca}";; pvwa-key) pvwa_key;; *) sed -n '2,11p' "$0"; echo "  延伸：conjur（15.1）sp（16.1/16.8）opmenu（17.1）prometheus（18.5）coldboot（20.4）"; exit 1;; esac
+  sign-next) sign_next "${2:-ca}";; pvwa-key) pvwa_key;; *) sed -n '2,11p' "$0"; echo "  延伸：prometheus（17.5）coldboot（19.4）sign-next pvwa-key lb-watch"; exit 1;; esac

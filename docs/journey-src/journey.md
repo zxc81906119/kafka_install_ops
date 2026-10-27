@@ -54,7 +54,7 @@
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
 - 指令都是一行可以整段貼上的；多行的 `heredoc`（`<<'EOF' … EOF`）要整段一起貼。
 - 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。正本在 PVWA；操作機上的是作業用的副本。從 PVWA 取出貼上時一律用**不顯示的寫法**（私鑰見 3.1、密碼見 3.4），PSMP 的錄影才不會錄到。
-- 主線是本案客戶的情境：銀行的 CyberArk 只有 PAM（PVWA、PSMP、SSH Key Manager、CPM），密碼和金鑰由人從 PVWA 取放。看到紫色「◆ 這一段只在：銀行有 Conjur（選配）」的段落（第 15 站、16.8、16.9 和各章的 Conjur 寫法）就跳過；那是給有 Conjur 的銀行用的。
+- 主線是本案客戶的情境：銀行的 CyberArk 只有 PAM（PVWA、PSMP、SSH Key Manager、CPM），密碼和金鑰由人從 PVWA 取放。
 
 - 指令很長是為了「整段貼上就能跑」。看不懂沒關係，先照做；每一站開頭說這站要做什麼，結尾說看到什麼代表成功。
 
@@ -78,8 +78,7 @@
 | systemd drop-in | 不改 RPM 附的服務設定，另外放一個覆寫檔（`/etc/systemd/system/<unit>.service.d/`） |
 | versionlock | dnf 的鎖版本插件，避免 OS 例行更新把 Confluent 升掉 |
 | 落地區 | 外網下載好的檔案暫放的地方，經掃描核准後搬進內網 |
-| CyberArk PAM／Conjur／CCP | 銀行的特權帳號與機敏資料系統：PAM 管人與帳號（Vault、PVWA、CPM、PSMP），Conjur 給程式拿 secret，CCP 是 PAM 給程式拿密碼的 REST 入口 |
-| config provider | Kafka 的擴充點：properties 裡寫 `${provider:路徑:key}`，啟動時由 provider 去外面取值 |
+| CyberArk PAM | 銀行的特權帳號系統：管人與帳號（Vault、PVWA、CPM、PSMP、SSH Key Manager）。本案只用 PAM，由人從 PVWA 取放密碼與金鑰 |
 | Secret Protection | Confluent 的密碼加密功能：密文留在 `security.properties`，master key 以環境變數給服務 |
 | OP menu | 給維運人員的文字選單：用本人 AD 身分做 Kafka 類作業，主機類作業以 cpadmin ssh、金鑰從保管庫取 |
 
@@ -104,20 +103,19 @@
 | 5–8 JDK、檢查、OS 調校、裝套件 | 30 分 | 11 台逐一 dnf install |
 | 9 憑證 | 15 分 | — |
 | 10–13 設定、啟動、權限、REST、C3 | 40 分 | 每段啟動要等健康檢查；C3 第一次起來 1–2 分鐘 |
-| 15 Conjur（選配） | 40 分 | 下載機建 jar 要 15–20 分；之後是改設定與滾動重啟 |
-| 16 Secret Protection（延伸） | 30 分 | 加密、派送、滾動重啟；16.8 Summon、16.9 AD 密碼改注入各再滾一輪 |
-| 17 OP menu（延伸） | 20 分 | 保管庫加身分、裝選單、改 sudoers、三種身分試跑 |
-| 18 JMX exporter（延伸） | 20 分 | 派送、滾動重啟、行內 Prometheus 驗證 |
-| 19 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
-| 20 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
-| 21 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
-| 22 升級 | 50 分 | 套件一輪、JDK 一輪滾動重啟（每台 15 秒到 2 分鐘）；controller 要等 quorum 追上 |
-| 23 license 監控 | 5 分 | — |
-| 24 換 controller | 10 分 | 新的那台要追上 metadata log |
-| 25 增減 broker | 40 分 | Self-Balancing 搬資料（加回後十幾分鐘才開始搬） |
-| 26 日常備份 | 10 分 | — |
-| 27 OS 修補 | 10 分 | 逐台 dnf update；要重開機的話每台多幾分鐘 |
-| 28 升級 C3 | 10 分 | C3 只有一台，畫面約 1 分鐘不能用 |
+| 15 Secret Protection（延伸） | 30 分 | 加密、派送、滾動重啟 |
+| 16 OP menu（延伸） | 20 分 | 保管庫加身分、裝選單、改 sudoers、三種身分試跑 |
+| 17 JMX exporter（延伸） | 20 分 | 派送、滾動重啟、行內 Prometheus 驗證 |
+| 18 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
+| 19 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
+| 20 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
+| 21 升級 | 50 分 | 套件一輪、JDK 一輪滾動重啟（每台 15 秒到 2 分鐘）；controller 要等 quorum 追上 |
+| 22 license 監控 | 5 分 | — |
+| 23 換 controller | 10 分 | 新的那台要追上 metadata log |
+| 24 增減 broker | 40 分 | Self-Balancing 搬資料（加回後十幾分鐘才開始搬） |
+| 25 日常備份 | 10 分 | — |
+| 26 OS 修補 | 10 分 | 逐台 dnf update；要重開機的話每台多幾分鐘 |
+| 27 升級 C3 | 10 分 | C3 只有一台，畫面約 1 分鐘不能用 |
 
 ## 0.5 自己把 lab 建起來
 
@@ -503,7 +501,7 @@ docker exec -it lab-ops02-1 bash
 
 ### 0.5.9 收工與重開
 
-想暫停：`cd ~/kafka-lab && docker compose -f compose.yml stop`，資料都在 volume 裡；繼續：`docker compose -f compose.yml start`。Windows 重開機後容器會自己起來（`restart: unless-stopped`），Kafka 服務設了 enable 也會自己起來；只有下載機 dl01 要手動 `docker start dl01`。操作機重開後 ssh-agent 和裡面的 cpadmin 私鑰就不在了，照 3.1 重開 agent、從 pvwa/ 貼私鑰（20.4 冷開機那段有一樣的指令）。全部清掉重來：`docker compose -f compose.yml down -v && docker rm -f dl01`（落地區 `~/kafka-lab/landing` 不會被刪）。
+想暫停：`cd ~/kafka-lab && docker compose -f compose.yml stop`，資料都在 volume 裡；繼續：`docker compose -f compose.yml start`。Windows 重開機後容器會自己起來（`restart: unless-stopped`），Kafka 服務設了 enable 也會自己起來；只有下載機 dl01 要手動 `docker start dl01`。操作機重開後 ssh-agent 和裡面的 cpadmin 私鑰就不在了，照 3.1 重開 agent、從 pvwa/ 貼私鑰（19.4 冷開機那段有一樣的指令）。全部清掉重來：`docker compose -f compose.yml down -v && docker rm -f dl01`（落地區 `~/kafka-lab/landing` 不會被刪）。
 
 > 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：ops02 的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 3、9 站會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
@@ -740,7 +738,7 @@ sudo rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-延伸章節還會陸續帶檔案進來：15.3 建的 provider jar（`tools/csid`）、16.8 的 Summon（`tools/summon`）、17.3 的選單套件（`tools/opmenu`）、第 22 章的新版 RPM 與 JDK。流程和第 2 站一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以由 root 放進去再收回寫入權限（`D` 換成要送的目錄）：
+延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 21 章的新版 RPM 與 JDK。流程和第 2 站一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以由 root 放進去再收回寫入權限（`D` 換成要送的目錄）：
 
 ```bash
 D=opmenu && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/home/cpadmin/landing/tools/ && docker exec lab-ops02-1 bash -c "chown -R cpadmin:cpadmin /home/cpadmin/landing/tools/$D && chmod -R a-w /home/cpadmin/landing/tools/$D && cd /home/cpadmin/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
@@ -809,7 +807,7 @@ agent: /home/cpadmin/.ssh/engineer-agent.sock
 `stty -echo; SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-add -t 10h -; stty echo`
 
 - `stty -echo`：貼上的內容**不顯示在畫面上**。PSMP 會錄下整個畫面，終端機也會留捲動紀錄；不關掉回顯，私鑰就跟著進了錄影檔。之後所有「從 PVWA 取出貼上」都用不顯示的寫法（密碼是 3.4 那種一行的寫法）。
-- `-t 10h`：私鑰在 agent 裡最多留 10 小時（一個工作天），時間到自動移除；作業結束仍然要 `ssh-agent -k`（20.5）。
+- `-t 10h`：私鑰在 agent 裡最多留 10 小時（一個工作天），時間到自動移除；作業結束仍然要 `ssh-agent -k`（19.5）。
 
 lab 用 Windows 終端把 pvwa/ 裡的那份送進去，效果相同（私鑰只進 agent 的記憶體，不經過畫面）；lab 一開就是好幾天，所以省略 `-t`：
 
@@ -829,7 +827,7 @@ Identity added: (stdin) (cpadmin (CyberArk managed))
 >
 > 陷阱：CyberArk（SSH Key Manager）定期換這把金鑰時，換的是 PVWA 裡的私鑰和各主機的公鑰，**agent 裡還是舊的那把**：之後每個 ssh 都會 `Permission denied (publickey)`。安裝、升級做到一半遇到，後面的步驟會全部失敗。所以：
 > - 變更時段內請 Secrets 團隊**暫停這個帳號的自動輪替**（待銀行確認，問題清單 8.4）。
-> - 輪替過後要作業：先清掉 agent 裡的舊鑰 `SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-add -D`，再照上面從 PVWA 貼新的，用 `ssh -o BatchMode=yes kb01.poc.lab hostname` 確認登得進去（演練見 20.6）。
+> - 輪替過後要作業：先清掉 agent 裡的舊鑰 `SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-add -D`，再照上面從 PVWA 貼新的，用 `ssh -o BatchMode=yes kb01.poc.lab hostname` 確認登得進去（演練見 19.6）。
 
 @role 小安 | ops02 | cpadmin
 
@@ -1398,8 +1396,8 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 | cp-server | 所有對外服務：client listener、MDS、REST、C3、Prometheus | serverAuth, clientAuth | 全部主機、rest.poc.lab、c3.poc.lab、localhost |
 | svc-rest、svc-c3、svc-ops | REST Proxy、C3、操作機向 MDS 換 token 的身分 | clientAuth | 無 |
 | app-legacy-billing | 走 REST Proxy 的應用程式 | clientAuth | 無 |
-| opmenu-breakglass | 維運選單（第 17 章）緊急模式用的身分 | clientAuth | 無 |
-| svc-backup | 每日備份（第 26 章）匯出叢集中繼資料的唯讀身分 | clientAuth | 無 |
+| opmenu-breakglass | 維運選單（第 16 章）緊急模式用的身分 | clientAuth | 無 |
+| svc-backup | 每日備份（第 25 章）匯出叢集中繼資料的唯讀身分 | clientAuth | 無 |
 
 ```bash
 install -d -m 0700 ~/pki ~/pki/keys ~/pki/requests ~/pki/incoming ~/pki/certs && (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/pki/store.pass) && cat > ~/pki/requests.txt <<'EOF'
@@ -1764,7 +1762,7 @@ kc01  heap=384m exec=/etc/confluent/kafka/server.properties data=cp-kafka:conflu
 （7 行）
 ```
 
-> 選配：銀行規定 `/tmp` 一律 `noexec` 時（第 6 章有檢查），讓 JVM 改把原生程式庫解到資料碟上的目錄。另加一個 drop-in，用 `JAVA_TOOL_OPTIONS`（第 18 章的 javaagent 會佔用 `KAFKA_OPTS`，兩者不互相覆蓋）：
+> 選配：銀行規定 `/tmp` 一律 `noexec` 時（第 6 章有檢查），讓 JVM 改把原生程式庫解到資料碟上的目錄。另加一個 drop-in，用 `JAVA_TOOL_OPTIONS`（第 17 章的 javaagent 會佔用 `KAFKA_OPTS`，兩者不互相覆蓋）：
 > `sudo install -d -o cp-kafka -g confluent -m 0750 /var/lib/kafka/tmp && printf '[Service]\nEnvironment="JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/var/lib/kafka/tmp"\n' | sudo tee /etc/systemd/system/confluent-server.service.d/15-tmpdir.conf`
 > 實測（2026-10-25，kb04）：重啟後 lz4 的原生程式庫改解在 `/var/lib/kafka/tmp`，snappy／zstd／lz4 壓縮的寫入都正常；日誌開頭會多一行 `Picked up JAVA_TOOL_OPTIONS`，屬正常。REST Proxy、C3 同理（各自的資料目錄）。
 
@@ -1895,7 +1893,7 @@ app-payments: SCRAM-SHA-512=iterations=8192
 kafka-admin: SCRAM-SHA-512=iterations=4096
 ```
 
-應用程式這一端的連線設定（扮演 app-orders 直連 CLIENT 9095；第 15、19、20 章驗證時都會用到）。密碼從 0600 檔讀，設定檔一樣是 0600：
+應用程式這一端的連線設定（扮演 app-orders 直連 CLIENT 9095；第 18、19 章驗證時都會用到）。密碼從 0600 檔讀，設定檔一樣是 0600：
 
 ```bash
 (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/app-orders.pass)" "$(cat ~/pki/store.pass)" > ~/conf/app-orders.properties) && echo "$(grep -c . ~/conf/app-orders.properties) lines, $(stat -c %a ~/conf/app-orders.properties)"
@@ -1982,7 +1980,7 @@ cd ~/kafka-lab && (umask 077; docker exec lab-ops02-1 cat /home/cpadmin/pki/stor
 store:24 kafka-admin:24 app-orders:24 app-payments:24
 ```
 
-> 應用程式團隊從 PVWA 取自己的 SCRAM 密碼，放進他們的設定；這本的 `~/conf/app-orders.properties` 是小安在操作機扮演應用程式用的。密碼換了（第 15 章的演練、OP menu 35 換服務密碼）就要同步更新 PVWA 的那個 object。
+> 應用程式團隊從 PVWA 取自己的 SCRAM 密碼，放進他們的設定；這本的 `~/conf/app-orders.properties` 是小安在操作機扮演應用程式用的。密碼換了（OP menu 35 換服務密碼）就要同步更新 PVWA 的那個 object。
 
 ## 11.2 演練：緊急帳號 kafka-admin 用過就換密碼
 
@@ -2014,7 +2012,7 @@ cd ~/kafka-lab && cp -p pvwa/kafka-admin.pass pvwa/kafka-admin.prev.pass && (uma
 PVWA kafka-admin-scram 已更新：24 字元
 ```
 
-> 誰在什麼時候取用過 `kafka-admin-scram`，PVWA 的取用紀錄查得到；Kafka 那邊，稽核日誌（第 19 站）會記下 `User:kafka-admin` 做了什麼。兩邊對得上，才算這次緊急使用結案。
+> 誰在什麼時候取用過 `kafka-admin-scram`，PVWA 的取用紀錄查得到；Kafka 那邊，稽核日誌（第 18 站）會記下 `User:kafka-admin` 做了什麼。兩邊對得上，才算這次緊急使用結案。
 
 
 # 12. 第十二站：REST Proxy
@@ -2125,7 +2123,7 @@ via LB: 200
 
 ## 12.1 之後每次重啟 REST Proxy：先請 LB 團隊停用那一台
 
-nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（升級演練實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（16、18、21、22、27 章）都照這個順序：
+nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（升級演練實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26 章）都照這個順序：
 
 1. LB 團隊停用 rest01 → 2. 小安等連線排空、重啟 rest01、確認 200 → 3. LB 團隊恢復 rest01、停用 rest02 → 4. 小安重啟 rest02 → 5. LB 團隊恢復 rest02
 
@@ -2434,10 +2432,8 @@ Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~
 
 到這裡平台已經能用，但還不能交付。後面分兩段：
 
-- **交付前一定要做**：第 16 站把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 17 站維運選單；第 18 站讓行內 Prometheus 抓指標；第 19 站稽核日誌；第 23.2 的 license 到期排程、第 26 站每日備份；最後第 20 站驗收與收尾。
-- **上線之後依需要**：第 21 站憑證輪替（每年）、第 22 站升級 Confluent 與 JDK、第 24 站換 controller、第 25 站增減 broker、第 27 站 OS 修補、第 28 站升級 Control Center。
-
-第 15 站與 16.8、16.9 是**選配**：只有銀行有 CyberArk Conjur（或 CCP）時才做；本案客戶只有 PAM，直接從第 16 站開始。
+- **交付前一定要做**：第 15 站把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 16 站維運選單；第 17 站讓行內 Prometheus 抓指標；第 18 站稽核日誌；第 22.2 的 license 到期排程、第 25 站每日備份；最後第 19 站驗收與收尾。
+- **上線之後依需要**：第 20 站憑證輪替（每年）、第 21 站升級 Confluent 與 JDK、第 23 站換 controller、第 24 站增減 broker、第 26 站 OS 修補、第 27 站升級 Control Center。
 
 @role 小安 | ops02 | cpadmin
 
@@ -2461,11 +2457,11 @@ metrics in prometheus: 111 kinds
 
 | 已完成 | 還沒做（之後的旅程） |
 |---|---|
-| 11 台主機就緒、套件裝好並鎖版本 | 設定檔密碼加密、master key 交 CyberArk（第 16 章；銀行有 Conjur 時可改第 15 章） |
+| 11 台主機就緒、套件裝好並鎖版本 | 設定檔密碼加密、master key 交 CyberArk（第 15 章） |
 | 8 張銀行憑證、truststore、MDS token 金鑰 | 維運選單（OP menu）；稽核日誌分流與專用寫入帳號 |
 | controller、broker、MDS、RBAC（人員綁 AD 群組） | 外部監控的 JMX exporter（7071） |
 | 應用程式 SCRAM 帳號、配額、範例 topic | 正式的端對端驗收清單 |
-| REST Proxy（憑證認證，經負載平衡）、C3（含 Prometheus） | 收回安裝帳號的 sudo、移交文件；之後的憑證輪替（第 21 章）、升級（第 22 章） |
+| REST Proxy（憑證認證，經負載平衡）、C3（含 Prometheus） | 收回安裝帳號的 sudo、移交文件；之後的憑證輪替（第 20 章）、升級（第 21 章） |
 
 ## 14.1 出問題先看哪裡
 
@@ -2487,7 +2483,7 @@ metrics in prometheus: 111 kinds
 |---|---|---|
 | 派送憑證、設定檔、drop-in（10–13 站） | 可以，重跑就是覆蓋成一樣的內容 | 改完記得 `sudo systemctl restart <unit>` |
 | 格式化儲存（10.4） | **不能**，`meta.properties` 存在就會拒絕 | 真要重來：停服務、`sudo rm -rf /var/lib/kafka/data/*`，所有 controller 和 broker 一起重做 |
-| 憑證（9 站） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留；已經上線的環境照第 21 站換發，不要重跑第 9 站 |
+| 憑證（9 站） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留；已經上線的環境照第 20 站換發，不要重跑第 9 站 |
 | 裝套件（8 站） | 可以，dnf 看到已安裝就略過 | `versionlock add` 對已鎖的套件會再加一筆重複，重跑前先 `sudo dnf versionlock list` 看一下，已鎖的不要再加 |
 | 整台主機重置 | lab 可以 | `docker compose -f compose.yml rm -sf <host> && docker compose -f compose.yml up -d <host>`，再對那台重做：3.2（根憑證信任與 OS 套件來源）、第 5 站（JDK）、第 7 站（OS 調校）、第 8 站（套件），以及它的角色在第 10、12、13 站的派送與啟動 |
 
@@ -2507,507 +2503,12 @@ metrics in prometheus: 111 kinds
 | 建銀行 OS 套件庫（3.2）時先裝工具再下載 | 套件庫少了 `createrepo_c-libs` | 乾淨容器，先下載、再裝工具 |
 | lab 專用：Docker VM 網路層卡死 | 所有 Java 都變慢、`docker stats` 也卡 | 任一容器 `timeout 5 ip addr` 卡住就重啟 Docker Desktop，不要查設定 |
 
+# 15. 第十五站：Secret Protection，master key 交 CyberArk 保管
 
-
-
-# 15. 第十五站（選配）：把密碼搬進 CyberArk Conjur
-
-@only conjur,provider
-
-![conjur]
-
-> 選配：只有銀行有 CyberArk Conjur 才做。本案客戶只有 PAM，跳過這一站，直接做第 16 站。
-
-到第 13 站為止，平台能跑，但 keystore 密碼和 AD 查詢帳號的密碼是以明文寫在各主機的 properties 裡（0640、只有 root 和 confluent 群組讀得到）。銀行的規範是機敏資料一律放 CyberArk。這一站把它們搬進銀行的 Conjur，properties 裡只留下「去 Conjur 拿哪一個值」的參照，服務啟動時才取回來。
-
-| 誰 | 做什麼 |
-|---|---|
-| 銀行 Secrets 團隊 | 建 Conjur、寫 policy（哪些主機能讀哪些值）、把每台主機的 API key 和一個給小安寫值用的身分交給小安 |
-| 小安 | 把值寫進 Conjur、派送 provider jar、改 properties、滾動重啟、驗證 |
-
-兩個誠實的提醒：Confluent 的 CyberArk provider（`csid-secrets-providers`）只接 **Conjur** 的 API，只有 PAM 沒有 Conjur 的銀行用不到它；而且它是 CSID 的社群專案，不在 Confluent Platform 的正式支援範圍。
-
-## 15.1 銀行建 Conjur
-
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-Conjur OSS 本身只講 HTTP，前面放一個 nginx 做 TLS，憑證一樣由銀行 CA 簽；資料放 PostgreSQL。三個容器接在既有的 `labnet` 上，主機名 `conjur.poc.lab`。
-
-先產 TLS 憑證與 Conjur 的 data key（加密資料庫內容用的主金鑰，**遺失就全部解不開**）：
-
-```bash
-cd ~/kafka-lab && mkdir -p conjur/tls conjur/keys && (umask 077; docker run --rm cyberark/conjur data-key generate | tr -d '\r\n' > conjur/data_key; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > conjur/db.pass) && O="$(cygpath -m "$PWD/conjur/tls")" && MSYS_NO_PATHCONV=1 openssl req -new -newkey rsa:2048 -nodes -keyout "$O/conjur.key" -out "$O/conjur.csr" -subj "/CN=conjur.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:conjur.poc.lab,DNS:conjur" -addext "keyUsage=digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/sign.sh conjur/tls/conjur.csr conjur/tls/conjur.crt && ls conjur conjur/tls
-```
-
-```out
-signed conjur.csr -> conjur.crt  (CN = conjur.poc.lab, O = PoC Bank, C = TW; EKU serverAuth)
-data_key  db.pass  keys  tls
-conjur.crt  conjur.csr  conjur.key
-```
-
-nginx 設定、環境檔（密碼只在 0600 檔裡）、compose：
-
-```bash
-cd ~/kafka-lab && cat > conjur/nginx.conf <<'EOF'
-events {}
-http {
-  server {
-    listen 443 ssl;
-    server_name conjur.poc.lab;
-    ssl_certificate     /etc/nginx/tls/conjur.crt;
-    ssl_certificate_key /etc/nginx/tls/conjur.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    location / { proxy_pass http://conjur:80; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; }
-  }
-}
-EOF
-(umask 077; printf 'POSTGRES_PASSWORD=%s\nDATABASE_URL=postgres://postgres:%s@conjur-db/postgres\nCONJUR_DATA_KEY=%s\nCONJUR_AUTHENTICATORS=authn\n' "$(cat conjur/db.pass)" "$(cat conjur/db.pass)" "$(cat conjur/data_key)" > conjur/conjur.env)
-cat > conjur.yml <<'EOF'
-services:
-  conjur-db:
-    image: postgres:15
-    env_file: conjur/conjur.env
-    networks: [ labnet ]
-    volumes: [ conjur-db:/var/lib/postgresql/data ]
-    restart: unless-stopped
-  conjur:
-    image: cyberark/conjur:latest
-    command: server
-    env_file: conjur/conjur.env
-    networks: [ labnet ]
-    depends_on: [ conjur-db ]
-    restart: unless-stopped
-  conjur-proxy:
-    image: nginx:1.28-alpine
-    networks:
-      labnet: { ipv4_address: 172.35.0.15, aliases: [ conjur.poc.lab, conjur-proxy ] }
-    volumes:
-      - ./conjur/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./conjur/tls:/etc/nginx/tls:ro
-    depends_on: [ conjur ]
-    restart: unless-stopped
-volumes:
-  conjur-db:
-EOF
-MSYS_NO_PATHCONV=1 docker compose -f compose.yml -f conjur.yml up -d conjur-db conjur conjur-proxy 2>&1 | grep -c Started
-```
-
-```out
-3
-```
-
-建立帳戶 `poc`（輸出含 admin 的 API key，存檔不印出）：
-
-```bash
-cd ~/kafka-lab && for i in $(seq 1 30); do docker exec lab-conjur-1 conjurctl wait >/dev/null 2>&1 && break; sleep 2; done; (umask 077; docker exec lab-conjur-1 conjurctl account create poc | grep -o 'API key for admin: .*' | awk '{print $NF}' | tr -d '\r\n' > conjur/keys/admin.key) && wc -c < conjur/keys/admin.key && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" lab-node:1 curl -sS --cacert /root.crt -o /dev/null -w "conjur https=%{http_code}
-" https://conjur.poc.lab/
-```
-
-```out
-Created new account 'poc'
-53
-conjur https=200
-```
-
-最後一行同時證明了 TLS 憑證鏈（銀行根憑證簽的）和 nginx 到 Conjur 的轉發都通。
-
-寫 policy：一個 `kafka` 區，11 台主機各一個 host 身分、一個給小安的 `ops` 使用者、三個變數。主機只能讀（`read`、`execute`），`ops` 能寫（`update`）。載入後 Conjur 回每個新身分的 API key，拆成一檔一把：
-
-```bash
-cd ~/kafka-lab && cat > conjur/kafka-policy.yml <<'EOF'
-- !policy
-  id: kafka
-  body:
-    - !user ops
-    - !layer hosts
-    - &hosts
-      - !host ops02
-      - !host kc01
-      - !host kc02
-      - !host kc03
-      - !host kb01
-      - !host kb02
-      - !host kb03
-      - !host kb04
-      - !host rest01
-      - !host rest02
-      - !host c3-01
-    - !grant
-      role: !layer hosts
-      members: *hosts
-    - &vars
-      - !variable store-password
-      - !variable ldap-bind-password
-      - !variable scram/app-orders
-    - !permit
-      role: !layer hosts
-      privileges: [ read, execute ]
-      resources: *vars
-    - !permit
-      role: !user ops
-      privileges: [ read, execute, update ]
-      resources: *vars
-EOF
-docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X PUT --data-binary @/c/kafka-policy.yml https://conjur.poc.lab/policies/poc/policy/root > /c/keys/policy-result.json; umask 077; python3 - <<PY
-import json; r=json.load(open("/c/keys/policy-result.json"))
-for k,v in r["created_roles"].items():
-    name=k.split(":")[-1].replace("/","_"); open(f"/c/keys/{name}.key","w").write(v["api_key"])
-    print(k)
-PY
-rm -f /c/keys/policy-result.json; ls /c/keys'
-```
-
-```out
-poc:user:ops@kafka
-poc:host:kafka/ops02
-poc:host:kafka/kc01
-（共 12 個身分）
-admin.key  kafka_c3-01.key  kafka_kb01.key … ops@kafka.key
-```
-
-交給小安：每台主機自己的 API key 放到該主機（0600 root），`ops` 的 key 放到 ops02 的 `~/secrets/`。正式環境這一步是 PVWA 或 CCP，lab 用 `docker cp`：
-
-```bash
-cd ~/kafka-lab && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/conjur/keys/kafka_$h.key")" lab-$h-1:/root/conjur.key && docker exec lab-$h-1 bash -c 'install -d -m 0750 -o root -g $(getent group confluent >/dev/null && echo confluent || echo root) /etc/confluent/conjur; install -m 0640 -o root -g $(getent group confluent >/dev/null && echo confluent || echo root) /root/conjur.key /etc/confluent/conjur/host.key && rm -f /root/conjur.key && printf "%s " $(hostname)'; done; echo; docker cp "$(cygpath -m "$PWD/conjur/keys/ops@kafka.key")" lab-ops02-1:/home/cpadmin/secrets/conjur-ops.key && docker exec lab-ops02-1 bash -c 'chown cpadmin:cpadmin /home/cpadmin/secrets/conjur-ops.key && chmod 0600 /home/cpadmin/secrets/conjur-ops.key && ls -la /home/cpadmin/secrets/conjur-ops.key'
-```
-
-```out
-ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
--rw------- 1 cpadmin cpadmin 52 … conjur-ops.key
-```
-
-> 陷阱：`docker cp` 進容器時不要放 `/tmp`。這些主機的 systemd 把 `/tmp` 掛成 tmpfs，`docker cp` 寫到的是被蓋住的底層目錄，容器裡的程序看不到檔案。放 `/root/` 再 `install` 到定位就好。
-
-## 15.2 小安把值寫進 Conjur
-
-@role 小安 | ops02 | cpadmin
-
-用 `ops` 身分換 token，把目前在用的三個密碼寫進去（值從既有的 0600 檔讀，不出現在畫面上），再以 kb01 的 host 身分讀一次確認主機真的拿得到：
-
-```bash
-cd ~ && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && for kv in store-password:pki/store.pass ldap-bind-password:secrets/ldap-bind.pass scram%2Fapp-orders:secrets/app-orders.pass; do curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @"$HOME/${kv#*:}" "https://conjur.poc.lab/secrets/poc/variable/kafka%2F${kv%%:*}" && echo "set kafka/${kv%%:*}"; done; unset T; HT=$(ssh kb01.poc.lab 'sudo cat /etc/confluent/conjur/host.key' | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fkb01/authenticate | base64 -w0) && [ "$(curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fstore-password)" = "$(cat ~/pki/store.pass)" ] && echo "kb01 reads store-password: match"; unset HT
-```
-
-```out
-set kafka/store-password
-set kafka/ldap-bind-password
-set kafka/scram%2Fapp-orders
-kb01 reads store-password: match
-```
-
-## 15.3 下載機建 provider jar，派送、讓 JDK 信任銀行根憑證
-
-@role 小安 | dl01 | root
-
-provider 不是 RPM，Confluent 也沒有放到 Maven Central 或 GitHub release，只有原始碼和 Confluent Hub 的打包方式。所以在下載機用 Maven 從原始碼建（第一次要抓相依套件，約 15–20 分鐘），產出 Confluent Hub 格式的 zip，再從裡面挑出主機上**沒有**的 jar。挑的原因：zip 裡的 Jersey、HK2、Jakarta 等相依，Confluent Server 本來就有（而且版本更新），CLASSPATH 又排在最前面，全部放進去會把 Kafka 自己的蓋掉。
-
-```bash
-dnf -q -y install maven-openjdk21 git python3 unzip >/dev/null && mkdir -p ~/.m2 && cat > ~/.m2/settings.xml <<EOF
-<settings><profiles><profile><id>confluent</id><activation><activeByDefault>true</activeByDefault></activation>
-<repositories><repository><id>confluent</id><url>https://packages.confluent.io/maven/</url></repository></repositories>
-<pluginRepositories><pluginRepository><id>confluent</id><url>https://packages.confluent.io/maven/</url></pluginRepository></pluginRepositories>
-</profile></profiles></settings>
-EOF
-cd /tmp && rm -rf csid-secrets-providers && git clone -q --depth 1 https://github.com/confluentinc/csid-secrets-providers.git && cd csid-secrets-providers && git log -1 --format="commit %h %cd" && python3 - <<EOF
-import re
-p="pom.xml"; s=open(p).read(); s=re.sub(r"<extensions>.*?</extensions>","",s,flags=re.S); open(p,"w").write(s)
-EOF
-mvn -q -B -pl common,cyberark -am -DskipTests package 2>&1 | grep -E "BUILD|ERROR" | head -5; mkdir -p /out/tools/csid && unzip -q -j -o cyberark/target/components/packages/confluentinc-csid-secrets-provider-cyberark-*.zip "*/lib/csid-secrets-provider-*.jar" "*/lib/conjur-api-*.jar" -d /out/tools/csid && (cd /out/tools/csid && sha256sum *.jar > SHA256SUMS && ls)
-```
-
-```out
-commit 7130a02 Thu Sep 24 22:41:32 2026 +0000
-SHA256SUMS
-conjur-api-3.1.2.jar
-csid-secrets-provider-annotations-1.0.53-SNAPSHOT.jar
-csid-secrets-provider-common-1.0.53-SNAPSHOT.jar
-csid-secrets-provider-cyberark-1.0.53-SNAPSHOT.jar
-```
-
-> root pom 裡有一個只給 Confluent 內部發布用的 S3 外掛（`aws-maven`），公開 repo 抓不到，所以先把 `<extensions>` 段拿掉再建。zip 裡其他 20 個 jar（jersey、hk2、jakarta、gson、joda-time、javassist、commons-codec）主機上都已經有，不要帶。
-
-這四個檔連同既有的 SHA256SUMS 一起走第 2 站的流程進內網；lab 照 2.4 送到操作機（`D=csid`）。
-
-@role 小安 | ops02 | cpadmin
-
-每台 Java 主機放到 `/usr/share/java/cp-secrets/`。另外 provider 連 Conjur 走 JVM 預設的信任庫，所以要把銀行根憑證匯進 JDK 的 `cacerts`（Kafka 自己的 TLS 用的是 truststore.p12，不受影響）：
-
-```bash
-ls ~/landing/tools/csid | wc -l && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo install -d -m 0755 /usr/share/java/cp-secrets' && scp -q ~/landing/tools/csid/*.jar $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -m 0644 /tmp/*.jar /usr/share/java/cp-secrets/ && rm -f /tmp/*.jar && sudo /opt/java/current/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias bank-root -file /etc/pki/ca-trust/source/anchors/bank-root.pem >/dev/null 2>&1; echo "$(hostname): $(ls /usr/share/java/cp-secrets | wc -l) jars, cacerts=$(/opt/java/current/bin/keytool -list -cacerts -storepass changeit -alias bank-root >/dev/null 2>&1 && echo ok || echo missing)"'; done
-```
-
-```out
-5
-ops02: 4 jars, cacerts=ok
-（11 行，操作機也裝，之後扮演應用程式）
-```
-
-## 15.4 properties 只留參照
-
-@role 小安 | ops02 | cpadmin
-
-三個範本（common.tpl、kafka-rest.tpl、control-center.tpl）加上 provider 設定，並把 `${STORE_PASSWORD}`、`${LDAP_BIND_PASSWORD}` 換成 Conjur 的參照。參照的寫法是 `${cyberark:<變數路徑>:<變數路徑>}`：第一段是 provider 名稱，第二段是要取的變數，第三段是結果裡的 key，這個 provider 的結果 key 就等於變數路徑，所以寫兩次。
-
-每台的 host 身分和 API key 各不同，所以多兩個範本變數 `HOST_SHORT`、`CONJUR_API_KEY`：
-
-```bash
-cd ~/conf && cat > conjur.tpl <<'EOF'
-
-############################# Secrets from the bank's CyberArk Conjur #############################
-config.providers=cyberark
-config.providers.cyberark.class=io.confluent.csid.config.provider.cyberark.CyberArkConfigProvider
-config.providers.cyberark.param.cyberark.url=https://conjur.poc.lab
-config.providers.cyberark.param.cyberark.account=poc
-config.providers.cyberark.param.cyberark.auth.username=host/kafka/${HOST_SHORT}
-config.providers.cyberark.param.cyberark.auth.apikey=${CONJUR_API_KEY}
-config.providers.cyberark.param.polling.enabled=false
-EOF
-for t in common controller broker kafka-rest control-center; do cp -n $t.tpl $t.tpl.plain; sed -e 's|\${STORE_PASSWORD}|${cyberark:kafka/store-password:kafka/store-password}|g' -e 's|\${LDAP_BIND_PASSWORD}|${cyberark:kafka/ldap-bind-password:kafka/ldap-bind-password}|g' $t.tpl.plain > $t.tpl; case $t in common|kafka-rest|control-center) cat conjur.tpl >> $t.tpl;; esac; done; grep -c 'cyberark' common.tpl controller.tpl broker.tpl kafka-rest.tpl control-center.tpl; grep -lE 'STORE_PASSWORD|LDAP_BIND_PASSWORD' *.tpl | wc -l
-```
-
-```out
-common.tpl:N
-controller.tpl:N
-broker.tpl:N
-kafka-rest.tpl:N
-control-center.tpl:N
-0
-```
-
-最後的 0 是「還留著 `${STORE_PASSWORD}` 的範本數」。小安第一次只改了三個範本，broker 範本裡 listener 專用的 `listener.name.token.ssl.keystore.password` 沒換到，broker 起來就報 `keystore password was incorrect`，所以這個檢查一定要是 0。
-
-重新產生設定並派送。多出來的兩個變數：`HOST_SHORT` 是 Conjur 裡的 host 名稱，`CONJUR_API_KEY` 從該主機自己的 `/etc/confluent/conjur/host.key` 讀。`unresolved` 的檢查要排除 `${cyberark:…}`，那是故意留給 provider 的：
-
-```bash
-cd ~/conf && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${HOST_SHORT} ${CONJUR_API_KEY}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack HOST_SHORT=$n CONJUR_API_KEY=$(ssh $n.poc.lab 'sudo cat /etc/confluent/conjur/host.key'); case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); scp -q $n.server.properties $n.poc.lab:/tmp/server.properties && ssh $n.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/server.properties /etc/confluent/kafka/server.properties && rm -f /tmp/server.properties && echo "$(hostname): refs=$(sudo grep -c "\${cyberark:" /etc/confluent/kafka/server.properties) unresolved=$(sudo grep "\${" /etc/confluent/kafka/server.properties | grep -vc "\${cyberark:")"'; done; unset CONJUR_API_KEY; echo "plaintext store password left in rendered files: $(grep -lF "$(cat ~/pki/store.pass)" *.server.properties | wc -l)"
-```
-
-```out
-kc01: refs=11 unresolved=0
-（3 行 controller）
-kb01: refs=17 unresolved=0
-（4 行 broker）
-plaintext store password left in rendered files: 0
-```
-
-REST Proxy 與 C3 同樣重做：
-
-```bash
-cd ~/conf && for h in rest01 rest02; do export HOST_FQDN=$h.poc.lab REST_ID=$h HOST_SHORT=$h CONJUR_API_KEY=$(ssh $h.poc.lab 'sudo cat /etc/confluent/conjur/host.key'); (umask 077; envsubst '${HOST_FQDN} ${REST_ID} ${HOST_SHORT} ${CONJUR_API_KEY}' < kafka-rest.tpl > $h.kafka-rest.properties); scp -q $h.kafka-rest.properties $h.poc.lab:/tmp/kafka-rest.properties && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-rest.properties /etc/confluent/kafka-rest/kafka-rest.properties && rm -f /tmp/kafka-rest.properties && echo "$(hostname): refs=$(sudo grep -c "\${cyberark:" /etc/confluent/kafka-rest/kafka-rest.properties) unresolved=$(sudo grep "\${" /etc/confluent/kafka-rest/kafka-rest.properties | grep -vc "\${cyberark:")"'; done; export HOST_SHORT=c3-01 CONJUR_API_KEY=$(ssh c3-01.poc.lab 'sudo cat /etc/confluent/conjur/host.key'); (umask 077; envsubst '${HOST_SHORT} ${CONJUR_API_KEY}' < control-center.tpl > c3-01.control-center.properties); unset CONJUR_API_KEY; scp -q c3-01.control-center.properties c3-01.poc.lab:/tmp/control-center.properties && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/control-center.properties /etc/confluent/control-center/control-center.properties && rm -f /tmp/control-center.properties && echo "c3-01: refs=$(sudo grep -c "\${cyberark:" /etc/confluent/control-center/control-center.properties) unresolved=$(sudo grep "\${" /etc/confluent/control-center/control-center.properties | grep -vc "\${cyberark:")"'; echo "plaintext store password left in rendered files: $(grep -lF "$(cat ~/pki/store.pass)" *.kafka-rest.properties c3-01.control-center.properties | wc -l)"
-```
-
-```out
-rest01: refs=9 unresolved=0
-rest02: refs=9 unresolved=0
-c3-01: refs=18 unresolved=0
-plaintext store password left in rendered files: 0
-```
-
-## 15.5 讓服務載入 jar，滾動重啟
-
-@role 小安 | ops02 | cpadmin
-
-jar 透過環境變數讓啟動腳本帶進去，用第二個 drop-in 檔，不碰第 10 站寫好的 `10-override.conf`。Kafka 和 REST Proxy 的啟動腳本看的是 `CLASSPATH`（放最前面），Control Center 的腳本只看 `CONTROL_CENTER_CLASSPATH`（自己的 jar 排前面）；小安第一次兩邊都寫 `CLASSPATH`，C3 就報 `ClassNotFoundException`：
-
-```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in rest*) u=confluent-kafka-rest; v=CLASSPATH;; c3*) u=confluent-control-center; v=CONTROL_CENTER_CLASSPATH;; *) u=confluent-server; v=CLASSPATH;; esac; ssh $h.poc.lab "sudo tee /etc/systemd/system/$u.service.d/20-conjur.conf >/dev/null <<EOF
-[Service]
-Environment=\"$v=/usr/share/java/cp-secrets/*\"
-EOF
-sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\n' | grep CLASSPATH)\""; done
-```
-
-```out
-kc01: "CLASSPATH=/usr/share/java/cp-secrets/*"
-（10 行；c3-01 那行是 CONTROL_CENTER_CLASSPATH。引號是 systemd 顯示含 `*` 的值時自己加的）
-```
-
-一台一台重啟，每台等健康再做下一台（controller 等 active、broker 等 MDS 回 200）：
-
-```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"; done
-```
-
-```out
-kc01 active
-kc02 active
-kc03 active
-kb01 MDS=200 after ~80s
-（4 行，20–80 秒都正常）
-```
-
-```bash
-ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*5))s"
-```
-
-```out
-c3 ui=200 after ~120s
-```
-
-
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest01 down
-```
-
-```out
-LB：rest01（停用） rest02
-```
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-~/conf/rest-restart.sh rest01
-```
-
-```out
-rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
-```
-
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
-```
-
-```out
-LB：rest01 rest02
-LB：rest01 rest02（停用）
-```
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-~/conf/rest-restart.sh rest02
-```
-
-```out
-rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
-```
-
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest02 up
-```
-
-```out
-LB：rest01 rest02
-```
-
-@role 小安 | ops02 | cpadmin
-
-## 15.6 驗證：主機上沒有明文、provider 真的有去 Conjur
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-for h in kb01 rest01 c3-01; do case $h in rest*) f=/etc/confluent/kafka-rest/kafka-rest.properties; u=confluent-kafka-rest;; c3*) f=/etc/confluent/control-center/control-center.properties; u=confluent-control-center;; *) f=/etc/confluent/kafka/server.properties; u=confluent-server;; esac; ssh $h.poc.lab "echo \"\$(hostname): plaintext=\$(sudo grep -cE '^[^#].*(password|credentials)=[^\$]' $f) refs=\$(sudo grep -c '\\\${cyberark:' $f) provider_log=\$(sudo journalctl -u $u --since '-10min' --no-pager | grep -ci 'cyberark')\""; done; echo "alice login: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
-```
-
-```out
-kb01: plaintext=0 refs=17 provider_log=1980
-rest01: plaintext=0 refs=9 provider_log=111
-c3-01: plaintext=0 refs=18 provider_log=48
-alice login: 200
-```
-
-`provider_log` 的數字很大，因為 Kafka 每建立一個設定物件就重新初始化 provider 一次（每次都向 Conjur 認證、取值），broker 啟動一次會做幾百次。功能沒問題但日誌很吵，正式環境可在 log4j2.yaml 把 `io.confluent.csid` 設成 WARN。
-
-這個 `plaintext` 的 grep 只看 `password=`／`credentials=` 後面不是 `$` 的行，所以沒算到 `config.providers.cyberark.param.cyberark.auth.apikey=` 那一行，也就是「開保管庫的那把鑰匙」。它一定要落地一份（檔案 0640、只有 root 和 confluent 讀得到），這是任何保管庫方案都躲不掉的 secret zero；銀行若要求更進一步，就把 Conjur 的 authenticator 換成憑證（authn-cert），讓這把鑰匙變成主機既有的憑證。
-
-## 15.7 演練：換 AD 查詢帳號的密碼
-
-@role 銀行 AD 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-有了 Conjur，輪替就是「改 AD、改 Conjur 的值、滾動重啟 controller 與 broker」三步，properties 一個字都不用動。先由 AD 團隊改密碼並交給小安（lab 直接寫進 ops02 的檔）：
-
-```bash
-docker exec lab-ad01-1 bash -c 'until P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $P =~ [A-Z] && $P =~ [a-z] && $P =~ [0-9] ]]; do :; done; samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"' && docker exec lab-ad01-1 cat /root/secrets/bind.pass | docker exec -i -u cpadmin lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/ldap-bind.pass; echo "ops02: new bind password saved"'
-```
-
-```out
-AD: password changed
-ops02: new bind password saved
-```
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @"$HOME/secrets/ldap-bind.pass" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password && unset T && echo "conjur: kafka/ldap-bind-password updated" && for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done && for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; echo "alice login after rotation: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
-```
-
-```out
-conjur: kafka/ldap-bind-password updated
-kc01 active
-（controller 3 行）
-kb01 MDS=200
-（broker 4 行）
-alice login after rotation: 200
-```
-
-> 這裡滾動重啟期間，還沒重啟的 broker 用舊密碼 bind 會失敗（AD 已經改了）。正式環境用兩組帳號 A／B 交替就沒有這個空窗：CPM 先改閒置的 B，Conjur 的值換成 B 的帳密，滾動重啟，最後才改 A。
-
-## 15.8 應用程式這一端：拿 SCRAM 密碼連 broker
-
-@role 小安（扮演應用程式） | ops02 | cpadmin
-
-應用程式不會碰 broker 的設定，它只需要自己的 SCRAM 密碼。兩種拿法都驗一次。
-
-**拿法一：app 自己向 Conjur 要密碼**（對應正式環境打 CCP 或 Conjur REST；會覆蓋第 11 章那份 `app-orders.properties`，內容一樣，只是密碼改從 Conjur 取）。ops02 用自己的 host 身分取 `kafka/scram/app-orders`，組成 client 設定，走 CLIENT 9095 寫一筆、讀一筆：
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && HT=$(sudo cat /etc/confluent/conjur/host.key | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fops02/authenticate | base64 -w0) && P=$(curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fscram%2Fapp-orders) && unset HT && (umask 077; cat > ~/conf/app-orders.properties <<EOF
-security.protocol=SASL_SSL
-sasl.mechanism=SCRAM-SHA-512
-sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="$P";
-ssl.truststore.type=PKCS12
-ssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12
-ssl.truststore.password=$(cat ~/pki/store.pass)
-EOF
-) && unset P && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && BS=kb01.poc.lab:9095 && echo "hello-from-conjur-$(date +%s)" | kafka-console-producer --bootstrap-server $BS --producer.config ~/conf/app-orders.properties --topic orders.events >/dev/null && kafka-console-consumer --bootstrap-server $BS --consumer.config ~/conf/app-orders.properties --topic orders.events --group orders-conjur-check --from-beginning --max-messages 1 --timeout-ms 20000 2>/dev/null | tail -1
-```
-
-```out
-hello-from-conjur-1792669175
-```
-
-**拿法二：Kafka client 自己的 config provider**。設定檔裡不放密碼，只放參照；CLI 工具就是 kafka-clients，帶上同一組 jar 就能解：
-
-```bash
-(umask 077; cat > ~/conf/app-orders-provider.properties <<EOF
-config.providers=cyberark
-config.providers.cyberark.class=io.confluent.csid.config.provider.cyberark.CyberArkConfigProvider
-config.providers.cyberark.param.cyberark.url=https://conjur.poc.lab
-config.providers.cyberark.param.cyberark.account=poc
-config.providers.cyberark.param.cyberark.auth.username=host/kafka/ops02
-config.providers.cyberark.param.cyberark.auth.apikey=$(sudo cat /etc/confluent/conjur/host.key)
-config.providers.cyberark.param.polling.enabled=false
-security.protocol=SASL_SSL
-sasl.mechanism=SCRAM-SHA-512
-sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="\${cyberark:kafka/scram/app-orders:kafka/scram/app-orders}";
-ssl.truststore.type=PKCS12
-ssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12
-ssl.truststore.password=$(cat ~/pki/store.pass)
-EOF
-) && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml CLASSPATH="/usr/share/java/cp-secrets/*" && BS=kb01.poc.lab:9095 && echo "hello-via-provider-$(date +%s)" | kafka-console-producer --bootstrap-server $BS --producer.config ~/conf/app-orders-provider.properties --topic orders.events >/dev/null && kafka-console-consumer --bootstrap-server $BS --consumer.config ~/conf/app-orders-provider.properties --topic orders.events --group orders-provider-check --from-beginning --max-messages 2 --timeout-ms 20000 2>/dev/null | tail -1; unset CLASSPATH; grep -c "cyberark:" ~/conf/app-orders-provider.properties
-```
-
-```out
-hello-via-provider-1792669189
-1
-```
-
-兩種拿法對 broker 來說沒有差別，broker 看到的都是 `User:app-orders` 用 SCRAM-SHA-512 進來。差別在 app 團隊：拿法一是他們既有的「向 CyberArk 要字串」流程，拿法二是連程式都不用改、只改設定檔。
-
-# 16. 第十六站：Secret Protection，master key 交 CyberArk 保管
-
-@only customer,conjur
 
 ![secretprotection]
 
-設定檔裡的密碼要加密。本案客戶的 CyberArk 只有 PAM（沒有 Conjur），broker 沒有原廠的 provider 可以去保管庫取值，所以用 Confluent 自己的 **Secret Protection**：密碼加密後留在主機上的 `security.properties`，解密用的 master key 由 CyberArk 保管（PVWA），啟動時經環境變數給服務。銀行有 Conjur 時另有第 15 站的做法（選配）；做過第 15 站的環境，這一站從它留下的明文範本 `*.tpl.plain` 重新開始。
+設定檔裡的密碼要加密。本案客戶的 CyberArk 只有 PAM（程式不會向保管庫取值），所以用 Confluent 自己的 **Secret Protection**：密碼加密後留在主機上的 `security.properties`，解密用的 master key 由 CyberArk 保管（PVWA），啟動時經環境變數給服務。
 
 ```
 passphrase ──(＋隨機 salt)──▶ master key ──▶ data key ──▶ 各個密碼的密文（security.properties）
@@ -3018,20 +2519,17 @@ passphrase ──(＋隨機 salt)──▶ master key ──▶ data key ──�
 
 | 誰 | 做什麼 |
 |---|---|
-| 銀行 Secrets 團隊 | PVWA 同一個 safe 開兩個 object：passphrase（銀行產生，只給平台工程師）、master key（16.2 產生後存入）；lab 用 `~/kafka-lab/pvwa/` 資料夾模擬 |
+| 銀行 Secrets 團隊 | PVWA 同一個 safe 開兩個 object：passphrase（銀行產生，只給平台工程師）、master key（15.2 產生後存入）；lab 用 `~/kafka-lab/pvwa/` 資料夾模擬 |
 | 小安 | 取 passphrase 產 master key、交 CyberArk 保管、加密 properties、派送、滾動重啟；之後的 master key 輪替也是他 |
 
-**為什麼兩樣都要存**（lab 實測）：master key 是 passphrase 加上一個隨機 salt 算出來的，salt 每次 `generate` 都重新產生，所以**只有 passphrase 算不回原本的 master key**；反過來，輪替 master key（16.6）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給。分成兩個 object 是為了分開授權：master key 給要啟動服務的一方（16.8 時是每台主機），passphrase 主機不應該讀得到。
+**為什麼兩樣都要存**（lab 實測）：master key 是 passphrase 加上一個隨機 salt 算出來的，salt 每次 `generate` 都重新產生，所以**只有 passphrase 算不回原本的 master key**；反過來，輪替 master key（15.6）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給。分成兩個 object 是為了分開授權：master key 給要啟動服務的一方（每台主機的 `service.env`），passphrase 主機不應該讀得到。
 
-每一步都有兩種寫法：**客戶模式**（PVWA，人工取放，本案）與**銀行有 Conjur**（程式向 Conjur 取放，要先做過 15.1）。取回來的字串一樣，後面的步驟完全相同。
+## 15.1 銀行開好兩個 object，放進 passphrase
 
-## 16.1 銀行開好兩個 object，放進 passphrase
-
-@only customer
 
 @role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-PVWA 同一個 safe 裡開兩個 object：`kafka-sp-passphrase`（值由銀行產生，只授權平台工程師取用）、`kafka-sp-master-key`（先開好，16.2 產生後存入）。lab：
+PVWA 同一個 safe 裡開兩個 object：`kafka-sp-passphrase`（值由銀行產生，只授權平台工程師取用）、`kafka-sp-master-key`（先開好，15.2 產生後存入）。lab：
 
 ```bash
 cd ~/kafka-lab && mkdir -p pvwa && (umask 077; [ -s pvwa/sp-passphrase.txt ] || openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > pvwa/sp-passphrase.txt) && echo "kafka-sp-passphrase: $(wc -c < pvwa/sp-passphrase.txt) chars"
@@ -3041,40 +2539,8 @@ cd ~/kafka-lab && mkdir -p pvwa && (umask 077; [ -s pvwa/sp-passphrase.txt ] || 
 kafka-sp-passphrase: 32 chars
 ```
 
-@only conjur
+## 15.2 小安取 passphrase、產生 master key
 
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-在既有的 `kafka` policy 底下加兩個變數：passphrase 只給 `ops` 使用者和操作機的 host 身分讀，值由銀行產生；master key 先開好空的、給 `ops` 寫，16.2 產生後由小安存入：
-
-```bash
-cd ~/kafka-lab && cat > conjur/sp-policy.yml <<'EOF'
-- !variable secret-protection/passphrase
-- !variable secret-protection/master-key
-- !permit
-  role: !user ops
-  privileges: [ read, execute ]
-  resource: !variable secret-protection/passphrase
-- !permit
-  role: !host ops02
-  privileges: [ read, execute ]
-  resource: !variable secret-protection/passphrase
-- !permit
-  role: !user ops
-  privileges: [ read, execute, update ]
-  resource: !variable secret-protection/master-key
-EOF
-(umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > conjur/keys/sp-passphrase.txt) && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/sp-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: variables kafka/secret-protection/passphrase, master-key added"; curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/keys/sp-passphrase.txt https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fpassphrase && echo "value set"'
-```
-
-```out
-policy: variables kafka/secret-protection/passphrase, master-key added
-value set
-```
-
-## 16.2 小安取 passphrase、產生 master key
-
-@only customer
 
 @role 小安（從 PVWA 取出；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
@@ -3088,21 +2554,6 @@ docker exec -i -u cpadmin lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-pas
 passphrase: 32 chars
 ```
 
-@only conjur
-
-@role 小安 | ops02 | cpadmin
-
-用操作機的 host 身分從 Conjur 取回 passphrase（只進 0600 檔，不印）：
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && HT=$(sudo cat /etc/confluent/conjur/host.key | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fops02/authenticate | base64 -w0) && (umask 077; curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fpassphrase > ~/secrets/sp-passphrase.txt) && unset HT && echo "passphrase: $(wc -c < ~/secrets/sp-passphrase.txt) chars"
-```
-
-```out
-passphrase: 32 chars
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -3119,13 +2570,12 @@ master key: 45 chars
 -rw------- 1 cpadmin cpadmin 169 … security.properties
 ```
 
-> 陷阱：`--passphrase` 一定要給**值本身**（`"$(cat 檔案)"`）。Confluent CLI v4 不認 `@檔案`、也不認 `-`（stdin），會把「`@/home/cpadmin/secrets/sp-passphrase.txt`」這串字當成 passphrase：產生、加密、輪替表面上都成功，但銀行給的 passphrase 根本沒用到，任何拿到 `security.properties` 又猜得到路徑的人都算得出 master key；檔案一改名，下一次輪替就 `incorrect master key passphrase`（2026-10-25 lab 實測）。16.6 結尾有檢查。
+> 陷阱：`--passphrase` 一定要給**值本身**（`"$(cat 檔案)"`）。Confluent CLI v4 不認 `@檔案`、也不認 `-`（stdin），會把「`@/home/cpadmin/secrets/sp-passphrase.txt`」這串字當成 passphrase：產生、加密、輪替表面上都成功，但銀行給的 passphrase 根本沒用到，任何拿到 `security.properties` 又猜得到路徑的人都算得出 master key；檔案一改名，下一次輪替就 `incorrect master key passphrase`（2026-10-25 lab 實測）。15.6 結尾有檢查。
 >
-> 給值的代價是執行那一瞬間值會出現在操作機的行程參數裡（`/proc/<pid>/cmdline`）。操作機上還有維運人員的帳號，**待銀行確認**：請 OS 團隊把操作機的 `/proc` 掛成 `hidepid=2`（`/etc/fstab`：`proc /proc proc defaults,hidepid=2 0 0`），別的帳號就看不到 cpadmin 的行程。16.10、11.2 用 `--config`／`--add-config` 帶密碼時也一樣。
+> 給值的代價是執行那一瞬間值會出現在操作機的行程參數裡（`/proc/<pid>/cmdline`）。操作機上還有維運人員的帳號，**待銀行確認**：請 OS 團隊把操作機的 `/proc` 掛成 `hidepid=2`（`/etc/fstab`：`proc /proc proc defaults,hidepid=2 0 0`），別的帳號就看不到 cpadmin 的行程。15.8、11.2 用 `--config`／`--add-config` 帶密碼時也一樣。
 
 「cannot be retrieved later」是 CLI 的提醒：CLI 不保存 master key，而且**再跑一次 `generate` 也拿不回同一把**（會換新的 salt，算出另一把）。所以產生之後馬上交 CyberArk 保管，確認存好了才往下派送；不能讓一把只存在操作機上的 key 上線。
 
-@only customer
 
 @role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -3151,51 +2601,36 @@ kafka-sp-master-key stored, hash 3f9c0a…（12 碼雜湊）
 3f9c0a… CHG-xxxx
 ```
 
-@only conjur
+
+> 注意：只存 passphrase 是不夠的。passphrase 遺失、master key 還在：服務照常，只是不能用 15.6 的 `rotate`；master key 遺失：服務照常（每台的 `service.env` 都有），但主機重建時拿不到；兩樣都遺失：產生新的 master key、照 15.3–15.5 從明文來源重新加密並滾動重啟（約 30 分鐘，不中斷服務）。
+
+## 15.3 加密每台的 properties
 
 @role 小安 | ops02 | cpadmin
 
-用 `ops` 身分寫進 16.1 開好的變數（`tr -d '\n'` 的理由同上）：
+先用第 10、12、13 站的方式從範本產生每台的設定（和之前完全一樣），再逐檔加密所有 `password`／`credentials` 欄位。加密後原檔裡的值變成 `${securepass:…}` 參照，密文集中寫進 `security.properties`：
 
 ```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '\n' < ~/secrets/master.key | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fmaster-key && unset T && echo "master key stored, hash $(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12)"
-```
-
-```out
-master key stored, hash 3f9c0a…（12 碼雜湊，之後用來核對保管的是不是這一把）
-```
-
-@only all
-
-> 注意：只存 passphrase 是不夠的。passphrase 遺失、master key 還在：服務照常，只是不能用 16.6 的 `rotate`；master key 遺失：服務照常（每台的 `service.env` 都有），但主機重建時拿不到；兩樣都遺失：產生新的 master key、照 16.3–16.5 從明文來源重新加密並滾動重啟（約 30 分鐘，不中斷服務）。
-
-## 16.3 加密每台的 properties
-
-@role 小安 | ops02 | cpadmin
-
-先用第 10、12、13 站的方式從明文範本產生每台的設定（和之前完全一樣，只是範本來源是 `.plain`），再逐檔加密所有 `password`／`credentials` 欄位。加密後原檔裡的值變成 `${securepass:…}` 參照，密文集中寫進 `security.properties`：
-
-```bash
-cd ~/conf && for t in common controller broker kafka-rest control-center; do [ -f $t.tpl.plain ] && cp $t.tpl.plain $t.tpl; done; export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) AUDIT_PASSWORD=$(cat ~/secrets/confluent-audit.pass 2>/dev/null) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${REST_ID} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD} ${AUDIT_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; for h in rest01 rest02; do export HOST_FQDN=$h.poc.lab REST_ID=$h; (umask 077; envsubst "$V" < kafka-rest.tpl > $h.kafka-rest.properties); done; (umask 077; envsubst "$V" < control-center.tpl > c3-01.control-center.properties); unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD; echo "沒替換到的變數：$(grep -ho '${[A-Z_]*}' *.server.properties *.kafka-rest.properties c3-01.control-center.properties | sort -u | paste -sd' ' | sed 's/^$/0 個/')"; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties *.kafka-rest.properties c3-01.control-center.properties; do keys=$(grep -E '^[^#].*(password|credentials)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; echo "security.properties: $(grep -c '^[^_].*ENC\[' ~/secrets/security.properties) entries"
+cd ~/conf && export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) AUDIT_PASSWORD=$(cat ~/secrets/confluent-audit.pass 2>/dev/null) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${REST_ID} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD} ${AUDIT_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; for h in rest01 rest02; do export HOST_FQDN=$h.poc.lab REST_ID=$h; (umask 077; envsubst "$V" < kafka-rest.tpl > $h.kafka-rest.properties); done; (umask 077; envsubst "$V" < control-center.tpl > c3-01.control-center.properties); unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD; echo "沒替換到的變數：$(grep -ho '${[A-Z_]*}' *.server.properties *.kafka-rest.properties c3-01.control-center.properties | sort -u | paste -sd' ' | sed 's/^$/0 個/')"; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties *.kafka-rest.properties c3-01.control-center.properties; do keys=$(grep -E '^[^#].*(password|credentials)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; echo "security.properties: $(grep -c '^[^_].*ENC\[' ~/secrets/security.properties) entries"
 ```
 
 ```out
 沒替換到的變數：0 個
 kb01.server.properties: 17 encrypted, plaintext=0
-（broker 17、controller 11、REST 9、C3 18；做過第 19 站的話 broker 19、controller 13。10 個檔 plaintext 都是 0）
-security.properties: 137 entries（做過第 19 站是 151）
+（broker 17、controller 11、REST 9、C3 18；做過第 18 站的話 broker 19、controller 13。10 個檔 plaintext 都是 0）
+security.properties: 137 entries（做過第 18 站是 151）
 ```
 
 > `${securepass:/etc/confluent/secrets/security.properties:kb01.server.properties/ssl.keystore.password}` 的最後一段是「本機檔名／欄位」，所以同一份 `security.properties` 可以放所有主機的密文，派送時每台拿同一個檔。
 
-## 16.4 派送：properties、密文檔、master key
+## 15.4 派送：properties、密文檔、master key
 
 @role 小安 | ops02 | cpadmin
 
-三樣東西到每台：加密後的 properties（原路徑）、`security.properties`（0640 root:confluent）、`service.env`（0600 root，只有一行 master key）。drop-in 加 `EnvironmentFile=`；若剛做過第 15 站，順手把 provider 的 drop-in 拿掉：
+三樣東西到每台：加密後的 properties（原路徑）、`security.properties`（0640 root:confluent）、`service.env`（0600 root，只有一行 master key）。drop-in 加 `EnvironmentFile=`：
 
 ```bash
-cd ~/conf && (umask 077; echo "CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)" > ~/secrets/service.env) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in rest*) f=$h.kafka-rest.properties; dst=/etc/confluent/kafka-rest/kafka-rest.properties; u=confluent-kafka-rest;; c3*) f=c3-01.control-center.properties; dst=/etc/confluent/control-center/control-center.properties; u=confluent-control-center;; *) f=$h.server.properties; dst=/etc/confluent/kafka/server.properties; u=confluent-server;; esac; scp -q $f ~/secrets/security.properties ~/secrets/service.env $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -o root -g confluent -m 0640 /tmp/$f $dst && sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets && sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && sudo install -o root -g root -m 0600 /tmp/service.env /etc/confluent/service.env && rm -f /tmp/$f /tmp/security.properties /tmp/service.env && sudo rm -f /etc/systemd/system/$u.service.d/20-conjur.conf && printf '[Service]\nEnvironmentFile=/etc/confluent/service.env\n' | sudo tee /etc/systemd/system/$u.service.d/20-secret-protection.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): refs=\$(sudo grep -c 'securepass:' $dst) plaintext=\$(sudo grep -cE '^[^#].*(password|credentials)=[^\$]' $dst) env=\$(systemctl show $u -p EnvironmentFiles --value | cut -d' ' -f1)\""; done; rm -f ~/secrets/service.env
+cd ~/conf && (umask 077; echo "CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)" > ~/secrets/service.env) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in rest*) f=$h.kafka-rest.properties; dst=/etc/confluent/kafka-rest/kafka-rest.properties; u=confluent-kafka-rest;; c3*) f=c3-01.control-center.properties; dst=/etc/confluent/control-center/control-center.properties; u=confluent-control-center;; *) f=$h.server.properties; dst=/etc/confluent/kafka/server.properties; u=confluent-server;; esac; scp -q $f ~/secrets/security.properties ~/secrets/service.env $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -o root -g confluent -m 0640 /tmp/$f $dst && sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets && sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && sudo install -o root -g root -m 0600 /tmp/service.env /etc/confluent/service.env && rm -f /tmp/$f /tmp/security.properties /tmp/service.env && printf '[Service]\nEnvironmentFile=/etc/confluent/service.env\n' | sudo tee /etc/systemd/system/$u.service.d/20-secret-protection.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): refs=\$(sudo grep -c 'securepass:' $dst) plaintext=\$(sudo grep -cE '^[^#].*(password|credentials)=[^\$]' $dst) env=\$(systemctl show $u -p EnvironmentFiles --value | cut -d' ' -f1)\""; done; rm -f ~/secrets/service.env
 ```
 
 ```out
@@ -3203,7 +2638,7 @@ kc01: refs=11 plaintext=0 env=/etc/confluent/service.env
 （10 行；refs 和上一步的 encrypted 數相同）
 ```
 
-## 16.5 滾動重啟、驗證
+## 15.5 滾動重啟、驗證
 
 @role 小安 | ops02 | cpadmin
 
@@ -3288,7 +2723,7 @@ service.env: root:root 600
 
 `security.properties` 裡那 1 筆是 `_metadata.symmetric_key.0.envvar=CONFLUENT_SECURITY_MASTER_KEY`，記的是「去哪個環境變數找 master key」，不是 key 本身。檔案開頭幾行 `_metadata.*` 是鹽、迭代次數，和被 master key 包起來的 data key。
 
-最後確認 passphrase 真的有用上（16.2 的陷阱）：在副本上試著輪替一次，正式檔不動。兩個都要是「是」；前一個是「否」代表 master key 不是用 PVWA 那組 passphrase 產生的，照 16.7「遺失怎麼辦」重新產生、重新加密：
+最後確認 passphrase 真的有用上（15.2 的陷阱）：在副本上試著輪替一次，正式檔不動。兩個都要是「是」；前一個是「否」代表 master key 不是用 PVWA 那組 passphrase 產生的，照 15.7「遺失怎麼辦」重新產生、重新加密：
 
 ```bash
 T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "目前的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
@@ -3298,9 +2733,8 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 目前的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
 ```
 
-## 16.6 演練：輪替 master key
+## 15.6 演練：輪替 master key
 
-@only customer
 
 @role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -3316,7 +2750,7 @@ new passphrase stored
 
 @role 小安（從 PVWA 取出新 passphrase；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
-正式環境同 16.2 不顯示的寫法，檔名換成 `sp-passphrase-new.txt`：
+正式環境同 15.2 不顯示的寫法，檔名換成 `sp-passphrase-new.txt`：
 
 ```bash
 docker exec -i -u cpadmin lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-passphrase-new.txt; echo "new passphrase: $(wc -c < ~/secrets/sp-passphrase-new.txt) chars"' < ~/kafka-lab/pvwa/sp-passphrase-new.txt
@@ -3326,31 +2760,6 @@ docker exec -i -u cpadmin lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-pas
 new passphrase: 32 chars
 ```
 
-@only conjur
-
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-銀行產生新 passphrase、放進保管庫（舊值 Conjur 會留版本）：
-
-```bash
-cd ~/kafka-lab && (umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > conjur/keys/sp-passphrase-new.txt) && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/keys/sp-passphrase-new.txt https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fpassphrase && echo "new passphrase stored"'
-```
-
-```out
-new passphrase stored
-```
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && HT=$(sudo cat /etc/confluent/conjur/host.key | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fops02/authenticate | base64 -w0) && (umask 077; curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fpassphrase > ~/secrets/sp-passphrase-new.txt) && unset HT && echo "new passphrase: $(wc -c < ~/secrets/sp-passphrase-new.txt) chars"
-```
-
-```out
-new passphrase: 32 chars
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -3370,7 +2779,6 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 
 新的 master key 一樣**先交 CyberArk 保管再上線**，兩個 object 都換成新值，舊版本留著回滾用：
 
-@only customer
 
 @role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -3379,7 +2787,7 @@ cd ~/kafka-lab && cp -p pvwa/master-key.txt pvwa/master-key.prev.txt && cp -p pv
 ```
 
 ```out
-kafka-sp-master-key stored, hash 7d21e4…（和 16.2 那一把不同）（舊版本另存 .prev）
+kafka-sp-master-key stored, hash 7d21e4…（和 15.2 那一把不同）（舊版本另存 .prev）
 ```
 
 @role 小安 | ops02 | cpadmin
@@ -3392,23 +2800,10 @@ kafka-sp-master-key stored, hash 7d21e4…（和 16.2 那一把不同）（舊�
 7d21e4… CHG-yyyy
 ```
 
-@only conjur
 
 @role 小安 | ops02 | cpadmin
 
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '\n' < ~/secrets/master.key | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fsecret-protection%2Fmaster-key && unset T && echo "master key stored, hash $(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12)"
-```
-
-```out
-master key stored, hash 7d21e4…（和 16.2 那一把不同）
-```
-
-@only all
-
-@role 小安 | ops02 | cpadmin
-
-然後照 16.5 再滾動重啟一次（指令相同），每台起得來就代表新 master key 解得開：
+然後照 15.5 再滾動重啟一次（指令相同），每台起得來就代表新 master key 解得開：
 
 ```bash
 for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 36); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; echo "alice login after master key rotation: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; rm -f ~/secrets/security.properties.bak ~/secrets/master.key.bak
@@ -3477,7 +2872,7 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-輪替完照 16.5 最後那個檢查再做一次：新的 passphrase（保管庫的現行版本）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
+輪替完照 15.5 最後那個檢查再做一次：新的 passphrase（保管庫的現行版本）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
 
 ```bash
 T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "目前的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
@@ -3487,264 +2882,26 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 目前的 passphrase 還能輪替：是；錯的 passphrase 被拒：是
 ```
 
-> 回滾：在刪掉 `.bak` 之前，把 `security.properties.bak` 和 `master.key.bak` 用 16.4 的方式派送回去、再滾動重啟一次，就回到舊 master key。所以 `.bak` 要等全部驗證完才刪。
+> 回滾：在刪掉 `.bak` 之前，把 `security.properties.bak` 和 `master.key.bak` 用 15.4 的方式派送回去、再滾動重啟一次，就回到舊 master key。所以 `.bak` 要等全部驗證完才刪。
 
-## 16.7 要跟資安說清楚的事
+## 15.7 要跟資安說清楚的事
 
 | 項目 | 說明 |
 |---|---|
-| secret zero | master key 以一行落在每台主機的 `/etc/confluent/service.env`（0600 root）。資安若不接受磁碟副本，改用 `ExecStartPre` 在啟動前向 CCP 取 master key 寫到 `/run`（tmpfs），代價是啟動時 CyberArk 要在線 |
-| CyberArk 在這裡做什麼（只有 PAM 時） | **保管與稽核，不參與執行期**：passphrase、master key 的正本與版本（重建主機、復原、輪替時取用）；誰在什麼時候取了、對應哪張變更單；以及 PSM／PSMP 控管誰能登入主機變成 root。服務啟動時不連 CyberArk |
-| 擋得住什麼、擋不住什麼 | 擋得住：設定檔被複製出去（備份、工單附檔、診斷資料、`confluent` 群組的人）時看不到密碼。擋不住：這台主機上的 root（`service.env` 就在本機）。要連 root 都擋，需要啟動時向外取 master key 的機制（CCP 或 Conjur＋16.8） |
-| 遺失怎麼辦 | `rotate` 一定要**同時**有舊 passphrase 和舊 master key（環境變數），CLI 也沒有辦法從 passphrase＋`security.properties` 重新算出 master key（2026-10-25 lab 實測），所以兩個 object 都要保管。master key 遺失：從 PVWA 取回（服務啟動要它）。passphrase 遺失：服務照跑，但不能 `rotate`。缺一個又取不回：產生新的 master key、照 16.3–16.5 重新加密（不中斷服務） |
-| data key | `security.properties` 裡真正加密每筆密碼的那把，被 master key 包著。**不做例行輪替**：16.6 換的是外層的 master key。懷疑外洩時，拿到舊 master key＋舊 `security.properties` 的人已經解得出明文，所以要換的是**密碼本身**（keystore 跟著第 21 章換證、SCRAM 與 AD 查詢密碼用 `update`／16.10），再照 16.3–16.5 重新加密 |
-| 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 16.6，兩個 object 一起更新 |
-| 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟，與 master key 輪替無關。CPM 管的 AD 查詢密碼見 16.10 |
-| 和第 15 站的差別 | 不依賴外部系統在線、原廠正式支援、不用 jar；但密碼是加密落地而不是啟動時取 |
+| secret zero | master key 以一行落在每台主機的 `/etc/confluent/service.env`（0600 root）。本案客戶的 CyberArk 只有 PAM（沒有 CCP），服務啟動時不能向保管庫取值，所以 master key 一定落在主機上；資安若不接受磁碟副本，要另外提出需求，不在本手冊範圍 |
+| CyberArk 在這裡做什麼 | **保管與稽核，不參與執行期**：passphrase、master key 的正本與版本（重建主機、復原、輪替時取用）；誰在什麼時候取了、對應哪張變更單；以及 PSM／PSMP 控管誰能登入主機變成 root。服務啟動時不連 CyberArk |
+| 擋得住什麼、擋不住什麼 | 擋得住：設定檔被複製出去（備份、工單附檔、診斷資料、`confluent` 群組的人）時看不到密碼。擋不住：這台主機上的 root（`service.env` 就在本機）。要連 root 都擋，需要啟動時向外取 master key 的機制（本案客戶沒有 CCP，做不到） |
+| 遺失怎麼辦 | `rotate` 一定要**同時**有舊 passphrase 和舊 master key（環境變數），CLI 也沒有辦法從 passphrase＋`security.properties` 重新算出 master key（2026-10-25 lab 實測），所以兩個 object 都要保管。master key 遺失：從 PVWA 取回（服務啟動要它）。passphrase 遺失：服務照跑，但不能 `rotate`。缺一個又取不回：產生新的 master key、照 15.3–15.5 重新加密（不中斷服務） |
+| data key | `security.properties` 裡真正加密每筆密碼的那把，被 master key 包著。**不做例行輪替**：15.6 換的是外層的 master key。懷疑外洩時，拿到舊 master key＋舊 `security.properties` 的人已經解得出明文，所以要換的是**密碼本身**（keystore 跟著第 20 章換證、SCRAM 與 AD 查詢密碼用 `update`／15.8），再照 15.3–15.5 重新加密 |
+| 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 15.6，兩個 object 一起更新 |
+| 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟，與 master key 輪替無關。CPM 管的 AD 查詢密碼見 15.8 |
 
-> 陷阱：做過這一站之後，若回頭照第 10、12、13 站重新產生設定並派送，會把明文密碼寫回主機；改了設定要照 16.3–16.5 重新加密、派送、重啟。
+> 陷阱：做過這一站之後，若回頭照第 10、12、13 站重新產生設定並派送，會把明文密碼寫回主機；改了設定要照 15.3–15.5 重新加密、派送、重啟。
 
-## 16.8 選配：用 Summon 讓 master key 不落地
+## 15.8 演練：CPM 換了 AD 查詢帳號的密碼
 
-@only conjur
 
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-16.4 的 `service.env` 是整個方案裡唯一落地的 master key。CyberArk 的開源工具 **Summon** 可以把它拿掉：服務啟動時 Summon 先向保管庫取值、塞進子程序的環境變數，再執行真正的啟動腳本，磁碟上只剩「主機向保管庫認證用的身分」。代價是服務啟動時保管庫要在線。
-
-master key 在 16.2 已經存進保管庫；銀行這裡只要讓每台主機讀得到它（passphrase 仍然只有平台工程師讀得到）：
-
-```bash
-cd ~/kafka-lab && cat > conjur/mk-policy.yml <<'EOF'
-- !permit
-  role: !layer hosts
-  privileges: [ read, execute ]
-  resource: !variable secret-protection/master-key
-EOF
-docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/mk-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: hosts can read kafka/secret-protection/master-key"'
-```
-
-```out
-policy: hosts can read kafka/secret-protection/master-key
-```
-
-@role 小安 | dl01 | root
-
-Summon 和它的 Conjur provider 都是單一執行檔，從 GitHub release 抓並核對原廠的 SHA256，放進落地區：
-
-```bash
-mkdir -p /out/tools/summon && cd /out/tools/summon && curl -fsSL -o summon-linux-amd64.tar.gz https://github.com/cyberark/summon/releases/download/v0.13.1/summon-linux-amd64.tar.gz && curl -fsSL https://github.com/cyberark/summon/releases/download/v0.13.1/SHA256SUMS.txt | grep -F summon-linux-amd64.tar.gz | sha256sum -c - && curl -fsSL -o summon-conjur-linux-amd64.tar.gz https://github.com/cyberark/summon-conjur/releases/download/v0.9.3/summon-conjur-linux-amd64.tar.gz && curl -fsSL https://github.com/cyberark/summon-conjur/releases/download/v0.9.3/SHA256SUMS.txt | grep -F summon-conjur-linux-amd64.tar.gz | sha256sum -c - && sha256sum *.tar.gz > SHA256SUMS && ls
-```
-
-```out
-summon-linux-amd64.tar.gz: OK
-summon-conjur-linux-amd64.tar.gz: OK
-SHA256SUMS
-summon-conjur-linux-amd64.tar.gz
-summon-linux-amd64.tar.gz
-```
-
-@role 小安 | ops02 | cpadmin
-
-每台 Java 主機：裝兩個執行檔、寫 Conjur 的設定與身分（身分檔就是第 15 站發的 host API key，0640 root:confluent，服務帳號讀得到）、寫 `secrets.yml`（哪個環境變數對應哪個變數），然後以服務帳號試跑一次 Summon，確認取得到值而且和 `service.env` 裡的一樣：
-
-```bash
-cd ~/landing/tools/summon && sha256sum -c --quiet SHA256SUMS && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in rest*) svc=cp-kafka-rest;; c3*) svc=cp-control-center;; *) svc=cp-kafka;; esac; scp -q *.tar.gz $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -d -m 0755 /usr/local/lib/summon && sudo tar -xzf /tmp/summon-linux-amd64.tar.gz -C /usr/local/bin summon && sudo tar -xzf /tmp/summon-conjur-linux-amd64.tar.gz -C /usr/local/lib/summon summon-conjur && rm -f /tmp/summon*.tar.gz && sudo chmod 0755 /usr/local/bin/summon /usr/local/lib/summon/summon-conjur && printf 'appliance_url: https://conjur.poc.lab\naccount: poc\ncert_file: /etc/pki/ca-trust/source/anchors/bank-root.pem\nnetrc_path: /etc/conjur.identity\n' | sudo tee /etc/conjur.conf >/dev/null && printf 'machine https://conjur.poc.lab/authn\n  login host/kafka/$h\n  password %s\n' \"\$(sudo cat /etc/confluent/conjur/host.key)\" | sudo install -m 0640 -o root -g confluent /dev/stdin /etc/conjur.identity && printf 'CONFLUENT_SECURITY_MASTER_KEY: !var kafka/secret-protection/master-key\n' | sudo tee /etc/confluent/secrets.yml >/dev/null && a=\$(sudo -u $svc /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml printenv CONFLUENT_SECURITY_MASTER_KEY | sha256sum | cut -c1-12) && b=\$(sudo sed -n s/^CONFLUENT_SECURITY_MASTER_KEY=//p /etc/confluent/service.env | sha256sum | cut -c1-12) && echo \"\$(hostname): summon \$(/usr/local/bin/summon --version | awk '{print \$3}' | cut -d- -f1) as $svc: \$([ \$a = \$b ] && echo key-matches || echo MISMATCH)\""; done
-```
-
-```out
-kc01: summon 0.13.1 as cp-kafka: key-matches
-（10 行）
-```
-
-換啟動方式：第三個 drop-in 把 `ExecStart` 改成「Summon 包住原本的啟動腳本」，拿掉 16.4 的 `EnvironmentFile` drop-in，刪掉 `service.env`：
-
-```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in rest*) u=confluent-kafka-rest; cmd="/usr/bin/kafka-rest-start /etc/confluent/kafka-rest/kafka-rest.properties";; c3*) u=confluent-control-center; cmd="/usr/bin/control-center-start /etc/confluent/control-center/control-center.properties";; *) u=confluent-server; cmd="/usr/bin/kafka-server-start /etc/confluent/kafka/server.properties";; esac; ssh $h.poc.lab "sudo tee /etc/systemd/system/$u.service.d/30-summon.conf >/dev/null <<EOF
-[Service]
-ExecStart=
-ExecStart=/usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml $cmd
-EOF
-sudo rm -f /etc/systemd/system/$u.service.d/20-secret-protection.conf /etc/confluent/service.env && sudo systemctl daemon-reload && echo \"\$(hostname): exec=\$(systemctl show $u -p ExecStart --value | grep -o 'path=[^ ]*' | head -1 | cut -d= -f2) service.env=\$(sudo test -e /etc/confluent/service.env && echo present || echo gone)\""; done
-```
-
-```out
-kc01: exec=/usr/local/bin/summon service.env=gone
-（10 行）
-```
-
-滾動重啟，然後從程序的環境變數證明 master key 在那裡、磁碟上卻沒有：
-
-```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 main pid $p = $(ps -o comm= -p $p); java child has MASTER_KEY in env: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^CONFLUENT_SECURITY_MASTER_KEY=") ; on disk: $(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l) files"'
-```
-
-```out
-kc01 active
-（3 行）
-kb01 MDS=200
-（4 行）
-c3 ui=200
-kb01 main pid 7764 = summon; java child has MASTER_KEY in env: 1 ; on disk: 0 files
-```
-
-
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest01 down
-```
-
-```out
-LB：rest01（停用） rest02
-```
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-~/conf/rest-restart.sh rest01
-```
-
-```out
-rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
-```
-
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
-```
-
-```out
-LB：rest01 rest02
-LB：rest01 rest02（停用）
-```
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-~/conf/rest-restart.sh rest02
-```
-
-```out
-rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
-```
-
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest02 up
-```
-
-```out
-LB：rest01 rest02
-```
-
-@role 小安 | ops02 | cpadmin
-
-主程序是 Summon，Java 是它的子程序，`systemctl stop` 送的訊號 Summon 會轉給子程序，停機和原本一樣。現在主機上和 master key 有關的只剩 `/etc/conjur.identity`（主機的 Conjur 身分）：這就是 secret zero，和第 15 站的 host API key 是同一把。
-
-> 什麼時候不要用 Summon：如果銀行要求「保管庫故障時平台仍能重啟」，就留在 16.4 的 `service.env` 作法。兩者的差別只有啟動時要不要連得到保管庫。
-
-## 16.9 選配：AD 查詢密碼不凍在密文裡，啟動時從保管庫注入
-
-@only conjur
-
-@role 小安 | ops02 | cpadmin
-
-Secret Protection 有一個本質上的脫鉤：密碼加密後「凍」在 `security.properties`，CyberArk 只是保存一份副本。CPM 替 AD 查詢帳號（`svc-mds-bind`）換了密碼，broker 不會知道，一定要有人重算密文、派送、滾動重啟。對 keystore 這類我們自己管的密碼沒差；對由 CPM 管的 AD 密碼，可以換一條路：**不加密它，啟動時由 Summon 從保管庫取回放進環境變數，properties 用 Kafka 內建的 `EnvVarConfigProvider` 讀環境變數**。不需要任何額外的 jar，`securepass` 和 `env` 兩個 provider 並存，各管各的欄位。
-
-```
-CPM 換密碼 ──▶ AD                                 broker 啟動
-            └─▶ 保管庫 kafka/ldap-bind-password ──▶ Summon 取值 → 環境變數 LDAP_BIND_PASSWORD ──▶ ${env:LDAP_BIND_PASSWORD}
-                                                    （master key 也是同一趟 Summon 給的）
-```
-
-保管庫裡要有這個值（15.2 寫過；只做過 16 沒做 15.2 的話這一行會補上，值相同就是覆蓋）：
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '\n' < ~/secrets/ldap-bind.pass | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password && unset T && echo "conjur: kafka/ldap-bind-password set"
-```
-
-```out
-conjur: kafka/ldap-bind-password set
-```
-
-7 台 controller 與 broker（LDAP 設定在共用區塊，兩種都有）：`secrets.yml` 多一行、properties 三處改法（`confluent secret` 改寫過的檔是 `key = value`，等號兩邊有空白，sed 要容許）——`config.providers` 加上 `env`、宣告 `env` 的 class、`ldap.java.naming.security.credentials` 從 `${securepass:…}` 改成 `${env:LDAP_BIND_PASSWORD}`。改完以服務帳號試跑 Summon，確認取回的值和操作機手上的一樣：
-
-```bash
-B=$(tr -d '\n' < ~/secrets/ldap-bind.pass | sha256sum | cut -c1-12) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab "grep -q '^LDAP_BIND_PASSWORD:' /etc/confluent/secrets.yml || echo 'LDAP_BIND_PASSWORD: !var kafka/ldap-bind-password' | sudo tee -a /etc/confluent/secrets.yml >/dev/null; f=/etc/confluent/kafka/server.properties; sudo sed -i -e 's|^config.providers *=.*|config.providers = securepass,env|' -e '/^config.providers.env.class *=/d' -e 's|^ldap.java.naming.security.credentials *=.*|ldap.java.naming.security.credentials = \${env:LDAP_BIND_PASSWORD}|' \$f && echo 'config.providers.env.class = org.apache.kafka.common.config.provider.EnvVarConfigProvider' | sudo tee -a \$f >/dev/null && a=\$(sudo -u cp-kafka /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml printenv LDAP_BIND_PASSWORD | tr -d '\n' | sha256sum | cut -c1-12) && echo \"\$(hostname): providers=\$(sudo grep '^config.providers *=' \$f | sed 's/.*= *//') env-refs=\$(sudo grep -c 'env:LDAP_BIND_PASSWORD' \$f) securepass-refs=\$(sudo grep -c 'securepass:' \$f) summon-value=\$([ \$a = $B ] && echo matches || echo MISMATCH)\""; done
-```
-
-```out
-kc01: providers=securepass,env env-refs=1 securepass-refs=10 summon-value=matches
-kb01: providers=securepass,env env-refs=1 securepass-refs=16 summon-value=matches
-（7 行；securepass 的參照比 16.3 少 1 個，就是搬去 env 的那個）
-```
-
-滾動重啟 controller、broker。驗證要挑一個**非得用查詢帳號不可**的動作：alice 登入只用她自己的帳密，群組快取也撐得住，看不出 bind 有沒有成功；重啟後快取是空的，alice 透過 LDAP listener 建 topic 時，MDS 必須先用查詢帳號到 AD 找出她的群組才會放行。再從 kb01 的程序環境證明密碼在環境變數裡、日誌沒有 LDAP 認證錯誤：
-
-```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; [ -f ~/conf/client-alice.properties ] || (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="alice" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/ad-test-users.pass)" "$(cat ~/pki/store.pass)" > ~/conf/client-alice.properties); t=ldap-check-$(date +%s); echo "alice（群組 kafka-admins）建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; ssh kb01.poc.lab 'p=$(systemctl show confluent-server -p MainPID --value); echo "kb01 java env has LDAP_BIND_PASSWORD: $(sudo cat /proc/$(pgrep -P $p java)/environ | tr "\0" "\n" | grep -c "^LDAP_BIND_PASSWORD="); credentials line: $(sudo grep "^ldap.java.naming.security.credentials" /etc/confluent/kafka/server.properties | sed "s/^[^=]*= *//"); ldap auth errors since restart: $(sudo journalctl -u confluent-server --since "$(systemctl show -p ActiveEnterTimestamp --value confluent-server)" --no-pager 2>/dev/null | grep -ci "javax.naming\|LDAP search failed")"'
-```
-
-```out
-kc01 active
-（3 行）
-kb01 MDS=200
-（4 行）
-alice（群組 kafka-admins）建 topic：Created topic
-kb01 java env has LDAP_BIND_PASSWORD: 1; credentials line: ${env:LDAP_BIND_PASSWORD}; ldap auth errors since restart: 0
-```
-
-`security.properties` 裡舊的 `ldap.java.naming.security.credentials` 密文還在，只是沒有人參照它；下次 `confluent secret file remove` 清掉即可。
-
-### 演練：CPM 換了 AD 密碼，平台怎麼跟上
-
-@role 銀行 AD 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-正式環境這一步是 CPM：改 AD、更新保管庫，一次完成。lab 用 samba-tool 改密碼、再寫進 Conjur；小安這次**什麼都不用拿**：
-
-```bash
-docker exec lab-ad01-1 bash -c 'until P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $P =~ [A-Z] && $P =~ [a-z] && $P =~ [0-9] ]]; do :; done; samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"' && cd ~/kafka-lab && docker exec lab-ad01-1 cat /root/secrets/bind.pass > conjur/keys/bind-new.txt && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/keys/bind-new.txt https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password && echo "vault: kafka/ldap-bind-password updated"'; rm -f conjur/keys/bind-new.txt
-```
-
-```out
-AD: password changed
-vault: kafka/ldap-bind-password updated
-```
-
-@role 小安 | ops02 | cpadmin
-
-不重算密文、不派送任何檔案，只滾動重啟；起來的那台就拿到新密碼。操作機本地的 `ldap-bind.pass` 已經是舊的，順手從保管庫取回更新（之後 16.3 若重做加密才會用到）：
-
-```bash
-for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; t=ldap-rotated-$(date +%s); echo "換密碼後 alice 建 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --create --topic $t --partitions 1 --replication-factor 3 2>&1 | grep -o 'Created topic\|TopicAuthorizationException' | head -1)"; kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config ~/conf/client-alice.properties --delete --topic $t >/dev/null 2>&1; echo "kb01 ldap auth errors since restart: $(ssh kb01.poc.lab 'sudo journalctl -u confluent-server --since "$(systemctl show -p ActiveEnterTimestamp --value confluent-server)" --no-pager 2>/dev/null | grep -ci "javax.naming\|LDAP search failed"')"; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && HT=$(sudo cat /etc/confluent/conjur/host.key | curl -sS --cacert $CA -X POST --data-binary @- https://conjur.poc.lab/authn/poc/host%2Fkafka%2Fops02/authenticate | base64 -w0) && (umask 077; curl -sS --cacert $CA -H "Authorization: Token token=\"$HT\"" https://conjur.poc.lab/secrets/poc/variable/kafka%2Fldap-bind-password > ~/secrets/ldap-bind.pass) && unset HT && echo "ops02: ldap-bind.pass refreshed from vault"
-```
-
-```out
-kc01 active
-（3 行）
-kb01 MDS=200
-（4 行）
-換密碼後 alice 建 topic：Created topic
-kb01 ldap auth errors since restart: 0
-ops02: ldap-bind.pass refreshed from vault
-```
-
-> 和 15.7 一樣的提醒：滾動重啟期間，還沒重啟的 broker 用舊密碼 bind 會失敗，靠 AD 群組快取撐著。正式環境用 A／B 兩組查詢帳號交替，CPM 只准輪替閒置的那組，就沒有這個空窗。
-
-| 密碼 | 誰管輪替 | 放法 | 換了之後要做什麼 |
-|---|---|---|---|
-| keystore、truststore | 我們（換憑證時） | Secret Protection 密文 | 重算密文、派送、滾動重啟（16.3–16.5） |
-| AD 查詢帳號 | CPM | 保管庫 → Summon → `${env:…}` | 只滾動重啟 |
-| master key | 我們（依變更單） | 保管庫 → Summon | 16.6 + 16.8 的寫回保管庫，滾動重啟 |
-
-## 16.10 演練：CPM 換了 AD 查詢帳號的密碼（只有 PAM 時）
-
-@only customer
-
-只有 PAM 時，`svc-mds-bind` 的密碼加密後固定在 `security.properties`。CPM 一換 AD 密碼，broker 手上就是舊的：當下靠群組快取撐著，下次重啟時 MDS 起不來（第 7 站的陷阱：卡在 `Waiting for all of the authorizer futures`）。所以 CPM 換完，平台要跟著做一次：從 PVWA 取新密碼 → 只更新這一個欄位的密文 → 派送 `security.properties` → 滾動重啟。
+`svc-mds-bind` 的密碼加密後固定在 `security.properties`。CPM 一換 AD 密碼，broker 手上就是舊的：當下靠群組快取撐著，下次重啟時 MDS 起不來（第 7 站的陷阱：卡在 `Waiting for all of the authorizer futures`）。所以 CPM 換完，平台要跟著做一次：從 PVWA 取新密碼 → 只更新這一個欄位的密文 → 派送 `security.properties` → 滾動重啟。
 
 > 待銀行確認：這個帳號的 CPM 輪替要**關掉自動排程、改成依變更單觸發**（CPM 換完通知平台工程師接著做這一節），或開 A／B 兩組查詢帳號交替（CPM 只換閒置的那組，平台切過去再滾動重啟，中間沒有空窗）。手冊以「依變更單觸發、單一帳號」為準。
 
@@ -3775,7 +2932,7 @@ ldap-bind.pass: 20 chars
 
 @role 小安 | ops02 | cpadmin
 
-不用重做 16.3：`confluent secret file update` 只重算指定欄位的密文，properties 本身不動（裡面本來就是 `${securepass:…}` 參照）。controller 和 broker 共 7 個檔有這個欄位，所以 `security.properties` 裡應該剛好變 7 行：
+不用重做 15.3：`confluent secret file update` 只重算指定欄位的密文，properties 本身不動（裡面本來就是 `${securepass:…}` 參照）。controller 和 broker 共 7 個檔有這個欄位，所以 `security.properties` 裡應該剛好變 7 行：
 
 ```bash
 cd ~/conf && cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do confluent secret file update --config-file $h.server.properties --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "ldap.java.naming.security.credentials=$(cat ~/secrets/ldap-bind.pass)" >/dev/null || echo "$h: update FAILED"; done; unset CONFLUENT_SECURITY_MASTER_KEY; d=$(grep -vxFf ~/secrets/security.properties.bak ~/secrets/security.properties); echo "changed lines: $(grep -c . <<<"$d"), of which ldap credentials: $(grep -c 'ldap.java.naming.security.credentials' <<<"$d")"
@@ -3785,7 +2942,7 @@ cd ~/conf && cp -p ~/secrets/security.properties ~/secrets/security.properties.b
 changed lines: 7, of which ldap credentials: 7
 ```
 
-> 新密碼會短暫出現在這台操作機的行程參數裡（`--config` 只吃命令列）。操作機只有 cpadmin 登入，可以接受；介意的話就改走 16.3 整批重新加密。
+> 新密碼會短暫出現在這台操作機的行程參數裡（`--config` 只吃命令列）。操作機只有 cpadmin 登入，可以接受；介意的話就改走 15.3 整批重新加密。
 
 `security.properties` 每台都是同一份，所以 10 台都派送（REST、C3 那幾行沒變，不用重啟）；只滾動重啟 controller 和 broker，再用 alice 的 AD 帳密登入 MDS 證明 bind 成功（MDS 要先用查詢帳號到 AD 找到 alice，才能驗她的密碼）：
 
@@ -3805,9 +2962,9 @@ kb01 bind 欄位仍是密文參照：1
 
 > 回滾（CPM 換錯、AD 被改回舊密碼）：刪 `.bak` 之前，把 `security.properties.bak` 派送回 10 台、再滾動重啟 controller 和 broker。
 >
-> 和 16.9（有 Conjur）的差別：那裡 CPM 換完只要滾動重啟；這裡多了「取密碼 → 更新密文 → 派送」，所以 CPM 不能悄悄換，一定要通知平台。
+> CPM 換密碼之後要「取密碼 → 更新密文 → 派送 → 滾動重啟」，所以 CPM 不能悄悄換，一定要通知平台。
 
-# 17. 第十七站：維運選單（OP menu）
+# 16. 第十六站：維運選單（OP menu）
 
 ![opmenu]
 
@@ -3815,62 +2972,28 @@ kb01 bind 欄位仍是密文參照：1
 
 | 誰 | 做什麼 |
 |---|---|
-| 銀行 Secrets 團隊 | PVWA 裡兩個 object：cpadmin 的 SSH 私鑰（3.1 已經有）、緊急模式用的憑證（17.2 小安交付）；授權給維運人員取用 |
+| 銀行 Secrets 團隊 | PVWA 裡兩個 object：cpadmin 的 SSH 私鑰（3.1 已經有）、緊急模式用的憑證（16.2 小安交付）；授權給維運人員取用 |
 | 銀行 OS 團隊 | 操作機上建維運人員的本機帳號（lab 用 op01）；各主機 cpadmin 的 sudo 改成兩段式 |
 | 小安 | 交付緊急憑證、裝選單、派送設定、綁緊急身分的權限、試跑 |
 
-選單取私鑰的來源由設定 `OPMENU_SECRETS` 決定：**本案客戶只有 PVWA，用 `manual`**（維運人員貼上）；銀行有 Conjur 用 `conjur`（選單以自己的身分向 Conjur 取，維運人員不用碰私鑰）、有 CCP 用 `ccp`。下面每一步都分兩種寫法。
+選單取私鑰的方式：本案客戶只有 PVWA，維運人員從 PVWA 取出貼上。
 
-## 17.1 銀行準備保管庫
+## 16.1 銀行準備保管庫
 
-@only customer
 
-PVWA 裡選單要用的兩個 object（名稱依銀行慣例，寫進 17.3 的設定，選單會在提示裡告訴維運人員去哪裡取）：
+PVWA 裡選單要用的兩個 object（名稱依銀行慣例，寫進 16.3 的設定，選單會在提示裡告訴維運人員去哪裡取）：
 
 | object | 內容 | 誰放 |
 |---|---|---|
 | `Safe KAFKA-OPS / cpadmin-hosts` | cpadmin 的 SSH 私鑰 | CyberArk SSH Key Manager（3.1 已經有，就是 pvwa/cpadmin_ed25519） |
-| `Safe KAFKA-OPS / opmenu-breakglass` | 緊急模式憑證（私鑰＋憑證鏈，PEM） | 小安在 17.2 交付 |
+| `Safe KAFKA-OPS / opmenu-breakglass` | 緊急模式憑證（私鑰＋憑證鏈，PEM） | 小安在 16.2 交付 |
 
 授權給維運人員（AD 群組）取用；每次取用 PVWA 都有紀錄，對得上選單紀錄裡的同一個人。lab 沒有要另外做的事。
 
-@only conjur,provider
-
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-cd ~/kafka-lab && cat > conjur/opmenu-policy.yml <<'EOF'
-- !host opmenu
-- !variable ssh/cpadmin
-- !variable breakglass/pem
-- !permit
-  role: !host opmenu
-  privileges: [ read, execute ]
-  resources: [ !variable ssh/cpadmin, !variable breakglass/pem ]
-- !permit
-  role: !user ops
-  privileges: [ read, execute, update ]
-  resources: [ !variable ssh/cpadmin, !variable breakglass/pem ]
-EOF
-docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/opmenu-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka > /c/keys/opmenu-policy.json; umask 077; python3 - <<PY
-import json; r=json.load(open("/c/keys/opmenu-policy.json"))
-for k,v in r["created_roles"].items(): open("/c/keys/kafka_opmenu.key","w").write(v["api_key"]); print(k)
-PY
-rm -f /c/keys/opmenu-policy.json' && docker cp "$(cygpath -m "$PWD/conjur/keys/kafka_opmenu.key")" lab-ops02-1:/root/opmenu.key && echo "opmenu host key delivered to ops02 (root)"
-```
-
-```out
-poc:host:kafka/opmenu
-opmenu host key delivered to ops02 (root)
-```
-
-> 重複載入同一份 policy 是安全的：已存在的身分不會重發 API key（`created_roles` 會是空的），要重發用 Conjur 的 rotate API。
-
-## 17.2 交付緊急憑證、綁緊急身分的權限
+## 16.2 交付緊急憑證、綁緊急身分的權限
 
 第 9 站簽好備用的 `opmenu-breakglass` 憑證（私鑰＋憑證鏈，PEM）交給保管庫，再把 `User:opmenu-breakglass` 綁成 SystemAdmin，這就是 91 緊急模式用的身分。
 
-@only customer
 
 @role 銀行 Secrets 團隊（收下存進 PVWA；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -3882,33 +3005,6 @@ cd ~/kafka-lab && (umask 077; docker exec lab-ops02-1 bash -c 'cat /home/cpadmin
 opmenu-breakglass：3 段 PEM（私鑰＋憑證鏈）
 ```
 
-@only conjur,provider
-
-@role 小安 | ops02 | cpadmin
-
-緊急憑證寫進 Conjur（cpadmin 私鑰由銀行從 PAM 同步過去，下一塊）：
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && echo "breakglass pem stored"; unset T
-```
-
-```out
-breakglass pem stored
-```
-
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-cpadmin 的 SSH 私鑰：銀行把 PAM 裡那把同步進 Conjur 的 `kafka/ssh/cpadmin`（lab 從 pvwa/ 寫進去）：
-
-```bash
-cd ~/kafka-lab && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" -v "$(cygpath -m "$PWD/pvwa"):/pvwa:ro" lab-node:1 bash -c 'T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/pvwa/cpadmin_ed25519 https://conjur.poc.lab/secrets/poc/variable/kafka%2Fssh%2Fcpadmin && echo "ssh key stored"'
-```
-
-```out
-ssh key stored
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -3934,7 +3030,7 @@ export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v
 
 > `DeveloperManage Topic:*` 同時給了建刪 topic 的能力。銀行若不接受，改給 ClusterAdmin，或規定健康檢查由管理員做。
 
-## 17.3 裝選單
+## 16.3 裝選單
 
 @role 小安 | Windows 終端 | 本機
 
@@ -3962,7 +3058,6 @@ opmenu 27 items; known_hosts 20 keys; uid=1001(op01) gid=1002(op01) groups=1002(
 
 設定檔只填無法推算的值（連線位址、可重啟的服務清單、保管庫）。`OPMENU_ALLOW_ENV_OVERRIDE=1` 只為了下面能非互動試跑，正式環境拿掉。
 
-@only customer
 
 @role 銀行 OS 團隊（lab 由小安用 sudo 代勞） | ops02 | cpadmin
 
@@ -3979,7 +3074,6 @@ OPMENU_LB_HOST="lb01.poc.lab"
 OPMENU_CONTROLLER_HOSTS="kc01.poc.lab kc02.poc.lab kc03.poc.lab"
 OPMENU_SSH_USER=cpadmin
 OPMENU_USER_FROM_OS=0
-OPMENU_SECRETS=manual
 OPMENU_SSH_KEY_SECRET="Safe KAFKA-OPS / cpadmin-hosts（SSH key）"
 OPMENU_BREAKGLASS_SECRET="Safe KAFKA-OPS / opmenu-breakglass（PEM）"
 OPMENU_LOG=/var/log/opmenu/opmenu.log
@@ -4000,58 +3094,8 @@ sudo chmod 0644 /etc/opmenu/opmenu.conf && sudo runuser -u op01 -- /opt/opmenu/o
 17 查看 certificate 到期日
 ```
 
-@only conjur,provider
 
-@role 銀行 OS 團隊（lab 由小安用 sudo 代勞） | ops02 | cpadmin
-
-`conjur`：選單以 17.1 發的 `host/kafka/opmenu` 身分向 Conjur 取值。先放身分檔（只有 `opmenu` 群組讀得到），再寫設定：
-
-```bash
-sudo bash -c 'printf "login=host/kafka/opmenu\napi_key=%s\n" "$(cat /root/opmenu.key)" | install -m 0640 -o root -g opmenu /dev/stdin /etc/opmenu/conjur.identity && rm -f /root/opmenu.key' && sudo ls -l /etc/opmenu/conjur.identity | cut -d' ' -f1,3,4
-```
-
-```out
--rw-r----- root opmenu
-```
-
-```bash
-sudo tee /etc/opmenu/opmenu.conf >/dev/null <<'EOF'
-OPMENU_ENV_LABEL=LAB
-OPMENU_BOOTSTRAP=kb01.poc.lab:9096,kb02.poc.lab:9096,kb03.poc.lab:9096,kb04.poc.lab:9096
-OPMENU_CERT_DIR=/etc/opmenu/ssl
-OPMENU_BROKER_SERVICES="kb01.poc.lab:confluent-server kb02.poc.lab:confluent-server kb03.poc.lab:confluent-server kb04.poc.lab:confluent-server"
-OPMENU_AUX_SERVICES="rest01.poc.lab:confluent-kafka-rest rest02.poc.lab:confluent-kafka-rest c3-01.poc.lab:confluent-control-center"
-OPMENU_LB_HOST="lb01.poc.lab"
-OPMENU_CONTROLLER_HOSTS="kc01.poc.lab kc02.poc.lab kc03.poc.lab"
-OPMENU_SSH_USER=cpadmin
-OPMENU_USER_FROM_OS=0
-OPMENU_SECRETS=conjur
-OPMENU_CONJUR_URL=https://conjur.poc.lab
-OPMENU_CONJUR_ACCOUNT=poc
-OPMENU_CONJUR_IDENTITY=/etc/opmenu/conjur.identity
-OPMENU_SSH_KEY_SECRET=kafka/ssh/cpadmin
-OPMENU_BREAKGLASS_SECRET=kafka/breakglass/pem
-OPMENU_LOG=/var/log/opmenu/opmenu.log
-OPMENU_SYSLOG=0
-OPMENU_ALLOW_ENV_OVERRIDE=1
-EOF
-sudo chmod 0644 /etc/opmenu/opmenu.conf && sudo runuser -u op01 -- /opt/opmenu/opmenu.sh --list | awk -F'\t' '{print $1, $5}' | head -8
-```
-
-```out
-10 查看 leader 與 partition 分布(balance report)
-11 cluster 與身分鏈健康檢查
-12 列出 topic 與 partition 狀態
-13 查看 consumer lag
-14 查看某個 topic 的設定
-15 查看 application 連線狀況
-16 查看磁碟與 data directory 用量
-17 查看 certificate 到期日
-```
-
-@only all
-
-## 17.4 各主機 cpadmin 的 sudo 改成兩段式
+## 16.4 各主機 cpadmin 的 sudo 改成兩段式
 
 @role 銀行 OS 團隊（lab 由小安用 sudo 代勞） | ops02 | cpadmin
 
@@ -4066,14 +3110,14 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 kb04: only the narrow rules now (sudo ls denied)
 ```
 
-## 17.5 試跑：三種身分看到的選單不一樣
+## 16.5 試跑：三種身分看到的選單不一樣
 
 @role 小安（代打 bob、carol、alice；以 sudo 切成 op01 執行） | ops02 | cpadmin
 
 互動模式就是 `op01` 登入後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 只印這個人看得到的編號：
 
 ```bash
-P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 17 站試跑" JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; for u in bob carol alice; do printf '%-6s ' $u; op $u menu | grep '@@MENU@@' | cut -d' ' -f2-; done; unset P
+P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; for u in bob carol alice; do printf '%-6s ' $u; op $u menu | grep '@@MENU@@' | cut -d' ' -f2-; done; unset P
 ```
 
 ```out
@@ -4086,7 +3130,6 @@ alice  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 4
 
 bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；23 只列含 error／warn 字樣的行，INFO 裡有 errors 字眼也會被列出）、重啟 kb04；直接輸入他看不到的 31 會被擋。alice（SystemAdmin）：建 topic、91 緊急模式、刪 topic。
 
-@only customer
 
 @role 小安（代打 bob、carol、alice；以 sudo 切成 op01 執行） | ops02 | cpadmin
 
@@ -4098,9 +3141,9 @@ cat > ~/conf/opmenu-try.sh <<'EOF'
 # lab：以 op01 跑一次選單（--run <AD 帳號> <項目…>）；stdin 是「從 PVWA 取出要貼的內容」（沒有就給空的），提示出現後貼進虛擬終端機
 person=$1; shift
 password=$(cat ~/secrets/ad-test-users.pass); pasted=$(cat)
-{ sleep 8; [ -n "$pasted" ] && printf '%s\n' "$pasted"; printf '\004'; } | script -q -e -c "sudo env OPMENU_USER=$person OPMENU_PASS='$password' OPMENU_YES=1 OPMENU_REASON=第17站試跑 JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run $*" /dev/null | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -v '^SLF4J'
+{ sleep 8; [ -n "$pasted" ] && printf '%s\n' "$pasted"; printf '\004'; } | script -q -e -c "sudo env OPMENU_USER=$person OPMENU_PASS='$password' OPMENU_YES=1 OPMENU_REASON=第16站試跑 JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run $*" /dev/null | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -v '^SLF4J'
 EOF
-chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 17 站試跑" JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; } && op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 31 orders.x 1 | tail -1; op alice 31 orders.optest 1 | tail -1; unset P
+chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; } && op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 31 orders.x 1 | tail -1; op alice 31 orders.optest 1 | tail -1; unset P
 ```
 
 ```out
@@ -4125,49 +3168,19 @@ kb04 MDS=200 after ~20s
 將執行:刪除 topic orders.optest,資料不可復原
 ```
 
-@only conjur,provider
 
-@role 小安（代打 bob、alice；以 sudo 切成 op01 執行） | ops02 | cpadmin
-
-選單自己向 Conjur 取私鑰與緊急憑證，維運人員不用貼；`--run` 非互動就能跑：
-
-```bash
-P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 23 kb04.poc.lab:confluent-server 10 | tail -1 | cut -c1-80; op bob 21 kb04.poc.lab:confluent-server | tail -1; for i in $(seq 1 24); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"; op bob 31 orders.x 1 | tail -1; unset P
-```
-
-```out
--- 你的 MDS token:已用 3s,剩約 3597s
--- broker 在線:4 / 4(設定的 broker 數)
-Oct 22 22:40:15 kb04 summon[1078]（做過 16.8 時行首是 summon，沒做是 kafka-server-start）: [2026-10-22 22:40:15,683] INFO Updated lag of 0 groups, …
-已重啟 kb04.poc.lab 的 confluent-server
-kb04 MDS=200 after ~20s
-項目 31 不在你的選單內(你的 AD 群組沒有這項權限),請依變更單申請。
-```
-
-```bash
-P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; sudo env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 17 站試跑" JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; op alice 31 orders.optest 1 | tail -1; op alice 91 kafka-topics --list | grep -c '^[a-z_]'; op alice 33 orders.optest | grep 將執行; unset P
-```
-
-```out
-Created topic orders.optest.
-14
-將執行:刪除 topic orders.optest,資料不可復原
-```
-
-@only all
-
-## 17.6 收尾檢查
+## 16.6 收尾檢查
 
 @role 小安 | ops02 | cpadmin
 
-選單結束後不留東西：op01 沒有殘留的 ssh-agent、磁碟上沒有私鑰；op01 讀不到 cpadmin 的檔案；有保管庫身分檔的話（conjur），op01 讀得到（0640 root:opmenu），manual 沒有這個檔（none）；紀錄每行有 AD 帳號、作業系統帳號、項目、結果：
+選單結束後不留東西：op01 沒有殘留的 ssh-agent、磁碟上沒有私鑰；op01 讀不到 cpadmin 的檔案；紀錄每行有 AD 帳號、作業系統帳號、項目、結果：
 
 ```bash
-echo "op01 的 ssh-agent: $(pgrep -u op01 -x ssh-agent | wc -l); private keys on disk: $(sudo grep -rls 'PRIVATE KEY' /home/op01 /dev/shm /tmp 2>/dev/null | grep -v runner.sh | wc -l); op01 reads identity: $(sudo test -e /etc/opmenu/conjur.identity && { sudo runuser -u op01 -- cat /etc/opmenu/conjur.identity >/dev/null 2>&1 && echo yes || echo no; } || echo none); op01 reads cpadmin secrets: $(sudo runuser -u op01 -- ls ~/secrets >/dev/null 2>&1 && echo YES || echo no)"; sudo tail -4 /var/log/opmenu/opmenu.log | cut -c1-120
+echo "op01 的 ssh-agent: $(pgrep -u op01 -x ssh-agent | wc -l); private keys on disk: $(sudo grep -rls 'PRIVATE KEY' /home/op01 /dev/shm /tmp 2>/dev/null | grep -v runner.sh | wc -l); op01 reads cpadmin secrets: $(sudo runuser -u op01 -- ls ~/secrets >/dev/null 2>&1 && echo YES || echo no)"; sudo tail -4 /var/log/opmenu/opmenu.log | cut -c1-120
 ```
 
 ```out
-op01 的 ssh-agent: 0; private keys on disk: 0; op01 reads identity: none（conjur 是 yes）; op01 reads cpadmin secrets: no
+op01 的 ssh-agent: 0; private keys on disk: 0; op01 reads cpadmin secrets: no
 2026-10-22 22:40:47 +0800 | LAB | alice | os=op01 | 91 breakglass | sid=1792680046-22240 | EMERGENCY | kafka-topics --li
 2026-10-22 22:40:49 +0800 | LAB | alice | os=op01 | 91 緊急模式(以保管庫的備用憑證執行一個指令) | sid
 2026-10-22 22:40:50 +0800 | LAB | alice | os=op01 | login | sid=1792680050-22629 | SSH_KEY_LOADED | kafka/ssh/cpadmin tt
@@ -4176,7 +3189,7 @@ op01 的 ssh-agent: 0; private keys on disk: 0; op01 reads identity: none（conj
 
 @role 銀行 OS 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-17.4 為了證明「只剩窄規則時選單仍能重啟」，把 kb04 的全權 sudo 收掉了。正式環境的全權是變更時段由 OS 團隊依變更單開、做完收回；lab 後面的章節（第 18、19、21、22 章）都還要在 kb04 上安裝與派送，所以演練完把它放回去，當作「下一個變更時段開了全權」：
+16.4 為了證明「只剩窄規則時選單仍能重啟」，把 kb04 的全權 sudo 收掉了。正式環境的全權是變更時段由 OS 團隊依變更單開、做完收回；lab 後面的章節（第 17、18、20、21 章）都還要在 kb04 上安裝與派送，所以演練完把它放回去，當作「下一個變更時段開了全權」：
 
 ```bash
 docker exec lab-kb04-1 bash -c 'mv /root/cpadmin.sudoers.full /etc/sudoers.d/cpadmin && visudo -cf /etc/sudoers.d/cpadmin >/dev/null && echo "kb04: full sudo back (change window)"'
@@ -4186,7 +3199,7 @@ docker exec lab-kb04-1 bash -c 'mv /root/cpadmin.sudoers.full /etc/sudoers.d/cpa
 kb04: full sudo back (change window)
 ```
 
-# 18. 第十八站：讓行內的 Prometheus 抓指標（JMX exporter）
+# 17. 第十七站：讓行內的 Prometheus 抓指標（JMX exporter）
 
 ![jmx]
 
@@ -4197,7 +3210,7 @@ C3 有自己的 Prometheus，但那是給 C3 用的。銀行的監控中心要�
 | 小安 | exporter jar 已在第 1.4 站帶進來；產抓取密碼、設定檔，派送、滾動重啟；產給銀行的 scrape 設定、告警規則、根憑證 |
 | 銀行監控團隊 | 把三個檔放進自己的 Prometheus，確認 9 個 target 都是 up |
 
-## 18.1 抓取密碼與設定檔
+## 17.1 抓取密碼與設定檔
 
 @role 小安 | ops02 | cpadmin
 
@@ -4302,7 +3315,7 @@ echo "rules: kafka $(grep -c pattern ~/monitoring/rules-kafka.yml) patterns, res
 rules: kafka 8 patterns, rest 2 patterns
 ```
 
-## 18.2 派送 jar 與設定、掛上 javaagent
+## 17.2 派送 jar 與設定、掛上 javaagent
 
 @role 小安 | ops02 | cpadmin
 
@@ -4319,7 +3332,7 @@ kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 61 lines
 
 > 陷阱：落地區的檔案是唯讀的（第 2 站 `chmod a-w`），`scp` 到 `/tmp` 會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
 
-## 18.3 滾動重啟、驗證端點
+## 17.3 滾動重啟、驗證端點
 
 @role 小安 | ops02 | cpadmin
 
@@ -4402,7 +3415,7 @@ rest01  anon=401 metrics=920
 （9 行，anon 都是 401；controller 約 680、broker 約 1000、REST 約 920 個指標）
 ```
 
-## 18.4 給銀行監控團隊的三個檔
+## 17.4 給銀行監控團隊的三個檔
 
 @role 小安 | ops02 | cpadmin
 
@@ -4520,7 +3533,7 @@ cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/ca.pem && (umask 
 for the bank: alert-rules.yml ca.pem prometheus-scrape.yml scrape.pass
 ```
 
-## 18.5 銀行的 Prometheus 接上來
+## 17.5 銀行的 Prometheus 接上來
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -4546,11 +3559,11 @@ docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
 bank-prometheus removed
 ```
 
-> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 24.1 的 `kafka-metadata-quorum describe --replication`。這裡說的是 **JMX 這條路**。raft 指標其實在 Confluent 的 telemetry 裡（`io.confluent.kafka.server/raft/…`：current_leader、current_epoch、number_of_voters、number_unknown_voter_connections、high_watermark、commit／election latency），lab 實測（2026-10-25）：只在 kc02 的 `confluent.telemetry.exporter._c3.metrics.include` 加上 `io.confluent.kafka.server.raft.(?!.*delta).*`，C3 內建 Prometheus 收到正確的值（leader 1、voters 3、unknown 0）。但**不建議**拿這條路告警：C3 內建 Prometheus 收的 telemetry 沒有主機標籤，三台 controller 都送時同名序列會互撞，被拒成 out of order（整批被拒，連 C3 自己的指標也一起掉；把白名單放寬成全部時實際發生）；delta 類型也不收（500）。所以 C3 的白名單不動，quorum 告警用上面三個 JMX 指標。
+> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 23.1 的 `kafka-metadata-quorum describe --replication`。這裡說的是 **JMX 這條路**。raft 指標其實在 Confluent 的 telemetry 裡（`io.confluent.kafka.server/raft/…`：current_leader、current_epoch、number_of_voters、number_unknown_voter_connections、high_watermark、commit／election latency），lab 實測（2026-10-25）：只在 kc02 的 `confluent.telemetry.exporter._c3.metrics.include` 加上 `io.confluent.kafka.server.raft.(?!.*delta).*`，C3 內建 Prometheus 收到正確的值（leader 1、voters 3、unknown 0）。但**不建議**拿這條路告警：C3 內建 Prometheus 收的 telemetry 沒有主機標籤，三台 controller 都送時同名序列會互撞，被拒成 out of order（整批被拒，連 C3 自己的指標也一起掉；把白名單放寬成全部時實際發生）；delta 類型也不收（500）。所以 C3 的白名單不動，quorum 告警用上面三個 JMX 指標。
 
 > 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3 或另外接 lag exporter。
 
-# 19. 第十九站：稽核日誌（audit log）
+# 18. 第十八站：稽核日誌（audit log）
 
 ![audit]
 
@@ -4561,7 +3574,7 @@ Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了�
 | 小安 | 建寫入帳號與權限、改 controller／broker 的設定（加密、派送）、滾動重啟、製造允許與拒絕的事件來驗證 |
 | 銀行稽核 | 之後用 OP menu 的 43／45，或自己的 SIEM 讀這兩個 topic |
 
-## 19.1 專用的寫入帳號
+## 18.1 專用的寫入帳號
 
 @role 小安 | ops02 | cpadmin
 
@@ -4576,7 +3589,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
   User:confluent-audit | DeveloperWrite  | Topic         | confluent-audit-log-events | PREFIXED
 ```
 
-## 19.2 設定片段：寫入者、路由、保留天數
+## 18.2 設定片段：寫入者、路由、保留天數
 
 @role 小安 | ops02 | cpadmin
 
@@ -4605,11 +3618,10 @@ grep -c 'security.event' common.tpl
 11
 ```
 
-@only customer,conjur
 
 @role 小安 | ops02 | cpadmin
 
-重新產生 7 台的 `server.properties`（第 16 站的流程：明文渲染 → Secret Protection 加密，新增的兩個密碼欄位會被一起加密進同一份 `security.properties`）、派送、滾動重啟。REST Proxy 與 C3 不受影響：
+重新產生 7 台的 `server.properties`（第 15 站的流程：明文渲染 → Secret Protection 加密，新增的兩個密碼欄位會被一起加密進同一份 `security.properties`）、派送、滾動重啟。REST Proxy 與 C3 不受影響：
 
 ```bash
 cd ~/conf && export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) AUDIT_PASSWORD=$(cat ~/secrets/confluent-audit.pass) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD} ${AUDIT_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties; do keys=$(grep -E '^[^#].*(password|credentials|jaas.config)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do scp -q $h.server.properties ~/secrets/security.properties $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -o root -g confluent -m 0640 /tmp/$h.server.properties /etc/confluent/kafka/server.properties && sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/$h.server.properties /tmp/security.properties && printf '%s ' \$(hostname)"; done; echo
@@ -4621,54 +3633,6 @@ kb01.server.properties: 22 encrypted, plaintext=0
 kc01 kc02 kc03 kb01 kb02 kb03 kb04
 ```
 
-@only conjur
-
-@role 小安 | ops02 | cpadmin
-
-做過 16.9 的話（AD 查詢密碼改由 Summon 注入）：剛才從範本重新產生的設定又把它加密回密文了，重啟前照 16.9 改回 `${env:LDAP_BIND_PASSWORD}`。沒做 16.9 的主機（`secrets.yml` 裡沒有這個變數）直接略過，不會有輸出：
-
-```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab "sudo grep -q '^LDAP_BIND_PASSWORD:' /etc/confluent/secrets.yml 2>/dev/null || exit 0; f=/etc/confluent/kafka/server.properties; sudo sed -i -e 's|^config.providers *=.*|config.providers = securepass,env|' -e '/^config.providers.env.class *=/d' -e 's|^ldap.java.naming.security.credentials *=.*|ldap.java.naming.security.credentials = \${env:LDAP_BIND_PASSWORD}|' \$f && echo 'config.providers.env.class = org.apache.kafka.common.config.provider.EnvVarConfigProvider' | sudo tee -a \$f >/dev/null && echo \"\$(hostname): \$(sudo grep '^ldap.java.naming.security.credentials' \$f)\""; done
-```
-
-```out
-kc01: ldap.java.naming.security.credentials = ${env:LDAP_BIND_PASSWORD}
-（做過 16.9 時 7 行；沒做時沒有輸出）
-```
-
-@only provider
-
-走第 15 站（Conjur provider、沒有 Secret Protection）的環境：稽核帳號的密碼也放進 Conjur，設定片段裡的兩個 `${…}` 換成 Conjur 的參照。先由銀行在 `kafka` policy 加一個變數、給主機讀：
-
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-cd ~/kafka-lab && printf -- '- !variable scram/confluent-audit\n- !permit\n  role: !layer hosts\n  privileges: [ read, execute ]\n  resource: !variable scram/confluent-audit\n- !permit\n  role: !user ops\n  privileges: [ read, execute, update ]\n  resource: !variable scram/confluent-audit\n' > conjur/audit-policy.yml && docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD/ca/root.crt"):/root.crt:ro" -v "$(cygpath -m "$PWD/conjur"):/c" lab-node:1 bash -c 'set -e; T=$(curl -sS --cacert /root.crt -X POST --data-binary @/c/keys/admin.key https://conjur.poc.lab/authn/poc/admin/authenticate | base64 -w0); curl -sS --cacert /root.crt -H "Authorization: Token token=\"$T\"" -X POST --data-binary @/c/audit-policy.yml https://conjur.poc.lab/policies/poc/policy/kafka >/dev/null && echo "policy: kafka/scram/confluent-audit added"'
-```
-
-```out
-policy: kafka/scram/confluent-audit added
-```
-
-@role 小安 | ops02 | cpadmin
-
-寫入值、把片段裡的 `${AUDIT_PASSWORD}`、`${STORE_PASSWORD}` 換成參照，再照 15.4 重新產生、派送 7 台：
-
-```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && tr -d '\n' < ~/secrets/confluent-audit.pass | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fscram%2Fconfluent-audit && unset T && echo "conjur: kafka/scram/confluent-audit set" && cd ~/conf && sed -i -e 's|\${AUDIT_PASSWORD}|${cyberark:kafka/scram/confluent-audit:kafka/scram/confluent-audit}|' -e 's|\${STORE_PASSWORD}|${cyberark:kafka/store-password:kafka/store-password}|g' common.tpl && echo "common.tpl 還留著的 \${…_PASSWORD}：$(grep -c '${[A-Z_]*PASSWORD}' common.tpl)" && cd ~/conf && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${HOST_SHORT} ${CONJUR_API_KEY}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack HOST_SHORT=$n CONJUR_API_KEY=$(ssh $n.poc.lab 'sudo cat /etc/confluent/conjur/host.key'); case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); scp -q $n.server.properties $n.poc.lab:/tmp/server.properties && ssh $n.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/server.properties /etc/confluent/kafka/server.properties && rm -f /tmp/server.properties && echo "$(hostname): refs=$(sudo grep -c "\${cyberark:" /etc/confluent/kafka/server.properties) unresolved=$(sudo grep "\${" /etc/confluent/kafka/server.properties | grep -vc "\${cyberark:")"'; done; unset CONJUR_API_KEY; echo "plaintext store password left in rendered files: $(grep -lF "$(cat ~/pki/store.pass)" *.server.properties | wc -l)"
-```
-
-```out
-conjur: kafka/scram/confluent-audit set
-common.tpl 還留著的 ${…_PASSWORD}：0
-kc01: refs=13 unresolved=0
-（3 行 controller）
-kb01: refs=19 unresolved=0
-（4 行 broker）
-plaintext store password left in rendered files: 0
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -4687,7 +3651,7 @@ confluent-audit-log-events
 confluent-audit-log-events_sensitive
 ```
 
-## 19.3 製造事件、讀回來
+## 18.3 製造事件、讀回來
 
 @role 小安 | ops02 | cpadmin
 
@@ -4740,12 +3704,12 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
   User:alice       Authorize  kafka-cluster                ALLOWED  x26
   User:bob         Authorize  kafka-cluster                DENIED   x27
   User:carol       Authorize  __opmenu-host-ops            DENIED   x12
-  （… 第 17 站 OP menu 問 MDS 留下的授權事件）
+  （… 第 16 站 OP menu 問 MDS 留下的授權事件）
 ```
 
-> 三件事值得看清楚：(1) 敏感 topic 的事件在 `_sensitive`：alice 的 produce（允許）和 app-orders 想讀時的 Metadata（describe 被拒）。(2) **一般 topic 的 produce／consume 不會被記**：app-orders 讀 orders.events 沒有出現在任何 topic，因為 Confluent 預設只記「管理類」與「授權類」事件（例如上面 MDS 的 Authorize，那是第 17 站 OP menu 問權限留下的），produce／consume 只在路由裡明確列出的 topic 才記。要記全部就把 `crn:///kafka=*/topic=*` 的 produce／consume 也寫進 routes，量會很大。(3) `kafka-internal`、`svc-c3` 完全不出現。OP menu 的 43（匯出）、45（查詢）讀的就是這兩個 topic。
+> 三件事值得看清楚：(1) 敏感 topic 的事件在 `_sensitive`：alice 的 produce（允許）和 app-orders 想讀時的 Metadata（describe 被拒）。(2) **一般 topic 的 produce／consume 不會被記**：app-orders 讀 orders.events 沒有出現在任何 topic，因為 Confluent 預設只記「管理類」與「授權類」事件（例如上面 MDS 的 Authorize，那是第 16 站 OP menu 問權限留下的），produce／consume 只在路由裡明確列出的 topic 才記。要記全部就把 `crn:///kafka=*/topic=*` 的 produce／consume 也寫進 routes，量會很大。(3) `kafka-internal`、`svc-c3` 完全不出現。OP menu 的 43（匯出）、45（查詢）讀的就是這兩個 topic。
 
-## 19.4 要跟稽核單位說清楚的事
+## 18.4 要跟稽核單位說清楚的事
 
 | 項目 | 說明 |
 |---|---|
@@ -4769,13 +3733,13 @@ Topic: confluent-audit-log-events ReplicationFactor: 3 min.insync.replicas=1
 Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.replicas=1
 ```
 
-# 20. 第二十站：驗收與收尾
+# 19. 第十九站：驗收與收尾
 
 ![acceptance]
 
 每一站結尾都有自己的檢查，但交付前要有一份**一次跑完、結果能附在驗收文件裡**的清單。四組：平台健康、安全（正向與反向都測）、應用程式端、維運。最後是收尾：安裝期間留在操作機與主機上的東西，哪些要留、哪些要收。
 
-## 20.1 平台健康
+## 19.1 平台健康
 
 @role 小安 | ops02 | cpadmin
 
@@ -4791,14 +3755,14 @@ ok   rest01 JMX exporter 7071 要帳密
 健康：21 / 21 項通過
 ```
 
-## 20.2 安全：正向與反向
+## 19.2 安全：正向與反向
 
 @role 小安 | ops02 | cpadmin
 
 每一條規則都要有「該過的過、該擋的擋」：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && P=$(cat ~/secrets/ad-test-users.pass) && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; mds() { curl -s --cacert $CA -u "$1:$2" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate; }; export -f mds; export CA; chk "AD 帳密正確 → MDS 給 token" bash -c "[ \$(mds alice '$P') = 200 ]"; chk "AD 密碼錯 → 401" bash -c "[ \$(mds alice wrong-password) = 401 ]"; chk "不存在的帳號 → 401" bash -c "[ \$(mds nobody '$P') = 401 ]"; chk "carol 在自己 prefix 以外建 topic 被拒" bash -c "kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config <(sed 's/username=\"alice\"/username=\"carol\"/' ~/conf/client-alice.properties) --create --topic payments.carol-test --partitions 1 --replication-factor 3 2>&1 | grep -q 'TopicAuthorizationException'"; chk "app-orders 讀 payments.events 被拒" bash -c "kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic payments.events --max-messages 1 --timeout-ms 8000 2>&1 | grep -q TopicAuthorizationException"; chk "REST Proxy 不帶憑證 → 連線被拒" bash -c "! curl -s --cacert $CA --max-time 10 https://rest.poc.lab:8082/v3/clusters -o /dev/null"; chk "REST Proxy 帶非 app 憑證（svc-ops）→ 401" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/svc-ops.crt --key ~/pki/keys/svc-ops.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 401 ]"; chk "CLIENT 9095 不帶 SASL → 失敗" bash -c "! kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config <(printf 'security.protocol=SSL\nssl.truststore.type=PKCS12\nssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12\nssl.truststore.password=%s\n' \"\$(cat ~/pki/store.pass)\") --list 2>/dev/null"; chk "JMX exporter 匿名 → 401" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://kb01.poc.lab:7071/metrics) = 401 ]"; chk "用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）" bash -c "! curl -s --max-time 10 --cacert <(openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=junk 2>/dev/null) https://kb01.poc.lab:8090/v1/metadata/id -o /dev/null"; for h in kb01 rest01 c3-01; do chk "$h properties 沒有明文密碼" ssh $h.poc.lab 'f=$(ls /etc/confluent/kafka/server.properties /etc/confluent/kafka-rest/kafka-rest.properties /etc/confluent/control-center/control-center.properties 2>/dev/null | head -1); [ "$(sudo grep -cE "^[^#].*(password|credentials|jaas.config)=[^$]" $f)" = 0 ]'; done; chk "kb01 磁碟上的 master key：只有 Secret Protection 且沒做 16.8 時是 1 個（service.env），其他情況 0 個" ssh kb01.poc.lab 'n=$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l); if sudo grep -q CONFLUENT_SECURITY_MASTER_KEY /etc/confluent/secrets.yml 2>/dev/null || ! sudo test -e /etc/confluent/secrets/security.properties; then [ "$n" = 0 ]; else [ "$n" = 1 ]; fi'; chk "各主機 /etc/confluent/ssl 是 0750" ssh kb01.poc.lab '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]'; unset P; echo "安全：$ok / $all 項通過"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && P=$(cat ~/secrets/ad-test-users.pass) && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; mds() { curl -s --cacert $CA -u "$1:$2" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate; }; export -f mds; export CA; chk "AD 帳密正確 → MDS 給 token" bash -c "[ \$(mds alice '$P') = 200 ]"; chk "AD 密碼錯 → 401" bash -c "[ \$(mds alice wrong-password) = 401 ]"; chk "不存在的帳號 → 401" bash -c "[ \$(mds nobody '$P') = 401 ]"; chk "carol 在自己 prefix 以外建 topic 被拒" bash -c "kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config <(sed 's/username=\"alice\"/username=\"carol\"/' ~/conf/client-alice.properties) --create --topic payments.carol-test --partitions 1 --replication-factor 3 2>&1 | grep -q 'TopicAuthorizationException'"; chk "app-orders 讀 payments.events 被拒" bash -c "kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic payments.events --max-messages 1 --timeout-ms 8000 2>&1 | grep -q TopicAuthorizationException"; chk "REST Proxy 不帶憑證 → 連線被拒" bash -c "! curl -s --cacert $CA --max-time 10 https://rest.poc.lab:8082/v3/clusters -o /dev/null"; chk "REST Proxy 帶非 app 憑證（svc-ops）→ 401" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/svc-ops.crt --key ~/pki/keys/svc-ops.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 401 ]"; chk "CLIENT 9095 不帶 SASL → 失敗" bash -c "! kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config <(printf 'security.protocol=SSL\nssl.truststore.type=PKCS12\nssl.truststore.location=/home/cpadmin/pki/certs/truststore.p12\nssl.truststore.password=%s\n' \"\$(cat ~/pki/store.pass)\") --list 2>/dev/null"; chk "JMX exporter 匿名 → 401" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://kb01.poc.lab:7071/metrics) = 401 ]"; chk "用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）" bash -c "! curl -s --max-time 10 --cacert <(openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=junk 2>/dev/null) https://kb01.poc.lab:8090/v1/metadata/id -o /dev/null"; for h in kb01 rest01 c3-01; do chk "$h properties 沒有明文密碼" ssh $h.poc.lab 'f=$(ls /etc/confluent/kafka/server.properties /etc/confluent/kafka-rest/kafka-rest.properties /etc/confluent/control-center/control-center.properties 2>/dev/null | head -1); [ "$(sudo grep -cE "^[^#].*(password|credentials|jaas.config)=[^$]" $f)" = 0 ]'; done; chk "kb01 磁碟上的 master key 只有 service.env 一個" ssh kb01.poc.lab 'n=$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l); [ "$n" = 1 ]'; chk "各主機 /etc/confluent/ssl 是 0750" ssh kb01.poc.lab '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]'; unset P; echo "安全：$ok / $all 項通過"
 ```
 
 ```out
@@ -4808,9 +3772,9 @@ ok   AD 密碼錯 → 401
 安全：15 / 15 項通過
 ```
 
-> carol 的群組在第 17 站拿到 `orders.` prefix 的 DeveloperManage，所以她在自己的 prefix 裡是能建 topic 的；反向測試要用她沒有權限的 prefix。
+> carol 的群組在第 16 站拿到 `orders.` prefix 的 DeveloperManage，所以她在自己的 prefix 裡是能建 topic 的；反向測試要用她沒有權限的 prefix。
 
-## 20.3 應用程式端
+## 19.3 應用程式端
 
 @role 小安（扮演兩個應用程式） | ops02 | cpadmin
 
@@ -4827,11 +3791,10 @@ app-legacy-billing 經 LB + REST Proxy（mTLS）寫入：HTTP 200
 alice 在 billing.events 看到那筆：1
 ```
 
-## 20.4 維運：選單重啟、冷開機
+## 19.4 維運：選單重啟、冷開機
 
-維運人員用選單重啟一台 broker（第 17 站的路徑：bob → MDS 確認權限 → cpadmin ssh → sudo 只開的 restart），叢集不中斷。
+維運人員用選單重啟一台 broker（第 16 站的路徑：bob → MDS 確認權限 → cpadmin ssh → sudo 只開的 restart），叢集不中斷。
 
-@only customer
 
 @role 維運人員 bob（從 PVWA 取出私鑰貼上；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
@@ -4844,26 +3807,11 @@ cd ~/kafka-lab && docker exec -i -u cpadmin lab-ops02-1 bash /home/cpadmin/conf/
 kb03 MDS=200 after ~20s; under-replicated=0
 ```
 
-@only conjur,provider
-
-@role 小安（代打 bob） | ops02 | cpadmin
-
-```bash
-P=$(cat ~/secrets/ad-test-users.pass); sudo env OPMENU_USER=bob OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current HOME=/home/op01 runuser -p -u op01 -- /opt/opmenu/opmenu.sh --run 21 kb03.poc.lab:confluent-server 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g' | tail -1; unset P; for i in $(seq 1 24); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://kb03.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb03 MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://kb03.poc.lab:8090/v1/metadata/id) after ~$((i*5))s; under-replicated=$(JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)"
-```
-
-```out
-已重啟 kb03.poc.lab 的 confluent-server
-kb03 MDS=200 after ~20s; under-replicated=0
-```
-
-@only all
 
 @role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
 
 冷開機：全部主機同時關、同時開，看平台自己回來的順序與時間。C3 比 MDS 先起來時會等（第 13 站的 drop-in）。
 
-@only customer
 
 @role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
 
@@ -4895,43 +3843,8 @@ Identity added: (stdin) (cpadmin (CyberArk managed))
 kb01
 ```
 
-@only conjur,provider
 
-@role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
-
-lab 一併把 Conjur 關掉再開，就是最壞情況：做過 16.8 的話 broker 依賴保管庫（Summon 向 Conjur 取 master key），Conjur 比 broker 慢起來時 broker 會先失敗、靠 systemd 的 `Restart=on-failure` 每 10 秒重試：
-
-```bash
-cd ~/kafka-lab && MSYS_NO_PATHCONV=1 docker compose -f compose.yml -f conjur.yml stop 2>&1 | grep -c Stopped && t0=$(date +%s) && MSYS_NO_PATHCONV=1 docker compose -f compose.yml -f conjur.yml start 2>&1 | grep -c Started && probe() { docker exec lab-ops02-1 bash -c "curl -sk -o /dev/null -w '%{http_code}' $1"; }; for i in $(seq 1 60); do a=0; for h in kb01 kb02 kb03 kb04; do [ "$(probe https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && a=$((a+1)); done; [ $a = 4 ] && break; sleep 10; done; echo "4 台 broker 的 MDS 都回 200：$(( $(date +%s) - t0 ))s"; for i in $(seq 1 60); do [ "$(probe https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 10; done; echo "C3 回 200：$(( $(date +%s) - t0 ))s"; echo "REST 經 LB：$(docker exec lab-ops02-1 bash -c "curl -s --cacert /etc/pki/ca-trust/source/anchors/bank-root.pem --cert /home/cpadmin/pki/certs/app-legacy-billing.crt --key /home/cpadmin/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters")"; docker exec lab-kb01-1 bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
-```
-
-```out
-17
-17
-4 台 broker 的 MDS 都回 200：90s
-C3 回 200：154s
-REST 經 LB：200
-kb01 confluent-server 重試次數：2
-```
-
-> 重試 2 次就是 broker 比 Conjur 先起來、Summon 取不到 master key，systemd 每 10 秒再試，Conjur 起來後就過了（做過 16.8 才會這樣；master key 落地 `service.env` 時開機不依賴保管庫，重試次數是 0）。C3 在第 13 站的 drop-in 加了「等 MDS」之後 154 秒回來；沒加之前 lab 實測是 12 分鐘（C3 比 MDS 先起來會卡住不開 9021）。
-
-@role 小安（從 PVWA 取私鑰貼進 agent；lab 由 Windows 終端代貼） | Windows 終端 | 本機
-
-操作機重開了，照 3.1 重新開 agent、貼私鑰：
-
-```bash
-docker exec -u cpadmin lab-ops02-1 bash -c 'rm -f ~/.ssh/engineer-agent.sock; ssh-agent -a ~/.ssh/engineer-agent.sock >/dev/null' && docker exec -i -u cpadmin -e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock lab-ops02-1 ssh-add - < ~/kafka-lab/pvwa/cpadmin_ed25519 && docker exec -u cpadmin -e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock lab-ops02-1 ssh -o BatchMode=yes kb01.poc.lab hostname
-```
-
-```out
-Identity added: (stdin) (cpadmin (CyberArk managed))
-kb01
-```
-
-@only all
-
-## 20.5 收尾：安裝完成後要收的東西
+## 19.5 收尾：安裝完成後要收的東西
 
 @role 小安 | ops02 | cpadmin
 
@@ -4939,9 +3852,9 @@ kb01
 |---|---|
 | `~/conf/`（範本與產出的設定，之後改設定都從這裡）、`~/pki/`（憑證、CSR、keystore 密碼）、`~/secrets/`（0600）、`~/monitoring/` | `~/landing/`、`~/repo/` 可以刪（套件已上架；要回滾用套件庫裡的舊版） |
 | cpadmin 的 SSH 私鑰只在這次作業的 ssh-agent 裡（PVWA 才是正本）：作業結束 `SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-agent -k` | `/tmp/` 裡安裝期間的暫存檔 |
-| | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它是 super user）；憑證輪替（第 21 章）、升級（第 22 章）前要先取回 |
+| | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它是 super user）；憑證輪替（第 20 章）、升級（第 21 章）前要先取回 |
 | | 各主機 cpadmin 的全權 sudo：改回只留 `cpadmin-ops` 窄規則（lab 留著，後面章節還要用） |
-| | 交給 Secrets 團隊存進 PVWA 的：store.pass、kafka-admin、應用程式 SCRAM（11.1）、master key 與 passphrase（16.2）、緊急憑證（17.2）、JMX 抓取密碼（18.4）、confluent-audit（19.1） |
+| | 交給 Secrets 團隊存進 PVWA 的：store.pass、kafka-admin、應用程式 SCRAM（11.1）、master key 與 passphrase（15.2）、緊急憑證（16.2）、JMX 抓取密碼（17.4）、confluent-audit（18.1） |
 
 ```bash
 rm -rf /tmp/jmx-* /tmp/*.properties 2>/dev/null; du -sh ~/landing ~/repo 2>/dev/null | tr '\n' ' '; echo; for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab 'printf "%s: /tmp 殘留 %s 個；sudoers %s\n" $(hostname) $(ls /tmp | grep -cv "^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.") "$(sudo ls /etc/sudoers.d | tr "\n" ",")"'; done; find ~ -maxdepth 2 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2>/dev/null | sed 's/^/權限不是 0600：/'; echo "收尾檢查完成"
@@ -4954,15 +3867,13 @@ kc01: /tmp 殘留 0 個；sudoers cpadmin,cpadmin-ops,
 收尾檢查完成
 ```
 
-交付清單裡還有兩個排程要先裝好：license 到期檢查（23.2）、每日中繼資料備份（26.2–26.4）。兩個都先放在操作機的 systemd timer；**待銀行確認**：行內若有排程系統（例如 Control-M），改由它在同樣的時間呼叫同一支腳本，操作機上的 timer 就不用裝。
+交付清單裡還有兩個排程要先裝好：license 到期檢查（22.2）、每日中繼資料備份（25.2–25.4）。兩個都先放在操作機的 systemd timer；**待銀行確認**：行內若有排程系統（例如 Control-M），改由它在同樣的時間呼叫同一支腳本，操作機上的 timer 就不用裝。
 
 > 正式環境交付時再做三件 lab 不做的事：OS 團隊把各主機 `/etc/sudoers.d/cpadmin`（全權）移除；把 `svc-ops.key` 移到離線保管；`~/landing`、`~/repo` 依銀行留存政策處理（套件庫才是正本）。
 
 
+## 19.6 演練：CyberArk 換了 cpadmin 的 SSH 金鑰
 
-## 20.6 演練：CyberArk 換了 cpadmin 的 SSH 金鑰
-
-@only customer
 
 SSH Key Manager 會定期換 cpadmin 的金鑰對：PVWA 裡的私鑰換新、各主機的公鑰換新。操作機 agent 裡的還是舊的那把，所以輪替後第一件事是換掉 agent 裡的私鑰（3.1 的陷阱）。維運人員的 OP menu 不受影響：選單每次都是當下從 PVWA 取，取到的就是新的。
 
@@ -5007,7 +3918,7 @@ agent 裡：SHA256:…（新金鑰）
 
 > 輪替的時間點要避開變更時段：做到一半金鑰被換，後面的 ssh 會全部失敗（3.1 的陷阱）。待銀行確認：這個帳號的輪替排程、變更時段能否暫停（問題清單 8.4）。
 
-# 21. 第二十一站：憑證輪替
+# 20. 第二十站：憑證輪替
 
 ![certrotate]
 
@@ -5023,22 +3934,22 @@ agent 裡：SHA256:…（新金鑰）
 - 檔名、路徑、keystore 密碼都和原本一樣，所以 properties 一個字都不用改（Secret Protection 的密文也不用重算）。
 - 新的東西先放在 `~/pki/next/`，派送完、驗證過，才換成 `~/pki/` 的正本；舊的留在 `~/pki/old-<日期>/`。
 
-## 21.0 銀行說要換憑證時，先判斷是哪一種
+## 20.0 銀行說要換憑證時，先判斷是哪一種
 
 銀行說「要換根」或「要換中繼」時，先問清楚三件事：**換的是哪一層**、**那一層的私鑰有沒有換**、**舊的什麼時候到期**。驗證憑證時看的是「上一層的名稱和公鑰」，不是上一層那張憑證本身，所以私鑰沒換的那一層，下面的憑證都還驗得過；工作量差很多：
 
 | 根 | 中繼 | 我方的 leaf（server／client） | p12 裡夾帶的中繼（憑證鏈） | 信任清單 | 走哪一節 |
 |---|---|---|---|---|---|
-| 不動 | 不動 | 到期前換發 | 不動 | 不動 | 21.2 |
-| 同私鑰續簽 | 不動 | 不動 | 不動 | 加入新根，舊的到期後再移除 | 只做 21.3 的信任清單那幾步（加入、移除） |
-| 不動 | 同私鑰續簽 | 不動 | **換成新中繼** | 不動 | 21.4 的換鏈（21.4.3、21.4.4；不用 CSR） |
-| 不動 | 換私鑰 | **重簽** | 重簽時一起換（銀行回覆就是新 leaf＋新中繼） | 不動 | 21.2（銀行用新中繼簽） |
-| 同私鑰續簽 | 同私鑰續簽 | 不動 | **換成新中繼** | 加入新根，舊的到期後再移除 | 信任清單加入新根，再做 21.4 的換鏈 |
-| 同私鑰續簽 | 換私鑰 | **重簽** | 重簽時一起換 | 加入新根，舊的到期後再移除 | 信任清單加入新根，再做 21.2 |
-| 換私鑰 | 同私鑰，由新根重簽 | 不動 | **換成新中繼** | **三階段** | 21.4（三階段，階段二是換鏈；lab 實跑） |
-| 換私鑰 | 換私鑰 | **重簽** | 重簽時一起換 | **三階段** | 21.3（lab 實跑） |
+| 不動 | 不動 | 到期前換發 | 不動 | 不動 | 20.2 |
+| 同私鑰續簽 | 不動 | 不動 | 不動 | 加入新根，舊的到期後再移除 | 只做 20.3 的信任清單那幾步（加入、移除） |
+| 不動 | 同私鑰續簽 | 不動 | **換成新中繼** | 不動 | 20.4 的換鏈（20.4.3、20.4.4；不用 CSR） |
+| 不動 | 換私鑰 | **重簽** | 重簽時一起換（銀行回覆就是新 leaf＋新中繼） | 不動 | 20.2（銀行用新中繼簽） |
+| 同私鑰續簽 | 同私鑰續簽 | 不動 | **換成新中繼** | 加入新根，舊的到期後再移除 | 信任清單加入新根，再做 20.4 的換鏈 |
+| 同私鑰續簽 | 換私鑰 | **重簽** | 重簽時一起換 | 加入新根，舊的到期後再移除 | 信任清單加入新根，再做 20.2 |
+| 換私鑰 | 同私鑰，由新根重簽 | 不動 | **換成新中繼** | **三階段** | 20.4（三階段，階段二是換鏈；lab 實跑） |
+| 換私鑰 | 換私鑰 | **重簽** | 重簽時一起換 | **三階段** | 20.3（lab 實跑） |
 
-「重簽」和「換鏈」的差別：中繼換了私鑰，leaf 一定要重簽，銀行回覆的 PEM 本來就是新 leaf＋新中繼，做 keystore 時一起包進去，不用另外換鏈；只有中繼**沒換私鑰**、leaf 不重簽時，才需要單獨把新中繼重包進 p12（21.4）。根「同私鑰續簽」的兩列，舊根和新根的名稱與公鑰都相同，舊鏈新鏈都驗得過，信任清單加入新根只是為了舊根到期之後還有一張有效的根。
+「重簽」和「換鏈」的差別：中繼換了私鑰，leaf 一定要重簽，銀行回覆的 PEM 本來就是新 leaf＋新中繼，做 keystore 時一起包進去，不用另外換鏈；只有中繼**沒換私鑰**、leaf 不重簽時，才需要單獨把新中繼重包進 p12（20.4）。根「同私鑰續簽」的兩列，舊根和新根的名稱與公鑰都相同，舊鏈新鏈都驗得過，信任清單加入新根只是為了舊根到期之後還有一張有效的根。
 
 我方的信任清單只放根憑證、不放中繼，所以只要根沒換私鑰，信任清單都不用動；換鏈的過程中，出示舊鏈和新鏈的主機可以並存。只有把中繼本身放進信任清單的應用程式，才要新舊中繼並存。
 
@@ -5050,7 +3961,7 @@ for f in old-ca.pem new-ca.pem; do echo "$f: $(openssl x509 -in $f -noout -subje
 
 > 實測（2026-10-24，openssl，用 lab 的模擬 CA）：同私鑰續簽的根、同私鑰續簽的中繼、兩者同時，舊 leaf 全部驗得過；根換私鑰而中繼沿用私鑰、由新根重簽時，舊 leaf 配新中繼驗得過新根，但**還沒換鏈的主機（舊 leaf 配舊中繼）在只信新根之後就驗不過**，所以三階段的「拿掉舊根」一定排在每個端點都換好鏈之後。Java 的驗證原理相同，沒有另外實測。
 
-## 21.1 現在用的是哪一張
+## 20.1 現在用的是哪一張
 
 @role 小安 | ops02 | cpadmin
 
@@ -5073,9 +3984,9 @@ kb01.poc.lab:9095      F343BC54 cp-server
 
 > 要求 client 憑證的埠（9092、9093、9090）沒有帶憑證也看得到伺服器出示的那張，握手才會在之後失敗；這裡只看伺服器那一張。
 
-## 21.2 換發 leaf（同一個 CA）
+## 20.2 換發 leaf（同一個 CA）
 
-### 21.2.1 新私鑰與 CSR
+### 20.2.1 新私鑰與 CSR
 
 @role 小安 | ops02 | cpadmin
 
@@ -5090,7 +4001,7 @@ kafka-internal: csr ok
 （7 行）
 ```
 
-### 21.2.2 銀行 CA 簽發
+### 20.2.2 銀行 CA 簽發
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
@@ -5106,7 +4017,7 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 7
 ```
 
-### 21.2.3 檢查、做成 keystore
+### 20.2.3 檢查、做成 keystore
 
 @role 小安 | ops02 | cpadmin
 
@@ -5133,7 +4044,7 @@ kafka-internal: old=F343BC55 new=F343BC5D
 cp-server: old=F343BC54 new=F343BC5C
 ```
 
-### 21.2.4 派送、滾動重啟
+### 20.2.4 派送、滾動重啟
 
 @role 小安 | ops02 | cpadmin
 
@@ -5236,7 +4147,7 @@ rest01 8082=new
 rest02 8082=new
 ```
 
-### 21.2.5 換成正本、交出去的那幾張
+### 20.2.5 換成正本、交出去的那幾張
 
 @role 小安 | ops02 | cpadmin
 
@@ -5254,7 +4165,6 @@ kafka-internal 查 quorum：LeaderId: 1
 
 緊急身分的 PEM 換了，保管庫裡那份也要換（舊的到期前都還有效）：
 
-@only customer
 
 @role 銀行 Secrets 團隊（更新 PVWA 的 opmenu-breakglass；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -5266,35 +4176,21 @@ cd ~/kafka-lab && cp -p pvwa/opmenu-breakglass.pem pvwa/opmenu-breakglass.prev.p
 PVWA opmenu-breakglass 已更新，序號末 8 碼 …
 ```
 
-@only conjur,provider
 
-@role 小安 | ops02 | cpadmin
+最後用 20.1 的指令再看一次：每個端點的序號都要是新的。
 
-```bash
-cd ~/pki && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat keys/opmenu-breakglass.key certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && unset T && echo "breakglass：保管庫已更新"
-```
+## 20.3 換 CA（三階段）
 
-```out
-breakglass：保管庫已更新
-```
-
-@only all
-
-最後用 21.1 的指令再看一次：每個端點的序號都要是新的。
-
-## 21.3 換 CA（三階段）
-
-> 走第 15 章（Conjur provider）的環境還多一份信任清單：各台 **JDK 的 `cacerts`**（15.3 匯入的銀行根，provider 連 Conjur 用）。階段一要把新根也匯進去（另一個 alias），階段三刪掉舊根的 alias，指令在各階段的紫色「只在 provider」區塊（2026-10-26 在 lab 實測：沒做的話階段二重啟後整個叢集起不來）。走第 16 章的不受影響。
 
 銀行換根憑證（或換簽發 CA）時，不能一次全換：只要有一台還不信新的根，它就會拒絕新憑證。三個階段，每段結束時所有元件都同時信任新舊兩個根：
 
 | 階段 | 誰做 | 做什麼 | 之後的狀態 |
 |---|---|---|---|
 | 一、加 | 銀行 OS 團隊＋小安 | 信任清單加入新根（OS 的 `bank-root.pem` 變成兩張根的 bundle、truststore 多一個 alias、C3 的 ca.pem） | 新舊都信；憑證還是舊 CA 簽的 |
-| 二、換 | 銀行 CA＋小安 | 銀行用新 CA 重簽自己的伺服器（AD、套件庫、保管庫）；小安照 21.2 換發全部 leaf，改由新 CA 簽 | 新舊都信；憑證都是新 CA 簽的 |
+| 二、換 | 銀行 CA＋小安 | 銀行用新 CA 重簽自己的伺服器（AD、套件庫）；小安照 20.2 換發全部 leaf，改由新 CA 簽 | 新舊都信；憑證都是新 CA 簽的 |
 | 三、退 | 銀行 OS 團隊＋小安 | 信任清單拿掉舊根 | 只信新的；舊 CA 簽的一律被拒 |
 
-### 21.3.1 銀行建新 CA（lab 模擬）
+### 20.3.1 銀行建新 CA（lab 模擬）
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
@@ -5310,11 +4206,11 @@ subject=CN = PoC Bank Root CA G2, O = PoC Bank, C = TW
 sha256 Fingerprint=…
 ```
 
-### 21.3.2 階段一：信任清單加入新根
+### 20.3.2 階段一：信任清單加入新根
 
 @role 銀行 OS 團隊 | Windows 終端 | 本機
 
-每台主機（含操作機）的 `bank-root.pem` 換成「舊根＋新根」兩張的 bundle。檔名不變，所以所有指向它的設定（curl、Summon 的 `cert_file`、操作機上的檢查）都不用改：
+每台主機（含操作機）的 `bank-root.pem` 換成「舊根＋新根」兩張的 bundle。檔名不變，所以所有指向它的設定（curl、操作機上的檢查）都不用改：
 
 ```bash
 cd ~/kafka-lab/ca && cat root.crt g2/root.crt > bundle-g1-g2.pem && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/bundle-g1-g2.pem")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo
@@ -5352,22 +4248,6 @@ chmod 0700 ~/conf/rolling-restart.sh && echo rolling-restart.sh ok
 
 我方的信任清單：truststore 加一個 alias `bank-root-g2`；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
 
-@only provider
-
-@role 小安 | ops02 | cpadmin
-
-provider 模式（第 15 章）：服務啟動時連 Conjur 走 **JDK 自己的 `cacerts`**，不是 `truststore.p12`。階段二 Conjur 的憑證會改由新 CA 簽，所以這一步要先把新根（bundle 的第二張）也匯進每台 JDK 的 `cacerts`，**在滾動重啟之前**做；不然階段二一重啟，服務連不上 Conjur（`PKIX path building failed`），整個叢集都起不來：
-
-```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'csplit -s -z -f /tmp/root- /etc/pki/ca-trust/source/anchors/bank-root.pem "/BEGIN CERT/" "{*}" && sudo /opt/java/current/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias bank-root-g2 -file /tmp/root-01 >/dev/null 2>&1; rm -f /tmp/root-0*; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
-```
-
-```out
-ops02: cacerts 裡的銀行根 2
-（11 行，每台都是 2：舊根和新根都信任）
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -5440,13 +4320,13 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（第 18.4 站交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
+> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（第 17.4 站交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
 
-### 21.3.3 階段二：全部改由新 CA 簽
+### 20.3.3 階段二：全部改由新 CA 簽
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-銀行先用 G2 重簽自己的伺服器：AD 的 LDAPS、套件庫（有 Conjur 的話還有保管庫）。私鑰沿用（銀行的事，lab 簡化），重啟讓它們出示新憑證：
+銀行先用 G2 重簽自己的伺服器：AD 的 LDAPS、套件庫。私鑰沿用（銀行的事，lab 簡化），重啟讓它們出示新憑證：
 
 ```bash
 cd ~/kafka-lab && docker cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01-g2.csr")" && bash ca/g2/sign.sh ca/exchange/ad01-g2.csr ca/exchange/ad01-g2.crt && docker cp "$(cygpath -m "$PWD/ca/exchange/ad01-g2.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && docker cp "$(cygpath -m "$PWD/ca/bundle-g1-g2.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem; pkill -x samba; sleep 8' && O="$(cygpath -m "$PWD/images/web/tls")" && openssl req -new -key "$O/repo.key" -out "$O/repo-g2.csr" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/g2/sign.sh images/web/tls/repo-g2.csr images/web/tls/repo.crt && rm -f images/web/tls/repo-g2.csr && docker exec lab-repo01-1 systemctl restart httpd && for ep in ad01.poc.lab:636 repo01.poc.lab:443; do echo "$ep $(docker exec lab-ops02-1 bash -c "openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
@@ -5459,28 +4339,12 @@ ad01.poc.lab:636 PoC Bank Issuing CA G2
 repo01.poc.lab:443 PoC Bank Issuing CA G2
 ```
 
-@only conjur,provider
-
-@role 銀行 CA 窗口 | Windows 終端 | 本機
-
-銀行有 Conjur 的話，保管庫自己的 HTTPS 憑證也改由 G2 簽：
-
-```bash
-cd ~/kafka-lab && C="$(cygpath -m "$PWD/conjur/tls")" && openssl req -new -key "$C/conjur.key" -out "$C/conjur-g2.csr" -subj "/CN=conjur.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:conjur.poc.lab,DNS:conjur" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/g2/sign.sh conjur/tls/conjur-g2.csr conjur/tls/conjur.crt && rm -f conjur/tls/conjur-g2.csr && docker restart lab-conjur-proxy-1 >/dev/null && sleep 3 && echo "conjur.poc.lab:443 $(docker exec lab-ops02-1 bash -c "openssl s_client -connect conjur.poc.lab:443 </dev/null 2>/dev/null | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"
-```
-
-```out
-signed conjur-g2.csr -> conjur.crt  (…)
-conjur.poc.lab:443 PoC Bank Issuing CA G2
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
-接著我方的每一張憑證都要改由 G2 簽：**把 21.2.1 到 21.2.5 整個再做一次**，唯一的差別是銀行改用 `ca/g2/sign.sh`。下面照順序列出同一組指令（`chain=ok` 是對 bundle 驗的，新根在裡面）：
+接著我方的每一張憑證都要改由 G2 簽：**把 20.2.1 到 20.2.5 整個再做一次**，唯一的差別是銀行改用 `ca/g2/sign.sh`。下面照順序列出同一組指令（`chain=ok` 是對 bundle 驗的，新根在裡面）：
 
-**21.2.1 新私鑰與 CSR**
+**20.2.1 新私鑰與 CSR**
 
 ```bash
 install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/incoming ~/pki/next/certs && cd ~/pki && while read -r name eku san; do (umask 077; openssl genrsa -out next/keys/$name.key 2048 2>/dev/null); ext=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$eku"); [ "$san" != "-" ] && ext+=(-addext "subjectAltName=$(echo "$san" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -)"); openssl req -new -key next/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" "${ext[@]}" -out next/requests/$name.csr && echo "$name: csr ok"; done < requests.txt
@@ -5491,7 +4355,7 @@ kafka-internal: csr ok
 （7 行）
 ```
 
-**21.2.2 銀行改用 G2 簽**
+**20.2.2 銀行改用 G2 簽**
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
@@ -5505,7 +4369,7 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 7
 ```
 
-**21.2.3 檢查（issuer 要是 G2）**
+**20.2.3 檢查（issuer 要是 G2）**
 
 @role 小安 | ops02 | cpadmin
 
@@ -5518,7 +4382,7 @@ kafka-internal      key=ok cn=ok san=ok days=364 chain=ok issuer=PoC Bank Issuin
 （7 行，全部 ok）
 ```
 
-**21.2.3 做成 keystore**
+**20.2.3 做成 keystore**
 
 ```bash
 cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do cat incoming/$n.leaf.pem incoming/$n.issuers.pem > certs/$n.crt; openssl pkcs12 -export -name $n -inkey keys/$n.key -in certs/$n.crt -out certs/$n.p12 -passout file:../store.pass && chmod 0600 certs/$n.p12; done; ls certs | wc -l; for n in kafka-internal cp-server; do echo "$n: old=$(openssl x509 -in ../certs/$n.crt -noout -serial | tail -c 9) new=$(openssl x509 -in certs/$n.crt -noout -serial | tail -c 9)"; done
@@ -5530,7 +4394,7 @@ kafka-internal: old=F343BC55 new=F343BC5D
 cp-server: old=F343BC54 new=F343BC5C
 ```
 
-**21.2.4 派送、滾動重啟 controller 與 broker**
+**20.2.4 派送、滾動重啟 controller 與 broker**
 
 ```bash
 cd ~/pki/next && NEW_INT=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2) NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in kc01 kc02 kc03; do scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-internal.p12 /etc/confluent/ssl/ && rm -f /tmp/kafka-internal.p12 && sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done'; for i in $(seq 1 30); do [ "$(served $h.poc.lab:9093)" = $NEW_INT ] && break; sleep 2; done; echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$([ "$(served $h.poc.lab:9093)" = $NEW_INT ] && echo new || echo OLD)"; done; for h in kb01 kb02 kb03 kb04; do scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in kafka-internal.p12 cp-server.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) 9092=$([ "$(served $h.poc.lab:9092)" = $NEW_INT ] && echo new || echo OLD) 9095=$([ "$(served $h.poc.lab:9095)" = $NEW_SRV ] && echo new || echo OLD)"; done
@@ -5543,7 +4407,7 @@ kb01 MDS=200 9092=new 9095=new
 （4 行）
 ```
 
-**21.2.4 REST Proxy 與 C3**
+**20.2.4 REST Proxy 與 C3**
 
 ```bash
 cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
@@ -5620,7 +4484,7 @@ rest01 8082=new
 rest02 8082=new
 ```
 
-**21.2.5 換成正本**
+**20.2.5 換成正本**
 
 ```bash
 cd ~/pki && OLD=old-$(date +%Y%m%d-%H%M) && install -d -m 0700 $OLD/keys $OLD/certs && for n in $(awk '{print $1}' requests.txt); do mv keys/$n.key $OLD/keys/; mv certs/$n.crt certs/$n.p12 $OLD/certs/; install -m 0600 next/keys/$n.key keys/; install -m 0644 next/certs/$n.crt certs/; install -m 0600 next/certs/$n.p12 certs/; done && rm -rf next && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | wc -l) 個 topic" && echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')" && echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)；舊的（還在效期內）：REST=$(curl -s --cert $OLD/certs/app-legacy-billing.crt --key $OLD/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)"
@@ -5634,7 +4498,6 @@ kafka-internal 查 quorum：LeaderId: 1
 
 緊急身分的 PEM 換了，保管庫裡那份也要換（舊的到期前都還有效）：
 
-@only customer
 
 @role 銀行 Secrets 團隊（更新 PVWA 的 opmenu-breakglass；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -5646,19 +4509,6 @@ cd ~/kafka-lab && cp -p pvwa/opmenu-breakglass.pem pvwa/opmenu-breakglass.prev.p
 PVWA opmenu-breakglass 已更新，序號末 8 碼 …
 ```
 
-@only conjur,provider
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-cd ~/pki && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat keys/opmenu-breakglass.key certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && unset T && echo "breakglass：保管庫已更新"
-```
-
-```out
-breakglass：保管庫已更新
-```
-
-@only all
 
 > 陷阱：這一段**一定要做完才能進階段三**。只有銀行的伺服器換成 G2、我方的 leaf 還是舊 CA 簽的就拿掉舊根，broker 驗不過 controller 的憑證，整個叢集起不來（lab 實際發生過：broker 一直重啟、MDS 不回應）。
 
@@ -5672,7 +4522,7 @@ bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.
 13 個端點都是 G2 簽的：可以進階段三
 ```
 
-### 21.3.4 階段三：拿掉舊根
+### 20.3.4 階段三：拿掉舊根
 
 @role 銀行 OS 團隊 | Windows 終端 | 本機
 
@@ -5688,22 +4538,6 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 
 truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem 只留新根，派送、滾動重啟：
 
-@only provider
-
-@role 小安 | ops02 | cpadmin
-
-provider 模式：JDK 的 `cacerts` 也拿掉舊根（alias `bank-root`），在滾動重啟之前：
-
-```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo /opt/java/current/bin/keytool -delete -cacerts -storepass changeit -alias bank-root >/dev/null 2>&1; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
-```
-
-```out
-ops02: cacerts 裡的銀行根 1
-（11 行，每台都是 1：只剩新根）
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -5774,10 +4608,10 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-最後反向驗證：舊 CA 簽的憑證（21.2 第一次換發留在 `old-` 底下的那張應用程式憑證）連 REST Proxy 要被拒；新的要能用；AD、套件庫、保管庫照常（它們在階段二已經換成 G2）：
+最後反向驗證：舊 CA 簽的憑證（20.2 第一次換發留在 `old-` 底下的那張應用程式憑證）連 REST Proxy 要被拒；新的要能用；AD、套件庫照常（它們在階段二已經換成 G2）：
 
 ```bash
-cd ~/pki && OLDEST=$(ls -d old-* | head -1) && echo "舊 CA 簽的 app 憑證 → REST：$(curl -s --cert $OLDEST/certs/app-legacy-billing.crt --key $OLDEST/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)（000 = TLS 直接拒絕）" && echo "新 CA 簽的 app 憑證 → REST：$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)" && echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)" && echo "套件庫：$(curl -s -o /dev/null -w '%{http_code}' https://repo01.poc.lab/confluent/repodata/repomd.xml)$(getent hosts conjur.poc.lab >/dev/null && echo "、保管庫：$(curl -s -o /dev/null -w '%{http_code}' https://conjur.poc.lab/)")"
+cd ~/pki && OLDEST=$(ls -d old-* | head -1) && echo "舊 CA 簽的 app 憑證 → REST：$(curl -s --cert $OLDEST/certs/app-legacy-billing.crt --key $OLDEST/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)（000 = TLS 直接拒絕）" && echo "新 CA 簽的 app 憑證 → REST：$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)" && echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)" && echo "套件庫：$(curl -s -o /dev/null -w '%{http_code}' https://repo01.poc.lab/confluent/repodata/repomd.xml)"
 ```
 
 ```out
@@ -5787,15 +4621,14 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 套件庫：200
 ```
 
-（有 Conjur 的話這一行多「、保管庫：200」。）
 
 > 階段三之前要確認：應用程式團隊已經換上新 CA 簽的憑證（REST 走 mTLS 的那些）、行內 Prometheus 與應用程式的 truststore 都已經有新根。否則拿掉舊根的那一刻，它們就斷了。
 
-## 21.4 換鏈：中繼沒換私鑰，只換憑證鏈
+## 20.4 換鏈：中繼沒換私鑰，只換憑證鏈
 
-21.0 表裡「中繼沿用私鑰」的那幾列：leaf 不用重簽（簽它的私鑰沒變），但每個 p12 裡夾帶的中繼要換成銀行給的新那張。不用 CSR、不用銀行簽任何東西，只是把「現在的 leaf＋新中繼」重新包成 p12、派送、滾動重啟。
+20.0 表裡「中繼沿用私鑰」的那幾列：leaf 不用重簽（簽它的私鑰沒變），但每個 p12 裡夾帶的中繼要換成銀行給的新那張。不用 CSR、不用銀行簽任何東西，只是把「現在的 leaf＋新中繼」重新包成 p12、派送、滾動重啟。
 
-這一節演練最麻煩的那一列：**銀行換根（G3，新私鑰），中繼 G2 沿用私鑰、由 G3 重簽**。信任清單一樣走三階段，階段二從「重簽 leaf」換成「換鏈」。只有中繼續簽、根不動的情況（表的第 3 列），跳過 21.4.2 和 21.4.5，只做 21.4.3、21.4.4。
+這一節演練最麻煩的那一列：**銀行換根（G3，新私鑰），中繼 G2 沿用私鑰、由 G3 重簽**。信任清單一樣走三階段，階段二從「重簽 leaf」換成「換鏈」。只有中繼續簽、根不動的情況（表的第 3 列），跳過 20.4.2 和 20.4.5，只做 20.4.3、20.4.4。
 
 | 階段 | 做什麼 | 之後的狀態 |
 |---|---|---|
@@ -5803,9 +4636,9 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 | 二、換鏈 | 銀行的伺服器、我方每一張 p12 都換成新鏈（中繼由 G3 簽） | 兩個根都信；出示的都是新鏈 |
 | 三、退 | 信任清單拿掉 G2 | 只信 G3；還出示舊鏈的一律被拒 |
 
-> 陷阱：舊鏈和新鏈的 leaf **是同一張**（同序號、同私鑰），所以 21.1 看序號分不出誰換好了。這一節改看端點出示的**第二張（中繼）是誰簽的**。
+> 陷阱：舊鏈和新鏈的 leaf **是同一張**（同序號、同私鑰），所以 20.1 看序號分不出誰換好了。這一節改看端點出示的**第二張（中繼）是誰簽的**。
 
-### 21.4.1 銀行建 G3、用 G3 重簽中繼（lab 模擬）
+### 20.4.1 銀行建 G3、用 G3 重簽中繼（lab 模擬）
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
@@ -5821,13 +4654,13 @@ issuing.crt: PoC Bank Issuing CA G2（簽發者 PoC Bank Root CA G2）key=…
 issuing-g3.crt: PoC Bank Issuing CA G2（簽發者 PoC Bank Root CA G3）key=…（和上一行相同）
 ```
 
-名稱相同、key 相同、簽發者不同：就是 21.0 表的「根換私鑰，中繼同私鑰由新根重簽」。
+名稱相同、key 相同、簽發者不同：就是 20.0 表的「根換私鑰，中繼同私鑰由新根重簽」。
 
-### 21.4.2 階段一：信任清單加入 G3
+### 20.4.2 階段一：信任清單加入 G3
 
 @role 銀行 OS 團隊 | Windows 終端 | 本機
 
-和 21.3.2 一樣，bundle 換成 G2＋G3（AD 的 `ca.pem` 也一起）：
+和 20.3.2 一樣，bundle 換成 G2＋G3（AD 的 `ca.pem` 也一起）：
 
 ```bash
 cd ~/kafka-lab/ca && cat g2/root.crt g3/root.crt > bundle-g2-g3.pem && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/bundle-g2-g3.pem")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; docker cp "$(cygpath -m "$PWD/bundle-g2-g3.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 chmod 644 /var/lib/samba/private/tls/ca.pem
@@ -5839,24 +4672,8 @@ ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01
 
 @role 小安 | ops02 | cpadmin
 
-truststore 加 alias `bank-root-g3`（bundle 的第二張），C3 與 OP menu 的 ca.pem 換成 bundle，派送、滾動重啟（21.3.2 寫的那支 `rolling-restart.sh`）：
+truststore 加 alias `bank-root-g3`（bundle 的第二張），C3 與 OP menu 的 ca.pem 換成 bundle，派送、滾動重啟（20.3.2 寫的那支 `rolling-restart.sh`）：
 
-@only provider
-
-@role 小安 | ops02 | cpadmin
-
-provider 模式：和 21.3.2 一樣，先把新根（G3）匯進每台 JDK 的 `cacerts`，在滾動重啟之前：
-
-```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'csplit -s -z -f /tmp/root- /etc/pki/ca-trust/source/anchors/bank-root.pem "/BEGIN CERT/" "{*}" && sudo /opt/java/current/bin/keytool -importcert -noprompt -cacerts -storepass changeit -alias bank-root-g3 -file /tmp/root-01 >/dev/null 2>&1; rm -f /tmp/root-0*; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
-```
-
-```out
-ops02: cacerts 裡的銀行根 2
-（11 行，每台都是 2：舊根和新根都信任）
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -5927,7 +4744,7 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-### 21.4.3 階段二之一：銀行換上新中繼，自己的伺服器換鏈
+### 20.4.3 階段二之一：銀行換上新中繼，自己的伺服器換鏈
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
@@ -5942,23 +4759,8 @@ ad01.poc.lab:636 中繼的簽發者：PoC Bank Root CA G3
 repo01.poc.lab:443 中繼的簽發者：PoC Bank Root CA G3
 ```
 
-@only conjur,provider
 
-@role 銀行 CA 窗口 | Windows 終端 | 本機
-
-銀行有 Conjur 的話，保管庫的憑證檔也換成新鏈：
-
-```bash
-cd ~/kafka-lab && awk '/BEGIN CERT/{n++} n==1' conjur/tls/conjur.crt > conjur/tls/conjur.crt.new && cat ca/g2/issuing.crt >> conjur/tls/conjur.crt.new && mv conjur/tls/conjur.crt.new conjur/tls/conjur.crt && docker restart lab-conjur-proxy-1 >/dev/null && sleep 3 && echo "conjur.poc.lab:443 中繼的簽發者：$(docker exec lab-ops02-1 bash -c "openssl s_client -connect conjur.poc.lab:443 -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"
-```
-
-```out
-conjur.poc.lab:443 中繼的簽發者：PoC Bank Root CA G3
-```
-
-@only all
-
-### 21.4.4 階段二之二：我方的每一張 p12 換鏈
+### 20.4.4 階段二之二：我方的每一張 p12 換鏈
 
 @role 小安 | ops02 | cpadmin
 
@@ -5975,9 +4777,9 @@ kafka-internal: leaf=7E8C05F2（不變） chain=ok
 （7 行，全部 ok）
 ```
 
-> 名稱或 key 不一樣，就不是換鏈：中繼換了私鑰，leaf 要重簽（走 21.2）。
+> 名稱或 key 不一樣，就不是換鏈：中繼換了私鑰，leaf 要重簽（走 20.2）。
 
-派送與滾動重啟和 21.2.4 相同，只是確認的方式改成「端點出示的中繼是 G3 簽的」：
+派送與滾動重啟和 20.2.4 相同，只是確認的方式改成「端點出示的中繼是 G3 簽的」：
 
 ```bash
 cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && for h in kc01 kc02 kc03; do scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-internal.p12 /etc/confluent/ssl/ && rm -f /tmp/kafka-internal.p12 && sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done'; for i in $(seq 1 30); do [ "$(via $h.poc.lab:9093)" = "$G3" ] && break; sleep 2; done; echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$([ "$(via $h.poc.lab:9093)" = "$G3" ] && echo new || echo OLD)"; done; for h in kb01 kb02 kb03 kb04; do scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in kafka-internal.p12 cp-server.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) 9092=$([ "$(via $h.poc.lab:9092)" = "$G3" ] && echo new || echo OLD) 9095=$([ "$(via $h.poc.lab:9095)" = "$G3" ] && echo new || echo OLD)"; done
@@ -5990,7 +4792,7 @@ kb01 MDS=200 9092=new 9095=new
 （4 行）
 ```
 
-REST Proxy 與 C3（C3 的 `cp-server.key` 沒變，照樣一起放，指令和 21.2.4 一致）：
+REST Proxy 與 C3（C3 的 `cp-server.key` 沒變，照樣一起放，指令和 20.2.4 一致）：
 
 ```bash
 cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(via c3-01.poc.lab:9021)" = "$G3" ] && echo new || echo OLD) 9090=$([ "$(via c3-01.poc.lab:9090)" = "$G3" ] && echo new || echo OLD)"
@@ -6081,7 +4883,6 @@ app-legacy-billing 新鏈：REST=200；舊鏈（G2 還信）：REST=200
 
 緊急身分的 PEM 換了，保管庫裡那份也要換（舊的到期前都還有效）：
 
-@only customer
 
 @role 銀行 Secrets 團隊（更新 PVWA 的 opmenu-breakglass；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -6093,33 +4894,19 @@ cd ~/kafka-lab && cp -p pvwa/opmenu-breakglass.pem pvwa/opmenu-breakglass.prev.p
 PVWA opmenu-breakglass 已更新，序號末 8 碼 …
 ```
 
-@only conjur,provider
-
-@role 小安 | ops02 | cpadmin
-
-```bash
-cd ~/pki && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && T=$(curl -sS --cacert $CA -X POST --data-binary @$HOME/secrets/conjur-ops.key https://conjur.poc.lab/authn/poc/ops%40kafka/authenticate | base64 -w0) && cat keys/opmenu-breakglass.key certs/opmenu-breakglass.crt | curl -sS --cacert $CA -H "Authorization: Token token=\"$T\"" -X POST --data-binary @- https://conjur.poc.lab/secrets/poc/variable/kafka%2Fbreakglass%2Fpem && unset T && echo "breakglass：保管庫已更新"
-```
-
-```out
-breakglass：保管庫已更新
-```
-
-@only all
 
 進階段三之前，每個端點出示的中繼都要是 G3 簽的（銀行的三台也算）：
 
 ```bash
-bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090 ad01.poc.lab:636 repo01.poc.lab:443 $(getent hosts conjur.poc.lab >/dev/null && echo conjur.poc.lab:443); do i=$(openssl s_client -connect $ep -servername ${ep%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'); [ "$i" = "PoC Bank Root CA G3" ] || { echo "$ep 中繼的簽發者：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "$(( 17 + $(getent hosts conjur.poc.lab >/dev/null && echo 1 || echo 0) )) 個端點都出示新鏈：可以進階段三"
+bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090 ad01.poc.lab:636 repo01.poc.lab:443; do i=$(openssl s_client -connect $ep -servername ${ep%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'); [ "$i" = "PoC Bank Root CA G3" ] || { echo "$ep 中繼的簽發者：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "17 個端點都出示新鏈：可以進階段三"
 ```
 
 ```out
 17 個端點都出示新鏈：可以進階段三
 ```
 
-（有 Conjur 的話多 conjur.poc.lab:443，是 18 個。）
 
-### 21.4.5 階段三：拿掉 G2
+### 20.4.5 階段三：拿掉 G2
 
 @role 銀行 OS 團隊 | Windows 終端 | 本機
 
@@ -6130,25 +4917,6 @@ cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 re
 ```out
 ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01:1
 ```
-
-@role 小安 | ops02 | cpadmin
-
-@only provider
-
-@role 小安 | ops02 | cpadmin
-
-provider 模式：JDK 的 `cacerts` 拿掉 G2（alias `bank-root-g2`），在滾動重啟之前：
-
-```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo /opt/java/current/bin/keytool -delete -cacerts -storepass changeit -alias bank-root-g2 >/dev/null 2>&1; echo "$(hostname): cacerts 裡的銀行根 $(/opt/java/current/bin/keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "^bank-root")"'; done
-```
-
-```out
-ops02: cacerts 裡的銀行根 1
-（11 行，每台都是 1：只剩新根）
-```
-
-@only all
 
 @role 小安 | ops02 | cpadmin
 
@@ -6219,10 +4987,10 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-反向驗證：**同一張 leaf、同一把私鑰**，配舊鏈（中繼由 G2 簽）要被拒，配新鏈要通過；AD、套件庫、保管庫照常：
+反向驗證：**同一張 leaf、同一把私鑰**，配舊鏈（中繼由 G2 簽）要被拒，配新鏈要通過；AD、套件庫照常：
 
 ```bash
-cd ~/pki && LAST=$(ls -d old-* | tail -1) && echo "舊鏈 → REST：$(curl -s --cert $LAST/certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)（000 = TLS 直接拒絕）" && echo "新鏈 → REST：$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)" && echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)" && echo "套件庫：$(curl -s -o /dev/null -w '%{http_code}' https://repo01.poc.lab/confluent/repodata/repomd.xml)$(getent hosts conjur.poc.lab >/dev/null && echo "、保管庫：$(curl -s -o /dev/null -w '%{http_code}' https://conjur.poc.lab/)")"
+cd ~/pki && LAST=$(ls -d old-* | tail -1) && echo "舊鏈 → REST：$(curl -s --cert $LAST/certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)（000 = TLS 直接拒絕）" && echo "新鏈 → REST：$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)" && echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)" && echo "套件庫：$(curl -s -o /dev/null -w '%{http_code}' https://repo01.poc.lab/confluent/repodata/repomd.xml)"
 ```
 
 ```out
@@ -6232,13 +5000,12 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 套件庫：200
 ```
 
-（有 Conjur 的話這一行多「、保管庫：200」。）
 
-> 實測（2026-10-25，lab，接在 21.3 之後做）：三個階段 12 塊指令全部一次通過；換鏈期間 REST、MDS、C3 都維持 200，舊鏈與新鏈的應用程式憑證在階段二都能用，階段三之後舊鏈被拒。銀行端（Windows 的 openssl）算出的 key 雜湊和 ops02 算的不同，是 PEM 換行字元不同造成的，各自那一邊的兩行相同就對了。
+> 實測（2026-10-25，lab，接在 20.3 之後做）：三個階段 12 塊指令全部一次通過；換鏈期間 REST、MDS、C3 都維持 200，舊鏈與新鏈的應用程式憑證在階段二都能用，階段三之後舊鏈被拒。銀行端（Windows 的 openssl）算出的 key 雜湊和 ops02 算的不同，是 PEM 換行字元不同造成的，各自那一邊的兩行相同就對了。
 
-> 這就是 21.0 說的「拿掉舊根一定排在每個端點都換好鏈之後」：舊鏈的 leaf 本身沒問題，被拒是因為它夾帶的中繼指向已經不信的 G2。應用程式（REST 走 mTLS 的那些）的 p12 也一樣要換鏈，否則階段三那一刻就斷。
+> 這就是 20.0 說的「拿掉舊根一定排在每個端點都換好鏈之後」：舊鏈的 leaf 本身沒問題，被拒是因為它夾帶的中繼指向已經不信的 G2。應用程式（REST 走 mTLS 的那些）的 p12 也一樣要換鏈，否則階段三那一刻就斷。
 
-# 22. 第二十二站：升級 Confluent 與 JDK
+# 21. 第二十一站：升級 Confluent 與 JDK
 
 ![upgrade]
 
@@ -6250,15 +5017,15 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 | 段 | 做什麼 | 出問題怎麼退 |
 |---|---|---|
-| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3 → broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（22.9） |
+| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3 → broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（21.9） |
 | 二 | JDK 21 → 25：controller、broker、REST Proxy、操作機逐台切換 `/opt/java/current`；C3 留在 21 | 連結切回 21、重啟 |
 | 三 | finalize：features 升到 4.3（`kafka-features upgrade --release-version 4.3`） | **不能退**：之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降回去可能要從備份還原 |
 
 要回 8.2 時順序反過來：先把 JDK 切回 21（8.2 不支援 25），再 `dnf downgrade`。所以**前兩段都驗收過才做第三段**。
 
-> 實測（lab，客戶模式，全程持續流量）：約 48 分鐘。直連應用程式送出 14,009 筆、讀回 14,009 筆，遺失 0；經負載平衡的 REST 2,684 次中失敗 2 次（HTTP 402，都發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 20 章的驗收，都全數通過。
+> 實測（lab，全程持續流量）：約 48 分鐘。直連應用程式送出 14,009 筆、讀回 14,009 筆，遺失 0；經負載平衡的 REST 2,684 次中失敗 2 次（HTTP 402，都發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 19 章的驗收，都全數通過。
 
-## 22.1 升級前檢查
+## 21.1 升級前檢查
 
 @role 小安 | ops02 | cpadmin
 
@@ -6280,14 +5047,14 @@ kc01:0 kc02:0 kc03:0 kb01:0 kb02:0 kb03:0 kb04:0
 
 新版的 RPM 和 JDK 照第 1–4 站的流程帶進來：下載機抓 `confluent-*-8.3.2`、照 1.5 把 `latest/21` 換成 `latest/25` 抓 JDK 25 交給銀行、掃描交換、上架。套件庫裡**舊版要留著**，回滾要用。
 
-## 22.2 備份
+## 21.2 備份
 
 @role 小安 | ops02 | cpadmin
 
-每台的 `/etc/confluent` 與 systemd drop-in、features 狀態、操作機的套件清單，打包回操作機（0700）。master key（`service.env`）與保管庫的主機身分（`/etc/confluent/conjur/`）不放進備份：master key 的正本在 CyberArk，身分由保管庫重發，備份檔就不必當成機敏資料保管。回滾、或 finalize 之後真的要退，都從這裡拿：
+每台的 `/etc/confluent` 與 systemd drop-in、features 狀態、操作機的套件清單，打包回操作機（0700）。master key（`service.env`）不放進備份：master key 的正本在 CyberArk，備份檔就不必當成機敏資料保管。回滾、或 finalize 之後真的要退，都從這裡拿：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && B=~/upgrade-backup/$(date +%Y%m%d-%H%M) && install -d -m 0700 $B && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo tar -czf - -C / --exclude=etc/confluent/service.env --exclude=etc/confluent/conjur etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > $B/$h.tar.gz && printf '%s %s  ' $h "$(du -h $B/$h.tar.gz | cut -f1)"; done; echo; kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe > $B/features.txt 2>/dev/null; rpm -qa 'confluent-*' | sort > $B/ops02-packages.txt; echo "$B"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && B=~/upgrade-backup/$(date +%Y%m%d-%H%M) && install -d -m 0700 $B && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > $B/$h.tar.gz && printf '%s %s  ' $h "$(du -h $B/$h.tar.gz | cut -f1)"; done; echo; kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe > $B/features.txt 2>/dev/null; rpm -qa 'confluent-*' | sort > $B/ops02-packages.txt; echo "$B"
 ```
 
 ```out
@@ -6295,11 +5062,11 @@ kc01 28K  kc02 28K  kc03 28K  kb01 32K  kb02 32K  kb03 32K  kb04 32K  rest01 28K
 /home/cpadmin/upgrade-backup/20261024-1401
 ```
 
-## 22.3 第一段：Control Center 先
+## 21.3 第一段：Control Center 先
 
 @role 小安 | ops02 | cpadmin
 
-原廠要求 C3 比 broker、controller 先升。這次 C3 版本不變，只要確認它活著、版本在 8.3 的相容範圍內（2.6.x 支援到 8.3.x）。C3 有新版時就在這一步照 22.4 的方式換套件、重啟。
+原廠要求 C3 比 broker、controller 先升。這次 C3 版本不變，只要確認它活著、版本在 8.3 的相容範圍內（2.6.x 支援到 8.3.x）。C3 有新版時就在這一步照 21.4 的方式換套件、重啟。
 
 ```bash
 ssh c3-01.poc.lab 'rpm -q confluent-control-center-next-gen; systemctl is-active confluent-control-center'; echo "UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
@@ -6311,7 +5078,7 @@ active
 UI=200
 ```
 
-## 22.4 第一段：broker 逐台
+## 21.4 第一段：broker 逐台
 
 @role 小安 | ops02 | cpadmin
 
@@ -6329,7 +5096,7 @@ kb01 confluent-server-8.3.2-1.noarch 設定檔沒變 exec=/etc/confluent/kafka/s
 
 > 陷阱：重啟前沒做 `daemon-reload`，systemd 會印 `The unit file … changed on disk`。設定還是我們的（drop-in 會疊上去），但下一次 reload 才會真的用新的 unit；所以每台都在重啟前 reload。
 
-## 22.5 第一段：controller 逐台（leader 最後）
+## 21.5 第一段：controller 逐台（leader 最後）
 
 @role 小安 | ops02 | cpadmin
 
@@ -6347,7 +5114,7 @@ kc02 confluent-server-8.3.2-1.noarch Lag=0（這輪開始時 leader=kc01）
 
 `describe --replication` 的欄位依序是 NodeId、DirectoryId、LogEndOffset、**Lag**、…，看的是第 4 欄。
 
-## 22.6 第一段：REST Proxy 與操作機的工具
+## 21.6 第一段：REST Proxy 與操作機的工具
 
 @role 小安 | ops02 | cpadmin
 
@@ -6437,9 +5204,9 @@ rest01 confluent-kafka-rest-8.3.2-1.noarch
 rest02 confluent-kafka-rest-8.3.2-1.noarch
 ```
 
-第一段結束：照第 20 章 20.1–20.3 再驗一次（實測全數通過）。這時 features 還是 8.2，隨時可以照 22.9 退回。
+第一段結束：照第 19 章 19.1–19.3 再驗一次（實測全數通過）。這時 features 還是 8.2，隨時可以照 21.9 退回。
 
-## 22.7 第二段：JDK 21 → 25
+## 21.7 第二段：JDK 21 → 25
 
 @role 小安 | ops02 | cpadmin
 
@@ -6536,11 +5303,10 @@ rest01 java=/opt/java/jdk-25.0.5+8
 rest02 java=/opt/java/jdk-25.0.5+8
 ```
 
-> 陷阱：走第 15 章（Conjur provider）的環境，provider 連 Conjur 靠的是 **JDK 自己的 `cacerts`**（15.3 匯入了銀行根）。新解壓的 JDK 25 沒有那份匯入，重啟前要照 15.3 對 `/opt/java/<新目錄>/lib/security/cacerts` 再匯一次，否則服務連不到 Conjur。走第 16 章的不受影響（本輪 lab 是第 16 章路徑，這一條沒有實測）。
 
-broker 的日誌會多一則 `WARNING: A terminally deprecated method in sun.misc.Unsafe has been called`：原廠說明這只是警告，JDK 25 上照常運作。第二段結束：照第 20 章再驗一次（實測全數通過）。
+broker 的日誌會多一則 `WARNING: A terminally deprecated method in sun.misc.Unsafe has been called`：原廠說明這只是警告，JDK 25 上照常運作。第二段結束：照第 19 章再驗一次（實測全數通過）。
 
-## 22.8 第三段：finalize（之後不能退回 8.2）
+## 21.8 第三段：finalize（之後不能退回 8.2）
 
 @role 小安 | ops02 | cpadmin
 
@@ -6574,9 +5340,9 @@ confluent.metadata.version was upgraded to 137.
 confluent.metadata.version CP-8.3-IV0B
 ```
 
-最後照第 20 章完整驗收一次。
+最後照第 19 章完整驗收一次。
 
-## 22.9 回滾（finalize 之前）
+## 21.9 回滾（finalize 之前）
 
 @role 小安 | ops02 | cpadmin
 
@@ -6590,17 +5356,17 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.x+y/bin/java MDS 200（約 15–20 秒）
 ```
 
-退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。演練完再照 22.4、22.7 把它升回去。
+退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。演練完再照 21.4、21.7 把它升回去。
 
-> 回滾：finalize 之後就不能用這個方法了。真的要退，得用 22.2 的備份與原廠支援的還原程序，所以 finalize 一定排在前兩段都驗收、觀察一段時間之後。
+> 回滾：finalize 之後就不能用這個方法了。真的要退，得用 21.2 的備份與原廠支援的還原程序，所以 finalize 一定排在前兩段都驗收、觀察一段時間之後。
 
-# 23. 第二十三站：License 到期監控
+# 22. 第二十二站：License 到期監控
 
 平台目前用的是試用 license（第 10 站 `confluent.license` 沒有設）。試用期 30 天；正式 license 一般一年一約。到期之後 broker 仍會繼續服務、只是日誌一直報錯，但**重啟時 RBAC／MDS 等安全外掛與 Control Center 起不來**，等於下一次維運重啟就停擺。原廠只在 C3 畫面（到期前 90 天開始）與 broker 日誌提醒，**沒有提供到期日的 JMX 指標**，所以行內監控要自己讀。
 
 生效中的 license 是一個 JWT，broker 會把它存進 `_confluent-command` topic。讀出來、解開中間那段，`exp` 就是到期時間。
 
-## 23.1 現在用的是哪一份、哪天到期
+## 22.1 現在用的是哪一份、哪天到期
 
 @role 小安 | ops02 | cpadmin
 
@@ -6615,11 +5381,11 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 
 > 只解開、不驗簽章：簽章由 broker 自己驗。這裡只是讀到期日給監控用。
 
-## 23.2 每天檢查一次，寫進 syslog
+## 22.2 每天檢查一次，寫進 syslog
 
 @role 小安 | ops02 | cpadmin
 
-把 23.1 寫成一支小腳本：剩不到 90 天（和 C3 的提示同一天開始）就以 `warning` 寫進 syslog，過期或讀不到就是 `err`；行內監控／SIEM 依 tag `confluent-license` 告警。結束碼 0／2／1 給銀行的排程系統用（要改由行內排程呼叫也是同一支）：
+把 22.1 寫成一支小腳本：剩不到 90 天（和 C3 的提示同一天開始）就以 `warning` 寫進 syslog，過期或讀不到就是 `err`；行內監控／SIEM 依 tag `confluent-license` 告警。結束碼 0／2／1 給銀行的排程系統用（要改由行內排程呼叫也是同一支）：
 
 ```bash
 cat > ~/conf/license-check.sh <<'EOF'
@@ -6668,20 +5434,20 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 
 > `SuccessExitStatus=2`：「快到期」不算服務失敗（不然 systemd 會把它標成 failed，維運以為是腳本壞了）；真正要告警的是 syslog 那一行。
 
-## 23.3 換上正式 license（lab 沒有正式 license，未實測）
+## 22.3 換上正式 license（lab 沒有正式 license，未實測）
 
 @role 小安 | ops02 | cpadmin
 
 銀行向 Confluent 買到 license 後會拿到一串 JWT（`eyJ` 開頭）。它和密碼一樣交由 Secrets 團隊放進 PVWA，小安取用時放 `~/secrets/license.jwt`（0600）。依原廠文件：
 
 1. `~/conf/common.tpl` 的 License 區塊加 `confluent.license=${LICENSE}`（controller 與 broker 共用）；REST Proxy、C3 的範本各加一行 `confluent.license=${LICENSE}`。
-2. 照第 10、12、13 站重新產生設定（`LICENSE=$(cat ~/secrets/license.jwt)` 帶進 `envsubst`）；有做第 16 站的，照 16.3 一起加密。
-3. 照 16.4、16.5 派送與滾動重啟（controller → broker → REST → C3）。
-4. 用 23.1 確認：類型不再是 `trial`、到期日是合約的日期。
+2. 照第 10、12、13 站重新產生設定（`LICENSE=$(cat ~/secrets/license.jwt)` 帶進 `envsubst`）；密碼欄位照 15.3 一起加密。
+3. 照 15.4、15.5 派送與滾動重啟（controller → broker → REST → C3）。
+4. 用 22.1 確認：類型不再是 `trial`、到期日是合約的日期。
 
-> 每年續約就是重做一次：換掉 `license.jwt`、重新產生、加密、滾動重啟。23.2 的告警在到期前 90 天開始，給採購流程留時間。
+> 每年續約就是重做一次：換掉 `license.jwt`、重新產生、加密、滾動重啟。22.2 的告警在到期前 90 天開始，給採購流程留時間。
 
-# 24. 第二十四站：換掉一台 controller
+# 23. 第二十三站：換掉一台 controller
 
 controller 的 quorum 是動態的（第 10 站用 `--initial-controllers` 格式化）：成員是「node id＋directory id」。換一台 controller，就是把舊的那組移出 quorum、把新的那組加進來，一次只動一個成員。
 
@@ -6689,11 +5455,11 @@ controller 的 quorum 是動態的（第 10 站用 `--initial-controllers` 格�
 |---|---|
 | 同一台主機，資料碟壞了換新 | 本章：移出舊成員 → 重新格式化（觀察者）→ 追上 → 加入 |
 | 換一台新機器，沿用同一個主機名稱 | 先照第 3、5、7、8 站把新機器準備好（銀行的帳號、套件庫、JDK、OS 調校、套件），派送憑證與設定（第 10 站），再做本章 |
-| 換成不同名稱的主機 | 另外要重簽 `kafka-internal`（SAN 列了所有主機名稱，21.2），所有節點的 `controller.quorum.bootstrap.servers` 改成新名單並滾動重啟；本章未演練 |
+| 換成不同名稱的主機 | 另外要重簽 `kafka-internal`（SAN 列了所有主機名稱，20.2），所有節點的 `controller.quorum.bootstrap.servers` 改成新名單並滾動重啟；本章未演練 |
 
 > 一次只換一台。換的過程中 quorum 只剩兩個成員，兩個都要在才能選出 leader：**這段時間不要重啟 kc01、kc02**。
 
-## 24.1 換之前：看 quorum
+## 23.1 換之前：看 quorum
 
 @role 小安 | ops02 | cpadmin
 
@@ -6710,7 +5476,7 @@ NodeId  DirectoryId             LogEndOffset  Lag  LastFetchTimestamp  LastCaugh
 （broker 101–104 都是 Observer）
 ```
 
-## 24.2 模擬：kc03 的資料碟壞了
+## 23.2 模擬：kc03 的資料碟壞了
 
 @role Lab 管理員 | Windows 終端 | 本機
 
@@ -6740,11 +5506,11 @@ NodeId  DirectoryId  LogEndOffset  Lag  …  Status
 MDS：200
 ```
 
-## 24.3 移出舊成員
+## 23.3 移出舊成員
 
 @role 小安 | ops02 | cpadmin
 
-舊成員是「3＋舊的 directory id」，從 24.1 的輸出取：
+舊成員是「3＋舊的 directory id」，從 23.1 的輸出取：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config $HOME/conf/client-internal.properties" && OLD_DIR=$(kafka-metadata-quorum $Q describe --replication | awk '$1==3 {print $2}') && echo "移出 3 / $OLD_DIR" && kafka-metadata-quorum $Q remove-controller --controller-id 3 --controller-directory-id $OLD_DIR && sleep 5 && kafka-metadata-quorum $Q describe --status | grep CurrentVoters | grep -o '"id": [0-9]*' | cut -d' ' -f2 | paste -sd' ' | sed 's/^/目前的成員：/'
@@ -6756,14 +5522,14 @@ Removed  KRaft controller 3 with directory id OwqboMUaS4C4y6JYkevW7w
 目前的成員：1 2
 ```
 
-## 24.4 重新格式化成觀察者、啟動、追上
+## 23.4 重新格式化成觀察者、啟動、追上
 
 @role 小安 | ops02 | cpadmin
 
-用原本的 cluster id、`--no-initial-controllers`（以觀察者身分加入，不是自己宣告成員）。設定檔有 `${securepass:…}`（第 16 站），格式化工具也要拿得到 master key：有 `service.env` 就從那裡讀，做了 16.8 的就經 Summon：
+用原本的 cluster id、`--no-initial-controllers`（以觀察者身分加入，不是自己宣告成員）。設定檔有 `${securepass:…}`（第 15 站），格式化工具也要拿得到 master key：從 `service.env` 讀：
 
 ```bash
-source ~/conf/kraft.env && ssh kc03.poc.lab "sudo bash -c 'run() { if [ -e /etc/confluent/service.env ]; then set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; else runuser -u cp-kafka -- /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml \"\$@\"; fi; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl start confluent-server && echo \"kc03 \$(systemctl is-active confluent-server) dir=\$(sudo sed -n 's/^directory.id=//p' /var/lib/kafka/data/meta.properties)\"" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for i in $(seq 1 60); do L=$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication 2>/dev/null | awk '$1==3'); [ "$(awk '{print $4, $NF}' <<<"$L")" = "0 Observer" ] && break; sleep 5; done; echo "kc03：$(awk '{print "Lag="$4, $NF}' <<<"$L")"
+source ~/conf/kraft.env && ssh kc03.poc.lab "sudo bash -c 'run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"$CONFLUENT_SECURITY_MASTER_KEY\" \"$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl start confluent-server && echo \"kc03 \$(systemctl is-active confluent-server) dir=\$(sudo sed -n 's/^directory.id=//p' /var/lib/kafka/data/meta.properties)\"" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for i in $(seq 1 60); do L=$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication 2>/dev/null | awk '$1==3'); [ "$(awk '{print $4, $NF}' <<<"$L")" = "0 Observer" ] && break; sleep 5; done; echo "kc03：$(awk '{print "Lag="$4, $NF}' <<<"$L")"
 ```
 
 ```out
@@ -6772,7 +5538,7 @@ kc03 active dir=eELCq6OM-4WuTdfGQSmOgQ（新的 directory id，和 OLD_DIR 不�
 kc03：Lag=0 Observer
 ```
 
-## 24.5 加回成員
+## 23.5 加回成員
 
 > 實測（2026-10-25，lab）：從清空資料到重新成為成員約 5 分鐘（格式化、啟動、追上 3 萬多筆 metadata、add-controller），期間 MDS、REST、C3 都維持 200。
 
@@ -6781,7 +5547,7 @@ kc03：Lag=0 Observer
 `add-controller` 要在**新的那台**上跑：工具從 `--command-config` 指到的設定找資料目錄，讀出自己的 node id 與 directory id 再去登記。用那台的 server.properties 加一行 `security.protocol=SSL`，用完就刪：
 
 ```bash
-ssh kc03.poc.lab "sudo bash -c '( cat /etc/confluent/kafka/server.properties; echo security.protocol=SSL ) > /etc/confluent/kafka/add-controller.properties && chown root:confluent /etc/confluent/kafka/add-controller.properties && chmod 0640 /etc/confluent/kafka/add-controller.properties; run() { if [ -e /etc/confluent/service.env ]; then set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; else runuser -u cp-kafka -- /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml \"\$@\"; fi; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config /etc/confluent/kafka/add-controller.properties add-controller 2>&1 | grep -v WARN | tail -1; rm -f /etc/confluent/kafka/add-controller.properties'" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && sleep 10 && kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication | awk 'NR==1 || $1<100'
+ssh kc03.poc.lab "sudo bash -c '( cat /etc/confluent/kafka/server.properties; echo security.protocol=SSL ) > /etc/confluent/kafka/add-controller.properties && chown root:confluent /etc/confluent/kafka/add-controller.properties && chmod 0640 /etc/confluent/kafka/add-controller.properties; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"$CONFLUENT_SECURITY_MASTER_KEY\" \"$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config /etc/confluent/kafka/add-controller.properties add-controller 2>&1 | grep -v WARN | tail -1; rm -f /etc/confluent/kafka/add-controller.properties'" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && sleep 10 && kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication | awk 'NR==1 || $1<100'
 ```
 
 ```out
@@ -6803,7 +5569,7 @@ kc03 7071：582個指標
 kb01 MDS=200 kb02 MDS=200 kb03 MDS=200 kb04 MDS=200
 ```
 
-# 25. 第二十五站：broker 縮減與擴充
+# 24. 第二十四站：broker 縮減與擴充
 
 broker 的資料由 Self-Balancing（第 10 站 `confluent.balancer.enable=true`）搬：縮減時用 `kafka-remove-brokers` 把要拿掉的那台的 replica 全部搬走、它自己關機；擴充時空的 broker 一加入，Self-Balancing 自動把資料搬過去。
 
@@ -6815,7 +5581,7 @@ broker 的資料由 Self-Balancing（第 10 站 `confluent.balancer.enable=true`
 
 lab 用 kb04（node id 104）演練：先縮減、再當成一台空的新 broker 加回來。過程中持續有應用程式寫入。
 
-## 25.1 前置檢查
+## 24.1 前置檢查
 
 @role 小安 | ops02 | cpadmin
 
@@ -6829,7 +5595,7 @@ under-replicated：0
 kb04（104）上的 replica：80
 ```
 
-## 25.2 縮減：拿掉 kb04
+## 24.2 縮減：拿掉 kb04
 
 @role 小安 | ops02 | cpadmin
 
@@ -6875,14 +5641,14 @@ under-replicated：0
 
 > 永久縮減時，還要把 kb04 從所有 bootstrap 名單拿掉（REST Proxy、C3、MDS URL、OP menu、應用程式的設定），重新產生並滾動重啟；名單裡留著一台不存在的主機，client 會略過它，但每次連線都多一次逾時。lab 接著要加回來，所以名單不動。
 
-## 25.3 擴充：kb04 以空的 broker 加回
+## 24.3 擴充：kb04 以空的 broker 加回
 
 @role 小安 | ops02 | cpadmin
 
-加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 3、5、7、8 站準備，憑證的 SAN 要有它的名稱（21.2）：
+加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 3、5、7、8 站準備，憑證的 SAN 要有它的名稱（20.2）：
 
 ```bash
-source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka/data/*; run() { if [ -e /etc/confluent/service.env ]; then set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; else runuser -u cp-kafka -- /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml \"\$@\"; fi; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
+source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka/data/*; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"$CONFLUENT_SECURITY_MASTER_KEY\" \"$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
 ```
 
 ```out
@@ -6913,21 +5679,21 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 錯誤：0
 ```
 
-# 26. 第二十六站：日常備份
+# 25. 第二十五站：日常備份
 
 要備份的東西分成三類，各走各的路：
 
 | 類別 | 內容 | 怎麼備 | 誰做 |
 |---|---|---|---|
 | 叢集中繼資料 | RBAC、ACL、topic 與設定、SCRAM 帳號清單與配額、features、broker 動態設定 | 操作機每天排程匯出（本章），保留 30 天；變更前另外手動跑一次當快照 | 小安裝好之後自動跑 |
-| 各台的設定 | `/etc/confluent`、systemd drop-in、`/etc/kafka` 的 log4j2 | 銀行既有的主機備份系統（客戶模式下 cpadmin 的私鑰只在變更時段的 ssh-agent 裡，操作機的排程 ssh 不進各台） | 銀行主機團隊 |
-| 機敏資料 | `~/pki` 的私鑰、`~/secrets`、master key | **事件觸發**：安裝、換憑證、換密碼的當下交 CyberArk 保管（第 16 章 master key 的做法），不排程 | 小安＋Secrets 團隊 |
+| 各台的設定 | `/etc/confluent`、systemd drop-in、`/etc/kafka` 的 log4j2 | 銀行既有的主機備份系統（cpadmin 的私鑰只在變更時段的 ssh-agent 裡，操作機的排程 ssh 不進各台） | 銀行主機團隊 |
+| 機敏資料 | `~/pki` 的私鑰、`~/secrets`、master key | **事件觸發**：安裝、換憑證、換密碼的當下交 CyberArk 保管（第 15 章 master key 的做法），不排程 | 小安＋Secrets 團隊 |
 
 訊息本身不做檔案備份：叢集內靠 replication factor 3、`min.insync.replicas=2`；異地備援（Cluster Linking）依銀行的 RPO／RTO 另議。
 
 匯出用的身分是新發的 `svc-backup` 憑證，**只能看、不能改、讀不到訊息內容**。不用 super user 的 `svc-ops`：排程每天自動跑，身分越小越好。
 
-## 26.1 svc-backup 的 client 設定
+## 25.1 svc-backup 的 client 設定
 
 @role 小安 | ops02 | cpadmin
 
@@ -6941,7 +5707,7 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 client-backup.properties：1 處指向 svc-backup；憑證 svc-backup，剩 364 天
 ```
 
-## 26.2 最小權限：SecurityAdmin＋兩條 ACL
+## 25.2 最小權限：SecurityAdmin＋兩條 ACL
 
 @role 小安 | ops02 | cpadmin
 
@@ -6977,7 +5743,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 改 role binding：403 Forbidden
 ```
 
-## 26.3 匯出腳本
+## 25.3 匯出腳本
 
 @role 小安 | ops02 | cpadmin
 
@@ -7042,9 +5808,9 @@ RBAC 的 principal：11 個；SHA256SUMS：7 個檔
 密碼字樣：0
 ```
 
-> `users.txt` 的 SCRAM 那幾行只有機制與迭代次數（`SCRAM-SHA-512=iterations=8192`），沒有密碼也沒有雜湊。帳號被刪掉時，這份清單告訴你要重建哪些帳號，密碼另向 Secrets 團隊取（第 15、16 章）。
+> `users.txt` 的 SCRAM 那幾行只有機制與迭代次數（`SCRAM-SHA-512=iterations=8192`），沒有密碼也沒有雜湊。帳號被刪掉時，這份清單告訴你要重建哪些帳號，密碼另向 Secrets 團隊取（第 15 章）。
 
-## 26.4 每天凌晨 2 點自動跑
+## 25.4 每天凌晨 2 點自動跑
 
 **待銀行確認**：行內若有排程系統，改由它每天呼叫 `~/conf/metadata-backup.sh`（結束碼 0／1），就不用裝下面的 timer。
 
@@ -7061,7 +5827,7 @@ syslog：中繼資料已匯出：/home/cpadmin/backup/metadata/20261025-0103
 
 > 備份目錄在操作機上；正式環境請銀行的主機備份系統把 `~/backup/metadata` 一起收走（裡面沒有密碼，只有清單與設定）。
 
-## 26.5 用備份：哪裡變了
+## 25.5 用備份：哪裡變了
 
 @role 小安 | ops02 | cpadmin
 
@@ -7109,7 +5875,7 @@ orders.backup-demo 還在嗎：0
 
 還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。
 
-# 27. 第二十七站：OS 修補
+# 26. 第二十六站：OS 修補
 
 銀行每月的 OS 修補照常由銀行的套件庫（Satellite／Nexus／web server）發布；平台這邊要做的只是「一台一台修、該重開就重開、健康了才做下一台」。Confluent 套件被 versionlock 鎖住（第 8 站），JDK 是 tar（第 5 站），所以 `dnf update` 只會動 OS 套件；C3 的前置套件 `cyrus-sasl`、`openssl-devel` 跟著 OS 修補走（不鎖）。
 
@@ -7123,7 +5889,7 @@ orders.backup-demo 還在嗎：0
 
 > lab 是容器，不能真的重開機（核心是 WSL2 的）；遇到「要重開機：是」時，正式環境是 `sudo systemctl reboot` 再等健康，lab 改用 `docker restart lab-<主機>-1`。
 
-## 27.1 修補前：看有哪些更新、Confluent 有沒有鎖住
+## 26.1 修補前：看有哪些更新、Confluent 有沒有鎖住
 
 @role 小安 | ops02 | cpadmin
 
@@ -7140,9 +5906,9 @@ c3-01：可更新 6 個（…同上）；鎖住 1 個 confluent 套件
 ops02：可更新 6 個（…同上）；鎖住 10 個 confluent 套件
 ```
 
-> 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 站重新鎖。Confluent 的升級只走第 22 章。
+> 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 站重新鎖。Confluent 的升級只走第 21 章。
 
-## 27.2 broker 逐台
+## 26.2 broker 逐台
 
 @role 小安 | ops02 | cpadmin
 
@@ -7167,7 +5933,7 @@ kb01 更新 6 個；要重開機：否；要重啟的平台服務：無；conflu
 （4 台）
 ```
 
-## 27.3 controller 逐台，leader 最後
+## 26.3 controller 逐台，leader 最後
 
 @role 小安 | ops02 | cpadmin
 
@@ -7184,7 +5950,7 @@ kc01 更新 6 個；要重開機：否；要重啟的平台服務：無；conflu
   kc01 Lag=0（leader，最後做）
 ```
 
-## 27.4 REST Proxy、C3、操作機
+## 26.4 REST Proxy、C3、操作機
 
 @role 小安 | ops02 | cpadmin
 
@@ -7258,25 +6024,25 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-> 實測（2026-10-25，lab）：11 台各 6 個 OS 套件（含 openssh-server，修補過程中 ssh 連線不斷），Confluent 版本都沒變、不用重開機、沒有平台服務要重啟；之後第 20 章驗收全過。openssh-server 更新後 sshd 由 RPM 自己重啟，所以 `-s` 雖然會列 sshd，這裡只看平台服務。
+> 實測（2026-10-25，lab）：11 台各 6 個 OS 套件（含 openssh-server，修補過程中 ssh 連線不斷），Confluent 版本都沒變、不用重開機、沒有平台服務要重啟；之後第 19 章驗收全過。openssh-server 更新後 sshd 由 RPM 自己重啟，所以 `-s` 雖然會列 sshd，這裡只看平台服務。
 
-最後照第 20 章驗收一次（20.1–20.3）。
+最後照第 19 章驗收一次（19.1–19.3）。
 
-# 28. 第二十八站：升級 Control Center
+# 27. 第二十七站：升級 Control Center
 
-Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Platform 頻繁，可以單獨升級。和第 22 章不同的地方：
+Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Platform 頻繁，可以單獨升級。和第 21 章不同的地方：
 
 | 項目 | 說明 |
 |---|---|
-| 相容性 | 先查原廠的相容表：新版 C3 要支援目前的 CP 版本（2.6.x 支援到 CP 8.3.x）。CP 要升級時，**C3 先升**（22.3） |
+| 相容性 | 先查原廠的相容表：新版 C3 要支援目前的 CP 版本（2.6.x 支援到 CP 8.3.x）。CP 要升級時，**C3 先升**（21.3） |
 | 停機 | 只有一台：升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看） |
 | 資料 | 內建 Prometheus 的歷史指標在 C3 的資料目錄，換套件不會清掉 |
-| JDK | C3 留在 JDK 21（22.7） |
+| JDK | C3 留在 JDK 21（21.7） |
 | 回滾 | `dnf downgrade` 回舊版（舊版的 RPM 一直留在套件庫，第 4 站） |
 
-lab 上已經是原廠最新的 2.6.1，所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 28.3。
+lab 上已經是原廠最新的 2.6.1，所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 27.3。
 
-## 28.1 下載、驗簽章
+## 27.1 下載、驗簽章
 
 @role 小安 | dl01 | root
 
@@ -7292,7 +6058,7 @@ SHA256SUMS
 confluent-control-center-next-gen-2.6.0-1.noarch.rpm
 ```
 
-## 28.2 引進、上架
+## 27.2 引進、上架
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
@@ -7318,7 +6084,7 @@ cp ~/landing/c3/*.rpm ~/repo/confluent/ && createrepo_c -q --update ~/repo/confl
 套件庫裡的 C3：2.6.0-1 2.6.1-1
 ```
 
-## 28.3 （lab 演練用）退回 2.6.0：也就是回滾程序
+## 27.3 （lab 演練用）退回 2.6.0：也就是回滾程序
 
 @role 小安 | ops02 | cpadmin
 
@@ -7341,7 +6107,7 @@ confluent-control-center-next-gen-2.6.0-1.noarch config=same exec=/etc/confluent
 UI=200（約 30 秒）；Prometheus 指標 125 種
 ```
 
-## 28.4 升級到新版
+## 27.4 升級到新版
 
 @role 小安 | ops02 | cpadmin
 

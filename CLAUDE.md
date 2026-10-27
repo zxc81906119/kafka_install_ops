@@ -25,13 +25,13 @@ Details of the architecture and every component: @README.md
 - One session = one git worktree = one branch. The Docker lab is shared: note "lab 使用中" in the status file.
 
 ## Repository map
-- `docs/journey-src/` — `journey.md` (the hands-on guide, chapters 0–28, `@only customer|conjur|provider` sections)
-  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh <mode> [from] [to]` runs the guide's
+- `docs/journey-src/` — `journey.md` (the hands-on guide, chapters 0–27, single `customer` mode)
+  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh customer [from] [to]` runs the guide's
   blocks on the lab (`run-chapter.js` extracts them, `scan-log.sh` flags rc=0 output that is really a failure).
 - `docs/questions-src/questions.md` → `docs/Confluent-請銀行確認的事項.docx` (`node build.js`).
 - `docs/deck-src/install.js` + `install-steps.js` → `docs/Confluent-RPM安裝流程.pptx` (14-page deck for bank managers).
-- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/01–27`, `conf/site.env`);
-  `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh`, `run-all.sh`, `run-upgrade-drill.sh`).
+- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/01–26`, `conf/site.env`);
+  `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh`, `run-upgrade-drill.sh`).
 - `opmenu/` — OP menu source (the **only** copy; never edit a sibling project such as `untitled6`).
 - `redesign/README.md` — design decisions, lessons, open questions.
 - Generated documents: edit the sources, then rebuild (skill `build-docs`).

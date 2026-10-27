@@ -100,8 +100,8 @@ D.journey = () => svg(760, 310, [
   box(265, 140, 230, 56, '5b 憑證與設定', ['CSR → 銀行簽 → 設定檔'], 'blue'),
   box(510, 140, 230, 56, '5c 啟動與驗證', ['controller → broker → REST → C3'], 'blue'),
   arrow(250, 168, 263, 168), arrow(495, 168, 508, 168),
-  box(20, 222, 400, 56, '15–20 延伸與交付', ['密碼交保管庫、維運選單、監控、稽核日誌、驗收'], 'purple'),
-  box(440, 222, 300, 56, '21–28 上線之後', ['憑證、升級、修補、license、換機、增減、備份'], 'gray'),
+  box(20, 222, 400, 56, '15–19 延伸與交付', ['密碼交保管庫、維運選單、監控、稽核日誌、驗收'], 'purple'),
+  box(440, 222, 300, 56, '20–27 上線之後', ['憑證、升級、修補、license、換機、增減、備份'], 'gray'),
   arrow(625, 196, 215, 220, null, { via: [[625, 208], [215, 208]] }), arrow(420, 250, 438, 250),
   legend(20, 298, [['teal', '我方'], ['amber', '銀行'], ['blue', '我方，在行內主機上'], ['purple', '延伸'], ['gray', '上線後']]),
 ].join(''));
@@ -209,29 +209,11 @@ D.edge = () => svg(760, 210, [
   arrow(550, 160, 588, 160),
 ].join(''));
 
-// 12. Secrets in the bank's Conjur
-D.conjur = () => svg(800, 310, [
-  region(20, 28, 290, 262, "銀行 CyberArk", "amber"),
-  box(36, 58, 258, 62, "Conjur（Secrets Manager）", ["policy：誰能讀哪個值", "kafka/store-password 等 3 個變數"], "amber"),
-  box(36, 136, 258, 62, "PAM Vault + CPM", ["真實來源，CPM 負責輪替", "Vault Synchronizer 同步進 Conjur"], "amber"),
-  box(36, 214, 258, 62, "每台主機一個 host 身分", ["host/kafka/kb01 … 各一把 API key", "只能 read，不能 update"], "amber"),
-  arrow(165, 136, 165, 122, null, { dash: true }),
-  box(400, 50, 210, 62, "server.properties", ["ssl.keystore.password=", "${cyberark:…store-password…}"], "blue"),
-  box(400, 130, 210, 62, "config.providers=cyberark", ["csid-secrets-providers jar", "CLASSPATH 由 drop-in 帶入"], "blue"),
-  box(400, 210, 210, 62, "服務啟動時", ["1 用 host 身分認證，拿 token", "2 取值填進設定，才開 listener"], "blue"),
-  arrow(398, 241, 296, 89, "HTTPS（銀行 CA）", { via: [[352, 241], [352, 89]], lx: 352, ly: 170 }),
-  box(640, 50, 140, 62, "小安（ops 身分）", ["把值寫進 Conjur", "可以 update"], "gray"),
-  arrow(710, 48, 165, 56, null, { dash: true, via: [[710, 14], [165, 14]] }),
-  box(640, 130, 140, 62, "輪替", ["改 AD／CyberArk 的值", "滾動重啟，不改檔"], "gray"),
-  box(640, 210, 140, 62, "secret zero", ["host API key 落地 0640", "或改用憑證 authn-cert"], "coral"),
-  arrow(638, 241, 612, 241, null, { dash: true }),
-].join(""));
-
 // 13. Secret Protection with the master key in the vault
 D.secretprotection = () => svg(800, 300, [
   region(20, 28, 250, 262, "銀行 CyberArk（PAM）", "amber"),
   box(36, 60, 218, 62, "Vault：passphrase", ["版本保留，可回滾", "取用要變更單、留紀錄"], "amber"),
-  box(36, 150, 218, 62, "PVWA / CCP", ["人取或操作機取", "lab 用 Conjur 代替"], "amber"),
+  box(36, 150, 218, 62, "PVWA", ["人從 PVWA 取出貼上", "lab 用資料夾模擬"], "amber"),
   arrow(145, 150, 145, 122, null, { dash: true }),
   box(320, 40, 210, 62, "操作機（變更時段）", ["取 passphrase → master key", "encrypt / rotate，用完刪"], "blue"),
   arrow(256, 91, 318, 71, null, { via: [[290, 91], [290, 71]] }),   // passphrase：Vault → 操作機
@@ -305,7 +287,7 @@ D.certrotate = () => svg(800, 300, [
   note(20, 145, "truststore 只信根憑證：新舊 leaf 同時有效，不斷線"),
   box(20, 170, 160, 100, "階段一：加", ["信任：舊根 + 新根", "出示：舊 CA 簽的"], "amber"),
   arrow(180, 220, 218, 220),
-  box(220, 170, 160, 100, "階段二：換", ["信任：舊根 + 新根", "出示：新 CA 簽的", "（銀行的 AD、套件庫、", "保管庫也重簽）"], "coral"),
+  box(220, 170, 160, 100, "階段二：換", ["信任：舊根 + 新根", "出示：新 CA 簽的", "（銀行的 AD、", "套件庫也重簽）"], "coral"),
   arrow(380, 220, 418, 220),
   box(420, 170, 160, 100, "階段三：退", ["信任：只有新根", "出示：新 CA 簽的", "舊 CA 簽的一律被拒"], "teal"),
   box(300, 30, 480, 92, "每個階段都要換的信任清單", ["OS：/etc/pki/…/bank-root.pem（bundle，檔名不變）", "我方：truststore.p12（alias）、C3 的 ca.pem、OP menu 的兩份", "行內：Prometheus 的 ca.pem、應用程式的 truststore"], "gray"),
@@ -320,7 +302,7 @@ D.upgrade = () => svg(800, 300, [
   box(290, 30, 220, 120, "二：JDK 21 → 25", ["切 /opt/java/current", "controller、broker、REST、", "操作機逐台重啟", "C3 留在 21"], "teal"),
   arrow(510, 90, 538, 90),
   box(540, 30, 240, 120, "三：finalize", ["kafka-features upgrade", "--release-version 4.3", "metadata 版本升到 8.3", "之後不能退回 8.2"], "coral"),
-  box(20, 190, 490, 80, "finalize 之前都能退", ["先把 JDK 切回 21（8.2 不支援 25）→ dnf downgrade 回 8.2.4", "順序和升級相反；每段結束跑第 20 章驗收"], "amber"),
+  box(20, 190, 490, 80, "finalize 之前都能退", ["先把 JDK 切回 21（8.2 不支援 25）→ dnf downgrade 回 8.2.4", "順序和升級相反；每段結束跑第 19 章驗收"], "amber"),
   arrow(265, 188, 265, 152, null, { dash: true }),
   box(540, 190, 240, 80, "每台的步驟", ["versionlock 解開 → 換套件 → 鎖回", "daemon-reload → 重啟 → 等健康"], "gray"),
 ].join(""));

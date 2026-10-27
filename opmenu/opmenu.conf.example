@@ -18,7 +18,7 @@ OPMENU_BROKER_SERVICES='kb01.poc.lab:confluent-server kb02.poc.lab:confluent-ser
 OPMENU_AUX_SERVICES='rest01.poc.lab:confluent-kafka-rest rest02.poc.lab:confluent-kafka-rest c3-01.poc.lab:confluent-control-center'
 OPMENU_CONTROLLER_HOSTS='kc01.poc.lab kc02.poc.lab kc03.poc.lab'
 
-# 主機登入:操作機以 cpadmin ssh 到各主機(和安裝同一個帳號);私鑰在選單啟動時從保管庫取進 ssh-agent,不落地
+# 主機登入:操作機以 cpadmin ssh 到各主機(和安裝同一個帳號);私鑰由維運人員從 PVWA 取出、貼進選單自己的 ssh-agent,不落地
 OPMENU_SSH_USER=cpadmin
 # 主機上 cpadmin 的 sudo 永久只開(安裝、升級時才由 OS 團隊依變更單開全權):
 #   cpadmin ALL=(root) NOPASSWD: /usr/bin/systemctl restart confluent-*, /usr/bin/systemctl status confluent-*, /usr/bin/journalctl -u confluent-*
@@ -26,22 +26,9 @@ OPMENU_SSH_USER=cpadmin
 # 操作者身分:操作機是本機個人帳號(opxx),所以操作者自己輸入 AD 帳號與密碼(Kafka 身分);作業系統帳號只在紀錄裡附註
 OPMENU_USER_FROM_OS=0
 
-# 機敏資料來源(lib/secrets/):conjur = Conjur REST(lab 用它扮演 CyberArk)| ccp = PAM 的 Central Credential Provider(範本,依行內調整)
-OPMENU_SECRETS=conjur
-OPMENU_CONJUR_URL='https://conjur.poc.lab'
-OPMENU_CONJUR_ACCOUNT=poc
-OPMENU_CONJUR_IDENTITY='/etc/opmenu/conjur.identity'   # 兩行 login=host/kafka/opmenu、api_key=…;0640 root:opmenu
-OPMENU_SSH_KEY_SECRET='kafka/ssh/cpadmin'               # 保管庫裡的 cpadmin 私鑰(CPM 管理、推公鑰到各主機的那把)
+# 機敏資料:維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh,唯一的來源);下面兩個是提示用的 object 名稱
+OPMENU_SSH_KEY_SECRET='kafka/ssh/cpadmin'               # PVWA 裡的 cpadmin 私鑰(SSH Key Manager 管理、推公鑰到各主機的那把)
 OPMENU_BREAKGLASS_SECRET='kafka/breakglass/pem'         # 91 緊急模式憑證(私鑰 + 憑證鏈 PEM),身分 User:opmenu-breakglass 在 MDS 綁 SystemAdmin
-# 用 CCP 時改成:
-# OPMENU_SECRETS=ccp
-# OPMENU_CCP_URL='https://ccp.bank.local/AIMWebService/api/Accounts'
-# OPMENU_CCP_APPID=opmenu
-# OPMENU_CCP_SAFE=Confluent
-# OPMENU_CCP_CERT=/etc/opmenu/ssl/opmenu-ccp.crt     # AppID 用 client 憑證 + 操作機 IP 驗身分
-# OPMENU_CCP_KEY=/etc/opmenu/ssl/opmenu-ccp.key
-# OPMENU_SSH_KEY_SECRET='cpadmin-ssh-key'            # CCP 的 object 名稱
-# OPMENU_BREAKGLASS_SECRET='opmenu-breakglass-pem'
 
 # 規範(依客戶規定)
 OPMENU_TOPIC_PATTERN='^[a-z][a-z0-9]+\.[a-z0-9.-]+$'

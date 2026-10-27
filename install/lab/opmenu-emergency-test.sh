@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lab 專用：在 ops02 以 cpadmin 跑。需要已裝好的 OP menu（第 17 站）。
+# lab 專用：在 ops02 以 cpadmin 跑。需要已裝好的 OP menu（第 16 站）。
 # OP menu「緊急主機模式」實測：用測試設定把 MDS 位址指到不通的埠，模擬 MDS 掛掉。
 #   1. 不在 opmenu-emergency 群組 → 擋下，什麼都不能做
 #   2. 加進群組 → 只看得到 16 18 21 22 23；Kafka 類（31 建 topic）不能做

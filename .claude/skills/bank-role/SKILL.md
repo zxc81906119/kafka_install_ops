@@ -21,7 +21,7 @@ inside the containers. Always say which bank role is acting and keep the product
 | Certificate signing | Windows: `bash ~/kafka-lab/ca/sign.sh <csr> <out>` (G2 issuing CA: `ca/g2/sign.sh`) | policy: RSA ≥ 2048, CN present, not a CA, EKU **must** be in the CSR and ⊆ {serverAuth, clientAuth}; answer = leaf + issuing CA. Copy CSRs out of ops02 with `docker cp`, answers back into `~/pki/incoming/`, `chown cpadmin` |
 | NTP | repo01 (`chronyd`, `local stratum 10`, `allow 172.35.0.0/24`) | nodes point `server repo01.poc.lab iburst` |
 | Load balancer | lb01 `/etc/nginx/stream.d/cp.conf` | L4 passthrough 8082 → rest01/rest02 (`hash $remote_addr consistent`); 9021 → c3-01 only for the Windows port mapping; `nginx -t && nginx -s reload` |
-| sudo for cpadmin | node image sudoers (full NOPASSWD in the lab) | after delivery only the narrow `cpadmin-ops` rule (guide 20.5) |
+| sudo for cpadmin | node image sudoers (full NOPASSWD in the lab) | after delivery only the narrow `cpadmin-ops` rule (guide 19.5) |
 | PVWA (CyberArk PAM) | Windows `~/kafka-lab/pvwa/` (0600 files) | storing = copy the file in; retrieving = paste into ops02 (`docker exec -i … < pvwa/x`); keep the old value as `.prev` |
 
 ## Rules

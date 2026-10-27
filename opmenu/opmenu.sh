@@ -7,7 +7,7 @@
 #   lib/common.sh             共用:項目登記、紀錄、確認、輸入驗證、執行流程、主機權限閘門、ssh 金鑰載入
 #   lib/kafka.sh              共用:以操作者身分跑 Kafka 工具、呼叫 MDS;91 用保管庫憑證
 #   lib/hosts.sh              共用:ssh 到各主機重啟、看日誌、磁碟、診斷
-#   lib/secrets/<名稱>.sh     機敏資料從哪裡取:conjur | ccp | manual(OPMENU_SECRETS 選;manual = 沒有 CCP,維運人員從 PVWA 取出貼上)
+#   lib/secrets/manual.sh     機敏資料從哪裡取:維運人員從 CyberArk PVWA 取出後貼上(唯一的來源)
 #   items/<編號>-<名稱>.sh     每個選單項目一個檔:開頭 item 一行宣告,下面 run() 做事
 #
 # 用法:
@@ -24,7 +24,7 @@ for _c in "${OPMENU_CONF:-}" /etc/opmenu/opmenu.conf "$OPMENU_HOME/opmenu.conf";
 if [ "${OPMENU_ALLOW_ENV_OVERRIDE:-0}" != 1 ]; then unset OPMENU_USER OPMENU_PASS OPMENU_YES OPMENU_REASON; fi   # 測試用的環境變數只在設定檔明確允許時才接受
 . "$OPMENU_HOME/lib/kafka.sh"
 . "$OPMENU_HOME/lib/hosts.sh"
-. "$OPMENU_HOME/lib/secrets/$OPMENU_SECRETS.sh" || { echo "找不到 secrets 來源: $OPMENU_SECRETS"; exit 1; }
+. "$OPMENU_HOME/lib/secrets/manual.sh" || { echo "找不到 lib/secrets/manual.sh"; exit 1; }
 core_guard_host_actions   # 碰主機的介面先過權限閘門
 load_items "$OPMENU_HOME/items" || exit 1
 

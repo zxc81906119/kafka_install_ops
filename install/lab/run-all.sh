@@ -3,8 +3,7 @@
 #
 #   bash run-all.sh              down -v 從零，跑到第 14 站
 #   bash run-all.sh --no-reset   用現有 lab 重跑（驗冪等）
-#   EXT=1 bash run-all.sh        再接延伸站：銀行建 Conjur／變數／選單身分 → 15–19（依 site.env 的開關）
-#                                → 行內 Prometheus 接上 → 冷開機 → 20 驗收
+#   第 15 站起（Secret Protection、選單、驗收…）由 run-customer.sh 從零跑到第 19 站
 #
 # 流程裡的「銀行」動作都由 bank-sim.sh 代做；安裝本身只靠 install.sh，和正式環境一樣。
 set -uo pipefail
@@ -39,12 +38,4 @@ milestone "銀行：公鑰、套件庫、根憑證、AD、NTP、LB"; $BANK prepa
 milestone "03–09"; install_on_ops --from 03 --to 09; expect_wait_for_bank $? 09
 milestone "銀行：CA 簽發"; $BANK sign
 milestone "09–14"; install_on_ops --from 09 --to 14 || exit 1
-if [ "${EXT:-0}" = 1 ]; then
-  milestone "銀行：Conjur、Secret Protection 變數、選單身分（15.1、16.1+16.8、17.1）"
-  $BANK conjur && $BANK sp && $BANK opmenu || exit 1
-  milestone "15–19"; install_on_ops --from 15 --to 19 || exit 1
-  milestone "銀行：行內 Prometheus 接上（18.5）"; $BANK prometheus
-  milestone "機房：冷開機（20.4）"; $BANK coldboot
-  milestone "20 驗收"; install_on_ops --from 20 || exit 1
-fi
 milestone "完成"; install_on_ops --list

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 第 27 站：OS 修補 —— 一台一台 dnf update（Confluent 由 versionlock 擋住），該重開就重開、健康了才做下一台（手把手第 27 章）
+# 第 26 站：OS 修補 —— 一台一台 dnf update（Confluent 由 versionlock 擋住），該重開就重開、健康了才做下一台（手把手第 26 章）
 # where: ops02 （cpadmin）
 # run: on-demand（不在安裝順序裡；銀行每月發布 OS 修補之後執行）
 #
 # 用法：
-#   bash steps/27-os-patch.sh plan          每台可更新幾個套件、有沒有 confluent-*（有就是 versionlock 沒鎖好，停下來）
-#   bash steps/27-os-patch.sh apply         broker 逐台 → controller（leader 最後）→ REST → C3 → 操作機
-#   ONLY_HOSTS="kb01" bash steps/27-os-patch.sh apply   只做列出的主機
+#   bash steps/26-os-patch.sh plan          每台可更新幾個套件、有沒有 confluent-*（有就是 versionlock 沒鎖好，停下來）
+#   bash steps/26-os-patch.sh apply         broker 逐台 → controller（leader 最後）→ REST → C3 → 操作機
+#   ONLY_HOSTS="kb01" bash steps/26-os-patch.sh apply   只做列出的主機
 #
 # 每台：dnf update → dnf needs-restarting -r（要不要重開機）、-s（哪些平台服務要重啟）→ 照判斷做 → 等健康。
 set -uo pipefail
@@ -80,7 +80,7 @@ patch_one() {
 
 plan() {
   local host counts
-  section "27.1 修補前：under-replicated、每台可更新的套件、versionlock"
+  section "26.1 修補前：under-replicated、每台可更新的套件、versionlock"
   [ "$(under_replicated_count)" = 0 ] && ok "沒有 under-replicated" || fail "有 under-replicated：叢集不健康時不修補"
   for host in $CONTROLLERS $BROKERS $RESTS $C3_HOST $OPS_HOST; do
     if [ "$host" = "$OPS_HOST" ]; then counts=$(bash -s <<<"$PLAN_HOST"); else counts=$(ssh_script "$host" <<<"$PLAN_HOST"); fi
@@ -94,14 +94,14 @@ apply() {
   local host leader
   plan
   [ "$FAIL_COUNT" = 0 ] || die "修補前檢查沒過"
-  section "27.2 broker 逐台"
+  section "26.2 broker 逐台"
   for host in $BROKERS; do selected "$host" && { patch_one "$host" || die "停在 $host"; }; done
-  section "27.3 controller 逐台，leader 最後"
+  section "26.3 controller 逐台，leader 最後"
   leader=$(current_leader)
   for host in $(for h in $CONTROLLERS; do [ "$h" != "$leader" ] && echo "$h"; done) $leader; do
     selected "$host" && { patch_one "$host" || die "停在 $host"; }
   done
-  section "27.4 REST Proxy、C3、操作機"
+  section "26.4 REST Proxy、C3、操作機"
   for host in $RESTS $C3_HOST $OPS_HOST; do selected "$host" && { patch_one "$host" || die "停在 $host"; }; done
 }
 

@@ -1,7 +1,5 @@
 // Builds docs/Confluent-安裝旅程-手把手.docx from journey.md (the manual's Markdown subset, plus:
 //   @role 銀行 OS 團隊 | repo01 | root        -> a role badge line (who runs the next commands, where, as whom)
-//   @only customer,conjur                        -> a note: the following section is only for these modes (see MODES);
-//                                                   right after a heading it covers that heading's section; `@only all` ends it
 //   ```bash  / ```out                            -> command block / expected-output block
 //   ![diagram-id]                                -> diagram from diagrams.js rendered to PNG
 const fs = require('fs');
@@ -71,15 +69,6 @@ function role(text) {
     indent: { left: 120 },
     children: parts,
   });
-}
-
-// 模式：手把手的主線是客戶模式；銀行有 Conjur 時另有選配段落（run-chapter.js 依同一組名稱挑要跑的指令塊）
-const MODES = { customer: '客戶模式（CyberArk 只有 PAM，密碼人工從 PVWA 取放）', conjur: '銀行有 Conjur（選配）',
-  provider: '銀行有 Conjur、改用 Conjur provider 不做第 16 章（選配）' };
-function onlyNote(list) {
-  const names = list.split(',').map(s => s.trim()).filter(Boolean).map(k => { if (!MODES[k]) throw new Error('unknown @only mode: ' + k); return MODES[k]; });
-  return new Paragraph({ spacing: { before: 120, after: 80 }, keepNext: true,
-    children: [new TextRun({ text: '◆ 這一段只在：' + names.join('；'), bold: true, color: '7C3AED', size: 19 })] });
 }
 
 function callout(text, warn) {
@@ -170,7 +159,6 @@ function parse(md) {
     if (l.trim() === '[[toc]]') { out.push(new TableOfContents('目錄', { hyperlink: true, headingStyleRange: '1-2' })); i++; continue; }
     if (l.trim() === '[[pagebreak]]') { out.push(new Paragraph({ children: [new PageBreak()] })); i++; continue; }
     if ((m = /^@role (.*)$/.exec(l))) { out.push(role(m[1])); i++; continue; }
-    if ((m = /^@only (.*)$/.exec(l))) { if (m[1].trim() !== 'all') out.push(onlyNote(m[1])); i++; continue; }
     if ((m = /^!\[([\w-]+)\]\s*$/.exec(l))) { out.push(image(m[1])); i++; continue; }
     if ((m = /^(#{1,3}) (.*)$/.exec(l))) {
       const lvl = m[1].length;
@@ -187,7 +175,7 @@ function parse(md) {
     if ((m = /^\d+\. (.*)$/.exec(l))) { numbered++; out.push(new Paragraph({ numbering: { reference: 'steps', level: 0, instance: out.length - numbered }, children: runs(m[1]) })); i++; continue; }
     if (l.trim() === '') { i++; continue; }
     const buf = [l]; i++;
-    while (i < lines.length && lines[i].trim() !== '' && !/^(\s*```|\||#|\s*>|\s*- |\d+\. |\[\[|@role|@only|!\[)/.test(lines[i])) buf.push(lines[i++]);
+    while (i < lines.length && lines[i].trim() !== '' && !/^(\s*```|\||#|\s*>|\s*- |\d+\. |\[\[|@role|!\[)/.test(lines[i])) buf.push(lines[i++]);
     const text = buf.map(x => x.trim()).reduce((a, b) => a + (/[\x21-\x7e]$/.test(a) && /^[\x21-\x7e]/.test(b) ? ' ' : '') + b);
     out.push(new Paragraph({ children: runs(text) }));
   }

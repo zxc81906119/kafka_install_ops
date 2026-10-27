@@ -30,7 +30,7 @@ run() {
     n=$(review_csv "$f" | tail -1); [[ "$n" =~ ^[0-9]+$ ]] || { echo "$n"; rm -f "$f"; return 1; }
     echo "已匯出 $n 筆權限:$f"; return 0
   fi
-  # 變更前快照:檔名與內容和每日備份(手把手第 26 章)一樣,sha256 可直接比對;features 的 Epoch 拿掉、ACL 與帳號清單排序
+  # 變更前快照:檔名與內容和每日備份(手把手第 25 章)一樣,sha256 可直接比對;features 的 Epoch 拿掉、ACL 與帳號清單排序
   d="$OPMENU_OUT_DIR/snapshot-$(date +%Y%m%d-%H%M%S)-$OP_USER"; mkdir -p "$d" && chmod 0750 "$d" || return 1
   n=$(review_csv "$d/permission-review.csv" | tail -1); [[ "$n" =~ ^[0-9]+$ ]] || failed="$failed permission-review.csv"
   be_kafka kafka-topics --describe > "$d/topics.txt" || failed="$failed topics.txt"

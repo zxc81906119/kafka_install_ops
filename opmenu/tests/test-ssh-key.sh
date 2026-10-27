@@ -37,13 +37,13 @@ check "取不到有記錄 SSH_KEY_FAIL" 'grep -q "SSH_KEY_FAIL" "$OPMENU_LOG"'
 OPMENU_SSH_KEY_SECRET=''; core_load_ssh_key; rc=$?
 check "沒設定 SSH_KEY_SECRET:不取、回傳 0" '[ $rc -eq 0 ] && [ -z "${OP_SSH_AGENT_PID:-}" ]'
 
-# ── on-demand：manual 來源預設等到要碰主機才取，而且只取一次 ──
+# ── on-demand：預設等到要碰主機才取，而且只取一次 ──
 OPMENU_SSH_KEY_SECRET="kafka/ssh/cpadmin"; SECRET_OK=1; : > "$SECRET_CALLS"
-OPMENU_SSH_KEY_LOAD=auto; OPMENU_SECRETS=manual
-check "manual + auto：登入時不取（on-demand）" "core_ssh_key_on_demand"
-OPMENU_SECRETS=conjur
-check "conjur + auto：登入就取" "! core_ssh_key_on_demand"
-OPMENU_SECRETS=manual
+OPMENU_SSH_KEY_LOAD=auto
+check "auto：登入時不取（on-demand）" "core_ssh_key_on_demand"
+OPMENU_SSH_KEY_LOAD=login
+check "login：登入就取" "! core_ssh_key_on_demand"
+OPMENU_SSH_KEY_LOAD=auto
 core_ensure_ssh_key >/dev/null; rc=$?
 check "第一次碰主機：取到金鑰" '[ $rc -eq 0 ] && [ "$(ssh-add -l 2>/dev/null | wc -l)" = 1 ]'
 core_ensure_ssh_key >/dev/null

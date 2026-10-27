@@ -26,7 +26,7 @@ rest01-02, c3-01, ops02; ports 9092 internal, 9093 controller, 9094 token, 9095 
 8082 REST, 9021 C3, 9090 Prometheus, 7071 JMX exporter.
 
 Reference material for exact commands and outputs: `docs/journey-src/journey.md` (validated end to end on
-the lab in all three modes). When a step fails, diagnose on the lab yourself (logs, `ss`, thread
+the lab). When a step fails, diagnose on the lab yourself (logs, `ss`, thread
 dumps) and give the user the fix as the next step — do not ask them to debug.
 
 After a step is confirmed, append anything new (a pitfall, a corrected command) to `redesign/README.md`.

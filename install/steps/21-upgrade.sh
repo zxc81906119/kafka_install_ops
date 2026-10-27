@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# 第 22 站：升級 Confluent 與 JDK —— 套件滾動升級、JDK 切換、finalize、回滾（手把手第 22 章）
+# 第 21 站：升級 Confluent 與 JDK —— 套件滾動升級、JDK 切換、finalize、回滾（手把手第 21 章）
 # where: ops02 （cpadmin）
 # run: on-demand（不在安裝順序裡；要升級時直接執行這支）
 #
-# 用法（照順序；每段結束都跑一次第 20 站驗收）：
-#   bash steps/22-upgrade.sh plan                    22.1 升級前檢查：features、quorum、套件庫有沒有新版、under-replicated、已廢棄設定
-#   bash steps/22-upgrade.sh backup                  22.2 每台 /etc/confluent 與 drop-in、features、操作機套件清單 → ~/upgrade-backup/<時間>/
-#   bash steps/22-upgrade.sh packages [版本]         22.3–22.6 第一段：C3 → broker 逐台 → controller 逐台（leader 最後）→ REST → 操作機
+# 用法（照順序；每段結束都跑一次第 19 站驗收）：
+#   bash steps/21-upgrade.sh plan                    21.1 升級前檢查：features、quorum、套件庫有沒有新版、under-replicated、已廢棄設定
+#   bash steps/21-upgrade.sh backup                  21.2 每台 /etc/confluent 與 drop-in、features、操作機套件清單 → ~/upgrade-backup/<時間>/
+#   bash steps/21-upgrade.sh packages [版本]         21.3–21.6 第一段：C3 → broker 逐台 → controller 逐台（leader 最後）→ REST → 操作機
 #                                                   版本預設 site.env 的 CP_VERSION（升級前先改 site.env，之後重跑其他站才一致）
-#   bash steps/22-upgrade.sh jdk <主版號>             22.7 第二段：切到 landing/bank/ 裡最新的 OpenJDK<主版號>U，C3 不動
-#   CONFIRM_CLUSTER_ID=<cluster id> bash steps/22-upgrade.sh finalize <release>
-#                                                   22.8 第三段：kafka-features upgrade --release-version <release>（例如 4.3）；不能退，所以要帶 cluster id 確認
-#   bash steps/22-upgrade.sh rollback <主機> <版本>   22.9 finalize 之前：這台 JDK 切回最新的 jdk-21*、套件 downgrade 到 <版本>
-#   bash steps/22-upgrade.sh c3 <版本>              只換 Control Center（手把手第 28 章）：比現在新就 install、比較舊就 downgrade（回滾）；
+#   bash steps/21-upgrade.sh jdk <主版號>             21.7 第二段：切到 landing/bank/ 裡最新的 OpenJDK<主版號>U，C3 不動
+#   CONFIRM_CLUSTER_ID=<cluster id> bash steps/21-upgrade.sh finalize <release>
+#                                                   21.8 第三段：kafka-features upgrade --release-version <release>（例如 4.3）；不能退，所以要帶 cluster id 確認
+#   bash steps/21-upgrade.sh rollback <主機> <版本>   21.9 finalize 之前：這台 JDK 切回最新的 jdk-21*、套件 downgrade 到 <版本>
+#   bash steps/21-upgrade.sh c3 <版本>              只換 Control Center（手把手第 27 章）：比現在新就 install、比較舊就 downgrade（回滾）；
 #                                                   套件要先上架到內部套件庫；做完把 site.env 的 C3_VERSION 改成同一版
-#   ONLY_HOSTS="kb04" bash steps/22-upgrade.sh packages|jdk …   只做列出的主機（回滾後把那台升回去）；略過 C3、role binding、操作機
+#   ONLY_HOSTS="kb04" bash steps/21-upgrade.sh packages|jdk …   只做列出的主機（回滾後把那台升回去）；略過 C3、role binding、操作機
 #
 # 每台的步驟：versionlock 解開 → 這台裝的每個 Confluent 套件換成目標版本 → 鎖回 → daemon-reload
 # （RPM 升級會換掉 unit 檔）→ 確認設定檔沒被動、ExecStart 指著我們的設定 → 重啟 → 等健康才做下一台。
@@ -113,7 +113,7 @@ for_each_controller_leader_last() {
 }
 
 plan() {
-  section "22.1 升級前檢查"
+  section "21.1 升級前檢查"
   local finalized
   finalized=$(features describe | awk '/confluent.metadata.version/{for(i=1;i<=NF;i++) if($i=="FinalizedVersionLevel:") print $(i+1)}')
   log "目前 metadata 版本：$finalized；quorum leader：$(current_leader)"
@@ -129,11 +129,11 @@ plan() {
 
 backup() {
   local backup_dir; backup_dir=$BACKUP_ROOT/$(date +%Y%m%d-%H%M)
-  section "22.2 備份 → $backup_dir"
+  section "21.2 備份 → $backup_dir"
   install -d -m 0700 "$backup_dir"
   for host in $CLUSTER_HOSTS; do
-    # master key（service.env）與保管庫身分不進備份：正本在 CyberArk，備份檔就不必當機敏資料保管
-    if ssh_run "$host" 'sudo tar -czf - -C / --exclude=etc/confluent/service.env --exclude=etc/confluent/conjur etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > "$backup_dir/$host.tar.gz"
+    # master key（service.env）不進備份：正本在 CyberArk，備份檔就不必當機敏資料保管
+    if ssh_run "$host" 'sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > "$backup_dir/$host.tar.gz"
     then ok "$host $(du -h "$backup_dir/$host.tar.gz" | cut -f1)"; else fail "$host 備份失敗"; fi
   done
   features describe > "$backup_dir/features.txt"
@@ -144,7 +144,7 @@ backup() {
 packages() {
   local version=${1:-$CP_VERSION}
   if [ -z "$ONLY_HOSTS" ]; then
-  section "22.3 Control Center 先（$C3_HOST）"
+  section "21.3 Control Center 先（$C3_HOST）"
   local c3_installed; c3_installed=$(ssh_run "$C3_HOST" "rpm -q --qf '%{VERSION}' confluent-control-center-next-gen")
   if [ "$c3_installed" = "$C3_VERSION" ]; then
     if wait_healthy "$C3_HOST"; then ok "C3 $c3_installed 不用換（site.env 的 C3_VERSION），UI 200"; else fail "C3 UI 沒有 200"; fi
@@ -152,16 +152,16 @@ packages() {
     change_packages_and_restart "$C3_HOST" "$C3_VERSION" install || die "C3 升級失敗"
   fi
   fi
-  section "22.4 broker 逐台 → $version"
+  section "21.4 broker 逐台 → $version"
   for host in $BROKERS; do selected "$host" || continue; change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
-  section "22.5 controller 逐台（每輪重查 leader，leader 最後）"
+  section "21.5 controller 逐台（每輪重查 leader，leader 最後）"
   upgrade_controller() { change_packages_and_restart "$1" "$version" install; }
   for_each_controller_leader_last upgrade_controller || die "controller 升級停下"
   if [ -n "$ONLY_HOSTS" ]; then
     for host in $RESTS; do selected "$host" || continue; change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
     log "ONLY_HOSTS=$ONLY_HOSTS：略過 role binding 與操作機"; return 0
   fi
-  section "22.6 REST Proxy（先給 svc-rest 在 _confluent-command 的 ResourceOwner）與操作機"
+  section "21.6 REST Proxy（先給 svc-rest 在 _confluent-command 的 ResourceOwner）與操作機"
   source "$CONF_DIR/kraft.env"   # CLUSTER_ID
   confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
     --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1 || die "confluent login（svc-ops）失敗"
@@ -173,7 +173,7 @@ packages() {
   # shellcheck disable=SC2086  # 套件清單要拆成多個參數
   if sudo dnf -q -y install $ops_packages >/dev/null && sudo dnf -q versionlock add $ops_packages >/dev/null; then ok "$OPS_HOST：$(rpm -q --qf '%{VERSION}' confluent-server)"
   else fail "$OPS_HOST 套件"; fi
-  log "第一段完成：跑第 20 站驗收；features 還沒升，隨時可以 rollback"
+  log "第一段完成：跑第 19 站驗收；features 還沒升，隨時可以 rollback"
 }
 
 # 一台：解壓新 JDK、切 /opt/java/current、重啟（操作機沒有服務，只切連結）
@@ -190,7 +190,7 @@ jdk() {
   [ -n "$jdk_tar" ] || die "$LANDING/bank/ 沒有 OpenJDK${major}U 的 tar（銀行交付）"
   (cd "$LANDING/bank" && sha256sum -c --quiet "$(basename "$jdk_tar").sha256") || die "$(basename "$jdk_tar") 的 sha256 不符"
   jdk_dir=$(tar -tzf "$jdk_tar" | head -1 | cut -d/ -f1)
-  section "22.7 JDK → $jdk_dir（$C3_HOST 不動）"
+  section "21.7 JDK → $jdk_dir（$C3_HOST 不動）"
   switch_jdk_on() {
     local host=$1 linked process_java
     copy_to_tmp "$host" "$jdk_tar" || { fail "$host scp"; return 1; }
@@ -207,13 +207,13 @@ jdk() {
   [ -n "$ONLY_HOSTS" ] && { log "ONLY_HOSTS=$ONLY_HOSTS：略過操作機"; return 0; }
   sudo tar -xzf "$jdk_tar" -C /opt/java && sudo chown -R root:root "/opt/java/$jdk_dir" && sudo ln -sfn "/opt/java/$jdk_dir" /opt/java/current
   ok "$OPS_HOST：$(java -version 2>&1 | head -1)"
-  log "$C3_HOST 留在 $(ssh_run "$C3_HOST" 'readlink /opt/java/current')；第二段完成：跑第 20 站驗收"
+  log "$C3_HOST 留在 $(ssh_run "$C3_HOST" 'readlink /opt/java/current')；第二段完成：跑第 19 站驗收"
 }
 
 finalize() {
   local release=${1:?用法：finalize <release>，例如 finalize 4.3}
   source "$CONF_DIR/kraft.env"
-  section "22.8 finalize：features → $release（之後不能退回舊版）"
+  section "21.8 finalize：features → $release（之後不能退回舊版）"
   features version-mapping --release-version "$release" | tee -a "$LOG_FILE"
   features upgrade --release-version "$release" --dry-run | tee -a "$LOG_FILE"
   if [ "${CONFIRM_CLUSTER_ID:-}" != "$CLUSTER_ID" ]; then
@@ -226,7 +226,7 @@ finalize() {
 
 rollback() {
   local host=${1:?用法：rollback <主機> <版本>} version=${2:?用法：rollback <主機> <版本>}
-  section "22.9 回滾 $host → $version（JDK 先切回最新的 jdk-21*）"
+  section "21.9 回滾 $host → $version（JDK 先切回最新的 jdk-21*）"
   if grep -q "CP-${version%.*}" <<<"$(features describe | grep confluent.metadata.version)"; then :; else
     warn "features 已經不是 ${version%.*}：finalize 之後 downgrade 不保證可行"
   fi

@@ -381,7 +381,7 @@ async function main() {
       txt(s, sub, { x, y: 5.5, w, h: 0.7, fontSize: 13, align: "center" });
       if (i < 2) arrow(s, x + w + 0.05, 5.62, x + w + gap - 0.05, 5.62);
     });
-    txt(s, "要問客戶：CA 是 root 還是 root＋中繼？憑證效期？誰簽發、多久能簽好？　provider 模式：JDK cacerts 也要同步加／刪", { x: M, y: 6.45, w: CW, h: 0.45, fontSize: 13, bold: true, color: C.accent });
+    txt(s, "要問客戶：CA 是 root 還是 root＋中繼？憑證效期？誰簽發、多久能簽好？　JDK cacerts 也要同步加／刪", { x: M, y: 6.45, w: CW, h: 0.45, fontSize: 13, bold: true, color: C.accent });
   }
 
   // ================================================================= 12 CyberArk: people + keys
@@ -421,7 +421,7 @@ async function main() {
       [B("SSH 金鑰對（連各主機）"), "私鑰：操作機 root 0400", man("人工"), "新公鑰先加、確認後再刪舊公鑰，可零停機"],
       [B("root"), "PVWA", auto("CPM"), "平常不用，僅供緊急"],
       [B("svc-mds-bind（AD 唯讀）"), "PVWA", auto("CPM"), "換完要更新 broker 設定；中間有短暫視窗"],
-      [B("master key、passphrase"), "PVWA", man("人工（手冊 16 章）"), "rotate 需要新舊兩者；data key 不例行輪替"],
+      [B("master key、passphrase"), "PVWA", man("人工（手冊 15 章）"), "rotate 需要新舊兩者；data key 不例行輪替"],
       [B("SCRAM 應用帳密"), "PVWA", man("人工"), "零停機要 A/B 兩組（見下頁）"],
       [B("kafka-admin"), "PVWA", man("人工：用完即換"), "只在維運時段使用"],
       [B("opmenu-breakglass 憑證"), "PVWA", man("人工（憑證效期）"), "緊急才用"],

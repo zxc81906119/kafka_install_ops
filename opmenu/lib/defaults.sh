@@ -41,24 +41,13 @@ d OPMENU_SSH_USER        cpadmin                                        # 各主
 d OPMENU_SSH_CONTROL_PERSIST 600                                        # 同一 node 的 ssh 連線重用幾秒(ControlMaster);離開選單時全部關閉
 d OPMENU_KNOWN_HOSTS     '/etc/opmenu/known_hosts'                         # 各主機的 ssh 主機金鑰(管理員用 ssh-keyscan 建,0644 root);選單只信這份,不接受新主機
 
-# ── 機敏資料:由保管庫取,選單啟動時載入記憶體,離開時清掉(2026-10-22)──
-d OPMENU_SECRETS         conjur                                         # lib/secrets/<名稱>.sh:conjur(Conjur REST,lab 用它扮演 CyberArk)| ccp(PAM 的 Central Credential Provider,範本)| manual(沒有 CCP:登入後從 PVWA 取出貼上)
-d OPMENU_SSH_KEY_SECRET  'kafka/ssh/cpadmin'                            # 保管庫裡「操作機 → 各主機 cpadmin」的 SSH 私鑰(和安裝同一把);空 = 不取,改用 ~/.ssh 既有金鑰
+# ── 機敏資料:維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh),進記憶體,離開時清掉 ──
+d OPMENU_SSH_KEY_SECRET  'kafka/ssh/cpadmin'                            # PVWA 裡「操作機 → 各主機 cpadmin」的 SSH 私鑰(和安裝同一把);空 = 不取,改用 ~/.ssh 既有金鑰
 d OPMENU_BREAKGLASS_SECRET 'kafka/breakglass/pem'                       # 91 緊急模式用的 client 憑證(私鑰 + 憑證鏈,PEM);只在執行 91 時取,用完即丟
 d OPMENU_BREAKGLASS_BOOTSTRAP ''                                        # 91 連的 TOKEN listener(主機:9094,逗號分隔);空 = 由 OPMENU_BOOTSTRAP 的主機 + OPMENU_TOKEN_PORT 推算
 d OPMENU_TOKEN_PORT      9094
 d OPMENU_SSH_KEY_TTL     14400                                          # 取回的 SSH 私鑰在 ssh-agent 裡最多留幾秒(保險:選單被強制終止時 agent 也會到期)
-d OPMENU_SSH_KEY_LOAD    auto                                           # 主機用的 SSH 私鑰何時取：login（登入就取）| on-demand（第一次做主機類項目、過了權限閘門才取）| auto（manual 來源用 on-demand，其他用 login）
-# conjur:設定檔與身分檔(身分 = 這台操作機給選單用的 host 身分,正式環境換成 CCP 的 AppID)
-d OPMENU_CONJUR_URL      'https://conjur.example.com'
-d OPMENU_CONJUR_ACCOUNT  poc
-d OPMENU_CONJUR_IDENTITY '/etc/opmenu/conjur.identity'                  # 兩行:login=host/…、api_key=…;0640 root:opmenu(操作員群組可讀、不可改)
-# ccp:AppID 以 client 憑證 + 來源 IP 驗身分
-d OPMENU_CCP_URL         'https://ccp.example.com/AIMWebService/api/Accounts'
-d OPMENU_CCP_APPID       opmenu
-d OPMENU_CCP_SAFE        Confluent
-d OPMENU_CCP_CERT        '/etc/opmenu/ssl/opmenu-ccp.crt'
-d OPMENU_CCP_KEY         '/etc/opmenu/ssl/opmenu-ccp.key'
+d OPMENU_SSH_KEY_LOAD    auto                                           # 主機用的 SSH 私鑰何時取：login（登入就取）| on-demand（第一次做主機類項目、過了權限閘門才取）| auto（= on-demand）
 
 # ── 規範(依客戶的命名規定調整)──
 d OPMENU_TOPIC_PATTERN   '^[a-z][a-z0-9]+\.[a-z0-9.-]+$'                # topic 命名:<系統>.<名稱>

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 第 25 站：broker 縮減與擴充（Self-Balancing 搬資料）（手把手第 25 章）
+# 第 24 站：broker 縮減與擴充（Self-Balancing 搬資料）（手把手第 24 章）
 # where: ops02 （cpadmin）
 # run: on-demand（不在安裝順序裡）
 #
 # 用法：
-#   bash steps/25-broker-scale.sh status        Self-Balancing 狀態、under-replicated、每台 broker 上的 replica 數
-#   bash steps/25-broker-scale.sh remove kb04   kafka-remove-brokers 把 kb04 的 replica 全部搬走、它自己關機 → 停用服務
-#   bash steps/25-broker-scale.sh add kb04      kb04 清空資料目錄、以觀察者格式化、啟動；Self-Balancing 自動把資料搬過去
+#   bash steps/24-broker-scale.sh status        Self-Balancing 狀態、under-replicated、每台 broker 上的 replica 數
+#   bash steps/24-broker-scale.sh remove kb04   kafka-remove-brokers 把 kb04 的 replica 全部搬走、它自己關機 → 停用服務
+#   bash steps/24-broker-scale.sh add kb04      kb04 清空資料目錄、以觀察者格式化、啟動；Self-Balancing 自動把資料搬過去
 #                                               全新主機先照第 3、5、7、8、10 站準備好（憑證 SAN 要有它的名稱）
 #
 # 永久縮減後，記得把那台從 site.env 的 BROKERS 拿掉，重跑第 12、13、17 站（bootstrap 名單）。
@@ -34,7 +34,7 @@ run() {
   if sudo test -e /etc/confluent/service.env; then
     sudo bash -c 'set -a; . /etc/confluent/service.env; set +a; exec runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"' run "$@"
   else
-    sudo runuser -u cp-kafka -- /usr/local/bin/summon -p /usr/local/lib/summon/summon-conjur -f /etc/confluent/secrets.yml "$@"
+    sudo runuser -u cp-kafka -- "$@"
   fi
 }
 EOF
@@ -49,7 +49,7 @@ EOF
 
 show_status() {
   local host
-  section "25.1 Self-Balancing、under-replicated、每台的 replica 數"
+  section "24.1 Self-Balancing、under-replicated、每台的 replica 數"
   if balancer_enabled; then ok "Self-Balancing：ENABLED"; else fail "Self-Balancing 不是 ENABLED（kafka-rebalance-cluster --status）"; fi
   log "under-replicated：$(under_replicated_count)"
   for host in $BROKERS; do log "$host（$(node_id_of "$host")）：$(replicas_on "$(node_id_of "$host")") 個 replica"; done
@@ -63,7 +63,7 @@ remove_broker() {
   [ "$(under_replicated_count)" = 0 ] || die "有 under-replicated partition，叢集不健康時不搬資料"
   balancer_enabled || die "Self-Balancing 不是 ENABLED，kafka-remove-brokers 要靠它"
 
-  section "25.2 拿掉 $host（$node_id 上有 $(replicas_on "$node_id") 個 replica）"
+  section "24.2 拿掉 $host（$node_id 上有 $(replicas_on "$node_id") 個 replica）"
   admin_tool kafka-remove-brokers --delete --broker-id "$node_id" | grep -v WARN | while read -r line; do log "$line"; done
   for attempt in $(seq 1 120); do
     block=$(removal_block "$node_id")
@@ -86,11 +86,11 @@ add_broker() {
   node_id=$(node_id_of "$host")
   [ -s "$CONF_DIR/kraft.env" ] || die "找不到 $CONF_DIR/kraft.env（第 10 站產生的 cluster id）"
   source "$CONF_DIR/kraft.env"
-  section "25.3 $host 清空、以觀察者格式化、啟動"
+  section "24.3 $host 清空、以觀察者格式化、啟動"
   ssh_script "$host" CLUSTER_ID="$CLUSTER_ID" <<<"$RUN_WITH_MASTER_KEY
 $FORMAT_EMPTY_BROKER" | while read -r line; do log "$line"; done
   retry 60 5 curl -s -o /dev/null -f -m 5 "https://$(fqdn "$host"):8090/v1/metadata/id" && ok "$host MDS 200" || die "$host 起不來（sudo journalctl -u confluent-server -n 50）"
-  section "25.3 等 Self-Balancing 把資料搬到 $node_id"
+  section "24.3 等 Self-Balancing 把資料搬到 $node_id"
   for attempt in $(seq 1 120); do
     replicas=$(replicas_on "$node_id"); under_replicated=$(under_replicated_count)
     [ "$replicas" -gt 0 ] && [ "$under_replicated" = 0 ] && break; sleep 30
