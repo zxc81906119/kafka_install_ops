@@ -1,4 +1,5 @@
 # Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256 (no plaintext scrape password here)
+# 這一段接在 Confluent 官方的規則檔前面（官方檔自己帶 lowercaseOutputName 等設定，所以這裡只放 httpServer）
 httpServer:
   ssl:
     keyStore:
@@ -13,5 +14,3 @@ httpServer:
       passwordHash: ${HASH}
       algorithm: SHA-256
       salt: ${SALT}
-lowercaseOutputName: true
-lowercaseOutputLabelNames: true

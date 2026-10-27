@@ -19,7 +19,7 @@ ports_of() {
     controller) echo "9093 7071";;                      # controller 之間與 broker；JMX exporter
     broker)     echo "9092 9094 9095 9096 8090 7071";;  # INTERNAL TOKEN CLIENT LDAP MDS；JMX exporter
     rest)       echo "8082 7071";;                      # 負載平衡；JMX exporter
-    c3)         echo "9021 9090";;                      # 瀏覽器；C3 自己的 Prometheus
+    c3)         echo "9021 9090 7071";;                 # 瀏覽器；C3 自己的 Prometheus；JMX exporter
   esac
 }
 

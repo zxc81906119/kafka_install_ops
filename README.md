@@ -6,7 +6,8 @@
 |---|---|---|
 | Confluent Platform（Confluent Server，KRaft） | 8.3.2（升級演練起點 8.2.4） | controller ×3、broker ×4 |
 | REST Proxy | 8.3.2 | ×2，前置 L4 負載平衡 |
-| Control Center（內建 Prometheus／Alertmanager） | 2.6.1 | ×1 |
+| Control Center（內建 Prometheus／Alertmanager，只供 C3 畫面用） | 2.6.1 | ×1 |
+| 監控：JMX exporter（4 種程序）＋ 銀行的 Prometheus、Alertmanager、Grafana | exporter 1.0.1；Confluent 官方 jmx-monitoring-stacks 固定 commit | 我方交付設定，銀行提供三套系統 |
 | JDK | 21（銀行以 tar 提供，裝到 `/opt/java/<dir>` + `/opt/java/current`） | 所有 Java 節點 |
 
 ## 文件
@@ -78,6 +79,6 @@ redesign/           設計討論紀錄
 
 ## 已知限制
 
-- Confluent Server 不以 JMX 提供 raft 指標（2026-10-25 在 8.3.2 的 controller 列出全部 MBean 確認）；raft 指標只在 Confluent telemetry 裡，送進 C3 內建 Prometheus 時沒有主機標籤、多台會互撞，不適合告警。手把手第 17 章改用 controller 的 `LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`、`ActiveControllerCount` 告警。consumer lag 由 C3 顯示。
+- 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。2026-10-25 的結論「Confluent Server 不以 JMX 提供 raft 指標」被 2026-10-27 的實測推翻（單 controller 的拋棄式環境，官方規則抓得到 `kafka_server_raft_metrics_*`），**待在三台 controller 的完整 lab 複驗**；官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 17.9 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章尚未在完整 lab 從零跑過（見 .claude/state/status-redesign.md）。
 - CyberArk PAM 本身（PVWA 取用核准、CPM 排程、PSMP 代登與錄影、SSH Key Manager 推送）無法在 lab 模擬，只驗證我方拿到值之後的程序。
 - MDS token 金鑰不排輪替（公鑰檔放兩把沒有用，無法零中斷切換）；只在私鑰外洩時用 `install/lab/mds-token-key-rotate.sh` 驗過的程序換。

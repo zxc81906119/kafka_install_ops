@@ -306,6 +306,8 @@
 
 ### C3 內建 Alertmanager 的 webhook 自訂 JSON（2026-10-26 實測；使用者尚未選方案）
 
+（已被 2026-10-27 的外部監控定案取代）
+
 lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），結論分三層：
 
 1. **Alertmanager 本身可以**：webhook 的 `payload` 自訂 JSON 可用（map 寫法、字串寫法、`range`、`toJson`）。陷阱：map 寫法會把含 `: ` 的值當 YAML 解成物件、把像數字的字串轉成數字（`"007"`→7）；字串寫法遇到含雙引號的文字會整串被當成一個 JSON 字串送出 → 一律用字串寫法加 `{{ toJson … }}`。一個通知群組一個 POST，要一筆告警一個 POST 用 `group_by: ['...']`。範本取不到 `.GroupKey`（預設格式有 groupKey）。
@@ -337,7 +339,7 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 
 和客戶討論後的做法，與上面「操作機對各主機的 SSH 金鑰，交給 CyberArk 管」那一段（金鑰只放 ssh-agent、不落地、SSH Key Manager 換金鑰）不同。客戶的 CyberArk：有 PAM（PVWA、PSMP、CPM），人員用 AD 帳密登入並已套用 MFA；沒有 CP、CCP、Conjur（對外文件一律不提之後會不會買）。
 
-1. **人員進操作機**：登入 CyberArk 後由 PSMP 代登進操作機，進去就是 root；沒有另外的堡壘機。
+1. **人員進操作機**：人員先登入 CyberArk 的 PVWA 網頁（AD 帳密加 MFA），在網頁上選目標並啟動連線，背後由 PSMP 代登進操作機（2026-10-27 看銀行實際操作確認；目標是 RHEL 9，所以是 PSMP，不是 PSM），進去就是 root；沒有另外的堡壘機。
 2. **一組 SSH 金鑰**：私鑰只放操作機 root（0400），連各主機（含操作機自己）都用它；公鑰放各主機安裝與維運 user 的 `authorized_keys`，可加 `from="操作機 IP"`、`restrict`、`pty`；登入不輸入密碼。
 3. **安裝與維運 user 每台都叫 `cpuser`**（取代 cpadmin）：本機帳號、鎖定密碼、只靠金鑰、sshd 對它關閉密碼驗證；每台相同 UID／GID。
 4. **sudo**：sudoers 限制指令、NOPASSWD。安裝與升級期是全權（`/etc/sudoers.d/cpuser`），交付後只留窄規則（`cpuser-ops`：重啟、查看狀態、查日誌）。窄規則逐一列出服務名稱，不用 `confluent-*`：sudoers 的 `*` 會比對空格，`systemctl restart confluent-* ` 會連 `confluent-server sshd` 一起放行。`install/steps/17-opmenu.sh` 現行規則還是萬用字元，待改。
@@ -348,7 +350,31 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 
 **尚未改的地方**（客戶正式採用後才改，改了要從零重跑）：手冊 3.1／15.x 的 ssh-agent 貼法、19.6 SSH Key Manager 演練、cpadmin 全部改 cpuser；`install/` 腳本與 `install/lab/bank-sim.sh`；OP menu 的 ssh-agent 流程；sudoers 窄規則改成逐一列出。
 
-**已產出的文件**：`docs/Confluent-CyberArk登入與主機存取設計.docx`（資拓宏宇風格，來源 `docs/access-src/`，`node ../journey-src/build.js access.md ../<輸出>.docx ./diagrams.js`）、`docs/Confluent-Kafka客戶資訊整理.pptx`（來源 `docs/deck-src/customer-info.js`，16 頁，桌面草稿重新分析版，修正對照在最後一頁）。換金鑰、公鑰佈署、鎖定密碼只靠金鑰登入的指令尚未在 lab 驗證。
+**已產出的文件**：`docs/Confluent-CyberArk登入與主機存取設計.docx`（資拓宏宇風格，來源 `docs/access-src/`，`node ../journey-src/build.js access.md ../<輸出>.docx ./diagrams.js`）。2026-10-27 已在 lab（11 台）實測文件的步驟：cpuser、金鑰登入、from= 擋別台、兩種 sudoers 規則、換金鑰 5 輪都通過；修了 from= 要含 ::1、sudoers 比對完整參數、換私鑰要連 .pub 成對更換三處。LUKS 與 ext4／xfs 只用 tmpfs 驗證，未測。桌面的「整理 kafka 客戶資訊」簡報重新分析後的版本已刪除（使用者決定，不需要）。
+
+### 監控改成外部 Prometheus／Alertmanager／Grafana + JMX exporter（2026-10-27 定案）
+
+**決定（使用者）**：監控與告警用 JMX exporter ＋ 銀行提供的 Prometheus、Alertmanager、Grafana，**不用 C3 內建的 Prometheus／Alertmanager 做告警**；收 C3、REST Proxy、broker、controller 的指標；匯入 Confluent 官方**全部** Grafana dashboard；告警用推薦規則。
+
+- **誰提供什麼**：Prometheus、Alertmanager、Grafana 由銀行提供，我方交付設定（exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana datasource 與 dashboard）。lab 的 bank-sim 用 `lab-mon-prometheus／alertmanager／grafana／webhook` 四個容器扮演（`install/lab/bank-sim.sh monitoring`，收掉用 `monitoring-stop`；`reset` 會先收）。
+- **C3 內建的不動**：C3 畫面還要用，第 13 章 otlp 設定照舊。手冊明講：告警與 dashboard 只走外部這套，不在 C3 建 alert trigger／action。手冊第 13 章原有「C3 畫面上建的 trigger 不會觸發」的字句已改成「C3 畫面的圖會空」。
+- **官方來源**：`confluentinc/jmx-monitoring-stacks`（Apache-2.0），固定 commit `f376263fc6d7270185ab6abab9a8c379079e2a92`（2026-05-28，沒有 tag）。在下載機（第 1.4 站）用 GitHub 的 commit tarball 只取要用的路徑（47 個檔），放 `landing/monitoring/`，列進 `SHA256SUMS`（第 1.6 站），經第 2 站進操作機。repo 本身只放我們自己的設定與範本，不放官方 JSON。
+- **exporter 規則**：一律用官方檔（controller `kafka_controller.yml`、broker `kafka_broker.yml`、REST `confluent_rest.yml`），前面接我們的 `httpServer` 標頭（HTTPS 用主機憑證、basic auth 加鹽 SHA-256）。官方檔第一行的 `---` 要拿掉；官方自帶 `startDelaySeconds: 120`，controller、broker 重啟後前兩分鐘 7071 回 200 但沒有指標，驗證要等。舊的手寫 `jmx-rules-kafka.yml`、`jmx-rules-rest.yml`、`alert-rules.yml` 已刪。
+- **job 與標籤**（dashboard 寫死）：`kafka-controller`、`kafka-broker`、`rest-proxy`、`control-center`；`env`（lab 用 `lab`）；`hostname` 由 `__address__` relabel。scrape 設定用 `scrape_config_files` 引用，不併進 `prometheus.yml`。
+- **Grafana 要修兩件事**（實測）：(1) 官方 JSON 是匯入畫面格式，datasource 寫成 `${Prometheus}`，檔案佈建不替換（後端 `Data source not found`）→ 改成固定 uid `Prometheus`，datasource 也用這個 uid；(2) 四組 ZooKeeper／KRaft 成對的 dashboard 共用 uid（`kafka-cluster`、`kafka-topics`、`confluent-platform` 與 `kafka-stream`／`globalktable`），Grafana 只收第一個 → 重複的改 uid 並在標題加檔名。其餘 32 個原樣放，沒有對應元件的（Connect、ksqlDB、SR、Flink …）就是空的。
+- **C3 能給什麼（lab 實測，2026-10-27）**：C3 沒有官方 exporter 設定。掛法：`CONTROL_CENTER_OPTS=-javaagent:…=7071:設定檔`（`control-center-run-class` 讀這個變數；只能放**一個** `-javaagent`，放兩個時 `-check_dir` 讀不到 `java.io.tmpdir`，C3 不起來）。C3 的 JVM 有兩萬多條序列，幾乎全是雜訊（`kafka_rest_jersey_*` 5,586、consumer 3,306、producer 1,913、streams／RocksDB 880、admin 470、Jetty 384 …）。我們只放行：JVM／process（內建 collector）、Kafka Streams `client_state`（0 CREATED、1 REBALANCING、2 RUNNING … 6 ERROR）／`alive_stream_threads`／`failed_stream_threads`、Jetty `request_rate`／`request_error_rate`，約 100 條。**C3 不給**：它處理了多少 telemetry、alert history、RocksDB 狀態（可加規則但序列數大）、使用者活動。官方沒有 C3 專用的 dashboard，`kafka-stream.json`／`kafka-streams-rocksdb.json` 對 C3 也是空的（我們沒放行那些序列）。
+- **raft 指標（推翻 2026-10-25 的結論，待在三台 controller 的 lab 再驗）**：用官方規則抓，controller 與 broker 的 `kafka_server_raft_metrics_*`（current_leader、current_epoch、current_vote、number_of_voters、number_unknown_voter_connections、high_watermark、log_end_offset、append／fetch_records_rate、commit／election latency、poll_idle_ratio）**都有值**，官方 `kraft.json` 18／18 panel 有資料。2026-10-25 的 jshell 查不到的原因沒查清（那次是三台 controller 的 dynamic quorum，這次是單 controller `--standalone`；也可能是 jshell 的 MBean 查詢範圍或當時的 includeObjectNames 擋掉了 `kafka.server:type=raft-metrics`）。README「已知限制」第一條與手冊 17.10 的備註都改成「待複驗」。已據此加 `KRaftNoLeader`、`KRaftUnknownVoterConnections` 兩條告警。
+- **哪些 dashboard／panel 有資料**：測試環境單 controller／broker／REST／C3、3 個 partition 的 topic、無 RBAC／audit／quota：32 個 dashboard、816 個 panel、253 個有資料（`docs/journey-src/tools/dashboard-coverage.py` 量；手冊 17.9 有完整表）。可用：`kraft.json` 18／18、`kafka-cluster-kraft.json` 75／80、`kafka-topics-kraft.json` 13／13、`kafka-transaction-coordinator.json` 10／10、`rest-proxy.json` 10／10、`confluent-audit.json` 5／6。**不通的 panel（Confluent Server 加專用 controller 的 KRaft）**：`kafka-cluster-kraft.json`「Offline Partitions Count」、`kafka-topics.json`「Total # of Topics／Partitions」、`kafka-cluster.json`／`confluent-platform.json` 的「Active Controllers」等——官方 query 把 controller 指標寫成 `job="kafka-broker"`，但專用 controller 的叢集裡這些只在 `job="kafka-controller"`（ZooKeeper 時代與 combined mode 才在 broker 上）；沒改官方 JSON（升級官方版本時才不用重修），告警 `KafkaOfflinePartitions` 有涵蓋。Tiered Storage、Cluster Linking 的 panel 沒開功能時是空的。**未驗證**：`confluent-rbac.json`（要 MDS／RBAC）、`kafka-quotas.json`（要設 quota）、稽核的 fallback panel——測試叢集沒開，要在正常 lab 補驗。
+- **告警規則（21 條，`install/templates/confluent-alerts.yml`，每條都有 `severity`、`impact`、`summary`、`description`，註解標出處）**：
+  - `official`（jmx-monitoring-stacks `prometheus-alerts/`）：`ConfluentTargetDown`（service_down，縮到我們四個 job）、`KafkaActiveControllerCountNotOne`、`KafkaOfflinePartitions`、`KafkaUncleanLeaderElections`（官方 `> 0` 對累計次數永遠成立，改看 10 分鐘增量）、`KafkaUnderReplicatedPartitions`（`for` 1 分改 5 分，滾動重啟會短暫 under-replicated）、`KafkaUnderMinIsrPartitions`。不收：官方兩條「Broker IO Activity」（用一個永遠小於 1 的 control-plane 指標，等於測試規則）、`high_load`（要 node exporter）、connector／zookeeper 規則（沒有元件）。
+  - `confluent`（Confluent 監控指引）：`KafkaIsrShrinkingWithoutExpand`、`KafkaNetworkProcessorBusy`、`KafkaProduceLatencyHigh`（p99 > 500 ms）、`KRaftNoLeader`、`KRaftUnknownVoterConnections`。
+  - `ours`：`KafkaRequestHandlerBusy`（官方有 `requesthandleravgidlepercent` 的累計值與 `_oneminuterate` 兩條序列，用後者）、`KRaftControllerMetadataLag`、`KRaftMetadataErrors`、`KRaftLeaderFlapping`（2026-10-25 的 controller 指標告警，保留）、`RestProxyErrors`（把每個 endpoint 的 `request_error_rate` 加總）、`RestProxyThreadPoolBusy`、`ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed`、`JvmHeapHigh`、`JvmFileDescriptorsHigh`。每條 lab 都確認過指標存在；沒有 consumer lag 規則（lag 不是 broker 的 JMX 指標）。
+- **Alertmanager webhook 兩個範例**（`install/templates/alertmanager.yml`）：(a) 預設 JSON（version 4）；(b) `payload` 字串寫法加 `toJson`，欄位照 Dynatrace 問題通知（`State` OPEN／RESOLVED、`ProblemTitle`、`ProblemSeverity`（critical 對 ERROR，其餘 PERFORMANCE，範例）、`ProblemImpact`（規則的 `impact` 標籤）、`ProblemDetailsText`（規則的 `description` 註解）、`ProblemID`（Fingerprint，因為範本拿不到 `.GroupKey`）、`ImpactedEntity`、`Tags`、`StartTime`）。`group_by: ['...']` 一筆告警一個 POST。Alertmanager 0.34.1 實測：兩種都送達；`description` 含雙引號、冒號、`007` 都完整；Alertmanager 會把渲染結果重新編碼，所以鍵變成字母順序。接收端：lab 用 `lab-node:1` 跑十行的 `python3 http.server`，印出收到的 POST（ncat 會掉輸出）。
+- **解除的行為（實測）**：把測試規則拿掉並 reload，Prometheus 不會對被拿掉的規則補送 resolved；Alertmanager 等告警過期（Prometheus 送的告警 `endsAt` 約 4 分鐘）才解除，再下一輪通知（`group_interval` 1 分）送 resolved，約 3–5 分鐘。真實的告警是條件消失，Prometheus 會直接送 resolved。把規則改成永遠不成立（`vector(1) < 0`）也沒有立刻的 resolved（改了 expr 就是新規則，舊的狀態直接丟掉）。
+- **lab 陷阱**：(1) Alertmanager 在 lab（172.35.x.x 不是私有位址）起不來，`--cluster.listen-address=` 留空關掉 gossip（和 2026-10-26 在 C3 那個一樣）；(2) Prometheus 容器要用 `--add-host`；(3) `docker compose down -v` 前要先收 `lab-mon-*`（接在 labnet 上，網路刪不掉）；(4) Windows Git Bash 的 `python3` 是 Microsoft Store 的空殼，什麼都不印也不報錯，所有 Python 都要放進容器（`lab-node:1`）或操作機執行；(5) `sudo wc -l < 檔` 的 `<` 是用呼叫者身分開檔，會 Permission denied（舊的 install 17 站有同一個問題，已修）。
+- **資源**：Prometheus 600 MB、Alertmanager 128 MB、Grafana 400 MB、webhook 64 MB（上限；實際約 77／19／90／10 MB）。
+- **待銀行確認**：問題清單 11.1（四樣都由銀行提供？版本）、11.5（webhook 接收端與格式、token）、11.6（Grafana 佈建與登入）、11.7（Prometheus 容量）、11.8（確認不依賴 C3 告警）。
+- **這次 lab 的限制**：叢集是舊的 provider 模式安裝，Conjur 已刪，cold boot 後 controller／broker／REST／C3 都因 `UnknownHostException: conjur.poc.lab` 起不來（crash loop）。照規則沒有修，改用拋棄式環境驗證：`lab-mon-kc／kb／rest／c3`（`lab-mon-cp:1` 映像：Confluent 8.3.2 與 C3 2.6.1 的 RPM 加 JDK 21，單 controller、單 broker、單 REST、單 C3，同一套 exporter 設定與 jar；同一張 `cp-server.p12` 的 SAN 涵蓋所有主機名）。真實主機只做了「派送 jar、設定、drop-in 加 daemon-reload」（`systemctl show -p Environment` 看得到 javaagent），**沒有重啟任何一台**。要正式驗收，從零重跑 lab 之後做第 17 章。
 
 ### 企業需求缺口分析（2026-10-24，對照原廠文件；使用者定案）
 

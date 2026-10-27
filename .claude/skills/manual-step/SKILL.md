@@ -23,7 +23,7 @@ Checklist before handing a service-start command:
 
 Host inventory (lab): controllers kc01-03 (node.id 1-3), brokers kb01-04 (101-104, racks a/a/b/b),
 rest01-02, c3-01, ops02; ports 9092 internal, 9093 controller, 9094 token, 9095 client, 9096 ldap, 8090 MDS,
-8082 REST, 9021 C3, 9090 Prometheus, 7071 JMX exporter.
+8082 REST, 9021 C3, 9090 C3 internal Prometheus, 7071 JMX exporter (also on c3-01).
 
 Reference material for exact commands and outputs: `docs/journey-src/journey.md` (validated end to end on
 the lab). When a step fails, diagnose on the lab yourself (logs, `ss`, thread

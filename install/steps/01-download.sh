@@ -3,8 +3,8 @@
 # where: dl01 （下載機，root；落地區掛在 /out）
 #
 # 做什麼：設定 Confluent 官方 repo → 下載指定版本（含 Confluent 自己的相依）→ 驗原廠簽章 → 抓 jar 並核對 sha1
-#         → 產生給銀行的 OS 套件清單 →（lab）順便抓 JDK → 產生整批的 SHA256SUMS。
-# 產出：落地區的 rpm/、gpg-keys/、tools/、os-packages.txt、bank/（JDK）、SHA256SUMS
+#         → 抓官方監控規則與 dashboard（固定 commit）→ 產生給銀行的 OS 套件清單 →（lab）順便抓 JDK → 產生整批的 SHA256SUMS。
+# 產出：落地區的 rpm/、gpg-keys/、tools/、monitoring/、os-packages.txt、bank/（JDK）、SHA256SUMS
 # 重跑：安全。已下載的 RPM 會 SKIPPED；JDK 已在且 sha256 相符就不重抓。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
@@ -62,12 +62,26 @@ other_dependencies=$(rpm -qpR "$DOWNLOAD_DIR"/rpm/*.rpm 2>/dev/null | grep -vE '
 if [ "$other_dependencies" = "bash glibc" ]; then ok "非 Confluent 相依只有 bash、glibc"
 else warn "非 Confluent 相依：$other_dependencies（預期只有 bash glibc，請確認）"; fi
 
-section "1.4 監控用的 jar（Maven Central 的 sha1 核對）、給銀行的 OS 套件清單"
+section "1.4 監控用的 jar（Maven Central 的 sha1 核對）、Confluent 官方監控規則與 dashboard、給銀行的 OS 套件清單"
 JAR_NAME=jmx_prometheus_javaagent-$JMX_EXPORTER_VERSION.jar
 JAR_URL=https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/$JMX_EXPORTER_VERSION/$JAR_NAME
 [ -f "$DOWNLOAD_DIR/tools/$JAR_NAME" ] || curl -fsSL -o "$DOWNLOAD_DIR/tools/$JAR_NAME" "$JAR_URL" || die "抓不到 $JAR_NAME"
 if [ "$(sha1sum "$DOWNLOAD_DIR/tools/$JAR_NAME" | cut -d' ' -f1)" = "$(curl -fsSL "$JAR_URL.sha1")" ]; then ok "$JAR_NAME sha1 符合 Maven Central"
 else die "$JAR_NAME sha1 不符"; fi
+# Confluent 官方的 JMX 規則、告警規則、Grafana dashboard（jmx-monitoring-stacks，Apache-2.0）：固定在 site.env 的 commit，只取要用的路徑
+MONITORING_DIR_OUT=$DOWNLOAD_DIR/monitoring/jmx-monitoring-stacks
+if [ "$(cat "$MONITORING_DIR_OUT/COMMIT" 2>/dev/null)" = "$MONITORING_STACKS_COMMIT" ]; then ok "jmx-monitoring-stacks 已在落地區（commit ${MONITORING_STACKS_COMMIT:0:12}），不重抓"
+else
+  rm -rf "$DOWNLOAD_DIR/monitoring" /tmp/jms-x; mkdir -p "$DOWNLOAD_DIR/monitoring" /tmp/jms-x
+  curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$MONITORING_STACKS_COMMIT.tar.gz" \
+    | tar -xz -C /tmp/jms-x --wildcards '*/LICENSE' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' \
+        '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' '*/jmxexporter-prometheus-grafana/assets/prometheus/*' \
+        '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' \
+    || die "抓不到 jmx-monitoring-stacks（下載機沒有外網，或 github.com 連不到）"
+  mv /tmp/jms-x/jmx-monitoring-stacks-* "$MONITORING_DIR_OUT" && echo "$MONITORING_STACKS_COMMIT" > "$MONITORING_DIR_OUT/COMMIT"
+  rm -rf /tmp/jms-x
+  ok "jmx-monitoring-stacks commit ${MONITORING_STACKS_COMMIT:0:12}：$(find "$MONITORING_DIR_OUT" -type f | wc -l) 個檔、dashboard $(ls "$MONITORING_DIR_OUT"/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l) 個"
+fi
 # 平台需要的 OS 套件（由銀行的套件庫提供），列出在哪個 RHEL repo，交給銀行
 dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' \
   chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u > "$DOWNLOAD_DIR/os-packages.txt"
@@ -93,7 +107,7 @@ if [ "$FETCH_JDK" = 1 ]; then
 fi
 
 section "1.6 整批的雜湊清單（之後每一關都用它核對）"
-(cd "$DOWNLOAD_DIR" && find rpm tools gpg-keys -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+(cd "$DOWNLOAD_DIR" && find rpm tools gpg-keys monitoring -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
 ok "SHA256SUMS：$(wc -l < "$DOWNLOAD_DIR/SHA256SUMS") 個檔（JDK 是銀行的檔案，有自己的 .sha256，不列在這裡）"
 log "下載機的工作到此結束。接下來：掃描、開單、送進操作機 → 操作機跑 steps/02-intake.sh"
 finish_step

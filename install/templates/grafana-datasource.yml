@@ -1,0 +1,12 @@
+# Grafana datasource for the Confluent dashboards. The official dashboards point at a datasource with uid "Prometheus" (the guide rewrites their ${Prometheus} placeholder to that).
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://PROMETHEUS:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 30s

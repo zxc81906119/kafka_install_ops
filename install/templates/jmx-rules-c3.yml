@@ -1,0 +1,21 @@
+# Control Center: Confluent has no official exporter rules for it, so this is our own, deliberately small.
+# C3 is a Kafka Streams application with a Jetty/Jersey front end; its JVM exposes thousands of MBeans (one per REST endpoint,
+# per RocksDB store, per client), most of them noise. Only what an alert can use is kept:
+#   jvm_*, process_*   built in (heap, GC, threads, open file descriptors)
+#   Kafka Streams state: client_state (0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR), alive / failed threads
+#   Jetty: request rate and error rate in front of C3's UI and API
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+startDelaySeconds: 0
+includeObjectNames:
+  - "kafka.streams:type=stream-metrics,*"
+  - "kafka.rest:type=jetty-metrics"
+rules:
+  # the beans carry different extra keys (application-id, process-id) in no fixed order, so only pick out client-id
+  - pattern: 'kafka.streams<.*client-id=([^,>]+).*><>(client-state|alive-stream-threads|failed-stream-threads): (.+)'
+    name: kafka_streams_stream_metrics_$2
+    type: GAUGE
+    labels: { client_id: "$1" }
+  - pattern: 'kafka.rest<type=jetty-metrics><>(request-rate|request-error-rate): (.+)'
+    name: kafka_rest_jetty_metrics_$1
+    type: GAUGE

@@ -13,9 +13,9 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 2.1 | 外網下載機由誰提供？能否連 `packages.confluent.io`、`repo1.maven.org`、`github.com`？ | 所有安裝檔都在下載機抓、驗證後才送進來 | 我方提供一台；只抓 Confluent 套件與監控用的 jar，OS 套件與 JDK 不下載 |
+| 2.1 | 外網下載機由誰提供？能否連 `packages.confluent.io`、`repo1.maven.org`、`github.com`？ | 所有安裝檔都在下載機抓、驗證後才送進來 | 我方提供一台；只抓 Confluent 套件、監控用的 jar，以及 Confluent 官方的監控檔（GitHub 的 jmx-monitoring-stacks，固定在一個 commit：exporter 規則、告警規則、32 個 Grafana dashboard），OS 套件與 JDK 不下載 |
 | 2.2 | 檔案交換的方式與單次大小上限？ | 整批約 3.1 GB | 超過上限就分批送，每批附各自的雜湊清單 |
-| 2.3 | 放行標準：RPM 有原廠 GPG 簽章＋SHA256，是否足夠？jar、tar 沒有原廠簽章，怎麼放行？ | 決定我們要準備哪些證明 | 附 SHA256SUMS 與驗證報告（RPM 原廠簽章逐一驗過、jar 比對 Maven 的雜湊） |
+| 2.3 | 放行標準：RPM 有原廠 GPG 簽章＋SHA256，是否足夠？jar、tar、GitHub 上的監控檔沒有原廠簽章，怎麼放行？ | 決定我們要準備哪些證明 | 附 SHA256SUMS 與驗證報告（RPM 原廠簽章逐一驗過、jar 比對 Maven 的雜湊、監控檔記下 commit 並列入 SHA256SUMS；監控檔都是純文字（YAML、JSON），可逐一審閱） |
 | 2.4 | 之後補帶檔案（修補版、升級版）的申請流程與時程？ | 升級、修補都要再走一次 | 每次升級前兩週提出 |
 
 # 3. 套件來源與 JDK（OS 團隊）
@@ -105,10 +105,14 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 11.1 | 行內 Prometheus 是否要抓平台指標（每台 7071，HTTPS＋帳密）？告警送到哪裡？ | 我們會交付抓取設定與告警規則 | 交付設定檔、告警規則、根憑證、抓取密碼 |
+| 11.1 | 監控採「JMX exporter＋行內 Prometheus＋行內 Alertmanager＋行內 Grafana」，行內 Prometheus、Alertmanager、Grafana 的版本與位置？ | 我們交付設定，不安裝這三套；版本影響設定寫法（自訂 webhook 內容要較新的 Alertmanager，我們在 0.34.1 實測；Prometheus 2.43 以上才有 scrape_config_files，我們用 3.5.0） | 銀行提供；我方交付 scrape 設定、21 條告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方 32 個 dashboard、根憑證、抓取密碼 |
 | 11.2 | 機房斷電演練時的開機順序可否配合（controller → broker → REST Proxy／Control Center）？ | 全部同時開機時 Control Center 要等權限服務起來 | 已加上等待機制；仍建議依順序開機 |
 | 11.3 | 行內 Prometheus 抓其他系統（主機、資料庫）用哪種認證：不加密、HTTPS＋帳密，還是 HTTPS＋client 憑證（mTLS）？ | 跟著行內既有慣例走，維運與稽核最省事 | HTTPS＋帳密（9 台共用一組抓取密碼，主機上只存加鹽雜湊）；要 mTLS 須另發 Prometheus 的 client 憑證 |
 | 11.4 | 每台的 7071 可否只放行行內 Prometheus 的來源位址？請提供位址（或網段） | 抓取帳密是共用的，限制來源可以縮小外洩後的影響範圍 | 主機防火牆目前對所有來源開放 7071；拿到位址後改成只放行它 |
+| 11.5 | 告警要送到哪裡？接收端是 Dynatrace 還是別的事件系統？要的 JSON 格式？要不要認證（API token）？ | 我們準備了兩種 webhook 範例：Alertmanager 預設的 JSON，和照 Dynatrace 問題通知欄位自訂的 JSON（State、ProblemTitle、ProblemSeverity、ProblemImpact、ProblemDetailsText …） | 兩種都交付，銀行留一種；欄位對應（例如 critical → ERROR）依行內的定義改範本。token 放檔案、不寫進設定 |
+| 11.6 | Grafana 怎麼放 dashboard 與 datasource：檔案佈建（provisioning）還是手動匯入？登入用 AD（LDAP／SSO）嗎？誰能改 dashboard？ | 32 個官方 dashboard 以檔案佈建最容易維護與重建；Grafana 的權限要和平台的 RBAC 分開想 | 檔案佈建、唯讀；datasource 名稱與 uid 固定為 Prometheus |
+| 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |
+| 11.8 | 確認：告警與 dashboard 只用行內這一套，不在 Control Center 建 alert trigger／action（C3 內建的 Prometheus、Alertmanager 只給 C3 畫面用） | C3 內建 Alertmanager 的設定會被 C3 重寫、webhook 內容不能自訂 | 如此設計；請銀行確認沒有別的流程依賴 C3 的告警功能 |
 
 # 12. 附件：要開的連線
 
@@ -126,5 +130,6 @@
 | 操作機 | 所有平台主機 | 22 | 安裝與維運（ssh，cpadmin） |
 | 所有平台主機 | 套件庫 | 443 | dnf 安裝 |
 | 所有平台主機 | NTP | 123/udp | 校時 |
-| 行內 Prometheus | controller、broker、REST Proxy | 7071 | 抓指標（HTTPS＋帳密） |
+| 行內 Prometheus | controller、broker、REST Proxy、Control Center | 7071 | 抓指標（HTTPS＋帳密） |
+| 行內 Alertmanager | 行內事件系統（Dynatrace 等） | 由銀行定 | 告警 webhook |
 | Control Center | 自己 | 9090 | 內建 Prometheus（不對外） |

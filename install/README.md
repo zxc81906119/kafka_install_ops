@@ -16,14 +16,14 @@ install/
   lib/ssh.sh          ssh_run / ssh_run_as / ssh_script（heredoc 原樣送過去）/ copy_to_tmp / restart_and_wait / rolling_restart
   lib/render.sh       render_template / render_templates / encrypt_passwords / ldap_password_from_env / count_plaintext_passwords
   lib/log.sh          section / log / ok / warn / fail / die / ask_bank / wait_for_bank / finish_step —— 畫面 + ~/install-logs/
-  templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、Prometheus 設定
+  templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、監控設定（exporter 規則、Prometheus scrape、告警規則、Alertmanager、Grafana datasource）
   steps/01–14         核心：下載到 C3、總檢查
-  steps/15–19         延伸：15 Secret Protection、16 OP menu、17 JMX exporter、18 稽核日誌、19 驗收
+  steps/15–19         延伸：15 Secret Protection、16 OP menu、17 監控（JMX exporter＋行內 Prometheus／Alertmanager／Grafana 的設定）、18 稽核日誌、19 驗收
   steps/20–26         隨時：20 憑證輪替（status｜leaf｜chain｜trust-sync）、21 升級（plan｜backup｜packages｜jdk｜finalize｜rollback｜c3）、
                       22 license 監控（status｜check｜schedule）、23 換 controller（status｜replace）、24 broker 增減（status｜remove｜add）、
                       25 日常備份（grant｜run｜schedule｜compare）、26 OS 修補（plan｜apply）；照順序安裝時略過
   tools/load.sh       演練用持續流量：start／stop／report（直連遺失幾筆、REST 失敗幾次）
-  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：prometheus / coldboot）
+  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：monitoring / monitoring-stop / coldboot）
   lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動（lab 模式，SSH 金鑰放檔案）；第 15 站起由 run-customer.sh 接
   tools/lint.sh       靜態檢查：shellcheck（含送到遠端的 heredoc）＋「pipefail 下不准 | grep -q」；沒有 shellcheck 時用 docker image koalaman/shellcheck 跑
 ```
@@ -58,7 +58,7 @@ install/
 | 14 | `--only 14` | 只讀的總檢查。2–14 可一次跑：`bash install/install.sh --to 14` |
 | 15 | `--only 15` | `SECRETS_MODE=sp` 才用；沒有 passphrase 檔會停；master key 產生後停下等 Secrets 團隊存進 PVWA、記單號（`~/secrets/master-key.custody`）；15.6 輪替不在腳本裡 |
 | 16 | `--only 16` | `OPMENU=1`；主機類項目要維運人員互動登入選單、從 PVWA 貼上私鑰試跑 |
-| 17 | `--only 17` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/` |
+| 17 | `--only 17` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/to-bank/`（prometheus／alertmanager／grafana）；官方規則與 dashboard 取自 `~/landing/monitoring/`（第 1 站帶進來）；C3 內建 Prometheus／Alertmanager 不動 |
 | 18 | `--only 18` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15 留下的）處理 |
 | 19 | `--only 19` | 印「驗收：N / N 項通過」；冷開機（19.4）交給機房演練 |
 | 20 | `bash install/steps/20-cert-rotate.sh status｜leaf｜chain 新中繼.pem｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；`chain` 用在中繼沒換私鑰（leaf 不重簽、只把新中繼重包進 p12）；換 CA 三階段 = `trust-sync` → `leaf`（或 `chain`）→ `trust-sync`。先看手把手 20.0 判斷是哪一種 |

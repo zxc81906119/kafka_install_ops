@@ -1,0 +1,188 @@
+# Alert rules for the bank's Prometheus. Metric names are the ones Confluent's official JMX exporter rules produce
+# (jmx-monitoring-stacks, see the guide, chapter 1.4); job names match scrape-confluent.yml.
+# Every rule has:  labels.severity (critical|warning)  labels.impact (APPLICATION|SERVICE|INFRASTRUCTURE, Dynatrace's ProblemImpact)
+#                  annotations.summary (one line)  annotations.description (full sentence, what to look at)
+# "source:" says where the rule comes from:
+#   official   = Confluent jmx-monitoring-stacks prometheus-alerts/ (kept, sometimes with the expression fixed for KRaft)
+#   confluent  = Confluent's monitoring guidance (docs.confluent.io "Monitor Kafka", "KRaft metrics")
+#   ours       = added for this installation, backed by a metric that really exists on Confluent Server 8.3.2 / C3 2.6.1
+# Thresholds and "for:" are starting points: tune them to the bank's paging policy and silence during planned restarts.
+groups:
+  - name: confluent-availability
+    rules:
+      # source: official alerts.yml (service_down), narrowed to our four jobs
+      - alert: ConfluentTargetDown
+        expr: up{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} == 0
+        for: 2m
+        labels: { severity: critical, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}) cannot be scraped"
+          description: "Prometheus has not been able to scrape {{ $labels.instance }} (job {{ $labels.job }}) for 2 minutes: the service, the JMX exporter (port 7071) or the network path is down. Check systemctl status on {{ $labels.hostname }}."
+
+  - name: kafka-broker
+    rules:
+      # source: official broker-alerts.yml (ActiveControllerCount != 1); ours: restricted to the controller job, 1 m instead of 10 s so a controller restart does not page
+      - alert: KafkaActiveControllerCountNotOne
+        expr: sum by (env) (kafka_controller_kafkacontroller_activecontrollercount{job="kafka-controller"}) != 1
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: active controller count is {{ $value }}"
+          description: "The KRaft quorum of {{ $labels.env }} reports {{ $value }} active controllers (expected exactly 1). Zero means no leader (metadata cannot change), more than one means a split. Check kafka-metadata-quorum describe --status."
+      # source: official broker-alerts.yml (OfflinePartitionCount > 0)
+      - alert: KafkaOfflinePartitions
+        expr: sum by (env) (kafka_controller_kafkacontroller_offlinepartitionscount{job="kafka-controller"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} offline partitions"
+          description: "{{ $value }} partitions in {{ $labels.env }} have no leader, so producers and consumers of those partitions fail. Look for brokers that are down: kafka-topics --describe --unavailable-partitions."
+      # source: official broker-alerts.yml (UncleanLeaderElectionsPerSec > 0); ours: the exporter publishes a cumulative count, so test the increase
+      - alert: KafkaUncleanLeaderElections
+        expr: sum by (env) (increase(kafka_controller_controllerstats_uncleanleaderelectionspersec{job="kafka-controller"}[10m])) > 0
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: unclean leader election"
+          description: "An out-of-sync replica became leader in {{ $labels.env }} within the last 10 minutes; acknowledged messages may have been lost. Confirm unclean.leader.election.enable is false."
+      # source: official broker-alerts.yml (UnderReplicatedPartitions > 0), "for" raised to 5 m (rolling restarts cause short under-replication)
+      - alert: KafkaUnderReplicatedPartitions
+        expr: sum by (env) (kafka_server_replicamanager_underreplicatedpartitions{job="kafka-broker"}) > 0
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} under-replicated partitions"
+          description: "{{ $value }} partitions of {{ $labels.env }} have fewer in-sync replicas than replicas for 5 minutes. A broker is slow, down or restarting; check kafka-topics --describe --under-replicated-partitions."
+      # source: official broker-alerts.yml (UnderMinIsrPartitionCount > 0)
+      - alert: KafkaUnderMinIsrPartitions
+        expr: sum by (env) (kafka_cluster_partition_underminisr{job="kafka-broker"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} partitions below min.insync.replicas"
+          description: "{{ $value }} partitions of {{ $labels.env }} are below min.insync.replicas: producers with acks=all get NotEnoughReplicas errors."
+      # source: confluent (ISR shrinks that are not followed by expands)
+      - alert: KafkaIsrShrinkingWithoutExpand
+        expr: sum by (env) (increase(kafka_server_replicamanager_isrshrinkspersec{job="kafka-broker"}[15m])) > 0 and sum by (env) (increase(kafka_server_replicamanager_isrexpandspersec{job="kafka-broker"}[15m])) == 0
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: ISR shrank and did not recover"
+          description: "Replicas left the ISR of {{ $labels.env }} in the last 15 minutes and none rejoined. A follower cannot keep up: check broker disks, network and replica.lag.time.max.ms."
+      # source: ours (the official rules for this are a test rule on a control-plane metric that is always below 1); the one-minute rate of the request handler pool is a real 0..1 idle ratio
+      - alert: KafkaRequestHandlerBusy
+        expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate{job="kafka-broker"}) < 0.3
+        for: 10m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: request handler threads busy"
+          description: "Request handler threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes ({{ $value | humanizePercentage }} idle). The broker is close to saturation: look at request rate, disk latency, num.io.threads."
+      # source: confluent (network processor idle ratio)
+      - alert: KafkaNetworkProcessorBusy
+        expr: avg by (instance) (kafka_network_socketserver_networkprocessoravgidlepercent{job="kafka-broker"}) < 0.3
+        for: 10m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: network threads busy"
+          description: "Network processor threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes. Check connection counts and num.network.threads."
+      # source: confluent (request latency); ours: Produce p99, 500 ms
+      - alert: KafkaProduceLatencyHigh
+        expr: max by (instance) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Produce p99 {{ $value }} ms"
+          description: "99th percentile Produce request time on {{ $labels.instance }} has been above 500 ms for 10 minutes. Look at disk latency and replication delay (acks=all waits for followers)."
+
+  - name: kraft
+    rules:
+      # source: confluent (KRaft: no leader). raft-metrics are on every controller and broker
+      - alert: KRaftNoLeader
+        expr: max by (env) (kafka_server_raft_metrics_current_leader{job=~"kafka-controller|kafka-broker"}) < 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: KRaft has no leader"
+          description: "No node of {{ $labels.env }} reports a KRaft leader (current-leader is -1). Check the controllers and their port 9093."
+      # source: confluent (a voter the quorum cannot reach)
+      - alert: KRaftUnknownVoterConnections
+        expr: max by (instance) (kafka_server_raft_metrics_number_unknown_voter_connections{job="kafka-controller"}) > 0
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: cannot reach a KRaft voter"
+          description: "{{ $labels.instance }} has had connections to {{ $value }} unknown voters for 5 minutes: a controller is down or its address in the quorum is wrong."
+      # source: ours (earlier lab work): controller applies the metadata log late
+      - alert: KRaftControllerMetadataLag
+        expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: metadata log applied {{ $value }} ms late"
+          description: "{{ $labels.instance }} applies the KRaft metadata log {{ $value }} ms behind the leader for 5 minutes: the quorum is not keeping up (disk or network)."
+      - alert: KRaftMetadataErrors
+        expr: max by (instance) (kafka_controller_kafkacontroller_metadataerrorcount{job="kafka-controller"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: errors applying the metadata log"
+          description: "{{ $labels.instance }} counted {{ $value }} errors while applying KRaft metadata records. Read /var/log/kafka on that controller."
+      - alert: KRaftLeaderFlapping
+        expr: sum by (env) (increase(kafka_controller_kafkacontroller_newactivecontrollerscount{job="kafka-controller"}[15m])) > 2
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: KRaft leader changed {{ $value }} times in 15 minutes"
+          description: "The active controller of {{ $labels.env }} changed more than twice in 15 minutes: unstable network, GC pauses or an overloaded controller."
+
+  - name: rest-proxy
+    rules:
+      # source: ours: the REST Proxy exports one error-rate series per endpoint (kafka_rest_jersey_metrics_<endpoint>_request_error_rate); sum them
+      - alert: RestProxyErrors
+        expr: sum by (instance) ({__name__=~"kafka_rest_jersey_metrics_.*_request_error_rate", job="rest-proxy"}) > 1
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: REST Proxy returns errors"
+          description: "REST Proxy {{ $labels.instance }} has returned more than 1 error response per second for 10 minutes (4xx and 5xx together). Check client certificates and the broker connection."
+      - alert: RestProxyThreadPoolBusy
+        expr: max by (instance) (kafka_rest_jetty_metrics_thread_pool_usage{job="rest-proxy"}) > 0.9
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: REST Proxy thread pool above 90%"
+          description: "The Jetty thread pool of {{ $labels.instance }} has been more than 90% used for 10 minutes: requests queue up. Check client load and broker latency."
+
+  - name: control-center
+    rules:
+      # source: ours: C3 is a Kafka Streams application; client-state 0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR
+      - alert: ControlCenterStreamsNotRunning
+        expr: max by (instance) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
+        for: 5m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center stopped processing"
+          description: "A Kafka Streams client inside Control Center {{ $labels.instance }} is in state {{ $value }} (4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR) for 5 minutes: the C3 screens show stale data. Read journalctl -u confluent-control-center."
+      - alert: ControlCenterStreamThreadsFailed
+        expr: max by (instance) (kafka_streams_stream_metrics_failed_stream_threads{job="control-center"}) > 0
+        for: 1m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center stream thread failed"
+          description: "Control Center {{ $labels.instance }} lost {{ $value }} stream threads. Restart it after reading the log."
+
+  - name: jvm
+    rules:
+      # source: ours (earlier lab work), now for all four jobs
+      - alert: JvmHeapHigh
+        expr: jvm_memory_used_bytes{area="heap", job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} / jvm_memory_max_bytes{area="heap", job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} > 0.9
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}): JVM heap above 90%"
+          description: "The JVM heap of {{ $labels.instance }} has been above 90% for 10 minutes ({{ $value | humanizePercentage }}). Look at GC time and consider a larger -Xmx."
+      - alert: JvmFileDescriptorsHigh
+        expr: process_open_fds{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} / process_max_fds{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} > 0.8
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}): file descriptors above 80%"
+          description: "{{ $labels.instance }} uses {{ $value | humanizePercentage }} of its file descriptor limit. Check LimitNOFILE in the systemd drop-in and the number of partitions or connections."

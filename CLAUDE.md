@@ -56,7 +56,8 @@ Details of the architecture and every component: @README.md
 - If every container's `timeout 5 ip addr` hangs, the VM's netlink is wedged: restart Docker Desktop, don't debug configs.
 - In the lab Claude plays the bank (`install/lab/bank-sim.sh`, or the guide's 銀行 blocks): AD (samba-tool on ad01),
   CA (`~/kafka-lab/ca`), OS repo and NTP on repo01, nginx on lb01, PVWA (`~/kafka-lab/pvwa/`), SSH public keys via
-  the shared `authorized_keys.d` volume.
+  the shared `authorized_keys.d` volume, monitoring (Prometheus, Alertmanager, Grafana, webhook receiver) as four
+  `lab-mon-*` containers (`bank-sim.sh monitoring`; remove them with `monitoring-stop` before any `down -v`).
 
 ## Design decisions in force (details: redesign/README.md)
 - RPM install only; Confluent packages are the only files we bring in; OS packages come from the bank's repo
@@ -70,6 +71,9 @@ Details of the architecture and every component: @README.md
   pasted from PVWA into ssh-agent, never on disk), root and `svc-mds-bind` rotated by CPM; platform secrets are
   vaulted in PVWA but rotated manually (Secret Protection master key: PVWA stores it, we rotate it).
 - ops02 is both the install host and the operators' login point (OP menu runs there); no separate bastion.
+- Monitoring (chapter 17): JMX exporter on controllers, brokers, REST Proxy, C3; Prometheus, Alertmanager and Grafana are the bank's, we deliver
+  config + Confluent's official jmx-monitoring-stacks files (pinned commit, brought in through chapters 1-2). C3's embedded Prometheus/Alertmanager stay
+  untouched and are not used for alerting (no C3 alert triggers/actions).
 - MDS token key pair is fixed (rotate only on compromise); cpadmin sudo is `NOPASSWD`; CPM's reconcile account is not cpadmin.
 
 ## Gotchas learned the hard way
@@ -84,6 +88,7 @@ Details of the architecture and every component: @README.md
   literally as the passphrase (everything "works", but the real passphrase is never used and the next rotate after a
   rename fails). `kafka-configs` echoes the whole config, passwords included, on error: send its output to /dev/null.
 - `kafka-configs --add-config-file` rejects SCRAM credentials (reads `SCRAM_SHA_512`); use `--add-config`.
+- Windows Git Bash has no real `python3` (it is the Microsoft Store stub: silent, exit 0): run Python inside a container or on ops02.
 - Check run logs line by line, not only `scan-log.sh`: an empty value after "：" means the check's precondition was missing.
 - Building a package set with `dnf download --resolve`: use a clean container and download **before** installing
   tools, or the tools' dependencies are missed (`createrepo_c-libs`).

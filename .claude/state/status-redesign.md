@@ -1,6 +1,13 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-27（lab 關閉：Docker Desktop 沒開；沒有人在用）
+Updated: 2026-10-27 23:50（lab 使用中：監控改版的驗證；`lab-mon-*` 容器還在跑，見下）
+
+**進行中（2026-10-27 晚）：監控改成外部 Prometheus／Alertmanager／Grafana + JMX exporter**（手把手第 17 章整章重寫，另動第 1.4／1.6／2／7／13／14／19／23 章、install 17 站與 01／07／19 站、bank-sim 的 `monitoring`、問題清單第 11 章、redesign 新段落）。細節與證據見 log/2026-10-27-monitoring.md；決策見 redesign/README.md「監控改成外部…（2026-10-27 定案）」。**沒有 commit。** 狀態：
+- 已驗證（拋棄式環境 `lab-mon-kc/kb/rest/c3`，因為真叢集起不來，見下）：官方 exporter 規則掛上 4 種程序、4 個 job 的 target、21 條告警規則載入且指標都存在、32 個官方 dashboard 佈建進 Grafana（datasource 與 uid 兩項修正）、Grafana `/api/ds/query` 查得到資料、兩種 webhook 格式送達（含 resolved）、dashboard 覆蓋率 253／816 panel。
+- **沒驗證**：真正的 controller／broker／REST／C3 主機上的滾動重啟（舊 lab 的叢集因 `conjur.poc.lab` 不存在起不來，cold boot 後 crash loop；依規則沒修）。真實主機只做了 jar／設定／drop-in 的派送與 daemon-reload。第 17.4 的重啟區塊與驗證迴圈的 `out` 是從拋棄式環境量的（只有 kc01、kb01、rest01、c3-01 各一）；第 7 章防火牆加 7071（c3）、第 19 章 JMX 檢查加 c3-01（22／22）、第 23 章 kc03 等指標的迴圈、第 2 章檔案數（65／61）都是改字沒實跑。**要從零重跑 lab（run-full.sh customer、run-customer.sh）才算驗證**，重跑時先看 17.4／17.7 的 `out` 換成 10／10。
+- 推翻舊結論：Confluent Server 8.3.2 的 JMX **有** `kafka_server_raft_metrics_*`（官方 kraft.json 18／18 panel 有資料）。要在三台 controller 的 lab 複驗。
+- 待使用者決定／確認：問題清單 11.1、11.5–11.8；官方 dashboard 的 `job="kafka-broker"` 寫法在專用 controller 叢集會讓幾個 panel 空掉，要不要在佈建時 sed 修（目前不改，告警有涵蓋）；C3 的 RocksDB／Streams 序列要不要放行。
+- 環境：舊 lab 的叢集是壞的（Conjur 依賴），Docker 我重新啟動過一次（原本沒開）。Docker 裡我留下：`lab-mon-prometheus／alertmanager／grafana／webhook`、`lab-mon-kc／kb／rest／c3`（拋棄式 Confluent）、映像 `lab-mon-cp:1`（5.2 GB）、`~/kafka-lab/bank-monitoring`、dl01 已啟動。ops02 的 `~/install` 是新 repo 版本，`~/monitoring/to-bank/` 與 `~/landing/monitoring/` 有新檔，c3-01 等十台多了 `40-jmx.conf`。
 
 **進行中（2026-10-27）：刪除 Conjur／provider 模式與 CyberArk 應用面**，三個 agent 同時改：手把手（journey-src）、install／opmenu、其餘文件（README、CLAUDE.md、問題清單、簡報、redesign、skills）。新編號：第 N 章（N≥16）→ N−1，手把手第 0–27 章，install/steps 01–26。**還沒有在 lab 重跑任何東西**；必須從零跑客戶模式（`run-full.sh customer`、`run-customer.sh`、升級演練）之後，新編號才算驗證過。細節見 log/2026-10-27-remove-conjur.md。以下「做到哪」「下一步」裡的章節編號，除非特別標示，都是**刪除前的舊編號**。
 
@@ -31,7 +38,7 @@ Updated: 2026-10-27（lab 關閉：Docker Desktop 沒開；沒有人在用）
    - ② 2026-10-26 14:35 通過：腳本版升級演練，LB 交握 8 次全部自動回覆；直連 6384 筆 0 遺失、**REST 1232 次 0 失敗**（上一輪沒排空是 4 失敗）、驗收 38/38×4。
    - ③ Conjur 手把手通過（歷史；模式已於 2026-10-27 刪除）。
    - ④ provider 0–22（歷史；模式已於 2026-10-27 刪除）：2026-10-27 從零重跑通過（324 塊、253 執行、0 失敗，五步 20 輪 REST 全 200）。上一輪在 21.3.3 倒掉（JDK cacerts 沒有新根，PKIX path building failed）已修（423a97f）：21.3.2／21.3.4／21.4.2／21.4.5 的 provider 專用 cacerts 區塊逐台驗證（加新根後每台 2、刪舊根後每台 1），階段二重啟後 controller／broker 全 active、MDS 200。第 13 章新加的 otlp 設定與標籤檢查也通過（剛啟動 5，穩定後 7）。
-6. 2026-10-27 和客戶討論後的主機存取做法（PSMP 代登 root、一組 SSH 金鑰放操作機 root 0400、每台 `cpuser`、sudoers 白名單、私鑰不放 CyberArk 也不備份）已記在 redesign/README.md「和客戶討論後的主機存取做法」；**手冊、install/、OP menu 還是舊設計（cpadmin、ssh-agent、SSH Key Manager）**，客戶正式採用後才改，改了要從零重跑。產出：`docs/Confluent-CyberArk登入與主機存取設計.docx`（來源 docs/access-src/）、`docs/Confluent-Kafka客戶資訊整理.pptx`（來源 docs/deck-src/customer-info.js）。細節見 log/2026-10-27-access-design-docs.md。
+6. 2026-10-27 和客戶討論後的主機存取做法（PSMP 代登 root、一組 SSH 金鑰放操作機 root 0400、每台 `cpuser`、sudoers 白名單、私鑰不放 CyberArk 也不備份）已記在 redesign/README.md「和客戶討論後的主機存取做法」；**手冊、install/、OP menu 還是舊設計（cpadmin、ssh-agent、SSH Key Manager）**，客戶正式採用後才改，改了要從零重跑。產出：`docs/Confluent-CyberArk登入與主機存取設計.docx`（來源 docs/access-src/）。（客戶資訊整理簡報已依使用者決定刪除。）使用者說晚點會請我從零重跑 lab，驗證手冊與腳本（需要 Docker Desktop；目前 lab 是舊的 provider 模式狀態，Conjur 已清掉）。細節見 log/2026-10-27-access-design-docs.md。
 7. 待辦（要 lab）：驗證換金鑰／公鑰佈署／鎖定密碼只靠金鑰的指令；install/steps/16-opmenu.sh（舊 17-opmenu.sh）的 sudoers 改成逐一列出服務（現行 `confluent-*` 會放行多個 unit）；客戶模式在刪除 Conjur 後從零重跑（必做，驗證新編號；含 `run-full.sh customer`、`run-customer.sh`、`run-upgrade-drill.sh`，第 13 章 otlp 修正也在這輪驗）。待使用者決定：webhook 方案（A／A＋D／C／E）與是否寫進第 17 章（新編號）、`docs/evidence/` 是否納入版控。
 - 從未 push。
 

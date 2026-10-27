@@ -56,7 +56,7 @@ check "REST Proxy 經負載平衡回 200（mTLS）" bash -c "[ \"\$(http_code --
 check "Control Center 9021 回 200" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$C3_FQDN:9021/)\" = 200 ]"
 check "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $BANK_ROOT_CA --cert $CERTS_DIR/cp-server.crt --key $KEYS_DIR/cp-server.key https://$C3_FQDN:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"
 if [ "$JMX_EXPORTER" = 1 ]; then
-  for host in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *}; do
+  for host in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
     check "$host JMX exporter 7071 要帳密" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$(fqdn "$host"):7071/metrics)\" = 401 ]"
   done
 fi

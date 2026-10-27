@@ -72,7 +72,7 @@ D.map = () => svg(760, 400, [
   region(20, 20, 720, 110, '外網', 'gray'),
   box(40, 55, 170, 56, '下載機 dl01', ['Rocky 9，可連 Internet', '/out = 落地區'], 'teal'),
   box(260, 55, 220, 56, 'packages.confluent.io', ['Confluent 原廠 RPM 倉庫'], 'gray'),
-  box(520, 55, 200, 56, 'repo1.maven.org', ['JMX exporter jar'], 'gray'),
+  box(520, 55, 200, 56, 'repo1.maven.org、GitHub', ['JMX jar、官方監控檔'], 'gray'),
   arrow(210, 83, 258, 83), arrow(480, 83, 518, 83),
   region(20, 150, 720, 230, '行內（離線）', 'amber'),
   box(40, 190, 150, 56, '操作機 ops02', ['cpadmin', '安裝起點'], 'teal'),
@@ -113,15 +113,15 @@ D.download = () => svg(760, 250, [
   box(520, 30, 220, 60, '11 個 RPM 到齊', ['全部 confluent-*', '約 3 GB'], 'teal'),
   arrow(220, 60, 258, 60), arrow(480, 60, 518, 60),
   box(20, 130, 200, 60, 'rpm -K 驗簽章', ['每個都要 OK', '非 Confluent 相依只有 bash'], 'teal'),
-  box(260, 130, 220, 60, 'jar、OS 套件清單', ['Maven sha1 核對', 'os-packages.txt'], 'teal'),
-  box(520, 130, 220, 60, 'SHA256SUMS', ['14 個檔案的雜湊', '之後每一關都用它'], 'teal'),
+  box(260, 130, 220, 60, 'jar、OS 套件清單', ['Maven sha1、官方監控檔', 'os-packages.txt'], 'teal'),
+  box(520, 130, 220, 60, 'SHA256SUMS', ['61 個檔案的雜湊', '之後每一關都用它'], 'teal'),
   arrow(630, 90, 120, 128, null, { via: [[630, 110], [120, 110]] }), arrow(220, 160, 258, 160), arrow(480, 160, 518, 160),
-  note(20, 225, '只帶 Confluent 的東西；JDK、OS 套件不下載，列清單交給銀行'),
+  note(20, 225, '只帶 Confluent 的東西（RPM、監控檔）；JDK、OS 套件不下載，列清單交給銀行'),
 ].join(''));
 
 // 5. into the bank + publish
 D.intake = () => svg(760, 220, [
-  box(20, 40, 170, 60, '落地區', ['下載機 /out', '14 個檔案'], 'teal'),
+  box(20, 40, 170, 60, '落地區', ['下載機 /out', '61 個檔案'], 'teal'),
   box(230, 40, 170, 60, '掃描平台、開單', ['附 SHA256SUMS', '與驗證報告'], 'amber'),
   box(440, 40, 150, 60, '檔案交換', ['搬到操作機', '~/landing 唯讀'], 'amber'),
   box(630, 40, 110, 60, '再驗一次', ['sha256sum -c', 'rpm -K'], 'teal'),
@@ -245,18 +245,24 @@ D.opmenu = () => svg(800, 310, [
   arrow(420, 256, 468, 256),
 ].join(""));
 
-// 15. JMX exporter for the bank's Prometheus
-D.jmx = () => svg(800, 250, [
-  region(20, 28, 300, 200, "每台 controller / broker / REST", "blue"),
-  box(40, 60, 260, 62, "Java 程序 + javaagent", ["-javaagent:jmx_prometheus_javaagent.jar", "讀 /etc/confluent/<元件>/jmx-exporter.yml"], "blue"),
-  box(40, 140, 260, 62, ":7071 HTTPS + basic auth", ["憑證 = 這台的 keystore", "密碼只存加鹽 SHA-256"], "blue"),
-  arrow(170, 122, 170, 138),
-  box(380, 60, 180, 62, "操作機產三個檔", ["prometheus-scrape.yml", "alert-rules.yml、ca.pem"], "gray"),
-  box(600, 60, 180, 62, "行內 Prometheus", ["三個 job、HTTPS、密碼檔", "9 條告警規則"], "amber"),
-  arrow(560, 91, 598, 91, "交付"),
-  arrow(690, 122, 302, 171, "每 30 秒抓 /metrics", { via: [[690, 136], [340, 136], [340, 171]], lx: 515, ly: 152 }),
-  box(600, 165, 180, 62, "Alertmanager / SIEM", ["銀行既有", "lag 另看 C3"], "amber"),
-  arrow(740, 122, 740, 163, null, { dash: true }),
+// 17. monitoring: JMX exporter -> the bank's Prometheus / Alertmanager / Grafana
+D.jmx = () => svg(820, 330, [
+  region(20, 28, 270, 282, "我方裝的：四種程序 + javaagent", "blue"),
+  box(36, 56, 238, 50, "controller ×3", ["官方 kafka_controller.yml"], "blue"),
+  box(36, 114, 238, 50, "broker ×4", ["官方 kafka_broker.yml"], "blue"),
+  box(36, 172, 238, 50, "REST Proxy ×2", ["官方 confluent_rest.yml"], "blue"),
+  box(36, 230, 238, 50, "Control Center", ["我方的小規則（JVM、Streams、Jetty）"], "blue"),
+  note(36, 298, ":7071 HTTPS + basic auth，憑證用這台的 keystore"),
+  region(330, 28, 470, 282, "銀行提供，我方交付設定", "amber"),
+  box(350, 60, 190, 62, "Prometheus", ["4 個 job、env 標籤", "21 條告警規則"], "amber"),
+  box(580, 60, 200, 62, "Alertmanager", ["兩種 webhook 格式", "default JSON／自訂 JSON"], "amber"),
+  arrow(540, 91, 578, 91, "告警"),
+  box(350, 170, 190, 62, "Grafana", ["datasource + 32 個官方", "dashboard（佈建）"], "amber"),
+  box(580, 170, 200, 62, "webhook 接收端", ["行內事件系統／Dynatrace", "lab：印出收到什麼的容器"], "gray"),
+  arrow(680, 122, 680, 168, "POST"),
+  arrow(445, 122, 445, 168, "查詢"),
+  arrow(290, 140, 348, 100, "每 30 秒抓", { lx: 316, ly: 162 }),
+  box(350, 250, 430, 44, "C3 內建 Prometheus／Alertmanager：不動，只給 C3 畫面用", [], "gray", { dash: true }),
 ].join(""));
 
 // 16. Audit log routing

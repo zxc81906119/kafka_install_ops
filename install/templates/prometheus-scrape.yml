@@ -1,22 +1,36 @@
-# Confluent Platform targets for the bank's Prometheus (merge under scrape_configs)
-# Files next to prometheus.yml: confluent/ca.pem (bank root CA), confluent/scrape.pass (basic-auth password, 0600)
+# Confluent Platform scrape jobs for the bank's Prometheus (referenced from prometheus.yml with scrape_config_files)
+# Job names and the env / hostname labels are what Confluent's official Grafana dashboards query (job="kafka-broker", env=...).
+# Files next to this one (/etc/prometheus/confluent/): ca.pem (bank root CA), scrape.pass (basic-auth password, 0600)
 scrape_configs:
-  - job_name: confluent-controller
+  - job_name: kafka-controller
     scheme: https
     scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
     basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
-    static_configs: [ { targets: [ ${CONTROLLER_TARGETS} ] } ]
-  - job_name: confluent-broker
+    static_configs: [ { targets: [ ${CONTROLLER_TARGETS} ], labels: { env: ${ENV_LABEL} } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
+  - job_name: kafka-broker
     scheme: https
     scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
     basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
-    static_configs: [ { targets: [ ${BROKER_TARGETS} ] } ]
-  - job_name: confluent-rest
+    static_configs: [ { targets: [ ${BROKER_TARGETS} ], labels: { env: ${ENV_LABEL} } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
+  - job_name: rest-proxy
     scheme: https
     scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
     basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
-    static_configs: [ { targets: [ ${REST_TARGETS} ] } ]
-rule_files: [ /etc/prometheus/confluent/alert-rules.yml ]
+    static_configs: [ { targets: [ ${REST_TARGETS} ], labels: { env: ${ENV_LABEL} } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
+  - job_name: control-center
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
+    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
+    static_configs: [ { targets: [ ${C3_TARGETS} ], labels: { env: ${ENV_LABEL} } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]

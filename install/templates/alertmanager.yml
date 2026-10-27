@@ -1,0 +1,39 @@
+# Alertmanager configuration for the bank's Alertmanager. Two webhook receivers show the two formats; keep one, delete the other.
+#   webhook-default    Alertmanager's own JSON (version 4): one POST per notification group, all alerts of the group inside
+#   webhook-dynatrace  a custom JSON built with a template in `payload`: one flat event per alert, Dynatrace problem-notification fields
+# group_by ['...'] puts every alert in its own group, so the custom format is always exactly one alert per POST.
+# Replace WEBHOOK-RECEIVER:8080 with the bank's webhook / Dynatrace endpoint (add authentication with http_config if it needs it).
+global:
+  resolve_timeout: 5m
+route:
+  receiver: webhook-default
+  group_by: ['...']
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - receiver: webhook-default
+      continue: true
+    - receiver: webhook-dynatrace
+receivers:
+  - name: webhook-default
+    webhook_configs:
+      - url: http://WEBHOOK-RECEIVER:8080/default
+        send_resolved: true
+  - name: webhook-dynatrace
+    webhook_configs:
+      - url: http://WEBHOOK-RECEIVER:8080/dynatrace
+        send_resolved: true
+        # String form + toJson: every value is escaped by toJson, so quotes or colons in a description cannot break the JSON.
+        # (The map form would turn "007" into the number 7 and read "a: b" as an object.)
+        payload: >-
+          {"eventType": "CUSTOM_ALERT",
+          "State": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
+          "ProblemID": {{ (index .Alerts 0).Fingerprint | toJson }},
+          "ProblemTitle": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
+          "ProblemSeverity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
+          "ProblemImpact": {{ .CommonLabels.impact | toJson }},
+          "ProblemDetailsText": {{ .CommonAnnotations.description | toJson }},
+          "ImpactedEntity": {{ .CommonLabels.hostname | toJson }},
+          "Tags": {{ printf "env:%s,job:%s,instance:%s" .CommonLabels.env .CommonLabels.job .CommonLabels.instance | toJson }},
+          "StartTime": {{ (index .Alerts 0).StartsAt.Format "2006-01-02T15:04:05Z07:00" | toJson }}}

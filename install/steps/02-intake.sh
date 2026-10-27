@@ -9,7 +9,7 @@ set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
 
-ask_bank "2.1 資安：落地區所有檔案（rpm/、tools/、gpg-keys/、SHA256SUMS、bank/ 的 JDK）上傳行內惡意程式掃描平台取得 OK 報告；" \
+ask_bank "2.1 資安：落地區所有檔案（rpm/、tools/、gpg-keys/、monitoring/、SHA256SUMS、bank/ 的 JDK）上傳行內惡意程式掃描平台取得 OK 報告；" \
          "    開單附安裝檔、掃描報告、SHA256SUMS。注意 confluent-security（1.1 GB）、C3（1.0 GB）單檔超過 1 GB，先確認平台上限。" \
          "2.2 檔案交換：核准後把整個落地區送到操作機 $LANDING（擁有者 cpadmin，唯讀 a-w）。"
 

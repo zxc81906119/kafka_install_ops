@@ -35,10 +35,11 @@
 | kc01、kc02、kc03 | KRaft controller | 我方安裝，銀行提供主機 |
 | kb01–kb04 | Kafka broker | 同上 |
 | rest01、rest02 | REST Proxy | 同上 |
-| c3-01 | Control Center（含內建 Prometheus、Alertmanager） | 同上 |
+| c3-01 | Control Center（含內建 Prometheus、Alertmanager，只供 C3 自己的畫面用） | 同上 |
 | repo01 | 行內套件庫 web server，lab 裡兼 NTP | 銀行 |
 | ad01 | 行內 AD（lab 用 Samba 模擬） | 銀行 |
 | lb01 | 負載平衡（lab 用 nginx 模擬） | 銀行 |
+| 行內監控（Prometheus、Alertmanager、Grafana） | 抓指標、發告警、看 dashboard；告警送到行內的事件系統（lab 用 `lab-mon-*` 四個容器模擬，第 17 章） | 銀行監控團隊 |
 | PVWA | CyberArk PAM 的網頁：密碼、金鑰的正本都在這裡，人工取放（lab 用 Windows 上的 `~/kafka-lab/pvwa/` 資料夾模擬） | 銀行 Secrets 團隊 |
 
 所有主機的 FQDN 是 `<主機>.poc.lab`。
@@ -105,7 +106,7 @@
 | 10–13 設定、啟動、權限、REST、C3 | 40 分 | 每段啟動要等健康檢查；C3 第一次起來 1–2 分鐘 |
 | 15 Secret Protection（延伸） | 30 分 | 加密、派送、滾動重啟 |
 | 16 OP menu（延伸） | 20 分 | 保管庫加身分、裝選單、改 sudoers、三種身分試跑 |
-| 17 JMX exporter（延伸） | 20 分 | 派送、滾動重啟、行內 Prometheus 驗證 |
+| 17 監控（延伸） | 40 分 | 四種程序派送、滾動重啟（controller 與 broker 的指標要等 2 分鐘）、lab 的 Prometheus／Alertmanager／Grafana、告警測試 |
 | 18 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
 | 19 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
 | 20 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
@@ -614,7 +615,7 @@ glibc-2.34-168.el9_8.x86_64
 （版本號依映像而異，重點是只有這兩個）
 ```
 
-## 1.4 監控用的 jar、給銀行的 OS 套件清單
+## 1.4 監控用的 jar 與官方規則、給銀行的 OS 套件清單
 
 @role 小安 | dl01 | root
 
@@ -626,6 +627,16 @@ curl -fsSL -o /out/tools/jmx_prometheus_javaagent-1.0.1.jar https://repo1.maven.
 
 ```out
 jar-sha1-ok
+```
+
+Confluent 官方的監控檔（exporter 規則、告警規則、Grafana dashboard）在 GitHub 的 confluentinc/jmx-monitoring-stacks（Apache-2.0）。**固定在一個 commit**（`f376263f…`，2026-05-28），不跟 main 走：第 17 章的 dashboard 與規則是照這一版的指標名稱寫的。只取要用的路徑（32 個 dashboard、告警規則、controller／broker／REST 三份 exporter 規則），jar 不拿（用上面 Maven Central 驗過的那個）。`COMMIT` 檔記下版本，之後每一關的 `SHA256SUMS` 也會涵蓋它們：
+
+```bash
+SHA=f376263fc6d7270185ab6abab9a8c379079e2a92 && mkdir -p /out/monitoring /tmp/jms-x && curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$SHA.tar.gz" | tar -xz -C /tmp/jms-x --wildcards '*/LICENSE' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' '*/jmxexporter-prometheus-grafana/assets/prometheus/*' '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' && rm -rf /out/monitoring/jmx-monitoring-stacks && mv /tmp/jms-x/jmx-monitoring-stacks-* /out/monitoring/jmx-monitoring-stacks && echo "$SHA" > /out/monitoring/jmx-monitoring-stacks/COMMIT && rm -rf /tmp/jms-x && echo "commit ${SHA:0:12}: $(find /out/monitoring -type f | wc -l) 個檔，dashboard $(ls /out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l) 個"
+```
+
+```out
+commit f376263fc6d7: 47 個檔，dashboard 32 個
 ```
 
 平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行：
@@ -675,14 +686,14 @@ jdk-ok: OpenJDK21U-jdk_x64_linux_hotspot_21.0.x_y.tar.gz
 @role 小安 | dl01 | root
 
 ```bash
-cd /out && find rpm tools gpg-keys -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS && wc -l SHA256SUMS
+cd /out && find rpm tools gpg-keys monitoring -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS && wc -l SHA256SUMS
 ```
 
 ```out
-14 SHA256SUMS
+61 SHA256SUMS
 ```
 
-11 個 RPM、1 個 jar、2 把公鑰（JDK 是銀行的檔案，有自己的 sha256，不列在這裡）。這份 `SHA256SUMS` 之後每一關都會再用一次。下載機的工作到此結束。
+11 個 RPM、1 個 jar、2 把公鑰、47 個官方監控檔（含 `COMMIT`）（JDK 是銀行的檔案，有自己的 sha256，不列在這裡）。這份 `SHA256SUMS` 之後每一關都會再用一次。下載機的工作到此結束。
 
 # 2. 第二站：把東西送進銀行
 
@@ -705,7 +716,7 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/home/cpadmin/
 ```
 
 ```out
-18
+65
 3.1G	/home/cpadmin/landing
 ```
 
@@ -720,7 +731,7 @@ cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) f
 ```
 
 ```out
-14 files OK
+61 files OK
 ```
 
 `rpm -K` 只認 rpm 資料庫裡的公鑰，所以要先匯入：
@@ -1305,17 +1316,17 @@ kc01: repo01 -65ns[+3833ns]
 | controller | 9093、7071 | 其他 controller 與 broker；監控 |
 | broker | 9092、9094、9095、9096、8090、7071 | broker 之間；token 連線；應用程式；MDS；監控 |
 | REST Proxy | 8082、7071 | 負載平衡；監控 |
-| C3 | 9021、9090 | 維運人員的瀏覽器；C3 自己的 Prometheus |
+| C3 | 9021、9090、7071 | 維運人員的瀏覽器；C3 自己的 Prometheus；監控 |
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'case $(hostname) in kc*) p="9093 7071";; kb*) p="9092 9094 9095 9096 8090 7071";; rest*) p="8082 7071";; c3*) p="9021 9090";; esac; sudo dnf -q -y install firewalld >/dev/null && sudo systemctl enable --now firewalld >/dev/null 2>&1; for s in cockpit dhcpv6-client; do sudo firewall-cmd -q --permanent --remove-service=$s 2>/dev/null; done; for x in $p; do sudo firewall-cmd -q --permanent --add-port=$x/tcp; done; sudo firewall-cmd -q --reload && echo "$(hostname): $(sudo firewall-cmd --list-ports)"'; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'case $(hostname) in kc*) p="9093 7071";; kb*) p="9092 9094 9095 9096 8090 7071";; rest*) p="8082 7071";; c3*) p="9021 9090 7071";; esac; sudo dnf -q -y install firewalld >/dev/null && sudo systemctl enable --now firewalld >/dev/null 2>&1; for s in cockpit dhcpv6-client; do sudo firewall-cmd -q --permanent --remove-service=$s 2>/dev/null; done; for x in $p; do sudo firewall-cmd -q --permanent --add-port=$x/tcp; done; sudo firewall-cmd -q --reload && echo "$(hostname): $(sudo firewall-cmd --list-ports)"'; done
 ```
 
 ```out
 kc01: 7071/tcp 9093/tcp
 kb01: 7071/tcp 8090/tcp 9092/tcp 9094/tcp 9095/tcp 9096/tcp
 rest01: 7071/tcp 8082/tcp
-c3-01: 9021/tcp 9090/tcp
+c3-01: 7071/tcp 9021/tcp 9090/tcp
 （10 行）
 ```
 
@@ -2244,7 +2255,7 @@ kill $(cat /tmp/lbprobe.pid); sleep 1; echo "經 LB 打了 $(wc -l < /tmp/lbprob
 
 @role 小安 | ops02 | cpadmin
 
-C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。
+C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。內建的 Prometheus、Alertmanager 是給 C3 自己的畫面用的；**監控與告警不走它們**（第 17 章用行內的 Prometheus、Alertmanager、Grafana），所以這一章只把它們設到 C3 畫面能用，不要在 C3 畫面建 alert trigger 或 action。
 
 ```bash
 scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-server.crt ~/pki/keys/cp-server.key ~/pki/certs/bank-root.pem ~/pki/certs/svc-c3.p12 ~/pki/certs/mds-token-public.pem c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center && for f in truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem; rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/bank-root.pem /tmp/mds-token-public.pem; echo "c3-01: $(sudo ls /etc/confluent/ssl | wc -l) files"'
@@ -2298,7 +2309,7 @@ c3-01: prometheus config ok
 
 > 陷阱：`*-generated.yml` 若是 root 擁有，C3 啟動會報 `AccessDeniedException`。
 >
-> 陷阱：上面最後兩段（`otlp`、`storage`）是從 C3 套件預設的 `prometheus-generated-local.yml` 抄來的，**不能省**。broker 用 OTLP 把指標送進 Prometheus，`promote_resource_attributes` 才會把資源屬性 `kafka.cluster.id`、`kafka.broker.id` 變成指標標籤。沒有它，指標沒有叢集標籤，C3 畫面上建的 trigger（告警條件）都帶 `kafka_cluster_id=…` 去比對，**永遠比對不到資料，告警不會觸發**，而畫面看起來一切正常（2026-10-26 lab 實測：補上之後 40 秒內帶標籤的資料點從 0 變成 7 萬多筆）。
+> 陷阱：上面最後兩段（`otlp`、`storage`）是從 C3 套件預設的 `prometheus-generated-local.yml` 抄來的，**不能省**。broker 用 OTLP 把指標送進 Prometheus，`promote_resource_attributes` 才會把資源屬性 `kafka.cluster.id`、`kafka.broker.id` 變成指標標籤。沒有它，指標沒有叢集標籤，C3 畫面上依叢集、broker 篩選的圖表都比對不到資料，而畫面看起來一切正常（2026-10-26 lab 實測：補上之後 40 秒內帶標籤的資料點從 0 變成 7 萬多筆）。
 
 C3 設定檔（整段貼到 EOF）：
 
@@ -2424,7 +2435,7 @@ REMOTE
 指標帶 kafka_broker_id 標籤的節點數：5（等了約 10 秒）
 ```
 
-只要大於 0 就代表標籤有帶上來。數字會隨 telemetry 陸續送進來而增加，穩定後是 7（4 台 broker 加 3 台 controller，各自的 node id；實測剛啟動 10 秒時是 5）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 的告警不會有作用。
+只要大於 0 就代表標籤有帶上來。數字會隨 telemetry 陸續送進來而增加，穩定後是 7（4 台 broker 加 3 台 controller，各自的 node id；實測剛啟動 10 秒時是 5）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 畫面上的圖會是空的。
 
 Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~/secrets/ad-test-users.pass`）。憑證是銀行 CA 簽的，瀏覽器沒裝銀行根憑證會有警告，lab 先略過。Alertmanager 的 9093 只開給同一台的 C3，從操作機連不到是正常的。
 
@@ -2432,7 +2443,7 @@ Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~
 
 到這裡平台已經能用，但還不能交付。後面分兩段：
 
-- **交付前一定要做**：第 15 站把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 16 站維運選單；第 17 站讓行內 Prometheus 抓指標；第 18 站稽核日誌；第 22.2 的 license 到期排程、第 25 站每日備份；最後第 19 站驗收與收尾。
+- **交付前一定要做**：第 15 站把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 16 站維運選單；第 17 站監控（JMX exporter，交付行內 Prometheus、Alertmanager、Grafana 的設定）；第 18 站稽核日誌；第 22.2 的 license 到期排程、第 25 站每日備份；最後第 19 站驗收與收尾。
 - **上線之後依需要**：第 20 站憑證輪替（每年）、第 21 站升級 Confluent 與 JDK、第 23 站換 controller、第 24 站增減 broker、第 26 站 OS 修補、第 27 站升級 Control Center。
 
 @role 小安 | ops02 | cpadmin
@@ -2459,7 +2470,7 @@ metrics in prometheus: 111 kinds
 |---|---|
 | 11 台主機就緒、套件裝好並鎖版本 | 設定檔密碼加密、master key 交 CyberArk（第 15 章） |
 | 8 張銀行憑證、truststore、MDS token 金鑰 | 維運選單（OP menu）；稽核日誌分流與專用寫入帳號 |
-| controller、broker、MDS、RBAC（人員綁 AD 群組） | 外部監控的 JMX exporter（7071） |
+| controller、broker、MDS、RBAC（人員綁 AD 群組） | 外部監控：JMX exporter（7071）與行內 Prometheus、Alertmanager、Grafana 的設定（第 17 章） |
 | 應用程式 SCRAM 帳號、配額、範例 topic | 正式的端對端驗收清單 |
 | REST Proxy（憑證認證，經負載平衡）、C3（含 Prometheus） | 收回安裝帳號的 sudo、移交文件；之後的憑證輪替（第 20 章）、升級（第 21 章） |
 
@@ -3199,22 +3210,33 @@ docker exec lab-kb04-1 bash -c 'mv /root/cpadmin.sudoers.full /etc/sudoers.d/cpa
 kb04: full sudo back (change window)
 ```
 
-# 17. 第十七站：讓行內的 Prometheus 抓指標（JMX exporter）
+# 17. 第十七站：監控（JMX exporter，行內 Prometheus、Alertmanager、Grafana）
 
 ![jmx]
 
-C3 有自己的 Prometheus，但那是給 C3 用的。銀行的監控中心要自己的 Prometheus 抓每台 controller、broker、REST Proxy 的指標，再接自己的告警。做法是在每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），在 7071 開一個 HTTPS 端點，basic auth 保護；行內 Prometheus 拿我們產生的 scrape 設定與告警規則去接。
+監控與告警的做法已定案：**每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），由銀行的 Prometheus 抓、銀行的 Alertmanager 發告警、銀行的 Grafana 看圖**。Prometheus、Alertmanager、Grafana 是銀行提供的；我方交付的是設定：exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方的 32 個 dashboard。
+
+> **C3 內建的 Prometheus、Alertmanager 不動**：它們是 C3 自己的畫面（第 13 章）要用的，`otlp` 等設定照舊。但**告警與 dashboard 不走它們**，也不要在 C3 畫面建 alert trigger 或 action（Webhook、Email、PagerDuty）。原因：C3 會把那份 Alertmanager 設定重寫（C3 重啟後手改的內容被蓋掉）、webhook 內容不能自訂、而且只看得到 C3 自己收到的 telemetry（沒有主機標籤、看不到 controller 的 raft 以外的 JMX）。這幾點 2026-10-26 在 lab 逐項實測過。
 
 | 誰 | 做什麼 |
 |---|---|
-| 小安 | exporter jar 已在第 1.4 站帶進來；產抓取密碼、設定檔，派送、滾動重啟；產給銀行的 scrape 設定、告警規則、根憑證 |
-| 銀行監控團隊 | 把三個檔放進自己的 Prometheus，確認 9 個 target 都是 up |
+| 小安 | exporter 的 jar 與 Confluent 官方規則檔已在第 1.4 站帶進來；產抓取密碼、組設定、派送、滾動重啟；產給銀行的 `to-bank/`（scrape 設定、告警規則、Alertmanager 設定、Grafana 設定與 dashboard、根憑證、抓取密碼） |
+| 銀行監控團隊 | 把 `to-bank/` 放進自己的 Prometheus、Alertmanager、Grafana；確認 10 個 target 都是 up、規則載入、dashboard 都在；把 webhook 指到行內的事件系統（例如 Dynatrace） |
+
+四種程序各用哪份規則，抓得到什麼：
+
+| 程序 | exporter 規則 | 抓得到什麼 |
+|---|---|---|
+| controller（kc01–03） | Confluent 官方 `kafka_controller.yml` | KRaft：controller 指標（`ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount` …）、raft 指標（leader、epoch、voter 數、commit／election latency）、JVM |
+| broker（kb01–04） | Confluent 官方 `kafka_broker.yml` | topic／partition／replica、request 延遲、ISR、網路與 request handler 執行緒、quota、JVM（序列數隨 topic 與 partition 數成長，3 個 partition 的 lab 約 1.2 萬條） |
+| REST Proxy（rest01–02） | Confluent 官方 `confluent_rest.yml` | Jetty 與每個 REST endpoint 的請求率、錯誤率、延遲，JVM |
+| Control Center（c3-01） | **我方自己寫的小規則**（官方沒有給 C3 的 exporter 設定） | JVM、Kafka Streams 狀態（`client_state`、執行緒數）、Jetty 請求率。C3 的 JVM 另外有上萬條 MBean（每個 REST endpoint、每個 RocksDB store 一串），全是雜訊，所以只放行上面幾項 |
 
 ## 17.1 抓取密碼與設定檔
 
 @role 小安 | ops02 | cpadmin
 
-exporter 的設定檔只存密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼則只能明文寫在這個 YAML 裡（exporter 不支援 Secret Protection），所以檔案一律 root:confluent 0640。controller 沒有 cp-server.p12，用 kafka-internal.p12：
+exporter 的設定檔只存密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼則只能明文寫在這個 YAML 裡（exporter 不支援 Secret Protection），所以檔案一律 root:confluent 0640。controller 沒有 cp-server.p12，用 kafka-internal.p12；broker、REST Proxy、C3 用 cp-server.p12。這一步只產生**標頭**（HTTPS 與帳密），規則在 17.2 接上去：
 
 ```bash
 install -d -m 0700 ~/monitoring && (umask 077; [ -s ~/secrets/jmx-scrape.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/jmx-scrape.pass; [ -s ~/secrets/jmx-scrape.salt ] || openssl rand -hex 16 > ~/secrets/jmx-scrape.salt) && SALT=$(cat ~/secrets/jmx-scrape.salt) && HASH=$(printf '%s:%s' "$SALT" "$(cat ~/secrets/jmx-scrape.pass)" | sha256sum | cut -d' ' -f1 | sed 's/^0*//') && for ks in cp-server kafka-internal; do (umask 077; cat > ~/monitoring/jmx-header-$ks.yml <<EOF
@@ -3233,10 +3255,8 @@ httpServer:
       passwordHash: $HASH
       algorithm: SHA-256
       salt: $SALT
-lowercaseOutputName: true
-lowercaseOutputLabelNames: true
 EOF
-); done; unset SALT HASH; echo "headers: $(ls ~/monitoring | tr '
+); done; unset SALT HASH; echo "headers: $(ls ~/monitoring | grep '^jmx-header' | tr '
 ' ' ')"
 ```
 
@@ -3246,95 +3266,89 @@ headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml
 
 > 陷阱：exporter 比對雜湊時用 Java 的 `BigInteger.toString(16)`，開頭的 0 會被吃掉。雜湊剛好以 0 開頭（機率 1/16）時，帳密永遠 401；所以上面多了 `sed 's/^0*//'` 把前導 0 去掉再寫進 YAML。
 
-要抓哪些 MBean、改成什麼名字，controller／broker 一份、REST Proxy 一份。**整段貼到 EOF**：
-
-```bash
-cat > ~/monitoring/rules-kafka.yml <<'EOF'
-# Confluent Server (controllers + brokers): only the MBean domains alerting and capacity planning need
-# (JVM metrics jvm_* come from the exporter's built-in collectors)
-includeObjectNames:
-  - "kafka.server:*"
-  - "kafka.controller:*"
-  - "kafka.network:type=RequestMetrics,name=RequestsPerSec,*"
-  - "kafka.network:type=RequestMetrics,name=TotalTimeMs,*"
-  - "kafka.network:type=SocketServer,*"
-  - "kafka.log:type=LogFlushStats,*"
-excludeObjectNames:
-  - "kafka.server:type=*,clientId=*,*"
-rules:
-  # ...PerSec meters -> counters
-  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)PerSec\w*, (.+)=(.+), (.+)=(.+)><>Count'
-    name: kafka_$1_$2_$3_total
-    type: COUNTER
-    labels: { "$4": "$5", "$6": "$7" }
-  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)PerSec\w*, (.+)=(.+)><>Count'
-    name: kafka_$1_$2_$3_total
-    type: COUNTER
-    labels: { "$4": "$5" }
-  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)PerSec\w*><>Count'
-    name: kafka_$1_$2_$3_total
-    type: COUNTER
-  # meters without PerSec: RequestHandlerAvgIdlePercent (0..1, one-minute rate)
-  - pattern: 'kafka.server<type=KafkaRequestHandlerPool, name=RequestHandlerAvgIdlePercent><>OneMinuteRate'
-    name: kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent
-    type: GAUGE
-  # request latency percentiles
-  - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(.+)><>(\d+)thPercentile'
-    name: kafka_network_requestmetrics_totaltimems
-    type: GAUGE
-    labels: { request: "$1", quantile: "0.$2" }
-  # gauges: UnderReplicatedPartitions, ActiveControllerCount, OfflinePartitionsCount, ...
-  - pattern: 'kafka.(\w+)<type=(.+), name=(.+), (.+)=(.+)><>Value'
-    name: kafka_$1_$2_$3
-    type: GAUGE
-    labels: { "$4": "$5" }
-  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)><>Value'
-    name: kafka_$1_$2_$3
-    type: GAUGE
-  - pattern: 'kafka.network<type=SocketServer><>([a-z-]+): (.+)'
-    name: kafka_network_socketserver_$1
-    type: GAUGE
-EOF
-cat > ~/monitoring/rules-rest.yml <<'EOF'
-# REST Proxy: Jetty / REST request metrics + JVM
-includeObjectNames:
-  - "kafka.rest:type=jetty-metrics,*"
-  - "kafka.rest:type=jersey-metrics,*"
-rules:
-  - pattern: 'kafka.rest<type=jetty-metrics><>([a-z-]+): (.+)'
-    name: kafka_rest_jetty_$1
-    type: GAUGE
-  - pattern: 'kafka.rest<type=jersey-metrics><>([a-z0-9.-]+): (.+)'
-    name: kafka_rest_jersey_$1
-    type: GAUGE
-EOF
-echo "rules: kafka $(grep -c pattern ~/monitoring/rules-kafka.yml) patterns, rest $(grep -c pattern ~/monitoring/rules-rest.yml) patterns"
-```
-
-```out
-rules: kafka 8 patterns, rest 2 patterns
-```
-
-## 17.2 派送 jar 與設定、掛上 javaagent
+## 17.2 接上 Confluent 官方的規則
 
 @role 小安 | ops02 | cpadmin
 
-每台：jar 到 `/opt/jmx-exporter/`、設定檔 = 標頭 + 規則、第四個 drop-in 把 `-javaagent` 放進 `KAFKA_OPTS`（REST Proxy 是 `KAFKAREST_OPTS`）。7071 在第 7 站的防火牆已經開了：
+Dashboard 是照 Confluent 官方 exporter 規則產生的指標名稱寫的，所以規則**直接用官方的檔，不自己改**（第 1.4 站帶進來，固定在 jmx-monitoring-stacks 的一個 commit，在 `~/landing/monitoring/` 下）。每台的設定 = 17.1 的標頭 + 官方規則。官方檔第一行是 YAML 文件分隔線 `---`，接在標頭後面會變成第二份文件，所以拿掉。官方檔自己帶 `startDelaySeconds: 120`（controller、broker：重啟後前兩分鐘 7071 回 200 但沒有指標）。
+
+C3 沒有官方規則，我們寫一份小的（`rules-c3.yml`）。整段貼到 EOF：
 
 ```bash
-JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do case $h in kc*) ks=kafka-internal; rules=rules-kafka; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; kb*) ks=cp-server; rules=rules-kafka; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; rest*) ks=cp-server; rules=rules-rest; cfg=/etc/confluent/kafka-rest/jmx-exporter.yml; u=confluent-kafka-rest; var=KAFKAREST_OPTS;; esac; cat ~/monitoring/jmx-header-$ks.yml ~/monitoring/$rules.yml > /tmp/jmx-$h.yml && scp -q ~/landing/tools/$JAR /tmp/jmx-$h.yml $h.poc.lab:/tmp/ && rm -f /tmp/jmx-$h.yml && ssh $h.poc.lab "sudo install -d -m 0755 /opt/jmx-exporter && sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-$h.yml $cfg && rm -f /tmp/$JAR /tmp/jmx-$h.yml && printf '[Service]\nEnvironment=\"$var=-javaagent:/opt/jmx-exporter/$JAR=7071:$cfg\"\n' | sudo tee /etc/systemd/system/$u.service.d/40-jmx.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\\n' | grep -o 'javaagent:[^ =]*' | head -1) \$(sudo wc -l $cfg | cut -d' ' -f1) lines\""; done
+cd ~/monitoring && rm -f alert-rules.yml ca.pem prometheus-scrape.yml rules-kafka.yml rules-rest.yml rules-jvm.yml scrape.pass
+R=~/landing/monitoring/jmx-monitoring-stacks/shared-assets/jmx-exporter && echo "官方規則版本：$(cut -c1-12 ~/landing/monitoring/jmx-monitoring-stacks/COMMIT)" && for x in controller:kafka-internal:kafka_controller broker:cp-server:kafka_broker rest:cp-server:confluent_rest; do role=${x%%:*}; rest=${x#*:}; ks=${rest%%:*}; rules=${rest#*:}; (umask 077; { cat ~/monitoring/jmx-header-$ks.yml; sed '1{/^---$/d}' $R/$rules.yml; } > ~/monitoring/jmx-$role.yml); done
+cat > ~/monitoring/rules-c3.yml <<'EOF'
+# Control Center: Confluent has no official exporter rules for it, so this is our own, deliberately small.
+# C3 is a Kafka Streams application with a Jetty/Jersey front end; its JVM exposes thousands of MBeans (one per REST endpoint,
+# per RocksDB store, per client), most of them noise. Only what an alert can use is kept:
+#   jvm_*, process_*   built in (heap, GC, threads, open file descriptors)
+#   Kafka Streams state: client_state (0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR), alive / failed threads
+#   Jetty: request rate and error rate in front of C3's UI and API
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+startDelaySeconds: 0
+includeObjectNames:
+  - "kafka.streams:type=stream-metrics,*"
+  - "kafka.rest:type=jetty-metrics"
+rules:
+  # the beans carry different extra keys (application-id, process-id) in no fixed order, so only pick out client-id
+  - pattern: 'kafka.streams<.*client-id=([^,>]+).*><>(client-state|alive-stream-threads|failed-stream-threads): (.+)'
+    name: kafka_streams_stream_metrics_$2
+    type: GAUGE
+    labels: { client_id: "$1" }
+  - pattern: 'kafka.rest<type=jetty-metrics><>(request-rate|request-error-rate): (.+)'
+    name: kafka_rest_jetty_metrics_$1
+    type: GAUGE
+EOF
+(umask 077; cat ~/monitoring/jmx-header-cp-server.yml ~/monitoring/rules-c3.yml > ~/monitoring/jmx-c3.yml)
+for f in controller broker rest c3; do printf '%-11s %4d 行  httpServer=%s lowercaseOutputName=%s
+' $f $(wc -l < ~/monitoring/jmx-$f.yml) $(grep -c '^httpServer:' ~/monitoring/jmx-$f.yml) $(grep -c '^lowercaseOutputName: true' ~/monitoring/jmx-$f.yml); done
 ```
 
 ```out
-kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 61 lines
-（9 行；REST Proxy 是 28 lines）
+官方規則版本：f376263fc6d7
+controller   158 行  httpServer=1 lowercaseOutputName=1
+broker       436 行  httpServer=1 lowercaseOutputName=1
+rest          54 行  httpServer=1 lowercaseOutputName=1
+c3            36 行  httpServer=1 lowercaseOutputName=1
 ```
 
-> 陷阱：落地區的檔案是唯讀的（第 2 站 `chmod a-w`），`scp` 到 `/tmp` 會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
+官方規則版本記在 `COMMIT`，換版本（重新下載官方檔）要重做這一步並重新驗證 dashboard。
 
-## 17.3 滾動重啟、驗證端點
+> **官方規則的一個副作用**：序列數會隨 topic 與 partition 數成長（`kafka.log`、`kafka.cluster` 的每個 partition 一條）。lab 3 個 partition 的 broker 就有 1.2 萬條；正式環境 partition 多時要請銀行監控團隊評估 Prometheus 的容量與保留天數。
+
+## 17.3 派送 jar 與設定、掛上 javaagent
 
 @role 小安 | ops02 | cpadmin
+
+每台：jar 到 `/opt/jmx-exporter/`、設定檔到各元件的目錄、第四個 drop-in 把 `-javaagent` 放進環境變數：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在第 7 站的防火牆已經開了（C3 的 7071 也在）：
+
+```bash
+JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in kc*) role=controller; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; kb*) role=broker; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; rest*) role=rest; cfg=/etc/confluent/kafka-rest/jmx-exporter.yml; u=confluent-kafka-rest; var=KAFKAREST_OPTS;; c3*) role=c3; cfg=/etc/confluent/control-center/jmx-exporter.yml; u=confluent-control-center; var=CONTROL_CENTER_OPTS;; esac; cp ~/monitoring/jmx-$role.yml /tmp/jmx-$h.yml && scp -q ~/landing/tools/$JAR /tmp/jmx-$h.yml $h.poc.lab:/tmp/ && rm -f /tmp/jmx-$h.yml && ssh $h.poc.lab "sudo install -d -m 0755 /opt/jmx-exporter && sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-$h.yml $cfg && rm -f /tmp/$JAR /tmp/jmx-$h.yml && printf '[Service]\nEnvironment=\"$var=-javaagent:/opt/jmx-exporter/$JAR=7071:$cfg\"\n' | sudo tee /etc/systemd/system/$u.service.d/40-jmx.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1) \$(sudo wc -l $cfg | cut -d' ' -f1) lines\""; done
+```
+
+```out
+kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 158 lines
+kc02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 158 lines
+kc03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 158 lines
+kb01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
+kb02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
+kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
+kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
+rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 54 lines
+rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 54 lines
+c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 36 lines
+```
+
+> 陷阱：落地區的檔案是唯讀的（第 2 站 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
+>
+> 陷阱：`sudo wc -l < 檔案` 的 `<` 是用 cpadmin 的身分開檔，會 `Permission denied`；要寫成 `sudo wc -l 檔案`。
+
+## 17.4 滾動重啟、驗證端點
+
+@role 小安 | ops02 | cpadmin
+
+controller、broker 照順序一台一台來（REST Proxy 與 C3 在後面）：
 
 ```bash
 for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
@@ -3402,166 +3416,783 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-沒帶帳密要被拒（401），帶了要看到指標；憑證鏈用銀行根憑證驗（不用 -k）：
+最後是 C3（它的畫面約 1 分鐘不能用）：
 
 ```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02; do u=https://$h.poc.lab:7071/metrics; a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert $CA $u); m=$(curl -s --max-time 20 --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" $u | grep -cE '^(kafka_|jvm_)'); printf '%-7s anon=%s metrics=%s\n' $h $a $m; done
+ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 10; done; echo "c3 ui=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*10))s"
 ```
 
 ```out
-kc01    anon=401 metrics=681
-kb01    anon=401 metrics=1054
-rest01  anon=401 metrics=920
-（9 行，anon 都是 401；controller 約 680、broker 約 1000、REST 約 920 個指標）
+c3 ui=200 after ~60s
 ```
 
-## 17.4 給銀行監控團隊的三個檔
+沒帶帳密要被拒（401），帶了要看到指標；憑證鏈用銀行根憑證驗（不用 -k）。controller 與 broker 重啟後前兩分鐘指標是空的（官方規則的 `startDelaySeconds: 120`），所以每台等到有指標再算：
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do u=https://$h.poc.lab:7071/metrics; a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert $CA $u); for i in $(seq 1 30); do m=$(curl -s --max-time 30 --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" $u | grep -cE '^(kafka_|jvm_)'); [ "$m" -gt 20 ] && break; sleep 10; done; printf '%-7s anon=%s metrics=%s\n' $h $a $m; done
+```
+
+```out
+kc01    anon=401 metrics=1067
+kb01    anon=401 metrics=12017
+rest01  anon=401 metrics=1498
+c3-01   anon=401 metrics=101
+（10 行，匿名都是 401；controller 約 1,000、REST 約 1,500、C3 約 100 個 kafka_／jvm_ 指標，broker 依 partition 數而定）
+```
+
+## 17.5 給銀行監控團隊的檔
 
 @role 小安 | ops02 | cpadmin
 
-scrape 設定（三個 job、HTTPS、basic auth 的密碼放檔案不放設定裡）、告警規則、根憑證；抓取密碼另外交 Secrets 團隊存進 PVWA，監控團隊從那裡取（lab 直接給檔）。**待銀行確認**（請銀行確認的事項 11.3、11.4）：行內 Prometheus 抓其他系統用哪種認證；7071 能否只放行行內 Prometheus 的來源位址（第 7 章的 firewalld 目前對所有來源開放）：
+全部放在 `~/monitoring/to-bank/`，分成三個資料夾，各給對應的銀行團隊：
+
+| 資料夾 | 內容 | 放到哪 |
+|---|---|---|
+| `prometheus/` | `scrape-confluent.yml`、`confluent-alerts.yml`、`ca.pem`、`scrape.pass` | Prometheus 的 `/etc/prometheus/confluent/` |
+| `alertmanager/` | `alertmanager.yml` | 併入行內 Alertmanager 的設定 |
+| `grafana/` | `datasource-prometheus.yml`、`dashboards/`（32 個 JSON 加 `dashboard.yml`） | Grafana 的 `provisioning/datasources/`、`provisioning/dashboards/` |
+
+**scrape 設定**：四個 job，名稱和標籤是官方 dashboard 寫死的（`job="kafka-broker"`、`env`、`hostname`），不要改。`env` 的值是這個環境的名字（lab 用 `lab`，客戶用 `prod`／`uat`）。抓取密碼放檔案不放設定裡。這個檔用 Prometheus 的 `scrape_config_files` 引用，不用併進 `prometheus.yml`：
 
 ```bash
-cat > ~/monitoring/prometheus-scrape.yml <<'EOF'
-# Confluent Platform targets for the bank's Prometheus (merge under scrape_configs)
-# Files next to prometheus.yml: confluent/ca.pem (bank root CA), confluent/scrape.pass (basic-auth password, 0600)
+rm -rf ~/monitoring/to-bank && install -d ~/monitoring/to-bank/prometheus ~/monitoring/to-bank/alertmanager ~/monitoring/to-bank/grafana/dashboards
+cat > ~/monitoring/to-bank/prometheus/scrape-confluent.yml <<'EOF'
+# Confluent Platform scrape jobs for the bank's Prometheus (referenced from prometheus.yml with scrape_config_files)
+# Job names and the env / hostname labels are what Confluent's official Grafana dashboards query (job="kafka-broker", env=...).
+# Files next to this one (/etc/prometheus/confluent/): ca.pem (bank root CA), scrape.pass (basic-auth password, 0600)
 scrape_configs:
-  - job_name: confluent-controller
+  - job_name: kafka-controller
     scheme: https
     scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
     basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
-    static_configs: [ { targets: [ "kc01.poc.lab:7071", "kc02.poc.lab:7071", "kc03.poc.lab:7071" ] } ]
-  - job_name: confluent-broker
+    static_configs: [ { targets: [ "kc01.poc.lab:7071", "kc02.poc.lab:7071", "kc03.poc.lab:7071" ], labels: { env: lab } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
+  - job_name: kafka-broker
     scheme: https
     scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
     basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
-    static_configs: [ { targets: [ "kb01.poc.lab:7071", "kb02.poc.lab:7071", "kb03.poc.lab:7071", "kb04.poc.lab:7071" ] } ]
-  - job_name: confluent-rest
+    static_configs: [ { targets: [ "kb01.poc.lab:7071", "kb02.poc.lab:7071", "kb03.poc.lab:7071", "kb04.poc.lab:7071" ], labels: { env: lab } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
+  - job_name: rest-proxy
     scheme: https
     scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
     basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
-    static_configs: [ { targets: [ "rest01.poc.lab:7071", "rest02.poc.lab:7071" ] } ]
-rule_files: [ /etc/prometheus/confluent/alert-rules.yml ]
+    static_configs: [ { targets: [ "rest01.poc.lab:7071", "rest02.poc.lab:7071" ], labels: { env: lab } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
+  - job_name: control-center
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
+    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
+    static_configs: [ { targets: [ "c3-01.poc.lab:7071" ], labels: { env: lab } } ]
+    relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
 EOF
-cat > ~/monitoring/alert-rules.yml <<'EOF'
-# alert rules for the bank's Prometheus (metrics from the JMX exporter javaagent).
-# Thresholds follow Confluent's monitoring guidance; tune "for:" to the bank's paging policy.
-# Consumer-group lag is not a broker JMX metric: use Control Center (built in) or a lag exporter.
-groups:
-  - name: confluent-platform
-    rules:
-      - alert: KafkaTargetDown
-        expr: up{job=~"confluent-.*"} == 0
-        for: 2m
-        labels: { severity: critical }
-        annotations:
-          summary: "{{ $labels.instance }} ({{ $labels.job }}) cannot be scraped"
-      - alert: KafkaUnderReplicatedPartitions
-        expr: sum by (instance) (kafka_server_replicamanager_underreplicatedpartitions) > 0
-        for: 5m
-        labels: { severity: warning }
-        annotations:
-          summary: "{{ $labels.instance }}: {{ $value }} under-replicated partitions"
-      - alert: KafkaUnderMinIsrPartitions
-        expr: sum by (instance) (kafka_server_replicamanager_underminisrpartitioncount) > 0
-        for: 1m
-        labels: { severity: critical }
-        annotations:
-          summary: "{{ $labels.instance }}: partitions below min.insync.replicas (producers with acks=all fail)"
-      - alert: KafkaOfflinePartitions
-        expr: max(kafka_controller_kafkacontroller_offlinepartitionscount) > 0
-        for: 1m
-        labels: { severity: critical }
-        annotations:
-          summary: "{{ $value }} partitions have no leader"
-      - alert: KafkaActiveControllerCount
-        expr: sum(kafka_controller_kafkacontroller_activecontrollercount{job="confluent-controller"}) != 1
-        for: 1m
-        labels: { severity: critical }
-        annotations:
-          summary: "KRaft active controller count is {{ $value }} (expected exactly 1)"
-      # KRaft quorum: Confluent Server has no raft-metrics MBean; the controllers' own metadata metrics show the quorum's health
-      - alert: KafkaControllerMetadataLag
-        expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="confluent-controller"}) > 30000
-        for: 5m
-        labels: { severity: warning }
-        annotations:
-          summary: "{{ $labels.instance }}: applies the metadata log {{ $value }} ms behind (quorum not keeping up)"
-      - alert: KafkaMetadataErrors
-        expr: max by (instance) (kafka_controller_kafkacontroller_metadataerrorcount{job="confluent-controller"}) > 0
-        for: 1m
-        labels: { severity: critical }
-        annotations:
-          summary: "{{ $labels.instance }}: errors while applying the KRaft metadata log"
-      - alert: KafkaControllerLeaderFlapping
-        expr: sum(increase(kafka_controller_kafkacontroller_newactivecontrollerscount{job="confluent-controller"}[15m])) > 2
-        labels: { severity: warning }
-        annotations:
-          summary: "KRaft controller leader changed {{ $value }} times in 15 minutes"
-      - alert: KafkaRequestHandlerSaturated
-        expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent) < 0.3
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          summary: "{{ $labels.instance }}: request handler threads less than 30% idle"
-      - alert: KafkaNetworkProcessorSaturated
-        expr: avg by (instance) (kafka_network_socketserver_networkprocessoravgidlepercent) < 0.3
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          summary: "{{ $labels.instance }}: network threads less than 30% idle"
-      - alert: KafkaProduceLatencyHigh
-        expr: max by (instance) (kafka_network_requestmetrics_totaltimems{request="Produce",quantile="0.99"}) > 500
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          summary: "{{ $labels.instance }}: produce p99 {{ $value }} ms"
-      - alert: JvmHeapHigh
-        expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.9
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          summary: "{{ $labels.instance }}: JVM heap above 90%"
-EOF
-cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/ca.pem && (umask 077; cp ~/secrets/jmx-scrape.pass ~/monitoring/scrape.pass) && echo "for the bank: $(ls ~/monitoring | grep -vE 'jmx-header|rules-' | tr '\n' ' ')"
+echo "scrape-confluent.yml: $(grep -c job_name ~/monitoring/to-bank/prometheus/scrape-confluent.yml) 個 job"
 ```
 
 ```out
-for the bank: alert-rules.yml ca.pem prometheus-scrape.yml scrape.pass
+scrape-confluent.yml: 4 個 job
 ```
 
-## 17.5 銀行的 Prometheus 接上來
+**告警規則**：21 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，是 Dynatrace 的 ProblemImpact）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
+
+- 官方 `broker-alerts.yml` 有兩條「Broker IO Activity」用的是一個永遠小於 1 的 control-plane 指標，等於測試規則，不收；改用 request handler 的一分鐘平均閒置率。
+- 官方的 `UncleanLeaderElectionsPerSec` 在 exporter 裡是累計次數，`> 0` 一旦發生過就永遠成立，改成看 10 分鐘內的增量。
+- 官方的 `high_load` 要 node exporter，我們沒有；主機層的 CPU、磁碟請用銀行既有的主機監控。
+- controller 的規則（`ActiveControllerCount`、offline partitions）限定 `job="kafka-controller"`；`for` 從 10 秒放寬到 1 分鐘，不然 controller 重啟會叫人。
+- KRaft 另加：沒有 leader、連不到 voter、metadata 落後、metadata 錯誤、leader 頻繁更換。REST Proxy、C3 各加兩條，都只用 lab 驗過存在的指標。
+
+整段貼到 EOF：
+
+```bash
+cat > ~/monitoring/to-bank/prometheus/confluent-alerts.yml <<'EOF'
+# Alert rules for the bank's Prometheus. Metric names are the ones Confluent's official JMX exporter rules produce
+# (jmx-monitoring-stacks, see the guide, chapter 1.4); job names match scrape-confluent.yml.
+# Every rule has:  labels.severity (critical|warning)  labels.impact (APPLICATION|SERVICE|INFRASTRUCTURE, Dynatrace's ProblemImpact)
+#                  annotations.summary (one line)  annotations.description (full sentence, what to look at)
+# "source:" says where the rule comes from:
+#   official   = Confluent jmx-monitoring-stacks prometheus-alerts/ (kept, sometimes with the expression fixed for KRaft)
+#   confluent  = Confluent's monitoring guidance (docs.confluent.io "Monitor Kafka", "KRaft metrics")
+#   ours       = added for this installation, backed by a metric that really exists on Confluent Server 8.3.2 / C3 2.6.1
+# Thresholds and "for:" are starting points: tune them to the bank's paging policy and silence during planned restarts.
+groups:
+  - name: confluent-availability
+    rules:
+      # source: official alerts.yml (service_down), narrowed to our four jobs
+      - alert: ConfluentTargetDown
+        expr: up{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} == 0
+        for: 2m
+        labels: { severity: critical, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}) cannot be scraped"
+          description: "Prometheus has not been able to scrape {{ $labels.instance }} (job {{ $labels.job }}) for 2 minutes: the service, the JMX exporter (port 7071) or the network path is down. Check systemctl status on {{ $labels.hostname }}."
+
+  - name: kafka-broker
+    rules:
+      # source: official broker-alerts.yml (ActiveControllerCount != 1); ours: restricted to the controller job, 1 m instead of 10 s so a controller restart does not page
+      - alert: KafkaActiveControllerCountNotOne
+        expr: sum by (env) (kafka_controller_kafkacontroller_activecontrollercount{job="kafka-controller"}) != 1
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: active controller count is {{ $value }}"
+          description: "The KRaft quorum of {{ $labels.env }} reports {{ $value }} active controllers (expected exactly 1). Zero means no leader (metadata cannot change), more than one means a split. Check kafka-metadata-quorum describe --status."
+      # source: official broker-alerts.yml (OfflinePartitionCount > 0)
+      - alert: KafkaOfflinePartitions
+        expr: sum by (env) (kafka_controller_kafkacontroller_offlinepartitionscount{job="kafka-controller"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} offline partitions"
+          description: "{{ $value }} partitions in {{ $labels.env }} have no leader, so producers and consumers of those partitions fail. Look for brokers that are down: kafka-topics --describe --unavailable-partitions."
+      # source: official broker-alerts.yml (UncleanLeaderElectionsPerSec > 0); ours: the exporter publishes a cumulative count, so test the increase
+      - alert: KafkaUncleanLeaderElections
+        expr: sum by (env) (increase(kafka_controller_controllerstats_uncleanleaderelectionspersec{job="kafka-controller"}[10m])) > 0
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: unclean leader election"
+          description: "An out-of-sync replica became leader in {{ $labels.env }} within the last 10 minutes; acknowledged messages may have been lost. Confirm unclean.leader.election.enable is false."
+      # source: official broker-alerts.yml (UnderReplicatedPartitions > 0), "for" raised to 5 m (rolling restarts cause short under-replication)
+      - alert: KafkaUnderReplicatedPartitions
+        expr: sum by (env) (kafka_server_replicamanager_underreplicatedpartitions{job="kafka-broker"}) > 0
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} under-replicated partitions"
+          description: "{{ $value }} partitions of {{ $labels.env }} have fewer in-sync replicas than replicas for 5 minutes. A broker is slow, down or restarting; check kafka-topics --describe --under-replicated-partitions."
+      # source: official broker-alerts.yml (UnderMinIsrPartitionCount > 0)
+      - alert: KafkaUnderMinIsrPartitions
+        expr: sum by (env) (kafka_cluster_partition_underminisr{job="kafka-broker"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} partitions below min.insync.replicas"
+          description: "{{ $value }} partitions of {{ $labels.env }} are below min.insync.replicas: producers with acks=all get NotEnoughReplicas errors."
+      # source: confluent (ISR shrinks that are not followed by expands)
+      - alert: KafkaIsrShrinkingWithoutExpand
+        expr: sum by (env) (increase(kafka_server_replicamanager_isrshrinkspersec{job="kafka-broker"}[15m])) > 0 and sum by (env) (increase(kafka_server_replicamanager_isrexpandspersec{job="kafka-broker"}[15m])) == 0
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: ISR shrank and did not recover"
+          description: "Replicas left the ISR of {{ $labels.env }} in the last 15 minutes and none rejoined. A follower cannot keep up: check broker disks, network and replica.lag.time.max.ms."
+      # source: ours (the official rules for this are a test rule on a control-plane metric that is always below 1); the one-minute rate of the request handler pool is a real 0..1 idle ratio
+      - alert: KafkaRequestHandlerBusy
+        expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate{job="kafka-broker"}) < 0.3
+        for: 10m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: request handler threads busy"
+          description: "Request handler threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes ({{ $value | humanizePercentage }} idle). The broker is close to saturation: look at request rate, disk latency, num.io.threads."
+      # source: confluent (network processor idle ratio)
+      - alert: KafkaNetworkProcessorBusy
+        expr: avg by (instance) (kafka_network_socketserver_networkprocessoravgidlepercent{job="kafka-broker"}) < 0.3
+        for: 10m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: network threads busy"
+          description: "Network processor threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes. Check connection counts and num.network.threads."
+      # source: confluent (request latency); ours: Produce p99, 500 ms
+      - alert: KafkaProduceLatencyHigh
+        expr: max by (instance) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Produce p99 {{ $value }} ms"
+          description: "99th percentile Produce request time on {{ $labels.instance }} has been above 500 ms for 10 minutes. Look at disk latency and replication delay (acks=all waits for followers)."
+
+  - name: kraft
+    rules:
+      # source: confluent (KRaft: no leader). raft-metrics are on every controller and broker
+      - alert: KRaftNoLeader
+        expr: max by (env) (kafka_server_raft_metrics_current_leader{job=~"kafka-controller|kafka-broker"}) < 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: KRaft has no leader"
+          description: "No node of {{ $labels.env }} reports a KRaft leader (current-leader is -1). Check the controllers and their port 9093."
+      # source: confluent (a voter the quorum cannot reach)
+      - alert: KRaftUnknownVoterConnections
+        expr: max by (instance) (kafka_server_raft_metrics_number_unknown_voter_connections{job="kafka-controller"}) > 0
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: cannot reach a KRaft voter"
+          description: "{{ $labels.instance }} has had connections to {{ $value }} unknown voters for 5 minutes: a controller is down or its address in the quorum is wrong."
+      # source: ours (earlier lab work): controller applies the metadata log late
+      - alert: KRaftControllerMetadataLag
+        expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
+        for: 5m
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: metadata log applied {{ $value }} ms late"
+          description: "{{ $labels.instance }} applies the KRaft metadata log {{ $value }} ms behind the leader for 5 minutes: the quorum is not keeping up (disk or network)."
+      - alert: KRaftMetadataErrors
+        expr: max by (instance) (kafka_controller_kafkacontroller_metadataerrorcount{job="kafka-controller"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: errors applying the metadata log"
+          description: "{{ $labels.instance }} counted {{ $value }} errors while applying KRaft metadata records. Read /var/log/kafka on that controller."
+      - alert: KRaftLeaderFlapping
+        expr: sum by (env) (increase(kafka_controller_kafkacontroller_newactivecontrollerscount{job="kafka-controller"}[15m])) > 2
+        labels: { severity: warning, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: KRaft leader changed {{ $value }} times in 15 minutes"
+          description: "The active controller of {{ $labels.env }} changed more than twice in 15 minutes: unstable network, GC pauses or an overloaded controller."
+
+  - name: rest-proxy
+    rules:
+      # source: ours: the REST Proxy exports one error-rate series per endpoint (kafka_rest_jersey_metrics_<endpoint>_request_error_rate); sum them
+      - alert: RestProxyErrors
+        expr: sum by (instance) ({__name__=~"kafka_rest_jersey_metrics_.*_request_error_rate", job="rest-proxy"}) > 1
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: REST Proxy returns errors"
+          description: "REST Proxy {{ $labels.instance }} has returned more than 1 error response per second for 10 minutes (4xx and 5xx together). Check client certificates and the broker connection."
+      - alert: RestProxyThreadPoolBusy
+        expr: max by (instance) (kafka_rest_jetty_metrics_thread_pool_usage{job="rest-proxy"}) > 0.9
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: REST Proxy thread pool above 90%"
+          description: "The Jetty thread pool of {{ $labels.instance }} has been more than 90% used for 10 minutes: requests queue up. Check client load and broker latency."
+
+  - name: control-center
+    rules:
+      # source: ours: C3 is a Kafka Streams application; client-state 0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR
+      - alert: ControlCenterStreamsNotRunning
+        expr: max by (instance) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
+        for: 5m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center stopped processing"
+          description: "A Kafka Streams client inside Control Center {{ $labels.instance }} is in state {{ $value }} (4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR) for 5 minutes: the C3 screens show stale data. Read journalctl -u confluent-control-center."
+      - alert: ControlCenterStreamThreadsFailed
+        expr: max by (instance) (kafka_streams_stream_metrics_failed_stream_threads{job="control-center"}) > 0
+        for: 1m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center stream thread failed"
+          description: "Control Center {{ $labels.instance }} lost {{ $value }} stream threads. Restart it after reading the log."
+
+  - name: jvm
+    rules:
+      # source: ours (earlier lab work), now for all four jobs
+      - alert: JvmHeapHigh
+        expr: jvm_memory_used_bytes{area="heap", job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} / jvm_memory_max_bytes{area="heap", job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} > 0.9
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}): JVM heap above 90%"
+          description: "The JVM heap of {{ $labels.instance }} has been above 90% for 10 minutes ({{ $value | humanizePercentage }}). Look at GC time and consider a larger -Xmx."
+      - alert: JvmFileDescriptorsHigh
+        expr: process_open_fds{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} / process_max_fds{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"} > 0.8
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}): file descriptors above 80%"
+          description: "{{ $labels.instance }} uses {{ $value | humanizePercentage }} of its file descriptor limit. Check LimitNOFILE in the systemd drop-in and the number of partitions or connections."
+EOF
+echo "confluent-alerts.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/prometheus/confluent-alerts.yml) 條規則"
+```
+
+```out
+confluent-alerts.yml: 21 條規則
+```
+
+**Alertmanager 設定**：兩個 webhook receiver 示範兩種格式，銀行留一種、刪另一種。
+
+- `webhook-default`：Alertmanager 預設的 JSON（version 4），一次 POST 帶一個通知群組裡所有告警。
+- `webhook-dynatrace`：用 Alertmanager 的範本在 `payload` 組自訂 JSON，欄位照 Dynatrace 問題通知的那組（`ProblemTitle`、`State` OPEN／RESOLVED、`ProblemSeverity`、`ProblemImpact`、`ProblemDetailsText`…）。`group_by: ['...']` 讓每筆告警自己一組，所以自訂格式永遠是一筆告警一個 POST。
+
+自訂 JSON 的寫法有兩個陷阱（2026-10-26 實測）：`payload` 用**字串寫法**，每個值都經 `toJson`，值裡有雙引號或冒號才不會弄壞 JSON；用 map 寫法時，含 `: ` 的值會被當成 YAML 物件、像數字的字串（`"007"`）會變成數字 7。範本裡拿不到 `.GroupKey`，要編號就用告警的 `Fingerprint`。webhook 網址 `WEBHOOK-RECEIVER:8080` 換成行內的；需要認證就在 receiver 加 `http_config`。
+
+```bash
+cat > ~/monitoring/to-bank/alertmanager/alertmanager.yml <<'EOF'
+# Alertmanager configuration for the bank's Alertmanager. Two webhook receivers show the two formats; keep one, delete the other.
+#   webhook-default    Alertmanager's own JSON (version 4): one POST per notification group, all alerts of the group inside
+#   webhook-dynatrace  a custom JSON built with a template in `payload`: one flat event per alert, Dynatrace problem-notification fields
+# group_by ['...'] puts every alert in its own group, so the custom format is always exactly one alert per POST.
+# Replace WEBHOOK-RECEIVER:8080 with the bank's webhook / Dynatrace endpoint (add authentication with http_config if it needs it).
+global:
+  resolve_timeout: 5m
+route:
+  receiver: webhook-default
+  group_by: ['...']
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - receiver: webhook-default
+      continue: true
+    - receiver: webhook-dynatrace
+receivers:
+  - name: webhook-default
+    webhook_configs:
+      - url: http://WEBHOOK-RECEIVER:8080/default
+        send_resolved: true
+  - name: webhook-dynatrace
+    webhook_configs:
+      - url: http://WEBHOOK-RECEIVER:8080/dynatrace
+        send_resolved: true
+        # String form + toJson: every value is escaped by toJson, so quotes or colons in a description cannot break the JSON.
+        # (The map form would turn "007" into the number 7 and read "a: b" as an object.)
+        payload: >-
+          {"eventType": "CUSTOM_ALERT",
+          "State": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
+          "ProblemID": {{ (index .Alerts 0).Fingerprint | toJson }},
+          "ProblemTitle": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
+          "ProblemSeverity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
+          "ProblemImpact": {{ .CommonLabels.impact | toJson }},
+          "ProblemDetailsText": {{ .CommonAnnotations.description | toJson }},
+          "ImpactedEntity": {{ .CommonLabels.hostname | toJson }},
+          "Tags": {{ printf "env:%s,job:%s,instance:%s" .CommonLabels.env .CommonLabels.job .CommonLabels.instance | toJson }},
+          "StartTime": {{ (index .Alerts 0).StartsAt.Format "2006-01-02T15:04:05Z07:00" | toJson }}}
+EOF
+cat > ~/monitoring/to-bank/grafana/datasource-prometheus.yml <<'EOF'
+# Grafana datasource for the Confluent dashboards. The official dashboards point at a datasource with uid "Prometheus" (the guide rewrites their ${Prometheus} placeholder to that).
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://PROMETHEUS:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 30s
+EOF
+echo "alertmanager.yml $(wc -l < ~/monitoring/to-bank/alertmanager/alertmanager.yml) 行、datasource-prometheus.yml $(wc -l < ~/monitoring/to-bank/grafana/datasource-prometheus.yml) 行"
+```
+
+```out
+alertmanager.yml 39 行、datasource-prometheus.yml 12 行
+```
+
+**Grafana**：datasource 的名字與 uid 都是 `Prometheus`（官方 dashboard 指向這個）。dashboard 用官方的 32 個 JSON 原樣複製，只修兩件事：
+
+1. 官方 JSON 是 Grafana 匯入畫面的格式，datasource 寫成佔位符 `${Prometheus}`，檔案佈建不會替換，每個 panel 都會「datasource not found」→ 改成固定的 uid `Prometheus`。
+2. 成對的 ZooKeeper 版與 KRaft 版（例如 `kafka-cluster.json` 與 `kafka-cluster-kraft.json`）用同一個 uid，Grafana 只收第一個、後面的被丟掉 → 重複的改自己的 uid 並在標題加檔名。
+
+落地區的檔是唯讀的，複製出來要加回寫入權限。**全部 32 個都放進去**，不挑；哪些在我們的元件上有資料見 17.9，沒有對應元件的（Connect、ksqlDB、Schema Registry、Flink…）畫面就是空的，不影響其他：
+
+```bash
+D=~/landing/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets && cp $D/grafana/provisioning/dashboards/*.json $D/grafana/provisioning/dashboards/dashboard.yml ~/monitoring/to-bank/grafana/dashboards/ && chmod u+w ~/monitoring/to-bank/grafana/dashboards/* && python3 - <<'EOF'
+import glob, json, os, collections
+files = sorted(glob.glob(os.path.expanduser('~/monitoring/to-bank/grafana/dashboards/*.json')))
+seen = collections.defaultdict(list)
+for f in files:
+    # the files are exports for the Grafana import screen: the datasource is the placeholder ${Prometheus}, which file provisioning does not fill in
+    d = json.loads(open(f, encoding='utf-8').read().replace('${Prometheus}', 'Prometheus'))
+    seen[d['uid']].append((f, d))
+renamed = 0
+for uid, group in seen.items():
+    for i, (f, d) in enumerate(group):
+        if i > 0:                                   # same uid as an earlier file (the ZooKeeper-era twins): give it its own
+            stem = os.path.basename(f)[:-5]
+            d['uid'] = (uid + '-' + stem)[:40]
+            d['title'] = d['title'] + ' [' + stem + ']'
+            renamed += 1
+        json.dump(d, open(f, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+print('dashboards: %d, placeholder datasource fixed, uid shared with another file (renamed): %d' % (len(files), renamed))
+EOF
+```
+
+```out
+dashboards: 32, placeholder datasource fixed, uid shared with another file (renamed): 4
+```
+
+根憑證與抓取密碼，然後看整個資料夾。抓取密碼另外交 Secrets 團隊存進 PVWA，監控團隊從那裡取（lab 直接給檔）。**待銀行確認**（請銀行確認的事項 11.3、11.4）：行內 Prometheus 抓其他系統用哪種認證；7071 能否只放行行內 Prometheus 的來源位址（第 7 章的 firewalld 目前對所有來源開放）：
+
+```bash
+cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && (umask 077; cp ~/secrets/jmx-scrape.pass ~/monitoring/to-bank/prometheus/scrape.pass) && cd ~/monitoring/to-bank && find . -type f ! -name '*.json' | sort && echo "dashboards: $(ls grafana/dashboards/*.json | wc -l) 個 JSON"
+```
+
+```out
+./alertmanager/alertmanager.yml
+./grafana/dashboards/dashboard.yml
+./grafana/datasource-prometheus.yml
+./prometheus/ca.pem
+./prometheus/confluent-alerts.yml
+./prometheus/scrape-confluent.yml
+./prometheus/scrape.pass
+dashboards: 32 個 JSON
+```
+
+## 17.6 銀行的 Prometheus、Alertmanager、Grafana 接上來
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-lab 用一個 Prometheus 容器當「行內 Prometheus」，接在 labnet（這個容器不在 compose 裡，主機名要用 `--add-host` 給它），載入小安給的三個檔，等一輪抓取後看 9 個 target 的狀態與規則是否載入：
+正式環境是銀行自己的三套系統，照 17.5 的表格放設定。lab 用四個容器扮演：Prometheus、Alertmanager、Grafana，加一個「webhook 接收端」（一支十行的 Python，收到什麼就印什麼，後面測告警用）。容器名稱都叫 `lab-mon-*`，接在 labnet，不在 compose 裡，所以主機名要用 `--add-host` 給 Prometheus。記憶體上限加起來約 1.2 GB。
+
+先把 `to-bank/` 取出來，放成各容器要的樣子（webhook 網址換成接收端容器；Alertmanager 的 `--cluster.listen-address=` 留空是因為 lab 的 172.35.x.x 不是私有位址，gossip 會起不來）：
 
 ```bash
-cd ~/kafka-lab && mkdir -p bank-prometheus/confluent && for f in prometheus-scrape.yml alert-rules.yml ca.pem scrape.pass; do docker cp lab-ops02-1:/home/cpadmin/monitoring/$f "$(cygpath -m "$PWD/bank-prometheus/confluent/$f")"; done && mv bank-prometheus/confluent/prometheus-scrape.yml bank-prometheus/prometheus.yml && MSYS_NO_PATHCONV=1 docker run -d --name bank-prometheus --network lab_labnet --add-host kc01.poc.lab:172.35.0.21 --add-host kc02.poc.lab:172.35.0.22 --add-host kc03.poc.lab:172.35.0.23 --add-host kb01.poc.lab:172.35.0.31 --add-host kb02.poc.lab:172.35.0.32 --add-host kb03.poc.lab:172.35.0.33 --add-host kb04.poc.lab:172.35.0.34 --add-host rest01.poc.lab:172.35.0.41 --add-host rest02.poc.lab:172.35.0.42 -v "$(cygpath -m "$PWD/bank-prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(cygpath -m "$PWD/bank-prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 >/dev/null && sleep 45 && docker run --rm --network lab_labnet lab-node:1 bash -c 'curl -s http://bank-prometheus:9090/api/v1/targets | python3 -c "import json,sys; t=json.load(sys.stdin)[\"data\"][\"activeTargets\"]; print(\"targets up:\", sum(1 for x in t if x[\"health\"]==\"up\"), \"/\", len(t)); [print(\"  down:\", x[\"labels\"][\"instance\"], x[\"lastError\"][:80]) for x in t if x[\"health\"]!=\"up\"]"; curl -s http://bank-prometheus:9090/api/v1/rules | python3 -c "import json,sys; g=json.load(sys.stdin)[\"data\"][\"groups\"]; print(\"alert rules:\", sum(len(x[\"rules\"]) for x in g))"; curl -s "http://bank-prometheus:9090/api/v1/query?query=kafka_server_replicamanager_underreplicatedpartitions" | python3 -c "import json,sys; r=json.load(sys.stdin)[\"data\"][\"result\"]; print(\"under-replicated per broker:\", [x[\"value\"][1] for x in r])"'
+cd ~/kafka-lab && rm -rf bank-monitoring && mkdir -p bank-monitoring/prometheus/confluent bank-monitoring/alertmanager bank-monitoring/grafana/provisioning/datasources bank-monitoring/grafana/provisioning/dashboards bank-monitoring/webhook && docker cp lab-ops02-1:/home/cpadmin/monitoring/to-bank "$(cygpath -m "$PWD/bank-monitoring/to-bank")" && cd bank-monitoring && cp to-bank/prometheus/* prometheus/confluent/ && sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' to-bank/alertmanager/alertmanager.yml > alertmanager/alertmanager.yml && sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' to-bank/grafana/datasource-prometheus.yml > grafana/provisioning/datasources/prometheus.yml && cp to-bank/grafana/dashboards/* grafana/provisioning/dashboards/ && echo "prometheus: $(ls prometheus/confluent | tr '\n' ' ')/ dashboards: $(ls grafana/provisioning/dashboards | wc -l) 個檔"
 ```
 
 ```out
-targets up: 9 / 9
-alert rules: 12
-under-replicated per broker: ['0', '0', '0', '0']
+prometheus: ca.pem confluent-alerts.yml scrape-confluent.yml scrape.pass / dashboards: 33 個檔
 ```
 
-看完就收掉（正式環境這台是銀行的，不會收）：
+行內 Prometheus 自己的 `prometheus.yml`（銀行原本就有，這裡只示範要加的三行：引用 scrape 設定、載入告警規則、指向 Alertmanager），以及 webhook 接收端：
 
 ```bash
-docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
+cd ~/kafka-lab/bank-monitoring && cat > prometheus/prometheus.yml <<'EOF'
+global: { scrape_interval: 30s, evaluation_interval: 30s }
+scrape_config_files: [ /etc/prometheus/confluent/scrape-confluent.yml ]
+rule_files: [ /etc/prometheus/confluent/confluent-alerts*.yml ]
+alerting: { alertmanagers: [ { static_configs: [ { targets: [ "lab-mon-alertmanager:9093" ] } ] } ] }
+EOF
+cat > webhook/receiver.py <<'EOF'
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode()
+        print('POST %s | %s | %s' % (self.path, self.headers.get('User-Agent'), body), flush=True)
+        self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(('0.0.0.0', 8080), H).serve_forever()
+EOF
+echo "prometheus.yml $(wc -l < prometheus/prometheus.yml) 行、receiver.py $(wc -l < webhook/receiver.py) 行"
 ```
 
 ```out
-bank-prometheus removed
+prometheus.yml 4 行、receiver.py 8 行
 ```
 
-> KRaft quorum 的告警：Confluent Server 8.3.2 **沒有** Apache Kafka 的 `kafka.server:type=raft-metrics` MBean（lab 用 jshell 連進 controller 的 JVM 列出全部 MBean 確認過，只有 raft 相關請求的 RequestMetrics），所以 quorum 健康看 controller 自己的三個指標：`LastAppliedRecordLagMs`（套用 metadata log 落後多久）、`MetadataErrorCount`、`NewActiveControllersCount`（leader 換手次數），加上原本的 `ActiveControllerCount`。成員與 Lag 的細節用 23.1 的 `kafka-metadata-quorum describe --replication`。這裡說的是 **JMX 這條路**。raft 指標其實在 Confluent 的 telemetry 裡（`io.confluent.kafka.server/raft/…`：current_leader、current_epoch、number_of_voters、number_unknown_voter_connections、high_watermark、commit／election latency），lab 實測（2026-10-25）：只在 kc02 的 `confluent.telemetry.exporter._c3.metrics.include` 加上 `io.confluent.kafka.server.raft.(?!.*delta).*`，C3 內建 Prometheus 收到正確的值（leader 1、voters 3、unknown 0）。但**不建議**拿這條路告警：C3 內建 Prometheus 收的 telemetry 沒有主機標籤，三台 controller 都送時同名序列會互撞，被拒成 out of order（整批被拒，連 C3 自己的指標也一起掉；把白名單放寬成全部時實際發生）；delta 類型也不收（500）。所以 C3 的白名單不動，quorum 告警用上面三個 JMX 指標。
+起四個容器。映像檔 `prom/prometheus`、`prom/alertmanager`、`grafana/grafana` 是銀行自己的事（正式環境不是我們帶進去的），lab 從 Docker Hub 拉；webhook 接收端用 lab 的 `lab-node:1`。Grafana 開匿名 Admin 只為了 lab 好操作，並發佈到 Windows 的 13000：
 
-> 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3 或另外接 lag exporter。
+```bash
+cd ~/kafka-lab/bank-monitoring && W() { cygpath -m "$PWD/$1"; } && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(W webhook):/w:ro" lab-node:1 python3 -u /w/receiver.py >/dev/null && docker run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(W alertmanager/alertmanager.yml):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null && docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $HOSTS -v "$(W prometheus/prometheus.yml):/etc/prometheus/prometheus.yml:ro" -v "$(W prometheus/confluent):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null && docker run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(W grafana/provisioning):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null && sleep 60 && docker ps --format '{{.Names}} {{.Status}}' | grep -E 'lab-mon-(prometheus|alertmanager|grafana|webhook)' | sort
+```
+
+```out
+lab-mon-alertmanager Up About a minute
+lab-mon-grafana Up About a minute
+lab-mon-prometheus Up About a minute
+lab-mon-webhook Up About a minute
+```
+
+## 17.7 驗證：target、規則、dashboard
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+四件事：每個 job 有幾個 target 是 up；告警規則載入且沒有錯；Alertmanager 認得 Prometheus；Grafana 有 32 個 dashboard、datasource 連得到 Prometheus。從 lab 的容器裡用 `curl` 查（容器內有 Python 可以整理輸出）：
+
+```bash
+docker run --rm --network lab_labnet lab-node:1 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
+import json, sys, collections
+up = collections.Counter(); total = collections.Counter()
+for t in json.load(sys.stdin)[\"data\"][\"activeTargets\"]:
+    total[t[\"labels\"][\"job\"]] += 1; up[t[\"labels\"][\"job\"]] += t[\"health\"] == \"up\"
+for j in sorted(total): print(\"%-17s up %d / %d\" % (j, up[j], total[j]))
+print(\"合計 up %d / %d\" % (sum(up.values()), sum(total.values())))"; curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
+import json, sys
+g = json.load(sys.stdin)[\"data\"][\"groups\"]
+r = [x for y in g for x in y[\"rules\"]]
+print(\"告警規則 %d 條，載入有錯 %d 條\" % (len(r), sum(x[\"health\"] != \"ok\" for x in r)))"; curl -s http://lab-mon-prometheus:9090/api/v1/alertmanagers | python3 -c "import json, sys; print(\"Prometheus 看到的 Alertmanager:\", [a[\"url\"] for a in json.load(sys.stdin)[\"data\"][\"activeAlertmanagers\"]])"; curl -s http://lab-mon-grafana:3000/api/search?type=dash-db | python3 -c "import json, sys; print(\"Grafana dashboard:\", len(json.load(sys.stdin)), \"個\")"; curl -s http://lab-mon-grafana:3000/api/datasources/uid/Prometheus/health'
+```
+
+```out
+control-center    up 1 / 1
+kafka-broker      up 1 / 4
+kafka-controller  up 1 / 3
+rest-proxy        up 1 / 2
+合計 up 4 / 10
+告警規則 21 條，載入有錯 0 條
+Prometheus 看到的 Alertmanager: ['http://lab-mon-alertmanager:9093/api/v2/alerts']
+Grafana dashboard: 32 個
+{"details":{"application":"Prometheus","features":{"rulerApiEnabled":false}},"message":"Successfully queried the Prometheus API.","status":"OK"}
+（上面是這次實測環境的數字：叢集沒有起來，只有補起來的 controller、broker、REST、C3 各一個程序在回應。叢集健康時 up 10 / 10）
+```
+
+Grafana 的 dashboard 真的查得到資料：用 Grafana 自己的查詢介面（`/api/ds/query`，和畫面上 panel 走同一條路）跑 KRaft dashboard 的「Current Leader」panel 的查詢，`$env` 換成 `lab`：
+
+```bash
+docker run --rm --network lab_labnet lab-node:1 bash -c 'curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "{\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"Prometheus\"},\"expr\":\"sum(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})/count(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})\",\"instant\":true}],\"from\":\"now-5m\",\"to\":\"now\"}" | python3 -c "import json, sys; r = json.load(sys.stdin)[\"results\"][\"A\"]; print(\"status\", r[\"status\"], \"current leader（controller node id）=\", r[\"frames\"][0][\"data\"][\"values\"][1][0])"'
+```
+
+```out
+status 200 current leader（controller node id）= 1
+```
+
+Windows 瀏覽器開 `http://localhost:13000` 就是 Grafana，左邊 Dashboards 底下有 32 個。
+
+## 17.8 測告警：兩種 webhook 格式與解除
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+不用弄壞叢集：在 Prometheus 多放一條永遠成立的測試規則（`vector(1)`），帶著和正式規則一樣的標籤與註解（`description` 裡故意放了雙引號和冒號，看自訂 JSON 會不會被弄壞）。Prometheus 重新載入規則後，告警送到 Alertmanager，約 1 分鐘內（規則每 30 秒算一次，再加 Alertmanager 的 group_wait 10 秒）兩個 receiver 都會收到：
+
+```bash
+cd ~/kafka-lab/bank-monitoring && cat > prometheus/confluent/confluent-alerts-test.yml <<'EOF'
+groups:
+  - name: confluent-test
+    rules:
+      - alert: ConfluentTestAlert
+        expr: vector(1)
+        labels: { severity: critical, impact: SERVICE, env: lab, job: test, hostname: test.poc.lab, instance: "test.poc.lab:7071" }
+        annotations:
+          summary: "test alert from chapter 17.8"
+          description: 'Test only: a "quoted" word and a colon: here, 007 stays a string.'
+EOF
+docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 70; docker logs lab-mon-webhook 2>&1 | grep -c ConfluentTestAlert
+```
+
+```out
+2
+```
+
+先看**預設格式**：整包 JSON，`alerts` 是陣列（一個通知群組可能有很多筆），欄位是 Alertmanager 的 version 4：
+
+```bash
+docker logs lab-mon-webhook 2>&1 | grep '^POST /default' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:1 python3 -c "
+import json, sys
+head, body = sys.stdin.read().split('\n', 1)
+d = json.loads(body)
+print(head)
+print(json.dumps({k: d[k] for k in ('version', 'status', 'receiver', 'groupKey')}, ensure_ascii=False))
+a = d['alerts'][0]
+print(json.dumps({'status': a['status'], 'labels': a['labels'], 'annotations': a['annotations'], 'startsAt': a['startsAt'], 'fingerprint': a['fingerprint']}, ensure_ascii=False, indent=1))"
+```
+
+```out
+/default Alertmanager/0.34.1 
+{"version": "4", "status": "firing", "receiver": "webhook-default", "groupKey": "{}/{}:{alertname=\"ConfluentTestAlert\", env=\"lab\", hostname=\"test.poc.lab\", impact=\"SERVICE\", instance=\"test.poc.lab:7071\", job=\"test\", severity=\"critical\"}"}
+{
+ "status": "firing",
+ "labels": {
+  "alertname": "ConfluentTestAlert",
+  "env": "lab",
+  "hostname": "test.poc.lab",
+  "impact": "SERVICE",
+  "instance": "test.poc.lab:7071",
+  "job": "test",
+  "severity": "critical"
+ },
+ "annotations": {
+  "description": "Test only: a \"quoted\" word and a colon: here, 007 stays a string.",
+  "summary": "test alert from chapter 17.8"
+ },
+ "startsAt": "2026-10-27T15:46:53.564Z",
+ "fingerprint": "609b3c4e91aae071"
+}
+```
+
+再看**自訂格式**：一筆告警一個扁平的 JSON，欄位是前面範本組出來的；`description` 裡的雙引號、冒號、`007` 都完整保留，JSON 沒壞：
+
+```bash
+docker logs lab-mon-webhook 2>&1 | grep '^POST /dynatrace' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:1 python3 -c "
+import json, sys
+head, body = sys.stdin.read().split('\n', 1)
+print(head)
+print(json.dumps(json.loads(body), ensure_ascii=False, indent=1))"
+```
+
+```out
+/dynatrace Alertmanager/0.34.1 
+{
+ "ImpactedEntity": "test.poc.lab",
+ "ProblemDetailsText": "Test only: a \"quoted\" word and a colon: here, 007 stays a string.",
+ "ProblemID": "609b3c4e91aae071",
+ "ProblemImpact": "SERVICE",
+ "ProblemSeverity": "ERROR",
+ "ProblemTitle": "ConfluentTestAlert: test alert from chapter 17.8",
+ "StartTime": "2026-10-27T15:46:53Z",
+ "State": "OPEN",
+ "Tags": "env:lab,job:test,instance:test.poc.lab:7071",
+ "eventType": "CUSTOM_ALERT"
+}
+```
+
+解除：把測試規則拿掉、重新載入。Prometheus 對被拿掉的規則不會補送「已解除」，Alertmanager 要等告警過期（Prometheus 送的告警帶約 4 分鐘的有效期）才自己解除，再在下一輪通知送出 resolved：自訂格式的 `State` 變 `RESOLVED`，預設格式的 `status` 變 `resolved`。（真實的告警是條件消失，Prometheus 會直接送 resolved，不用等這麼久。）等 5 分鐘左右：
+
+```bash
+cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.yml && docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 290; docker logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | docker run --rm -i lab-node:1 python3 -c "import re, sys; [print(re.match(r'POST (\S+)', l).group(1).ljust(11), re.search(r'\"(?:State|status)\":\"(\w+)\"', l).group(1)) for l in sys.stdin]"
+```
+
+```out
+/dynatrace  OPEN
+/default    firing
+/default    resolved
+/dynatrace  RESOLVED
+```
+
+> 實際的 Dynatrace：Events API 或問題通知的接收端要認證（API token），在 `webhook_configs` 的 `http_config` 加 `authorization`；token 放 Alertmanager 設定檔以外的檔案（`credentials_file`），不寫進 YAML。`ProblemSeverity` 的對應（這裡 critical → `ERROR`、warning → `PERFORMANCE`）是範例，照行內事件系統的定義改範本。
+
+## 17.9 哪些 dashboard 與 panel 有資料
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+「全部 32 個都放進去」之後，要知道哪些在我們的元件上是活的。下面這段 Python 取出每個 panel 的 PromQL，dashboard 變數換成「All」，對 Prometheus 各查一次（和畫面上選 All 的結果一致），有任何一條 query 回得出序列就算「有資料」：
+
+```bash
+cd ~/kafka-lab/bank-monitoring && cat > dashboard-coverage.py <<'EOF'
+#!/usr/bin/env python3
+"""查官方 Grafana dashboard 的每個 panel 在我們的 Prometheus 裡有沒有資料。
+
+用法：dashboard-coverage.py <Prometheus URL> <dashboard 目錄> [--detail] [--auth user:pass]
+
+做法：把每個 panel 的 PromQL 取出來，dashboard 變數（$env、$instance …）換成「全部」，
+$__rate_interval 等換成固定區間，對 Prometheus 做 instant query；有任何一條 query 回得出序列，這個 panel 就算有資料。
+這和 Grafana 畫面上選「All」時的結果一致，但不需要開瀏覽器。只用 Python 標準函式庫。
+"""
+import base64, glob, json, os, re, sys, urllib.parse, urllib.request
+
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+detail = "--detail" in sys.argv
+auth = None
+if "--auth" in sys.argv:
+    auth = sys.argv[sys.argv.index("--auth") + 1]
+    args = [a for a in args if a != auth]
+prom, folder = args[0].rstrip("/"), args[1]
+
+
+def query(expr):
+    url = prom + "/api/v1/query?" + urllib.parse.urlencode({"query": expr})
+    req = urllib.request.Request(url)
+    if auth:
+        req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.load(r)
+    except Exception as e:  # HTTP 400 = PromQL 不合法
+        return None, str(e)
+    return data["data"]["result"], None
+
+
+def expand(expr):
+    # 變數放在 = 比對的位置時改成 =~，換成 .* 才有意義
+    expr = re.sub(r'(\w+)\s*=\s*"(\$\{?[A-Za-z_][\w.]*\}?|\[\[\w+\]\])"', r'\1=~"\2"', expr)
+    expr = re.sub(r"\$__rate_interval|\$\{__rate_interval\}", "5m", expr)
+    expr = re.sub(r"\$__interval|\$\{__interval\}", "1m", expr)
+    expr = re.sub(r"\$__range|\$\{__range\}", "1h", expr)
+    expr = re.sub(r"\$\{[A-Za-z_][\w.]*(:[a-z]+)?\}|\$[A-Za-z_]\w*|\[\[\w+\]\]", ".*", expr)
+    return expr
+
+
+def panels(items):
+    for p in items:
+        yield p
+        yield from panels(p.get("panels", []))
+
+
+total = {"dash": 0, "panels": 0, "data": 0}
+print("%-34s %6s %6s  %s" % ("dashboard", "panels", "有資料", "沒資料的 panel"))
+for f in sorted(glob.glob(os.path.join(folder, "*.json"))):
+    j = json.load(open(f, encoding="utf-8"))
+    n = ok = 0
+    missing = []
+    for p in panels(j.get("panels", [])):
+        targets = [t for t in p.get("targets", []) if t.get("expr")]
+        if not targets:
+            continue
+        n += 1
+        has = False
+        for t in targets:
+            res, err = query(expand(t["expr"]))
+            if res:
+                has = True
+                break
+        if has:
+            ok += 1
+        else:
+            missing.append(p.get("title", "(無標題)"))
+    total["dash"] += 1; total["panels"] += n; total["data"] += ok
+    print("%-34s %6d %6d  %s" % (os.path.basename(f), n, ok, ("; ".join(missing[:6]) + (" …" if len(missing) > 6 else "")) if detail else ""))
+print("合計 %d 個 dashboard、%d 個 panel、%d 個有資料" % (total["dash"], total["panels"], total["data"]))
+EOF
+docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD"):/w:ro" lab-node:1 python3 /w/dashboard-coverage.py http://lab-mon-prometheus:9090 /w/grafana/provisioning/dashboards
+```
+
+```out
+dashboard                          panels    有資料  沒資料的 panel
+OTel_kafkametrics.json                  5      0  
+cluster-linking.json                   19     12  
+confluent-audit.json                    6      5  
+confluent-oracle-cdc.json              15      0  
+confluent-platform-kraft.json          23      8  
+confluent-platform.json                26      4  
+confluent-rbac.json                    10      0  
+debezium-connectors.json               34      0  
+flink-jobmanager.json                  27      0  
+flink-taskmanager.json                 52      0  
+globalktable.json                      24      4  
+kafka-cluster-kraft.json               80     75  
+kafka-cluster.json                     87     72  
+kafka-connect-cluster.json             54      0  
+kafka-consumer.json                    25      3  
+kafka-lag-exporter.json                 9      3  
+kafka-producer.json                    32      3  
+kafka-quotas.json                       6      0  
+kafka-stream.json                      27      0  
+kafka-streams-rocksdb.json             40      0  
+kafka-topics-kraft.json                13     13  
+kafka-topics.json                      12     10  
+kafka-transaction-coordinator.json     10     10  
+kraft.json                             18     18  
+ksqldb-cluster.json                    38      0  
+librdkafka-application.json            52      0  
+mongo.json                             25      0  
+replicator.json                         6      0  
+rest-proxy.json                        10     10  
+schema-registry-cluster.json           12      0  
+tiered-storage.json                     8      3  
+zookeeper-cluster.json                 11      0  
+合計 32 個 dashboard、816 個 panel、253 個有資料
+```
+
+怎麼讀這張表（Confluent Server 8.3.2 與 C3 2.6.1，lab 單 controller、單 broker、單 REST、單 C3 的實測；**RBAC、稽核、Tiered Storage 沒開，要在正式叢集上補驗**）：
+
+| dashboard（檔名） | 有資料／總數 | 判讀 |
+|---|---|---|
+| `kraft.json` | 18／18 | **可用**。KRaft 健康：leader、epoch、voter、high watermark、commit／election latency、metadata lag、broker 註冊數。這張靠 raft-metrics（見 17.10 的備註） |
+| `kafka-cluster-kraft.json` | 75／80 | **可用**（主力）。缺的 5 個：「Offline Partitions Count」——官方 query 寫 `job="kafka-broker"`，但專用 controller 的叢集裡這個指標只在 `kafka-controller` 上，所以空（告警 `KafkaOfflinePartitions` 有涵蓋）；另 4 個是 Tiered Storage（我們沒開） |
+| `kafka-topics-kraft.json` | 13／13 | **可用**。topic 大小、流量、partition |
+| `kafka-transaction-coordinator.json` | 10／10 | **可用** |
+| `rest-proxy.json` | 10／10 | **可用**。每個 REST endpoint 的請求率、錯誤、延遲 |
+| `confluent-audit.json` | 5／6 | **可用**（第 18 章稽核啟用後）；缺的是「Fallback entries」，稽核寫不進 topic 才會有值 |
+| `confluent-platform-kraft.json` | 8／23 | **部分**。總覽裡 broker、controller 的部分有值；Schema Registry、Connect、ksqlDB 區塊是空的（我們沒有這些元件） |
+| `kafka-topics.json`、`kafka-cluster.json`、`confluent-platform.json` | 10／12、72／87、4／26 | **用 KRaft 版就好**。這三張是 ZooKeeper 時代的版本；「Total # of Topics」「Active Controllers」「Offline Partitions」等 panel 同樣寫 `job="kafka-broker"`，在專用 controller 的 KRaft 叢集裡是空的 |
+| `kafka-consumer.json`、`kafka-producer.json`、`kafka-lag-exporter.json` | 3／25、3／32、3／9 | **部分／要另外接**。這幾張要應用程式（或 lag exporter）自己掛 exporter；只有 broker 端看得到的少數 panel 有值。consumer lag 請看 C3 畫面 |
+| `cluster-linking.json`、`tiered-storage.json` | 12／19、3／8 | 沒開這兩個功能，有值的是不分功能的計數（多數是 0） |
+| `kafka-quotas.json` | 0／6 | **未驗證**。要有 quota 設定才有 `kafka_server_produce_byte_rate`；lab 這次的測試叢集沒設 quota（正式叢集依 `conf/apps.txt` 設了，應該有值） |
+| `confluent-rbac.json` | 0／10 | **未驗證**。要有 RBAC／MDS；測試叢集沒開（正式叢集有 MDS，應該有值，要在 3 台 controller 的完整 lab 上補驗） |
+| `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 0／27、4／24、0／40 | **空**。這幾張看應用程式的 Kafka Streams。C3 本身是 Streams 應用，但我們只放行它的 `client_state` 與執行緒數，沒有放 RocksDB／處理率，所以這幾張對 C3 也是空的（想看 C3 的 RocksDB 要改 `rules-c3.yml`，序列數會到好幾千） |
+| `kafka-connect-cluster.json`、`confluent-oracle-cdc.json`、`mongo.json`、`debezium-connectors.json`、`replicator.json` | 全 0 | **空**。沒有 Connect |
+| `ksqldb-cluster.json`、`schema-registry-cluster.json` | 0／38、0／12 | **空**。沒有 ksqlDB、Schema Registry |
+| `flink-jobmanager.json`、`flink-taskmanager.json`、`librdkafka-application.json`、`OTel_kafkametrics.json`、`zookeeper-cluster.json` | 全 0 | **空**。沒有 Flink、librdkafka 應用、OTel kafkametrics 來源、ZooKeeper |
+
+## 17.10 收尾
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+驗完把 lab 的四個監控容器收掉（正式環境是銀行的系統，不收）。設定資料夾 `~/kafka-lab/bank-monitoring` 留著；重建 lab（第 0 章 `down -v`）之前一定要先收，否則容器還接在 labnet 上，網路刪不掉：
+
+```bash
+docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null && echo "lab-mon-* 已收掉：$(docker ps -a --format '{{.Names}}' | grep -c '^lab-mon-') 個剩下"
+```
+
+```out
+lab-mon-* 已收掉：0 個剩下
+```
+
+> 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3（畫面）或另外接 lag exporter；Grafana 的 `kafka-consumer.json`、`kafka-lag-exporter.json` 要有對應來源才有資料。
+>
+> 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用 22 章的 syslog 告警；稽核事件看第 18 章。
+>
+> KRaft 指標：2026-10-25 在舊 lab 的 jshell 查不到 `kafka.server:type=raft-metrics`，所以 quorum 告警當時只用 controller 的四個指標。這次用 Confluent 官方規則抓，`kafka_server_raft_metrics_*`（current_leader、current_epoch、number_of_voters、high_watermark、commit／election latency 等 17 條）**有資料**，官方 `kraft.json` 的 18 個 panel 全部有值；告警因此多了「沒有 leader」「連不到 voter」兩條。兩次結論不同，原因還沒查清（這次是單 controller 的 dynamic quorum，舊的是三台）；正式叢集請在三台 controller 上再確認一次。
 
 # 18. 第十八站：稽核日誌（audit log）
 
@@ -3744,7 +4375,7 @@ Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.repl
 @role 小安 | ops02 | cpadmin
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; chk "controller quorum 有 leader" bash -c 'kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep -q "LeaderId: *[0-9]"'; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do chk "$h confluent-server active" ssh $h.poc.lab 'systemctl is-active -q confluent-server'; done; for h in kb01 kb02 kb03 kb04; do chk "$h MDS 8090 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) = 200 ]"; done; chk "沒有 under-replicated partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions | grep -c Partition:)" = 0 ]'; chk "沒有 offline partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --unavailable-partitions | grep -c Partition:)" = 0 ]'; chk "Self-Balancing 啟用" bash -c 'kafka-rebalance-cluster --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --status 2>/dev/null | grep -q "Balancer status: ENABLED"'; chk "REST Proxy 經 LB 回 200（mTLS）" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 200 ]"; chk "Control Center 9021 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) = 200 ]"; chk "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $CA --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"; for h in kc01 kb01 rest01; do chk "$h JMX exporter 7071 要帳密" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:7071/metrics) = 401 ]"; done; echo "健康：$ok / $all 項通過"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; chk "controller quorum 有 leader" bash -c 'kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep -q "LeaderId: *[0-9]"'; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do chk "$h confluent-server active" ssh $h.poc.lab 'systemctl is-active -q confluent-server'; done; for h in kb01 kb02 kb03 kb04; do chk "$h MDS 8090 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) = 200 ]"; done; chk "沒有 under-replicated partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions | grep -c Partition:)" = 0 ]'; chk "沒有 offline partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --unavailable-partitions | grep -c Partition:)" = 0 ]'; chk "Self-Balancing 啟用" bash -c 'kafka-rebalance-cluster --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --status 2>/dev/null | grep -q "Balancer status: ENABLED"'; chk "REST Proxy 經 LB 回 200（mTLS）" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 200 ]"; chk "Control Center 9021 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) = 200 ]"; chk "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $CA --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"; for h in kc01 kb01 rest01 c3-01; do chk "$h JMX exporter 7071 要帳密" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:7071/metrics) = 401 ]"; done; echo "健康：$ok / $all 項通過"
 ```
 
 ```out
@@ -3752,7 +4383,8 @@ ok   controller quorum 有 leader
 ok   kc01 confluent-server active
 （…）
 ok   rest01 JMX exporter 7071 要帳密
-健康：21 / 21 項通過
+ok   c3-01 JMX exporter 7071 要帳密
+健康：22 / 22 項通過
 ```
 
 ## 19.2 安全：正向與反向
@@ -3854,7 +4486,7 @@ kb01
 | cpadmin 的 SSH 私鑰只在這次作業的 ssh-agent 裡（PVWA 才是正本）：作業結束 `SSH_AUTH_SOCK=~/.ssh/engineer-agent.sock ssh-agent -k` | `/tmp/` 裡安裝期間的暫存檔 |
 | | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它是 super user）；憑證輪替（第 20 章）、升級（第 21 章）前要先取回 |
 | | 各主機 cpadmin 的全權 sudo：改回只留 `cpadmin-ops` 窄規則（lab 留著，後面章節還要用） |
-| | 交給 Secrets 團隊存進 PVWA 的：store.pass、kafka-admin、應用程式 SCRAM（11.1）、master key 與 passphrase（15.2）、緊急憑證（16.2）、JMX 抓取密碼（17.4）、confluent-audit（18.1） |
+| | 交給 Secrets 團隊存進 PVWA 的：store.pass、kafka-admin、應用程式 SCRAM（11.1）、master key 與 passphrase（15.2）、緊急憑證（16.2）、JMX 抓取密碼（17.5）、confluent-audit（18.1） |
 
 ```bash
 rm -rf /tmp/jmx-* /tmp/*.properties 2>/dev/null; du -sh ~/landing ~/repo 2>/dev/null | tr '\n' ' '; echo; for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab 'printf "%s: /tmp 殘留 %s 個；sudoers %s\n" $(hostname) $(ls /tmp | grep -cv "^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.") "$(sudo ls /etc/sudoers.d | tr "\n" ",")"'; done; find ~ -maxdepth 2 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2>/dev/null | sed 's/^/權限不是 0600：/'; echo "收尾檢查完成"
@@ -4320,7 +4952,7 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | cpadmin
 
-> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（第 17.4 站交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
+> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（第 17.5 站交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
 
 ### 20.3.3 階段二：全部改由新 CA 簽
 
@@ -5558,14 +6190,14 @@ NodeId  DirectoryId             LogEndOffset  Lag  …  Status
 3       eELCq6OM-4WuTdfGQSmOgQ  30989         0    …  Follower
 ```
 
-最後確認：kc03 的監控端點、整體健康（14.0 的檢查清單）：
+最後確認：kc03 的監控端點（官方規則有 `startDelaySeconds: 120`，剛啟動兩分鐘內是空的，所以等到有指標）、整體健康（14.0 的檢查清單）：
 
 ```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && echo "kc03 7071：$(curl -s --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" https://kc03.poc.lab:7071/metrics | grep -c '^kafka_')個指標" && for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && for i in $(seq 1 24); do n=$(curl -s --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" https://kc03.poc.lab:7071/metrics | grep -c '^kafka_'); [ "$n" -gt 20 ] && break; sleep 10; done; echo "kc03 7071：${n}個指標" && for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo
 ```
 
 ```out
-kc03 7071：582個指標
+kc03 7071：973個指標
 kb01 MDS=200 kb02 MDS=200 kb03 MDS=200 kb04 MDS=200
 ```
 

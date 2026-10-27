@@ -118,6 +118,7 @@ sign() {
 }
 
 reset() {
+  monitoring_stop >/dev/null 2>&1 || true   # 監控容器接在 lab_labnet 上，不先收掉 down -v 刪不掉網路
   announce "lab 從零：down -v（volume 全刪，落地區 $LAB/landing 保留）→ up -d"
   (cd "$LAB" && docker compose -f compose.yml down -v --remove-orphans 2>&1 | tail -1; docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)
   sleep 5; (cd "$LAB" && docker compose -f compose.yml up -d 2>&1 | grep -c Started || true)   # lb01 第一次有時沒起來
@@ -125,22 +126,44 @@ reset() {
   docker ps --format '{{.Names}}' | grep -c '^lab-\|^dl01$'
 }
 
-prometheus() {   # 17.5：銀行的 Prometheus 接上來看 target 與規則，看完收掉
-  announce "17.5 監控團隊：用 prom/prometheus 載入小安給的三個檔，看 target 與規則"
-  mkdir -p "$LAB/bank-prometheus/confluent"; docker rm -f bank-prometheus >/dev/null 2>&1 || true
-  for f in prometheus-scrape.yml alert-rules.yml ca.pem scrape.pass; do docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/monitoring/$f" "$(windows_path "$LAB/bank-prometheus/confluent/$f")"; done
-  mv -f "$LAB/bank-prometheus/confluent/prometheus-scrape.yml" "$LAB/bank-prometheus/prometheus.yml"
-  hosts=""; for h in $KAFKA_HOSTS $RESTS; do hosts="$hosts --add-host $(fqdn "$h"):$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$h")")"; done
+monitoring_stop() {   # 17.6（lab）：收掉銀行端的監控容器（Prometheus、Alertmanager、Grafana、webhook 接收端）；設定目錄留著
+  docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook 2>/dev/null | tr '\n' ' '; echo "（已收掉）"
+}
+
+monitoring() {   # 17.6（lab）：銀行監控團隊用小安給的 to-bank/ 起 Prometheus、Alertmanager、Grafana，再加一個印出收到什麼的 webhook 接收端
+  announce "17.6 監控團隊：載入 to-bank/ 的設定，起 lab-mon-prometheus、lab-mon-alertmanager、lab-mon-grafana、lab-mon-webhook"
+  local dir=$LAB/bank-monitoring hosts="" h tmp
+  monitoring_stop >/dev/null
+  rm -rf "$dir"; mkdir -p "$dir"/prometheus/confluent "$dir"/alertmanager "$dir"/grafana/provisioning/{datasources,dashboards} "$dir"/webhook
+  tmp=$dir/to-bank; docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/monitoring/to-bank" "$(windows_path "$tmp")"
+  cp "$tmp"/prometheus/* "$dir/prometheus/confluent/"
+  sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' "$tmp/alertmanager/alertmanager.yml" > "$dir/alertmanager/alertmanager.yml"
+  sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' "$tmp/grafana/datasource-prometheus.yml" > "$dir/grafana/provisioning/datasources/prometheus.yml"
+  cp "$tmp"/grafana/dashboards/* "$dir/grafana/provisioning/dashboards/"
+  cat > "$dir/prometheus/prometheus.yml" <<'YML'
+global: { scrape_interval: 30s, evaluation_interval: 30s }
+scrape_config_files: [ /etc/prometheus/confluent/scrape-confluent.yml ]
+rule_files: [ /etc/prometheus/confluent/confluent-alerts.yml ]
+alerting: { alertmanagers: [ { static_configs: [ { targets: [ "lab-mon-alertmanager:9093" ] } ] } ] }
+YML
+  cat > "$dir/webhook/receiver.py" <<'PY'
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode()
+        print('POST %s | %s | %s' % (self.path, self.headers.get('User-Agent'), body), flush=True)
+        self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(('0.0.0.0', 8080), H).serve_forever()
+PY
+  # 主機名稱 → 容器 IP（Prometheus 容器不在 compose 裡，要自己給）
+  for h in $KAFKA_HOSTS $RESTS $C3_HOST; do hosts="$hosts --add-host $(fqdn "$h"):$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$h")")"; done
+  docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(windows_path "$dir/webhook"):/w:ro" lab-node:1 python3 -u /w/receiver.py >/dev/null
+  docker run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(windows_path "$dir/alertmanager/alertmanager.yml"):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null
   # shellcheck disable=SC2086
-  docker run -d --name bank-prometheus --network lab_labnet $hosts -v "$(windows_path "$LAB/bank-prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(windows_path "$LAB/bank-prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 >/dev/null
-  sleep 45
-  targets_json=$(docker run --rm --network lab_labnet lab-node:1 curl -s http://bank-prometheus:9090/api/v1/targets)
-  rules_json=$(docker run --rm --network lab_labnet lab-node:1 curl -s http://bank-prometheus:9090/api/v1/rules)
-  targets_up=$(grep -o '"health":"up"' <<<"$targets_json" | wc -l)
-  targets_total=$(grep -o '"health":"[a-z]*"' <<<"$targets_json" | wc -l)
-  echo "targets up: $targets_up / $targets_total"
-  echo "alert rules: $(grep -o '"type":"alerting"' <<<"$rules_json" | wc -l)"
-  docker rm -f bank-prometheus >/dev/null && echo "bank-prometheus removed"
+  docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $hosts -v "$(windows_path "$dir/prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null
+  docker run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(windows_path "$dir/grafana/provisioning"):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null
+  announce "Windows 瀏覽器：Prometheus http://localhost:19090（若有發布）、Grafana http://localhost:13000（匿名 Admin，只在 lab）"
 }
 
 coldboot() {   # 19.4：機房停電：全部主機同時關、同時開
@@ -174,6 +197,7 @@ lb_watch() {   # 12.1（lab）：扮演 LB 團隊：操作機出現 ~/lb-request
   done
 }
 
-case ${1:-} in push|intake|prepare|sign|reset|prometheus|coldboot) "$1";;
+case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboot) "$1";;
+  monitoring-stop) monitoring_stop;;
   lb-watch) lb_watch "${2:-}";;
-  sign-next) sign_next "${2:-ca}";; pvwa-key) pvwa_key;; *) sed -n '2,11p' "$0"; echo "  延伸：prometheus（17.5）coldboot（19.4）sign-next pvwa-key lb-watch"; exit 1;; esac
+  sign-next) sign_next "${2:-ca}";; pvwa-key) pvwa_key;; *) sed -n '2,11p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next pvwa-key lb-watch"; exit 1;; esac

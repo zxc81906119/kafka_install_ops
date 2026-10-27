@@ -23,10 +23,11 @@ MODE=$MODE node "$(cygpath -m "$TOOLS_DIR/run-chapter.js")" "$(cygpath -m "$REPO
 # 16.3 打包選單：文件寫的是佔位的原始碼目錄
 sed -i "s#<放 opmenu/ 原始碼的目錄>#$REPO_DIR#" "$runner"
 
-# 從第 0 章開始：拆掉整個 lab（容器、volume、下載機、行內 Prometheus），只留落地區
+# 從第 0 章開始：拆掉整個 lab（容器、volume、下載機、第 17 章的 lab-mon-* 監控容器），只留落地區
 if [ "$FROM" = 0 ]; then
   echo "拆掉 lab（保留 $LAB/landing、landing-extra）"
   if [ -f "$LAB/compose.yml" ]; then
+    docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null 2>&1   # 接在 lab_labnet 上，不先收掉 down -v 刪不掉網路
     (cd "$LAB" && docker compose -f compose.yml down -v >/dev/null 2>&1)
   fi
   docker rm -f dl01 bank-prometheus >/dev/null 2>&1
