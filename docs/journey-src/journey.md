@@ -802,10 +802,10 @@ rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.as
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 27 章單獨換 C3 版本時的單一 RPM。遷移用的新版 RPM 與 JDK 25 已經在第 1、2 站一起進來了（`rpm-target/`、`bank/`），第 21 章只是把它們上架。流程和第 2 站一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）：
+延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 27 章單獨換 C3 版本時的單一 RPM。遷移用的新版 RPM 與 JDK 25 已經在第 1、2 站一起進來了（`rpm-target/`、`bank/`），第 21 章只是把它們上架。流程和第 2 站一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）；操作機上已經有同名的目錄會先清掉再送，所以同一個目錄換新版也是這一條。落地區還沒有那個目錄就什麼都不做：
 
 ```bash
-D=opmenu && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; docker exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
 ```
 
 ```out
@@ -3173,6 +3173,20 @@ cd <放 opmenu/ 原始碼的目錄> && v=$(date +%Y%m%d).$(find opmenu -type f |
 3f9c…  opmenu-20261024.1a2b3c4d.tar.gz
 ```
 
+再把這一包送進操作機（就是 2.4 的做法，`D=opmenu`；操作機上舊的會先被清掉，不然 `opmenu-*.tar.gz` 會解到舊版）：
+
+@role Lab 管理員（扮演銀行） | Windows 終端 | 本機
+
+```bash
+D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; docker exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+```
+
+```out
+SHA256SUMS
+opmenu-20261028.2affc7e3.tar.gz
+sha256-ok
+```
+
 @role 銀行 OS 團隊（lab 由小安代勞） | ops02 | root
 
 選單從落地區解開到 `/opt/opmenu`（唯讀）；`/etc/opmenu/` 放設定、truststore、主機金鑰清單；`/var/log/opmenu/` 給紀錄與匯出檔。操作者都是 root，所以不需要另外的維運帳號與群組：
@@ -4072,14 +4086,14 @@ Grafana dashboard: 32 個
 （上面是這次實測環境的數字：叢集沒有起來，只有補起來的 controller、broker、REST、C3 各一個程序在回應。叢集健康時 up 10 / 10）
 ```
 
-Grafana 的 dashboard 真的查得到資料：用 Grafana 自己的查詢介面（`/api/ds/query`，和畫面上 panel 走同一條路）跑 KRaft dashboard 的「Current Leader」panel 的查詢，`$env` 換成 `lab`：
+Grafana 的 dashboard 真的查得到資料：用 Grafana 自己的查詢介面（`/api/ds/query`，和畫面上 panel 走同一條路）跑一個 controller 指標的查詢（active controller 數，叢集健康時是 1），`$env` 換成 `lab`：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "{\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"Prometheus\"},\"expr\":\"sum(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})/count(kafka_server_raft_metrics_current_leader{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})\",\"instant\":true}],\"from\":\"now-5m\",\"to\":\"now\"}" | python3 -c "import json, sys; r = json.load(sys.stdin)[\"results\"][\"A\"]; print(\"status\", r[\"status\"], \"current leader（controller node id）=\", r[\"frames\"][0][\"data\"][\"values\"][1][0])"'
+docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "{\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"Prometheus\"},\"expr\":\"sum(kafka_controller_kafkacontroller_activecontrollercount{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})\",\"instant\":true}],\"from\":\"now-5m\",\"to\":\"now\"}" | python3 -c "import json, sys; r = json.load(sys.stdin)[\"results\"][\"A\"]; print(\"status\", r[\"status\"], \"active controller 數 =\", r[\"frames\"][0][\"data\"][\"values\"][1][0])"'
 ```
 
 ```out
-status 200 current leader（controller node id）= 1
+status 200 active controller 數 = 1
 ```
 
 Windows 瀏覽器開 `http://localhost:13000` 就是 Grafana，左邊 Dashboards 底下有 32 個。
@@ -5334,6 +5348,8 @@ PVWA opmenu-breakglass 已更新，序號末 8 碼 …
 
 最後確認每個端點出示的都是 G2 簽的憑證，全部是才往下：
 
+@role 小安 | ops02 | root
+
 ```bash
 bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 rest01.poc.lab:8082 rest02.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090; do i=$(openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/.*CN *= *//; s/,.*//'); [ "$i" = "PoC Bank Issuing CA G2" ] || { echo "$ep 出示的是：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "13 個端點都是 G2 簽的：可以進階段三"
 ```
@@ -5717,6 +5733,8 @@ PVWA opmenu-breakglass 已更新，序號末 8 碼 …
 
 進階段三之前，每個端點出示的中繼都要是 G3 簽的（銀行的三台也算）：
 
+@role 小安 | ops02 | root
+
 ```bash
 bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090 ad01.poc.lab:636 repo01.poc.lab:443; do i=$(openssl s_client -connect $ep -servername ${ep%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'); [ "$i" = "PoC Bank Root CA G3" ] || { echo "$ep 中繼的簽發者：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "17 個端點都出示新鏈：可以進階段三"
 ```
@@ -5934,7 +5952,7 @@ alice 登入 MDS（C3 用同一套）：200
 每台：解開 versionlock → 這台裝的每個 Confluent 套件都換成 8.3.2 → 重新鎖 → **`daemon-reload`**（RPM 升級會換掉 systemd 的 unit 檔，不 reload 就重啟，用的還是舊的定義）→ 確認設定檔沒被動、ExecStart 還指著我們的設定 → 重啟 → 等 MDS 回 200、under-replicated 回到 0 才做下一台：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do t0=$(date +%s); ssh $h.poc.lab 'before=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; after=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); echo "$(hostname) $(rpm -q confluent-server) 設定檔$([ $before = $after ] && echo 沒變 || echo 被改了) exec=$(systemctl show confluent-server -p ExecStart --value | grep -o "/etc/[^ ]*properties")"; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "  MDS 200（約 $((i*5)) 秒）under-replicated=$u，這台 $(( $(date +%s) - t0 )) 秒"; done
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do t0=$(date +%s); ssh $h.poc.lab 'before=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; after=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); echo "$(hostname) $(rpm -q confluent-server) 設定檔$([ $before = $after ] && echo 沒變 || echo 被改了) exec=$(systemctl show confluent-server -p ExecStart --value | grep -o "/etc/[^ ]*properties")"; sudo systemctl restart confluent-server' || exit 1; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "  MDS 200（約 $((i*5)) 秒）under-replicated=$u，這台 $(( $(date +%s) - t0 )) 秒"; done
 ```
 
 ```out
@@ -5952,7 +5970,7 @@ kb01 confluent-server-8.3.2-1.noarch 設定檔沒變 exec=/etc/confluent/kafka/s
 步驟和 broker 一樣。controller 的健康看 quorum：這台回來、`Lag` 是 0。**leader 會在過程中換人**（實測做完第二台時 leader 從 kc02 換到 kc01），所以每做一台之前都重新查一次 leader，跳過它，最後一輪才做 leader：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config /root/conf/client-internal.properties" && done_list="" && for round in 1 2 3; do leader=kc0$($Q describe --status 2>/dev/null | awk '/LeaderId/{print $2}'); h=""; for c in kc01 kc02 kc03; do [[ " $done_list " == *" $c "* ]] && continue; [ $c = $leader ] && [ $round -lt 3 ] && continue; h=$c; break; done; ssh $h.poc.lab 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; sudo systemctl restart confluent-server'; sleep 10; for i in $(seq 1 60); do lag=$($Q describe --replication 2>/dev/null | awk -v id=${h#kc0} '$1==id {print $4}'); [ "$lag" = 0 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') Lag=$lag（這輪開始時 leader=$leader）"; done_list="$done_list $h"; done
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && Q="kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config /root/conf/client-internal.properties" && done_list="" && for round in 1 2 3; do leader=kc0$($Q describe --status 2>/dev/null | awk '/LeaderId/{print $2}'); h=""; for c in kc01 kc02 kc03; do [[ " $done_list " == *" $c "* ]] && continue; [ $c = $leader ] && [ $round -lt 3 ] && continue; h=$c; break; done; ssh $h.poc.lab 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; sudo systemctl restart confluent-server' || exit 1; sleep 10; for i in $(seq 1 60); do lag=$($Q describe --replication 2>/dev/null | awk -v id=${h#kc0} '$1==id {print $4}'); [ "$lag" = 0 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') Lag=$lag（這輪開始時 leader=$leader）"; done_list="$done_list $h"; done
 ```
 
 ```out
@@ -5981,7 +5999,7 @@ source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --cer
 先換操作機自己的 `kafka-*` 與 `confluent` 指令：
 
 ```bash
-pkgs=$(rpm -qa 'confluent-*' --qf '%{NAME}-8.3.2 '); dnf -q versionlock delete 'confluent-*' >/dev/null; dnf -q -y install $pkgs >/dev/null && dnf -q versionlock add $pkgs >/dev/null; echo "ops02 $(rpm -q confluent-server confluent-cli | paste -sd' ')"
+pkgs=$(rpm -qa 'confluent-*' --qf '%{NAME}-8.3.2 '); dnf -q versionlock delete 'confluent-*' >/dev/null; dnf -q -y --refresh install $pkgs >/dev/null && dnf -q versionlock add $pkgs >/dev/null || exit 1; echo "ops02 $(rpm -q confluent-server confluent-cli | paste -sd' ')"
 ```
 
 ```out
@@ -6004,7 +6022,7 @@ LB：rest01（停用） rest02
 @role 小安 | ops02 | root
 
 ```bash
-~/conf/rest-restart.sh rest01 -b 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload'
+~/conf/rest-restart.sh rest01 -b 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload'
 ```
 
 ```out
@@ -6025,7 +6043,7 @@ LB：rest01 rest02（停用）
 @role 小安 | ops02 | root
 
 ```bash
-~/conf/rest-restart.sh rest02 -b 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload'
+~/conf/rest-restart.sh rest02 -b 'pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload'
 ```
 
 ```out
@@ -6155,7 +6173,38 @@ rest02 java=/opt/java/jdk-25.0.5+8
 
 broker 的日誌會多一則 `WARNING: A terminally deprecated method in sun.misc.Unsafe has been called`：原廠說明這只是警告，JDK 25 上照常運作。第二段結束：照第 19 章再驗一次（實測全數通過）。
 
-## 21.8 第三段：finalize（之後不能退回 8.2）
+## 21.8 回滾演練（finalize 之前）：kb04 退回 8.2.4，再升回去
+
+@role 小安 | ops02 | root
+
+任何一段出問題、features 還沒升（`describe` 看到的還是 `CP-8.2-…`），就逐台退：先把 JDK 切回 21，再把套件 `downgrade` 回 8.2.4、重新鎖、`daemon-reload`、重啟。順序和升級相反（操作機、REST Proxy → controller → broker；C3 不用退，2.6.x 也支援 8.2.x，真的要退照第 27 章的 `c3-change.sh`）。實測拿 kb04 單台演練（其他台都是 8.3.2）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-21* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.2.4 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh downgrade $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; sudo systemctl restart confluent-server' || exit 1; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
+```
+
+```out
+kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.x+y/bin/java MDS 200（約 15–20 秒）
+```
+
+
+演練完馬上把它升回去（和 21.4、21.7 同樣的做法，只動這一台）：
+
+@role 小安 | ops02 | root
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-25* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; sudo systemctl restart confluent-server' || exit 1; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
+```
+
+```out
+kb04 confluent-server-8.3.2-1.noarch /opt/java/jdk-25.0.5+8/bin/java MDS 200（約 15–20 秒）
+```
+
+退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。回滾驗證完，馬上升回去（下面這一段），再往下做 finalize。
+
+> 回滾：finalize 之後就不能用這個方法了。真的要退，得用 21.2 的備份與原廠支援的還原程序，所以 finalize 一定排在前兩段都驗收、觀察一段時間之後。
+
+## 21.9 第三段：finalize（之後不能退回 8.2）
 
 @role 小安 | ops02 | root
 
@@ -6190,24 +6239,6 @@ confluent.metadata.version CP-8.3-IV0B
 ```
 
 最後照第 19 章完整驗收一次。
-
-## 21.9 回滾（finalize 之前）
-
-@role 小安 | ops02 | root
-
-任何一段出問題、features 還沒升（`describe` 看到的還是 `CP-8.2-…`），就逐台退：先把 JDK 切回 21，再把套件 `downgrade` 回 8.2.4、重新鎖、`daemon-reload`、重啟。順序和升級相反（操作機、REST Proxy → controller → broker；C3 不用退，2.6.x 也支援 8.2.x，真的要退照第 27 章的 `c3-change.sh`）。實測拿 kb04 單台演練（其他台都是 8.3.2）：
-
-```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-21* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.2.4 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y downgrade $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null; sudo systemctl daemon-reload; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
-```
-
-```out
-kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.x+y/bin/java MDS 200（約 15–20 秒）
-```
-
-退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。回滾驗證完，再照 21.4、21.7 把它升回去。
-
-> 回滾：finalize 之後就不能用這個方法了。真的要退，得用 21.2 的備份與原廠支援的還原程序，所以 finalize 一定排在前兩段都驗收、觀察一段時間之後。
 
 ## 21.10 遷移完成：確認版本、記下新的基準
 
@@ -6291,7 +6322,7 @@ rc=2
 排程：操作機的 systemd timer 每天早上 8 點跑一次（以 root 身分，用的是操作機本來就有的管理 client 設定）。**待銀行確認**：行內若有排程系統（例如 Control-M），改由它在同一時間呼叫 `~/conf/license-check.sh`，看結束碼與 syslog，就不用裝這個 timer：
 
 ```bash
-printf '[Unit]\nDescription=Confluent license expiry check\n\n[Service]\nType=oneshot\nExecStart=/root/conf/license-check.sh\nSuccessExitStatus=2\n' | tee /etc/systemd/system/confluent-license-check.service >/dev/null && printf '[Unit]\nDescription=Daily Confluent license expiry check\n\n[Timer]\nOnCalendar=*-*-* 08:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' | tee /etc/systemd/system/confluent-license-check.timer >/dev/null && systemctl daemon-reload && systemctl enable --now confluent-license-check.timer >/dev/null 2>&1 && systemctl start confluent-license-check.service && echo "下次執行：$(systemctl show confluent-license-check.timer -p NextElapseUSecRealtime --value)" && echo "syslog：$(journalctl -t confluent-license -n 1 --no-pager -o cat)"
+printf '[Unit]\nDescription=Confluent license expiry check\n\n[Service]\nType=oneshot\nEnvironment=HOME=/root\nExecStart=/root/conf/license-check.sh\nSuccessExitStatus=2\n' | tee /etc/systemd/system/confluent-license-check.service >/dev/null && printf '[Unit]\nDescription=Daily Confluent license expiry check\n\n[Timer]\nOnCalendar=*-*-* 08:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' | tee /etc/systemd/system/confluent-license-check.timer >/dev/null && systemctl daemon-reload && systemctl enable --now confluent-license-check.timer >/dev/null 2>&1 && systemctl start confluent-license-check.service && echo "下次執行：$(systemctl show confluent-license-check.timer -p NextElapseUSecRealtime --value)" && echo "syslog：$(journalctl -t confluent-license -n 1 --no-pager -o cat)"
 ```
 
 ```out
@@ -6396,7 +6427,7 @@ Removed  KRaft controller 3 with directory id OwqboMUaS4C4y6JYkevW7w
 用原本的 cluster id、`--no-initial-controllers`（以觀察者身分加入，不是自己宣告成員）。設定檔有 `${securepass:…}`（第 15 站），格式化工具也要拿得到 master key：從 `service.env` 讀：
 
 ```bash
-source ~/conf/kraft.env && ssh kc03.poc.lab "sudo bash -c 'run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"$CONFLUENT_SECURITY_MASTER_KEY\" \"$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl start confluent-server && echo \"kc03 \$(systemctl is-active confluent-server) dir=\$(sudo sed -n 's/^directory.id=//p' /var/lib/kafka/data/meta.properties)\"" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for i in $(seq 1 60); do L=$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication 2>/dev/null | awk '$1==3'); [ "$(awk '{print $4, $NF}' <<<"$L")" = "0 Observer" ] && break; sleep 5; done; echo "kc03：$(awk '{print "Lag="$4, $NF}' <<<"$L")"
+source ~/conf/kraft.env && ssh kc03.poc.lab "sudo bash -c 'run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl start confluent-server && echo \"kc03 \$(systemctl is-active confluent-server) dir=\$(sudo sed -n 's/^directory.id=//p' /var/lib/kafka/data/meta.properties)\"" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for i in $(seq 1 60); do L=$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication 2>/dev/null | awk '$1==3'); [ "$(awk '{print $4, $NF}' <<<"$L")" = "0 Observer" ] && break; sleep 5; done; echo "kc03：$(awk '{print "Lag="$4, $NF}' <<<"$L")"
 ```
 
 ```out
@@ -6414,7 +6445,7 @@ kc03：Lag=0 Observer
 `add-controller` 要在**新的那台**上跑：工具從 `--command-config` 指到的設定找資料目錄，讀出自己的 node id 與 directory id 再去登記。用那台的 server.properties 加一行 `security.protocol=SSL`，用完就刪：
 
 ```bash
-ssh kc03.poc.lab "sudo bash -c '( cat /etc/confluent/kafka/server.properties; echo security.protocol=SSL ) > /etc/confluent/kafka/add-controller.properties && chown root:confluent /etc/confluent/kafka/add-controller.properties && chmod 0640 /etc/confluent/kafka/add-controller.properties; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"$CONFLUENT_SECURITY_MASTER_KEY\" \"$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config /etc/confluent/kafka/add-controller.properties add-controller 2>&1 | grep -v WARN | tail -1; rm -f /etc/confluent/kafka/add-controller.properties'" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && sleep 10 && kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication | awk 'NR==1 || $1<100'
+ssh kc03.poc.lab "sudo bash -c '( cat /etc/confluent/kafka/server.properties; echo security.protocol=SSL ) > /etc/confluent/kafka/add-controller.properties && chown root:confluent /etc/confluent/kafka/add-controller.properties && chmod 0640 /etc/confluent/kafka/add-controller.properties; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config /etc/confluent/kafka/add-controller.properties add-controller 2>&1 | grep -v WARN | tail -1; rm -f /etc/confluent/kafka/add-controller.properties'" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && sleep 10 && kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication | awk 'NR==1 || $1<100'
 ```
 
 ```out
@@ -6515,7 +6546,7 @@ under-replicated：0
 加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 3、5、7、8 站準備，憑證的 SAN 要有它的名稱（20.2）：
 
 ```bash
-source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka/data/*; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"$CONFLUENT_SECURITY_MASTER_KEY\" \"$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
+source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka/data/*; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
 ```
 
 ```out
@@ -6684,7 +6715,7 @@ RBAC 的 principal：11 個；SHA256SUMS：7 個檔
 @role 小安 | ops02 | root
 
 ```bash
-printf '[Unit]\nDescription=Confluent cluster metadata export\n\n[Service]\nType=oneshot\nExecStart=/root/conf/metadata-backup.sh\n' | tee /etc/systemd/system/confluent-metadata-backup.service >/dev/null && printf '[Unit]\nDescription=Daily Confluent cluster metadata export\n\n[Timer]\nOnCalendar=*-*-* 02:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' | tee /etc/systemd/system/confluent-metadata-backup.timer >/dev/null && systemctl daemon-reload && systemctl enable --now confluent-metadata-backup.timer >/dev/null 2>&1 && systemctl start confluent-metadata-backup.service && echo "下次執行：$(systemctl show confluent-metadata-backup.timer -p NextElapseUSecRealtime --value)" && echo "syslog：$(journalctl -t confluent-backup -n 1 --no-pager -o cat)"
+printf '[Unit]\nDescription=Confluent cluster metadata export\n\n[Service]\nType=oneshot\nEnvironment=HOME=/root\nExecStart=/root/conf/metadata-backup.sh\n' | tee /etc/systemd/system/confluent-metadata-backup.service >/dev/null && printf '[Unit]\nDescription=Daily Confluent cluster metadata export\n\n[Timer]\nOnCalendar=*-*-* 02:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' | tee /etc/systemd/system/confluent-metadata-backup.timer >/dev/null && systemctl daemon-reload && systemctl enable --now confluent-metadata-backup.timer >/dev/null 2>&1 && systemctl start confluent-metadata-backup.service && echo "下次執行：$(systemctl show confluent-metadata-backup.timer -p NextElapseUSecRealtime --value)" && echo "syslog：$(journalctl -t confluent-backup -n 1 --no-pager -o cat)"
 ```
 
 ```out
@@ -6820,6 +6851,8 @@ Upgrade  148 Packages
 
 每台：更新 → 看要不要重開機、哪些平台服務要重啟 → 照判斷做 → 等健康、沒有 under-replicated 才下一台：
 
+> Rocky 的陷阱（lab 實測）：9.8 的 `rocky-repos` 更新後，預設的 repo 檔（`rocky.repo` 等，走外網 mirrorlist）被裝回來並啟用，之後每個 `dnf` 都先去連外網而報 `Failed to download metadata for repo 'baseos'`。所以更新完立刻把它們關掉（下面腳本的那一行）。銀行的 RHEL 沒有這個問題。
+
 ```bash
 cat > ~/conf/os-patch-host.sh <<'EOF'
 #!/usr/bin/env bash
@@ -6827,6 +6860,8 @@ cat > ~/conf/os-patch-host.sh <<'EOF'
 n=$(sudo dnf -q check-update --refresh 2>/dev/null | grep -c '^[a-zA-Z0-9]')
 os_before=$(. /etc/os-release; echo $VERSION_ID)
 sudo dnf -y -q update >/dev/null 2>&1 || { echo "$(hostname) dnf update 失敗"; exit 1; }
+# Rocky 專屬：rocky-repos 套件跟著更新，會把預設的 repo 檔（走外網 mirrorlist）裝回來並啟用，離線的 lab 要再關掉；RHEL 的 redhat.repo 由訂閱管理或 Satellite 管，不需要這行
+sudo sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/rocky*.repo 2>/dev/null
 reboot=$(sudo dnf needs-restarting -r >/dev/null 2>&1 && echo 否 || echo 是)
 services=$(sudo dnf needs-restarting -s 2>/dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u | paste -sd, -)
 echo "$(hostname) 更新 $n 個；OS $os_before>$(. /etc/os-release; echo $VERSION_ID)；要重開機：$reboot；要重啟的平台服務：${services:-無}；confluent 版本：$(rpm -qa 'confluent-*' --qf '%{VERSION}\n' | sort -u | paste -sd, -)"

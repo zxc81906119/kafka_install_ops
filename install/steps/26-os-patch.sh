@@ -26,6 +26,8 @@ PATCH_HOST=$(cat <<'EOF'
 count=$(sudo dnf -q check-update --refresh 2>/dev/null | grep -c '^[a-zA-Z0-9]')
 os_before=$(. /etc/os-release; echo "$VERSION_ID")
 sudo dnf -y -q update >/dev/null 2>&1 || { echo "result=failed"; exit 1; }
+# Rocky 專屬：rocky-repos 更新會把預設 repo 檔（外網 mirrorlist）裝回來並啟用，離線的 lab 要再關掉；RHEL 不需要
+sudo sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/rocky*.repo 2>/dev/null
 reboot=$(sudo dnf needs-restarting -r >/dev/null 2>&1 && echo no || echo yes)
 services=$(sudo dnf needs-restarting -s 2>/dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u | paste -sd, -)
 echo "updated=$count reboot=$reboot services=${services:-none} confluent=$(rpm -qa 'confluent-*' --qf '%{VERSION}\n' | sort -u | paste -sd, -) os=$os_before>$(. /etc/os-release; echo "$VERSION_ID")"

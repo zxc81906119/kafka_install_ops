@@ -69,7 +69,7 @@ CHANGE_PACKAGES=$(cat <<'EOF'
 before=$(sudo sha256sum "$PROPS" | cut -c1-12)
 packages=$(rpm -qa "confluent-*" --qf "%{NAME}-$VERSION ")
 sudo dnf -q versionlock delete "confluent-*" >/dev/null
-sudo dnf -q -y "$DNF_ACTION" $packages >/dev/null && sudo dnf -q versionlock add $packages >/dev/null
+sudo dnf -q -y --refresh "$DNF_ACTION" $packages >/dev/null && sudo dnf -q versionlock add $packages >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }
 sudo systemctl daemon-reload
 # C3：RPM 換版本會把 C3 自己要寫的 generated 檔改回 root:root 644（lab 實測），改回來，不然之後改告警規則寫不進去
 if [ -d /etc/confluent-control-center ]; then
@@ -176,7 +176,7 @@ packages() {
   local ops_packages; ops_packages=$(rpm -qa "confluent-*" --qf "%{NAME}-$version ")
   dnf -q versionlock delete "confluent-*" >/dev/null
   # shellcheck disable=SC2086  # 套件清單要拆成多個參數
-  if dnf -q -y install $ops_packages >/dev/null && dnf -q versionlock add $ops_packages >/dev/null; then ok "$OPS_HOST：$(rpm -q --qf '%{VERSION}' confluent-server)"
+  if dnf -q -y --refresh install $ops_packages >/dev/null && dnf -q versionlock add $ops_packages >/dev/null; then ok "$OPS_HOST：$(rpm -q --qf '%{VERSION}' confluent-server)"
   else fail "$OPS_HOST 套件"; fi
   log "第一段完成：跑第 19 站驗收；features 還沒升，隨時可以 rollback"
 }
