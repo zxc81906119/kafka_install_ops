@@ -344,7 +344,7 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 5. **私鑰不放 CyberArk、不另外備份**：操作機重建時重新產生金鑰對，由 OS 團隊重新佈署公鑰。換金鑰人工做，新舊並存、不中斷（加新公鑰 → 逐台測新金鑰 → 換私鑰 → 刪舊公鑰）。
 6. **OP menu**：OS 身分是 root，進選單時再用本人 AD 帳密。Kafka 動作走本人帳密，權限與稽核在 Kafka 端強制；碰主機那段在 root 前提下只是流程控管，繞得過，追溯靠 CyberArk 登入紀錄與 PSMP 錄影。討論過「OP menu 改依 OS 帳號（op／sp 開頭）分選單」：那要 PSMP 代登成角色帳號、私鑰改由專用服務帳號持有，也會放棄「Kafka 動作記到本人」；本案不採用。
 7. **CPM 與零停機輪替**：CPM 還在，所以 A/B 兩組帳密與 CPM 自動輪替仍衝突（CPM 不知道哪組在用）。`svc-mds-bind` 維持單帳號、CPM 輪替，接受 MDS 查 AD 的短暫失敗；要零停機才改 A/B、關掉該帳號的 CPM 自動變更。SCRAM 應用帳號 CPM 沒有 Kafka plugin，一律人工。
-8. **客戶提到「私鑰放不同 file system」**：先不討論，不放進文件。我方判斷：分開本身沒有安全效果（人員是 root，已掛載的都讀得到）；要防離線讀取要靠加密，要防備份外流要排除備份。
+8. **客戶提到「私鑰放不同 file system」**（2026-10-27）：客戶沒說原因，我方選最可能的目的——防磁碟、VM 快照或備份被取走後離線讀取——寫進 Word 4.2：私鑰放獨立且加密（LUKS）的 file system（例如 `/secure/ssh`），備份與快照排除該掛載點，要支援 POSIX 權限（xfs／ext4）。分開本身沒有安全效果（人員是 root，已掛載的都讀得到），效果來自加密與排除備份；掛載失敗時 ssh 連不上各主機，需要處理流程。實際原因待客戶確認。
 
 **尚未改的地方**（客戶正式採用後才改，改了要從零重跑）：手冊 3.1／15.x 的 ssh-agent 貼法、19.6 SSH Key Manager 演練、cpadmin 全部改 cpuser；`install/` 腳本與 `install/lab/bank-sim.sh`；OP menu 的 ssh-agent 流程；sudoers 窄規則改成逐一列出。
 

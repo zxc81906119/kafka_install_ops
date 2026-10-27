@@ -69,7 +69,7 @@ D.keydeploy = () => svg(800, 300, [
   box(420, 40, 170, 100, '3 放進各主機', ['cpuser 的', 'authorized_keys'], 'amber'),
   arrow(590, 90, 618, 90, null),
   box(620, 40, 160, 100, '4 驗證', ['每台免密碼登入', '身分是 cpuser'], 'teal'),
-  box(20, 175, 370, 90, '私鑰', ['只存在操作機 /root/.ssh，權限 0400'], 'coral'),
+  box(20, 175, 370, 90, '私鑰', ['只存在操作機獨立的 file system', '加密、權限 0400'], 'coral'),
   box(420, 175, 360, 90, '公鑰', ['每台主機一份，可加 from="操作機 IP"', '限制只有操作機能用這把金鑰'], 'blue'),
 ].join(''));
 
@@ -113,10 +113,10 @@ D.sudoers = () => svg(800, 330, [
 // 6. where the pieces live
 D.files = () => svg(800, 300, [
   region(20, 20, 370, 260, '操作機', 'teal'),
-  box(40, 55, 330, 60, '/root/.ssh/cpuser_ed25519', ['私鑰，root:root 0400'], 'coral'),
-  box(40, 130, 330, 60, '/root/.ssh/cpuser_ed25519.pub', ['公鑰，用來佈署到各主機'], 'teal'),
+  box(40, 55, 330, 60, '/secure/ssh/cpuser_ed25519', ['私鑰，root:root 0400，獨立加密 file system'], 'coral'),
+  box(40, 130, 330, 60, '/secure/ssh/cpuser_ed25519.pub', ['公鑰，用來佈署到各主機'], 'teal'),
   region(410, 20, 370, 260, '每台主機（含操作機自己）', 'blue'),
-  box(430, 55, 330, 60, '~cpuser/.ssh/authorized_keys', ['公鑰，0600，可加 from=、restrict'], 'blue'),
+  box(430, 55, 330, 60, '~cpuser/.ssh/authorized_keys', ['公鑰，0600，可加 from='], 'blue'),
   box(430, 130, 330, 60, '/etc/sudoers.d/cpuser', ['安裝期全權，交付時移除'], 'amber'),
   box(430, 205, 330, 60, '/etc/sudoers.d/cpuser-ops', ['交付後窄規則，0440'], 'blue'),
 ].join(''));
