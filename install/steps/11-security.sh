@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 11 站：帳號與權限 —— 管理 client、app 的 SCRAM、RBAC（人員綁 AD 群組）、配額、範例 topic
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：
 #   - 操作機的管理 client：svc-ops 憑證向 MDS 換 token，走 TOKEN listener（svc-ops 是 super user）

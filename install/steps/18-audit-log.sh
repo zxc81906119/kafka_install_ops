@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 18 站：稽核日誌 —— 專用低權限寫入帳號、敏感 topic 的事件分開放（365 天）、排除平台自己的雜訊
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 何時用：AUDIT_LOG=1。
 # 做什麼：

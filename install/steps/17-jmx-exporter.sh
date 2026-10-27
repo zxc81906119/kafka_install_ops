@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 第 17 站：監控 —— 每個 Java 程序（controller、broker、REST Proxy、C3）掛 JMX exporter（7071、HTTPS、basic auth），
 #           並產出給銀行監控團隊（行內 Prometheus／Alertmanager／Grafana）的設定、告警規則、官方 dashboard
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 何時用：JMX_EXPORTER=1。jar 與 Confluent 官方的規則檔（jmx-monitoring-stacks）在第 1.4 站已帶進 ~/landing。
 # 做什麼：

@@ -13,7 +13,7 @@ install/
   conf/apps.txt       應用程式：SCRAM 直連或憑證走 REST、配額
   conf/rbac.txt       role binding（人員綁 AD 群組，服務與 app 綁最小權限）
   conf/topics.txt     範例 topic
-  lib/ssh.sh          ssh_run / ssh_run_as / ssh_script（heredoc 原樣送過去）/ copy_to_tmp / restart_and_wait / rolling_restart
+  lib/ssh.sh          ssh_run / ssh_run_as / ssh_script（heredoc 原樣送過去）/ copy_to_tmp / restart_and_wait / rolling_restart —— 以 cpuser 與 /secure/ssh 的金鑰連線；ops_from_addrs / authorized_keys_line
   lib/render.sh       render_template / render_templates / encrypt_passwords / ldap_password_from_env / count_plaintext_passwords
   lib/log.sh          section / log / ok / warn / fail / die / ask_bank / wait_for_bank / finish_step —— 畫面 + ~/install-logs/
   templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、監控設定（exporter 規則、Prometheus scrape、告警規則、Alertmanager、Grafana datasource）
@@ -23,8 +23,8 @@ install/
                       22 license 監控（status｜check｜schedule）、23 換 controller（status｜replace）、24 broker 增減（status｜remove｜add）、
                       25 日常備份（grant｜run｜schedule｜compare）、26 OS 修補（plan｜apply）；照順序安裝時略過
   tools/load.sh       演練用持續流量：start／stop／report（直連遺失幾筆、REST 失敗幾次）
-  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（公鑰派送、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：monitoring / monitoring-stop / coldboot）
-  lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動（lab 模式，SSH 金鑰放檔案）；第 15 站起由 run-customer.sh 接
+  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（每台建 cpuser＋sshd 設定＋公鑰行＋安裝期 sudo、OS 套件庫、AD、NTP/LB、CA 簽發、檔案交換；延伸：monitoring / monitoring-stop / coldboot）
+  lab/run-all.sh      lab 專用：down -v 從零到第 14 站全自動；第 15 站起由 run-customer.sh 接
   tools/lint.sh       靜態檢查：shellcheck（含送到遠端的 heredoc）＋「pipefail 下不准 | grep -q」；沒有 shellcheck 時用 docker image koalaman/shellcheck 跑
 ```
 
@@ -33,9 +33,9 @@ install/
 | 在哪 | 誰 | 指令 | 說明 |
 |---|---|---|---|
 | 下載機 | root | `bash install/steps/01-download.sh` | 第 1 站。落地區掛在 `/out`（可用 `OUT=` 改） |
-| 操作機 | cpadmin | `bash install/install.sh` | 第 2 站起依序跑；第 1 站只提示「請在 dl01 執行」 |
-| 操作機 | cpadmin | `bash install/install.sh --from 09` | 銀行做完後從某一站續跑 |
-| 操作機 | cpadmin | `bash install/install.sh --list` | 看每站是否 done（`~/install-logs/<step>.done`） |
+| 操作機 | root | `bash install/install.sh` | 第 2 站起依序跑；第 1 站只提示「請在 dl01 執行」 |
+| 操作機 | root | `bash install/install.sh --from 09` | 銀行做完後從某一站續跑 |
+| 操作機 | root | `bash install/install.sh --list` | 看每站是否 done（`~/install-logs/<step>.done`） |
 
 - 每一步 rc 0 成功、rc 2 **等銀行**（印出「請銀行做」清單；銀行做完後 `--from` 同一站重跑）、其他 rc 失敗（看 `~/install-logs/` 最新的 log）。
 - 銀行的事腳本**不代做**，只印清單並驗證結果：第 2 站的掃描與交換、第 3 站的公鑰／套件庫／根憑證／JDK／AD／NTP／LB、第 9 站的簽發。
@@ -44,20 +44,20 @@ install/
 
 ## 每一站：在哪跑、會在哪裡停下
 
-手把手文件只教手打指令；這張表是兩者的對照。指令都在操作機以 cpadmin 執行，除非另外註明。
+手把手文件只教手打指令；這張表是兩者的對照。指令都在操作機以 root 執行（人員經 CyberArk PVWA 網頁＋PSMP 登入就是 root；lab 直接 `docker exec -it lab-ops02-1 bash`），到各主機一律用 cpuser 與 `/secure/ssh/cpuser_ed25519` 這把金鑰，除非另外註明。
 
 | 站 | 指令 | 會停下等銀行（rc 2）／注意 |
 |---|---|---|
 | 1 | 下載機（root）`bash install/steps/01-download.sh` | 落地區預設 `/out`（`OUT=` 可改）；已下載的檔案 `dnf download` 會 SKIPPED |
 | 2 | `bash install/install.sh --only 02` | 掃描、開單、檔案交換是銀行的事：印清單；送到後核對 SHA256SUMS 與原廠簽章 |
-| 3 | `--only 03` | 我方只產生 ssh 金鑰（`SSH_KEY_SOURCE=file` 時）；金鑰登入、根憑證、OS 套件庫、JDK、LDAPS、負載平衡任一項沒好就停 |
+| 3 | `--only 03` | 我方只在獨立 file system（`/secure/ssh`，沒掛載就停）產生 ssh 金鑰對並印出公鑰行；各主機的 cpuser＋sshd 設定＋公鑰＋安裝期 sudo 是 OS 團隊的事；cpuser 金鑰登入（含 sudo、密碼鎖定、sshd 只收金鑰）、根憑證、OS 套件庫、JDK、LDAPS、負載平衡任一項沒好就停 |
 | 4–8 | `--only 04` … `--only 08` | 6 只讀；8 裝套件並 versionlock |
 | 9 | `--only 09` | 第一次產生私鑰與 CSR 後停在「請銀行簽」；回覆放進 `~/pki/incoming/` 再跑一次 |
 | 10 | `--only 10` | 重跑時設定或 drop-in 有變、服務在跑的主機一台一台重啟；15 做過會照樣加密，18 做過會帶上稽核設定 |
 | 11–13 | `--only 11` … `--only 13` | 12、13 重跑時 15 做過會照樣加密 |
 | 14 | `--only 14` | 只讀的總檢查。2–14 可一次跑：`bash install/install.sh --to 14` |
 | 15 | `--only 15` | `SECRETS_MODE=sp` 才用；沒有 passphrase 檔會停；master key 產生後停下等 Secrets 團隊存進 PVWA、記單號（`~/secrets/master-key.custody`）；15.6 輪替不在腳本裡 |
-| 16 | `--only 16` | `OPMENU=1`；主機類項目要維運人員互動登入選單、從 PVWA 貼上私鑰試跑 |
+| 16 | `--only 16` | `OPMENU=1`；選單以 root 跑；16.4 寫每台的 `/etc/sudoers.d/cpuser-ops`（逐一列出服務與寫法）；重啟、看日誌要維運人員互動登入選單試跑（`lab/opmenu-hostkey-test.sh` 驗 sudoers 與私鑰檔） |
 | 17 | `--only 17` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/to-bank/`（prometheus／alertmanager／grafana）；官方規則與 dashboard 取自 `~/landing/monitoring/`（第 1 站帶進來）；C3 內建 Prometheus／Alertmanager 不動 |
 | 18 | `--only 18` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15 留下的）處理 |
 | 19 | `--only 19` | 印「驗收：N / N 項通過」；冷開機（19.4）交給機房演練 |
@@ -71,16 +71,19 @@ install/
 
 ## lab 與客戶環境的設定差異（conf/site.env）
 
-客戶的 CyberArk 只有 PAM（PSM／PSMP 代登、SSH 金鑰輪替），程式碰不到 PVWA（passphrase 由人取出、master key 由 Secrets 團隊存入），所以下面這些要換：
+客戶的 CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登、CPM 輪替 root 與 svc-mds-bind），程式碰不到 PVWA（passphrase 由人取出、master key 由 Secrets 團隊存入）。
+人員登入 PVWA 後由 PSMP 代登進操作機就是 root；lab 沒有 PVWA／PSMP，直接 `docker exec` 以 root 進操作機。操作機到各主機一律 cpuser＋一把金鑰
+（放在獨立加密 file system `/secure/ssh`；lab 用 docker volume 模擬那個獨立 file system，LUKS 無法模擬）。下面這些要換：
 
 | 設定 | lab | 客戶 | 為什麼 |
 |---|---|---|---|
-| `SSH_KEY_SOURCE` | `file` | `agent` | cpadmin 私鑰變更窗口內從 PVWA 取出貼進 ssh-agent，不落地 |
+| `SSH_KEY_DIR`、`SSH_KEY_REQUIRE_MOUNT` | `/secure/ssh`（docker volume）、`1` | 銀行規範的掛載點（名稱只是範例）、`1` | 私鑰放獨立（加密）file system，不放系統碟、不備份 |
+| `SSH_USER`、`SSH_USER_ID`、`SSH_FROM_ADDRS` | `cpuser`、`1500`、空（= 操作機 IP＋127.0.0.1＋::1） | 同左 | 每台同名同 UID；公鑰只加 `from=` |
 | `FETCH_JDK` | `1` | `0` | JDK 由銀行交付到 `landing/bank/` |
-| `OPMENU_OS_USER`、`OPMENU_ENV_LABEL` | `op01`、`LAB` | 實際帳號、`PROD`／`UAT` | |
+| `OPMENU_ENV_LABEL` | `LAB` | `PROD`／`UAT` | |
 | 主機、`DOMAIN`、`REPO_URL`、AD 的 DN、`NTP_SERVER`、`HEAP_*` | lab 值 | 實際值 | heap 依主機記憶體調整 |
 
-客戶這組設定已在 lab 從零整套跑過（2026-10-24，CP 8.2.4，`install/lab/run-customer.sh`）：第 19 站驗收 38/38；選單的主機類項目（19.4 bob 重啟 broker）因為要人在終端機貼私鑰，列為人工驗收項目。
+舊做法（cpadmin、私鑰貼進 ssh-agent）已在 lab 從零整套跑過（2026-10-24，CP 8.2.4）；2026-10-27 改成 cpuser＋`/secure/ssh` 金鑰檔＋root 操作機後**尚未從零重跑**（需要先重建 lab）。選單重啟 broker（19.4）要人互動登入，列為人工驗收項目。
 
 ## 安裝完之後還會用到的
 
@@ -113,7 +116,7 @@ install/
 | `PVWA_SAFE` | PVWA 裡放本平台 object 的 safe 名稱（15、16 站印給 Secrets 團隊的清單與選單設定用） |
 | `OPMENU` `JMX_EXPORTER` `AUDIT_LOG` | 16／17／18 站要不要做 |
 
-選單的 cpadmin 私鑰與緊急憑證一律由維運人員從 PVWA 取出貼上（沒有其他來源可選）。
+選單的緊急憑證（91）由維運人員從 PVWA 取出貼上（沒有其他來源可選）；主機用的 ssh 私鑰就是 `/secure/ssh` 的那個檔，不經 PVWA。
 
 15 站一次把 15.2–15.5 做完，只滾動重啟一次；18 站依 `~/conf/secrets.mode`（15 站留下的）決定密碼怎麼放。
 
@@ -129,7 +132,8 @@ install/
 ```bash
 bash install/lab/run-all.sh            # down -v 從零；約 1.5–2 小時（下載機已有檔案時 dnf download 會 SKIPPED）
 bash install/lab/run-all.sh --no-reset # 用現有 lab 重跑（驗冪等）
-bash install/lab/run-customer.sh       # 客戶模式從零到第 19 站（PVWA、Secrets 團隊、工程師貼私鑰都由它扮演）；FROM=N 從第 N 段接著跑
+bash install/lab/run-customer.sh       # 客戶模式從零到第 19 站（OS 團隊建 cpuser、PVWA、Secrets 團隊都由它扮演）；FROM=N 從第 N 段接著跑
+bash install/lab/opmenu-hostkey-test.sh # 選單的私鑰檔與 sudoers 窄規則實測（第 16 站之後）
 ```
 
 `lab/bank-sim.sh` 的每個子命令就是文件裡橘色「銀行」標籤的區塊，只是從 Windows 端對容器執行；正式環境沒有這支。

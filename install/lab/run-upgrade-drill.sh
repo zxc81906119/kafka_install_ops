@@ -11,7 +11,6 @@ set -uo pipefail
 export MSYS_NO_PATHCONV=1
 LAB_TOOLS_DIR=$(cd "$(dirname "$0")" && pwd)
 OPS_CONTAINER=lab-ops02-1
-AGENT_SOCKET=/home/cpadmin/.ssh/engineer-agent.sock   # run-customer.sh 開的工程師 ssh-agent
 FROM_VERSION=${FROM_VERSION:-8.2.4}
 TO_VERSION=${TO_VERSION:-8.3.2}
 NEW_JDK_MAJOR=${NEW_JDK_MAJOR:-25}
@@ -22,11 +21,11 @@ bash "$LAB_TOOLS_DIR/bank-sim.sh" lb-watch "$LB_TEAM_STOP" >> "${LAB:-$HOME/kafk
 LB_TEAM_PID=$!
 trap 'touch "$LB_TEAM_STOP"; kill $LB_TEAM_PID 2>/dev/null' EXIT
 
-# 在操作機以 cpadmin 跑一段指令（帶工程師的 ssh-agent）；印標題與結束碼
+# 在操作機以 root 跑一段指令；印標題與結束碼
 on_ops() {
   local title=$1 command=$2 exit_code
   printf '\n######## %s (+%ss)\n' "$title" "$(( $(date +%s) - started_at ))"
-  docker exec -u cpadmin -w /home/cpadmin -e SSH_AUTH_SOCK="$AGENT_SOCKET" "$OPS_CONTAINER" bash -c "$command"
+  docker exec -w /root "$OPS_CONTAINER" bash -c "$command"
   exit_code=$?; echo "rc=$exit_code"; return "$exit_code"
 }
 acceptance() { on_ops "驗收（$1）" 'bash install/install.sh --only 19 2>&1 | grep -E "驗收：| FAIL "'; }
@@ -36,7 +35,7 @@ if [ "${SKIP_INSTALL:-0}" != 1 ]; then
   CP_VERSION=$FROM_VERSION TO=17 bash "$LAB_TOOLS_DIR/run-customer.sh" || { echo "安裝失敗"; exit 1; }   # 裝到第一次驗收就好
 fi
 # 升級前先改 site.env 的目標版本（第 21 章、21-upgrade.sh 的做法）
-docker exec "$OPS_CONTAINER" sed -i "s/^CP_VERSION=[0-9.]*/CP_VERSION=$TO_VERSION/" /home/cpadmin/install/conf/site.env
+docker exec "$OPS_CONTAINER" sed -i "s/^CP_VERSION=[0-9.]*/CP_VERSION=$TO_VERSION/" /root/install/conf/site.env
 on_ops "持續流量開始" 'bash install/tools/load.sh start'
 
 on_ops "plan"   'bash install/steps/21-upgrade.sh plan 2>&1 | grep -E " ok | FAIL |目前|套件庫"' || exit 1

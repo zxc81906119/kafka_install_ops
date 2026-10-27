@@ -1,13 +1,19 @@
 # hosts.sh — ssh 到各主機做事:重啟、看日誌、磁碟、收集診斷;憑證到期日。
-# 操作機以 cpadmin ssh 到各主機(和安裝同一個帳號),私鑰在 ssh-agent 裡(lib/common.sh 的 core_load_ssh_key 載入),
-# 主機金鑰只信管理員建的 OPMENU_KNOWN_HOSTS;主機上 cpadmin 的 sudo 只開放 systemctl restart/status confluent-*、journalctl -u confluent-*。
+# 操作機(人員經 PSMP 登入就是 root)以 cpuser ssh 到各主機(和安裝同一個帳號、同一把金鑰),私鑰是檔案 OPMENU_SSH_KEY_FILE
+# (操作機獨立 file system 上,root 0400;沒有 ssh-agent、不從保管庫取),主機金鑰只信管理員建的 OPMENU_KNOWN_HOSTS。
+# 主機上 cpuser 的 sudo 只開放逐一列出的寫法(/etc/sudoers.d/cpuser-ops):sudoers 比對完整的參數,所以這裡的 sudo 寫法必須固定:
+#   sudo -n systemctl restart <服務>
+#   sudo -n journalctl -u <服務> -n 200 --no-pager        (行數固定 _JOURNAL_LINES;要少看幾行在本機 tail,不改遠端的參數)
+# 改這裡的 sudo 寫法,就要同步改 install/steps/16-opmenu.sh 的 sudoers 規則與手把手 16.4,並跑 tests/test-sudo-forms.sh。
 # 主機名稱與服務名在這裡再驗一次(不信任呼叫端);遠端指令只由固定字串與已驗證的值組成;ssh 用 -- 隔開。
+
+_JOURNAL_LINES=200   # 遠端 journalctl 的固定行數(要和 sudoers 規則一致)
 
 _ssh() { # _ssh <主機> <遠端指令字串>;主機必須在 OPMENU_HOSTS 清單內;同一 session 對同一主機只認證一次(ControlMaster)
   local h="$1"; shift
   v_host "$h" >/dev/null || { echo "後端拒絕:主機 $h 不在 OPMENU_HOSTS" >&2; return 1; }
   [ -n "${OP_SSH_CTL:-}" ] || { OP_SSH_CTL="$(umask 077 && mktemp -d "$OPMENU_TMPDIR/opmenu-ssh.$$.XXXXXXXX")"; export OP_SSH_CTL; }
-  local o=(-o ControlMaster=auto -o "ControlPath=$OP_SSH_CTL/%C" -o "ControlPersist=${OPMENU_SSH_CONTROL_PERSIST:-600}" -o ConnectTimeout=10 -o BatchMode=yes -o "UserKnownHostsFile=$OPMENU_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
+  local o=(-o ControlMaster=auto -o "ControlPath=$OP_SSH_CTL/%C" -o "ControlPersist=${OPMENU_SSH_CONTROL_PERSIST:-600}" -o ConnectTimeout=10 -o BatchMode=yes -o "UserKnownHostsFile=$OPMENU_KNOWN_HOSTS" -o StrictHostKeyChecking=yes -i "$OPMENU_SSH_KEY_FILE" -o IdentitiesOnly=yes -o IdentityAgent=none)
   ssh "${o[@]}" -- "${OPMENU_SSH_USER}@$h" "$@"
 }
 be_cleanup() { # 離開選單時關掉所有重用的 ssh 連線
@@ -18,9 +24,15 @@ be_cleanup() { # 離開選單時關掉所有重用的 ssh 連線
 
 # <服務> 的格式:<主機>:<systemd 服務名>,例如 kb01.poc.lab:confluent-server(清單在 OPMENU_BROKER_SERVICES / OPMENU_AUX_SERVICES)
 be_service_restart() { local host="${1%%:*}" svc="${1##*:}"; v_any_svc "$1" >/dev/null || return 1; _ssh "$host" "sudo -n systemctl restart '$svc' && systemctl is-active '$svc'" && echo "已重啟 $host 的 $svc"; }
-be_service_logs()    { local host="${1%%:*}" svc="${1##*:}" n="${2:-50}"; v_any_svc "$1" >/dev/null || return 1; v_number "$n" >/dev/null || return 1; _ssh "$host" "sudo -n journalctl -u '$svc' -n $n --no-pager"; }
+be_service_logs()    { local host="${1%%:*}" svc="${1##*:}" n="${2:-50}"; v_any_svc "$1" >/dev/null || return 1; v_number "$n" >/dev/null || return 1
+  [ "$n" -le "$_JOURNAL_LINES" ] || { echo "(一次最多看 $_JOURNAL_LINES 行,改看 $_JOURNAL_LINES 行)" >&2; n=$_JOURNAL_LINES; }
+  _ssh "$host" "sudo -n journalctl -u '$svc' -n $_JOURNAL_LINES --no-pager | tail -n $n"; }
 be_disk_usage() { local h; for h in $OPMENU_HOSTS; do printf '%-28s ' "$h"; _ssh "$h" "df -h '$OPMENU_DATA_DIR' 2>/dev/null | tail -1 | awk '{print \"磁碟用量 \" \$5 \"  剩餘 \" \$4}'"; done; }
-be_collect_diag() { local d="$1" h; mkdir -p "$d"; for h in $OPMENU_HOSTS; do _ssh "$h" "sudo -n journalctl -u 'confluent-*' -n 500 --no-pager" > "$d/$h.log" 2>&1; done; }
+# 這台主機上選單管得到的 systemd 服務(broker/輔助服務清單 + controller 主機的 confluent-server);診斷逐一服務收集,不用萬用字元
+_host_units() { local h="$1" s out=""; for s in $OPMENU_BROKER_SERVICES ${OPMENU_AUX_SERVICES:-}; do [ "${s%%:*}" = "$h" ] && out+="${s##*:} "; done
+  case " ${OPMENU_CONTROLLER_HOSTS:-} " in *" $h "*) out+="confluent-server ";; esac; echo "$out"; }
+be_collect_diag() { local d="$1" h u; mkdir -p "$d"; for h in $OPMENU_HOSTS; do : > "$d/$h.log"
+    for u in $(_host_units "$h"); do { echo "== $u"; _ssh "$h" "sudo -n journalctl -u '$u' -n $_JOURNAL_LINES --no-pager"; } >> "$d/$h.log" 2>&1; done; done; }
 be_hosts() { echo "$OPMENU_HOSTS"; }
 # be_lb_connections <主機>：那台 8082 上從負載平衡進來的連線數；沒設 OPMENU_LB_HOST 就不印（不檢查）
 be_lb_connections() { local ip; [ -n "${OPMENU_LB_HOST:-}" ] || return 0; ip=$(getent hosts "$OPMENU_LB_HOST" | awk '{print $1}'); [ -n "$ip" ] || return 0; _ssh "$1" "ss -Htn state established '( sport = :8082 )'" | grep -c " $ip:"; }

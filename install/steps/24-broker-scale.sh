@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 24 站：broker 縮減與擴充（Self-Balancing 搬資料）（手把手第 24 章）
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 # run: on-demand（不在安裝順序裡）
 #
 # 用法：

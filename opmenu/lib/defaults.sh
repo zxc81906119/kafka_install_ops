@@ -37,17 +37,15 @@ d OPMENU_LB_HOST         ''                                             # REST P
 d OPMENU_AUX_SERVICES    ''                                             # 22 可重啟的 REST Proxy / C3(主機:服務名);cluster 裡沒有這些資訊,要填
 d OPMENU_HOSTS           ''                                             # node 清單;空 = BROKER_SERVICES 與 AUX_SERVICES 的主機 + OPMENU_CONTROLLER_HOSTS
 d OPMENU_DATA_DIR        '/var/lib/kafka/data'                          # 16 磁碟用量看的目錄(各 broker 通常有自己的 log.dirs;不同時請填)
-d OPMENU_SSH_USER        cpadmin                                        # 各主機上的帳號:和安裝同一個;sudo 只永久開 systemctl restart/status confluent-*、journalctl -u confluent-*
+d OPMENU_SSH_USER        cpuser                                         # 各主機上的帳號:和安裝同一個;交付後 sudo 只開 /etc/sudoers.d/cpuser-ops 逐一列出的寫法(不用 confluent-* 萬用字元)
+d OPMENU_SSH_KEY_FILE    '/secure/ssh/cpuser_ed25519'                   # 操作機上的 SSH 私鑰檔(獨立 file system、root 0400,和安裝同一把);沒有這個檔,主機類動作被擋
 d OPMENU_SSH_CONTROL_PERSIST 600                                        # 同一 node 的 ssh 連線重用幾秒(ControlMaster);離開選單時全部關閉
 d OPMENU_KNOWN_HOSTS     '/etc/opmenu/known_hosts'                         # 各主機的 ssh 主機金鑰(管理員用 ssh-keyscan 建,0644 root);選單只信這份,不接受新主機
 
-# ── 機敏資料:維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh),進記憶體,離開時清掉 ──
-d OPMENU_SSH_KEY_SECRET  'kafka/ssh/cpadmin'                            # PVWA 裡「操作機 → 各主機 cpadmin」的 SSH 私鑰(和安裝同一把);空 = 不取,改用 ~/.ssh 既有金鑰
+# ── 機敏資料:91 緊急模式的憑證由維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh),進記憶體,用完即刪 ──
 d OPMENU_BREAKGLASS_SECRET 'kafka/breakglass/pem'                       # 91 緊急模式用的 client 憑證(私鑰 + 憑證鏈,PEM);只在執行 91 時取,用完即丟
 d OPMENU_BREAKGLASS_BOOTSTRAP ''                                        # 91 連的 TOKEN listener(主機:9094,逗號分隔);空 = 由 OPMENU_BOOTSTRAP 的主機 + OPMENU_TOKEN_PORT 推算
 d OPMENU_TOKEN_PORT      9094
-d OPMENU_SSH_KEY_TTL     14400                                          # 取回的 SSH 私鑰在 ssh-agent 裡最多留幾秒(保險:選單被強制終止時 agent 也會到期)
-d OPMENU_SSH_KEY_LOAD    auto                                           # 主機用的 SSH 私鑰何時取：login（登入就取）| on-demand（第一次做主機類項目、過了權限閘門才取）| auto（= on-demand）
 
 # ── 規範(依客戶的命名規定調整)──
 d OPMENU_TOPIC_PATTERN   '^[a-z][a-z0-9]+\.[a-z0-9.-]+$'                # topic 命名:<系統>.<名稱>

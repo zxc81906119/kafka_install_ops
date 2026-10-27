@@ -15,14 +15,14 @@ Docker Desktop VM has ~10.7 GB RAM: run nothing else alongside.
 - Run logs: `~/kafka-lab-runs/`; check them with `docs/journey-src/tools/scan-log.sh <log>`.
 
 ## Entering hosts
-- Operator host as cpadmin: `docker exec -it -u cpadmin -w /home/cpadmin lab-ops02-1 bash`. In customer mode
-  cpadmin's private key exists only in the agent: add `-e SSH_AUTH_SOCK=/home/cpadmin/.ssh/engineer-agent.sock`;
-  after a cold boot re-paste the key from `~/kafka-lab/pvwa/` (guide 19.4).
+- Operator host (as root = what PSMP gives a person): `docker exec -it -w /root lab-ops02-1 bash`. ops02 reaches every host as `cpuser` with
+  `/secure/ssh/cpuser_ed25519` (docker volume `ops-secure`, survives restarts; `~/.ssh/config` selects it). Nothing to re-paste after a cold boot;
+  check `mountpoint /secure/ssh` if ssh says Permission denied.
 - Any host as root ("bank" work): `MSYS_NO_PATHCONV=1 docker exec lab-<host>-1 bash -c '...'`
 - Download host: `docker exec -it dl01 bash` (`/out` = landing zone).
 - Windows paths for `-v` / `docker cp` / Node: `"$(cygpath -m "$PWD/dir")"`; keep `MSYS_NO_PATHCONV=1`.
 
-## Health checks (from ops02 as cpadmin, `export JAVA_HOME=/opt/java/current`)
+## Health checks (from ops02 as root, `export JAVA_HOME=/opt/java/current`)
 - Services: `systemctl is-active confluent-server` on kc*/kb*; `confluent-kafka-rest` on rest*;
   `prometheus alertmanager confluent-control-center` on c3-01.
 - Quorum: `kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status`

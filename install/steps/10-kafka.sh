@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 10 站：controller 與 broker —— 派送憑證、產生設定、systemd drop-in、格式化（只做一次）、啟動、看 quorum 與 MDS
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：
 #   10.1 每台放 truststore、kafka-internal、MDS token 金鑰；broker 多 cp-server（對外 listener 與 MDS 用）

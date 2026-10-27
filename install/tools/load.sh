@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install/tools/load.sh —— 演練用的持續流量：升級、滾動重啟、換憑證時量「有沒有掉資料、REST 有沒有失敗」
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 #   bash install/tools/load.sh start    背景開始送：SCRAM 應用程式直連（連號訊息、acks=all）＋ REST 應用程式經負載平衡（每秒一筆）
 #   bash install/tools/load.sh stop     停止

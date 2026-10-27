@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # 第 25 站：日常備份 —— 叢集中繼資料每天匯出（RBAC、ACL、topic 與設定、SCRAM 帳號清單與配額、features、broker 動態設定）（手把手第 25 章）
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 # run: on-demand（不在安裝順序裡；裝好之後跑 grant、schedule 各一次，之後由 timer 每天跑 run）
 #
 # 用法：
 #   bash steps/25-metadata-backup.sh grant      svc-backup 的最小權限：RBAC SecurityAdmin＋ACL（Topic * 與 Cluster 的 Describe、DescribeConfigs）
 #                                               並產生 client-backup.properties；svc-backup 憑證要先有（conf/certs.txt，第 9 站或手把手 25.1）
 #   bash steps/25-metadata-backup.sh run        匯出一次到 ~/backup/metadata/<時間>/（變更前手動跑一次當快照）
-#   bash steps/25-metadata-backup.sh schedule   操作機的 systemd timer：每天 02:00 跑 run（以 cpadmin 身分）
+#   bash steps/25-metadata-backup.sh schedule   操作機的 systemd timer：每天 02:00 跑 run（以 root 身分）
 #   bash steps/25-metadata-backup.sh compare    比對最近兩次的備份，哪些檔有變
 #
 # 各台的 /etc/confluent 由銀行的主機備份系統備；私鑰、密碼、master key 在事件發生時交 CyberArk，不在這支。
@@ -89,14 +89,14 @@ run_backup() {
 schedule() {
   section "25.4 每天 02:00 匯出（systemd timer：$TIMER_NAME）"
   printf '[Unit]\nDescription=Confluent cluster metadata export\n\n[Service]\nType=oneshot\nUser=%s\nExecStart=/bin/bash %s run\n' \
-    "$(id -un)" "$INSTALL_DIR/steps/25-metadata-backup.sh" | sudo tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
+    "$(id -un)" "$INSTALL_DIR/steps/25-metadata-backup.sh" | tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
   printf '[Unit]\nDescription=Daily Confluent cluster metadata export\n\n[Timer]\nOnCalendar=*-*-* 02:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' |
-    sudo tee "/etc/systemd/system/$TIMER_NAME.timer" >/dev/null
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now "$TIMER_NAME.timer" >/dev/null 2>&1 || die "timer 啟用失敗"
-  sudo systemctl start "$TIMER_NAME.service" || fail "第一次匯出失敗（看 journalctl -u $TIMER_NAME）"
+    tee "/etc/systemd/system/$TIMER_NAME.timer" >/dev/null
+  systemctl daemon-reload
+  systemctl enable --now "$TIMER_NAME.timer" >/dev/null 2>&1 || die "timer 啟用失敗"
+  systemctl start "$TIMER_NAME.service" || fail "第一次匯出失敗（看 journalctl -u $TIMER_NAME）"
   ok "下次執行：$(systemctl show "$TIMER_NAME.timer" -p NextElapseUSecRealtime --value)"
-  ok "syslog：$(sudo journalctl -t confluent-backup -n 1 --no-pager -o cat)"
+  ok "syslog：$(journalctl -t confluent-backup -n 1 --no-pager -o cat)"
 }
 
 compare() {

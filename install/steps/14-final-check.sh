@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 14 站：終點 —— 核心安裝做完，用手把手第 14 章的檢查清單確認整套健康
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 檢查：每個服務 active、quorum 有 leader、每台 MDS 200、範例 topic 都在、REST 經負載平衡 200、
 #       C3 UI 200、C3 的 Prometheus 收到 broker 指標。只讀不寫。

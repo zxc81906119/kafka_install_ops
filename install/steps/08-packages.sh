@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 8 站：安裝 Confluent 套件 —— 原廠公鑰、內部 repo 設定、依角色 dnf install、versionlock
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：每台放原廠公鑰與指向內部套件庫的 .repo（gpgcheck=1）→ 依角色安裝 → 只鎖 Confluent 的版本
 #         → 確認 RPM 建好了服務帳號與 confluent 群組。

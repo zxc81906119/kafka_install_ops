@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # 第 22 站：License 到期監控 —— 讀生效中的 license（JWT）到期日；每天排程檢查、寫 syslog（手把手第 22 章）
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 # run: on-demand（不在安裝順序裡；裝好之後跑一次 schedule，之後由 timer 每天跑 check）
 #
 # 用法：
 #   bash steps/22-license.sh status      印出類型、到期日、剩幾天（不寫 syslog）
 #   bash steps/22-license.sh check       同上，另寫 syslog（tag confluent-license）；timer 跑的就是這個
-#   bash steps/22-license.sh schedule    裝操作機的 systemd timer（每天 08:00 跑 check，以 cpadmin 身分）
+#   bash steps/22-license.sh schedule    裝操作機的 systemd timer（每天 08:00 跑 check，以 root 身分）
 # 結束碼：0 正常、2 剩不到 LICENSE_WARN_DAYS 天（預設 90，和 C3 開始提示的天數相同）、1 已過期或讀不到
 #
 # 原廠沒有到期日的 JMX 指標，所以自己讀：broker 把生效中的 license 存在 _confluent-command topic，
@@ -60,14 +60,14 @@ license_status() {
 schedule() {
   section "22.2 每天 08:00 檢查（systemd timer：$TIMER_NAME）"
   printf '[Unit]\nDescription=Confluent license expiry check\n\n[Service]\nType=oneshot\nUser=%s\nExecStart=/bin/bash %s check\nSuccessExitStatus=2\n' \
-    "$(id -un)" "$INSTALL_DIR/steps/22-license.sh" | sudo tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
+    "$(id -un)" "$INSTALL_DIR/steps/22-license.sh" | tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
   printf '[Unit]\nDescription=Daily Confluent license expiry check\n\n[Timer]\nOnCalendar=*-*-* 08:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' |
-    sudo tee "/etc/systemd/system/$TIMER_NAME.timer" >/dev/null
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now "$TIMER_NAME.timer" >/dev/null 2>&1 || die "timer 啟用失敗"
-  sudo systemctl start "$TIMER_NAME.service" || fail "第一次檢查失敗（看 journalctl -u $TIMER_NAME）"
+    tee "/etc/systemd/system/$TIMER_NAME.timer" >/dev/null
+  systemctl daemon-reload
+  systemctl enable --now "$TIMER_NAME.timer" >/dev/null 2>&1 || die "timer 啟用失敗"
+  systemctl start "$TIMER_NAME.service" || fail "第一次檢查失敗（看 journalctl -u $TIMER_NAME）"
   ok "下次執行：$(systemctl show "$TIMER_NAME.timer" -p NextElapseUSecRealtime --value)"
-  ok "syslog：$(sudo journalctl -t confluent-license -n 1 --no-pager -o cat)"
+  ok "syslog：$(journalctl -t confluent-license -n 1 --no-pager -o cat)"
 }
 
 case $ACTION in

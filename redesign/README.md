@@ -93,7 +93,9 @@
 - CyberArk（PSMP）代登進操作機，身分是 cpadmin（安裝用帳號），全程錄影。
 - 人不會知道 cpadmin 的密碼，也不用知道。
 
-### 2. 操作機對各主機的 SSH 金鑰，交給 CyberArk 管
+### 2. 操作機對各主機的 SSH 金鑰，交給 CyberArk 管（2026-10-27 已被取代）
+
+> **2026-10-27 已被取代**：和客戶討論後改成「一組金鑰放操作機、user 叫 cpuser、人員經 PVWA＋PSMP 進操作機是 root」，見下方「和客戶討論後的主機存取做法」與「新做法已進手冊與腳本」。本段保留當時的討論，手冊與腳本已不是這樣做。
 
 - 金鑰對由 CyberArk（CPM）產生，不是我們自己 `ssh-keygen`。私鑰只放 Vault。
 - 公鑰由 CPM 自己 SSH 進每一台主機，寫進 cpadmin 的 `authorized_keys`（包含操作機自己，因為迴圈裡會 `ssh` 到自己）。輪替的時候也是它去換。
@@ -136,7 +138,9 @@
   其他組合技術上可行但多一條信任鏈，不推薦。
 - 只有 PAM 又想不落地：方案 A = FileConfigProvider ＋ systemd ExecStartPre 以 client 憑證打 CCP REST 寫到 tmpfs（/run，0700）；方案 B = 自寫 CCP ConfigProvider jar。PoC 先用 Secret Protection。
 
-### 3. 操作機 ssh 進各主機的 cpadmin
+### 3. 操作機 ssh 進各主機的 cpadmin（2026-10-27 已被取代：帳號改叫 cpuser）
+
+> **2026-10-27 已被取代**：和客戶討論後改成「一組金鑰放操作機、user 叫 cpuser、人員經 PVWA＋PSMP 進操作機是 root」，見下方「和客戶討論後的主機存取做法」與「新做法已進手冊與腳本」。本段保留當時的討論，手冊與腳本已不是這樣做。
 
 - 有了私鑰，操作機就能 ssh 到 controller、broker、REST Proxy、C3 各台的 cpadmin，指令和今天做的一模一樣。
 - 這是機器對機器的連線，不走 PSMP。PSMP 是給人用的，一條連線一個錄影 session，安裝迴圈幾十條連線走它不實際。
@@ -147,7 +151,9 @@
   - 行內 OS 團隊依變更單在各主機開 cpadmin 的 sudo，有時限，做完收回。
   - 行內有 OPM 的話，cpadmin 提權的每條指令經 OPM 授權跟記錄，不用改 sudoers。
 
-### 5. 操作機上的帳號（2026-10-22 定案）
+### 5. 操作機上的帳號（2026-10-22 定案；2026-10-27 已被取代）
+
+> **2026-10-27 已被取代**：和客戶討論後改成「一組金鑰放操作機、user 叫 cpuser、人員經 PVWA＋PSMP 進操作機是 root」，見下方「和客戶討論後的主機存取做法」與「新做法已進手冊與腳本」。本段保留當時的討論，手冊與腳本已不是這樣做。
 
 > 這是客戶正式環境的長相，**不改 lab 與手把手文件的設計**：lab 維持 cpadmin 直接登入操作機、自己 ssh-keygen。
 
@@ -335,22 +341,41 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 - **歷史**：刪除前的完整內容在 git 裡，看刪除這次 commit 之前的版本即可。
 - **待辦**：編號與內容都還沒有在 lab 上重跑（Docker 關閉中），必須從零重跑客戶模式（`run-full.sh customer`、`run-customer.sh`、升級演練）之後，才能說新編號驗證過。
 
-### 和客戶討論後的主機存取做法（2026-10-27；手冊與腳本尚未改）
+### 和客戶討論後的主機存取做法（2026-10-27；已進手冊與腳本，見下一段）
 
 和客戶討論後的做法，與上面「操作機對各主機的 SSH 金鑰，交給 CyberArk 管」那一段（金鑰只放 ssh-agent、不落地、SSH Key Manager 換金鑰）不同。客戶的 CyberArk：有 PAM（PVWA、PSMP、CPM），人員用 AD 帳密登入並已套用 MFA；沒有 CP、CCP、Conjur（對外文件一律不提之後會不會買）。
 
 1. **人員進操作機**：人員先登入 CyberArk 的 PVWA 網頁（AD 帳密加 MFA），在網頁上選目標並啟動連線，背後由 PSMP 代登進操作機（2026-10-27 看銀行實際操作確認；目標是 RHEL 9，所以是 PSMP，不是 PSM），進去就是 root；沒有另外的堡壘機。
 2. **一組 SSH 金鑰**：私鑰只放操作機 root（0400），連各主機（含操作機自己）都用它；公鑰放各主機安裝與維運 user 的 `authorized_keys`，可加 `from="操作機 IP"`、`restrict`、`pty`；登入不輸入密碼。
 3. **安裝與維運 user 每台都叫 `cpuser`**（取代 cpadmin）：本機帳號、鎖定密碼、只靠金鑰、sshd 對它關閉密碼驗證；每台相同 UID／GID。
-4. **sudo**：sudoers 限制指令、NOPASSWD。安裝與升級期是全權（`/etc/sudoers.d/cpuser`），交付後只留窄規則（`cpuser-ops`：重啟、查看狀態、查日誌）。窄規則逐一列出服務名稱，不用 `confluent-*`：sudoers 的 `*` 會比對空格，`systemctl restart confluent-* ` 會連 `confluent-server sshd` 一起放行。`install/steps/17-opmenu.sh` 現行規則還是萬用字元，待改。
+4. **sudo**：sudoers 限制指令、NOPASSWD。安裝與升級期是全權（`/etc/sudoers.d/cpuser`），交付後只留窄規則（`cpuser-ops`：重啟、查看狀態、查日誌）。窄規則逐一列出服務名稱，不用 `confluent-*`：sudoers 的 `*` 會比對空格，`systemctl restart confluent-* ` 會連 `confluent-server sshd` 一起放行。（`install/steps/16-opmenu.sh` 已改成逐一列出。）
 5. **私鑰不放 CyberArk、不另外備份**：操作機重建時重新產生金鑰對，由 OS 團隊重新佈署公鑰。換金鑰人工做，新舊並存、不中斷（加新公鑰 → 逐台測新金鑰 → 換私鑰 → 刪舊公鑰）。
 6. **OP menu**：OS 身分是 root，進選單時再用本人 AD 帳密。Kafka 動作走本人帳密，權限與稽核在 Kafka 端強制；碰主機那段在 root 前提下只是流程控管，繞得過，追溯靠 CyberArk 登入紀錄與 PSMP 錄影。討論過「OP menu 改依 OS 帳號（op／sp 開頭）分選單」：那要 PSMP 代登成角色帳號、私鑰改由專用服務帳號持有，也會放棄「Kafka 動作記到本人」；本案不採用。
 7. **CPM 與零停機輪替**：CPM 還在，所以 A/B 兩組帳密與 CPM 自動輪替仍衝突（CPM 不知道哪組在用）。`svc-mds-bind` 維持單帳號、CPM 輪替，接受 MDS 查 AD 的短暫失敗；要零停機才改 A/B、關掉該帳號的 CPM 自動變更。SCRAM 應用帳號 CPM 沒有 Kafka plugin，一律人工。
 8. **客戶提到「私鑰放不同 file system」**（2026-10-27）：客戶沒說原因，我方選最可能的目的——防磁碟、VM 快照或備份被取走後離線讀取——寫進 Word 4.2：私鑰放獨立且加密（LUKS）的 file system（例如 `/secure/ssh`），備份與快照排除該掛載點，要支援 POSIX 權限（xfs／ext4）。分開本身沒有安全效果（人員是 root，已掛載的都讀得到），效果來自加密與排除備份；掛載失敗時 ssh 連不上各主機，需要處理流程。實際原因待客戶確認。
 
-**尚未改的地方**（客戶正式採用後才改，改了要從零重跑）：手冊 3.1／15.x 的 ssh-agent 貼法、19.6 SSH Key Manager 演練、cpadmin 全部改 cpuser；`install/` 腳本與 `install/lab/bank-sim.sh`；OP menu 的 ssh-agent 流程；sudoers 窄規則改成逐一列出。
+**原本列為尚未改的地方**（手冊 3.1／15.x 的 ssh-agent 貼法、19.6 SSH Key Manager 演練、cpadmin 全部改 cpuser；`install/` 腳本與 `bank-sim.sh`；OP menu 的 ssh-agent 流程；sudoers 窄規則）：2026-10-27 當天已全部改進手冊與腳本，見下一段；**尚未從零重跑**。
 
 **已產出的文件**：`docs/Confluent-CyberArk登入與主機存取設計.docx`（資拓宏宇風格，來源 `docs/access-src/`，`node ../journey-src/build.js access.md ../<輸出>.docx ./diagrams.js`）。2026-10-27 已在 lab（11 台）實測文件的步驟：cpuser、金鑰登入、from= 擋別台、兩種 sudoers 規則、換金鑰 5 輪都通過；修了 from= 要含 ::1、sudoers 比對完整參數、換私鑰要連 .pub 成對更換三處。LUKS 與 ext4／xfs 只用 tmpfs 驗證，未測。桌面的「整理 kafka 客戶資訊」簡報重新分析後的版本已刪除（使用者決定，不需要）。
+
+### 新做法已進手冊與腳本（2026-10-27）
+
+**改了什麼**（客戶同意的做法，全部取代 cpadmin／ssh-agent／SSH Key Manager 那一套）：
+- **登入**：人員在 PVWA 網頁登入（AD 帳密＋MFA）、選操作機按連線，PSMP 代登，進去是 root；沒有堡壘機。手冊所有「小安 | ops02 | cpadmin」改成 root；blocks 裡 ops02 本機的 `sudo` 拿掉。
+- **一組金鑰**：操作機 `/secure/ssh/cpuser_ed25519`（root、0400，獨立加密 file system），ssh 到所有主機含自己；`~/.ssh/config` 讓手打的 `ssh kb01.poc.lab`、`scp` 都用它；註解 `cpuser-ops-<日期>`。不放 CyberArk、不備份。
+- **cpuser**：每台本機帳號，UID／GID 1500、家目錄 /home/cpuser、鎖定密碼、`/etc/ssh/sshd_config.d/50-cpuser.conf`（`Match User cpuser`／`PasswordAuthentication no`／`AuthenticationMethods publickey`）；`authorized_keys` 只有 `from="<ops02 IP>,127.0.0.1,::1"`。
+- **sudo**：安裝期 `/etc/sudoers.d/cpuser`（全權），交付後只留 `cpuser-ops`，逐一列出每個服務與指令寫法：`systemctl restart|status <服務>`、`journalctl -u <服務> -n 200 --no-pager`（服務只有 confluent-server、confluent-kafka-rest、confluent-control-center，每台只列自己的）。
+- **換金鑰**：人工，手冊 19.6（新舊並存：產生 `.new` → 用舊鑰加新公鑰 → 逐台測新鑰 → 成對換私鑰與 `.pub` → 依註解刪舊公鑰與舊私鑰）。探針（每 0.2 秒連一次）預期：全程最多失敗 1 次，發生在換私鑰的瞬間，其他 0 次。
+- **OP menu**：以 root 在操作機跑；主機 ssh 直接用金鑰檔（`OPMENU_SSH_KEY_FILE`），拿掉 ssh-agent 載入／`OPMENU_SSH_KEY_LOAD`／`OPMENU_SSH_KEY_SECRET`／`OPMENU_SSH_USER=cpadmin`；`lib/secrets/manual.sh` 留著，只給 91 緊急憑證用。看日誌改固定寫法（遠端 `-n 200 --no-pager`，本機 `tail`），收集診斷改逐服務（原本 `confluent-*`）。選單的主機權限閘門在 root 前提下是流程控管；緊急主機模式的 OS 群組變成「把 root 加進群組」的開關。
+- **問題清單**：4.2–4.6、8.3、8.4、8.8、9.1、9.3 改寫；hidepid 那題（原 4.6）改成接受風險（4.8）。
+
+**lab 怎麼模擬**：
+- 沒有 PVWA／PSMP：lab 直接 `docker exec -it -w /root lab-ops02-1 bash`（root）；`~/kafka-lab/pvwa/` 只放平台密碼，不放 ssh 私鑰。
+- 沒有 LUKS：compose 加一個具名 volume `ops-secure` 掛在 ops02 的 `/secure/ssh`（獨立掛載點，重啟還在，沒有加密）；`ops-home` 掛 `/root`。
+- 銀行的動作：`install/lab/bank-sim.sh prepare`（和手冊 3.1.1／3.1.3 一樣）對每台主機（含 ops02）以 root 建 cpuser、sshd 設定、安裝期 sudo、放公鑰行；repo01 的 repodeploy 放同一行。原本共用的 `authorized_keys.d` volume 拿掉。映像不再內建 cpadmin 與 sudoers。
+- CPM 與 SSH Key Manager 不模擬。
+
+**還沒做／沒驗證**：全部只做了靜態檢查（bash -n、shellcheck、單元測試、文件建置）；lab 舊叢集已壞，等從零重建後用 `run-full.sh customer`、`run-customer.sh` 跑。要特別看：`mountpoint /secure/ssh` 在容器裡是否成立；`cpuser`（`!!` 鎖定）以金鑰登入；3.1.5 的 `from=` 拒絕訊息；16.4 窄規則的 9 種寫法結果；19.6 探針的失敗次數；`opmenu-hostkey-test.sh`、`opmenu-emergency-test.sh`（root 加進 opmenu-emergency 群組後 `runuser` 會不會讀到新群組）。
 
 ### 監控改成外部 Prometheus／Alertmanager／Grafana + JMX exporter（2026-10-27 定案）
 

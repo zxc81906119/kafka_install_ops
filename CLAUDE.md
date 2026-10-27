@@ -46,17 +46,18 @@ Details of the architecture and every component: @README.md
 ## Lab facts
 - One lab: project `lab` (14 containers + `dl01`, subnets 172.35/172.36), built from `~/kafka-lab` per journey chapter 0.
   Docker Desktop VM has ~10.7 GB, so never run anything else alongside it.
-- Enter hosts: `docker exec -it -u cpadmin -w /home/cpadmin lab-ops02-1 bash` (ops),
+- Enter hosts: `docker exec -it -w /root lab-ops02-1 bash` (ops02 as **root** = what PSMP gives a person; no PVWA/PSMP in the lab),
   `docker exec -it lab-<host>-1 bash` (root, "bank" actions). Prefix docker commands with `MSYS_NO_PATHCONV=1`
   and pass Windows paths through `cygpath -m` (Node is a Windows program: convert paths before handing them over).
-- In customer mode cpadmin's private key exists only in ops02's agent `~/.ssh/engineer-agent.sock` (pasted from
-  `~/kafka-lab/pvwa/`); after a cold boot re-paste it.
+- ops02 → all hosts: user `cpuser` (UID/GID 1500, locked password), one key `/secure/ssh/cpuser_ed25519` (root 0400) on the
+  separate file system simulated by docker volume `ops-secure` (no LUKS); `~/.ssh/config` makes plain `ssh kb01.poc.lab` use it.
+  It survives restarts (volume), nothing to re-paste. `~/kafka-lab/pvwa/` holds platform secrets only, never an ssh key.
 - Bind mounts of Windows folders (9p) are slow for multi-GB reads: download inside the container, then copy out.
 - After a Docker Desktop restart check `docker ps --format '{{.Names}}' | cut -d- -f1 | sort | uniq -c`.
 - If every container's `timeout 5 ip addr` hangs, the VM's netlink is wedged: restart Docker Desktop, don't debug configs.
 - In the lab Claude plays the bank (`install/lab/bank-sim.sh`, or the guide's 銀行 blocks): AD (samba-tool on ad01),
-  CA (`~/kafka-lab/ca`), OS repo and NTP on repo01, nginx on lb01, PVWA (`~/kafka-lab/pvwa/`), SSH public keys via
-  the shared `authorized_keys.d` volume, monitoring (Prometheus, Alertmanager, Grafana, webhook receiver) as four
+  CA (`~/kafka-lab/ca`), OS repo and NTP on repo01, nginx on lb01, PVWA (`~/kafka-lab/pvwa/`), the OS team (cpuser account, sshd drop-in, public key line with `from=`, install-period sudo on every host incl. ops02; `bank-sim.sh prepare`),
+  monitoring (Prometheus, Alertmanager, Grafana, webhook receiver) as four
   `lab-mon-*` containers (`bank-sim.sh monitoring`; remove them with `monitoring-stop` before any `down -v`).
 
 ## Design decisions in force (details: redesign/README.md)
@@ -67,14 +68,18 @@ Details of the architecture and every component: @README.md
 - Only Confluent packages and the JDK are version-locked; C3's `cyrus-sasl`/`openssl-devel` follow OS patching.
 - Apps connect directly with SCRAM; apps via REST Proxy must use client certificates (REST has no password path).
 - Humans use AD accounts; RBAC binds AD groups, never individuals. Platform services use certificates, not AD.
-- CyberArk at this customer = PAM only: PSMP for human logins, SSH Key Manager for cpadmin's key (the only SSH key;
-  pasted from PVWA into ssh-agent, never on disk), root and `svc-mds-bind` rotated by CPM; platform secrets are
-  vaulted in PVWA but rotated manually (Secret Protection master key: PVWA stores it, we rotate it).
-- ops02 is both the install host and the operators' login point (OP menu runs there); no separate bastion.
+- CyberArk at this customer = PAM only: a person logs in to the PVWA web page (AD + MFA), PSMP logs them in to ops02 as root; root and
+  `svc-mds-bind` rotated by CPM; platform secrets are vaulted in PVWA but rotated manually (Secret Protection master key: PVWA stores it, we rotate it).
+- One SSH key pair (ed25519), private key only on ops02 in a separate encrypted file system `/secure/ssh` (root 0400), not in CyberArk, not backed up;
+  ops02 rebuilt = new pair + OS team redeploys the public key. Public key in each host's `cpuser` authorized_keys with only `from="<ops02 IP>,127.0.0.1,::1"`.
+  Rotation is manual (new+old coexist, guide 19.6). `cpuser` sudo: full `NOPASSWD` during install/upgrade, afterwards only `/etc/sudoers.d/cpuser-ops`
+  listing every unit and exact command form (sudoers matches the whole argument list; no `confluent-*` wildcard).
+- ops02 is both the install host and the operators' login point (OP menu runs there as root); no separate bastion. Because operators are root, the menu's
+  host-level permission check is a process control, not a hard barrier; traceability = CyberArk login records + PSMP recording.
 - Monitoring (chapter 17): JMX exporter on controllers, brokers, REST Proxy, C3; Prometheus, Alertmanager and Grafana are the bank's, we deliver
   config + Confluent's official jmx-monitoring-stacks files (pinned commit, brought in through chapters 1-2). C3's embedded Prometheus/Alertmanager stay
   untouched and are not used for alerting (no C3 alert triggers/actions).
-- MDS token key pair is fixed (rotate only on compromise); cpadmin sudo is `NOPASSWD`; CPM's reconcile account is not cpadmin.
+- MDS token key pair is fixed (rotate only on compromise); cpuser sudo is `NOPASSWD` during install; CPM's reconcile account is not cpuser.
 
 ## Gotchas learned the hard way
 - Before `systemctl start` of an RPM service, confirm the drop-in is in effect:

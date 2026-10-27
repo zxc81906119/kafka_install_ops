@@ -1,47 +1,63 @@
 #!/usr/bin/env bash
 # 第 3 站：銀行準備好了嗎 —— 我方只產生 ssh 金鑰；其餘是銀行各團隊的事，這裡印出清單並逐項確認
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
-# 做什麼：產生操作機的 ssh 金鑰對 → 印出銀行要做的事 → 逐項確認：金鑰登入、根憑證信任、OS 套件庫、JDK、
-#         LDAPS、密碼檔、負載平衡。有任何一項沒好就 rc 2（等銀行），銀行做完再跑一次。
-# 產出：~/.ssh/id_ed25519（私鑰不離開操作機；正式環境可由 CyberArk 產生與派送）
+# 做什麼：確認私鑰的獨立 file system 已掛載 → 在那裡產生操作機的 ssh 金鑰對 → 印出銀行要做的事（含 cpuser 與公鑰行）→ 逐項確認：
+#         cpuser 金鑰登入與 sudo、根憑證信任、OS 套件庫、JDK、LDAPS、密碼檔、負載平衡。有任何一項沒好就 rc 2（等銀行），銀行做完再跑一次。
+# 產出：$SSH_KEY（root、0400，放在獨立 file system；不放 CyberArk、不備份，操作機重建就重新產生，由 OS 團隊重新佈署公鑰）
 # 重跑：安全（金鑰已存在就沿用）。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 
-section "3.1 操作機的 ssh 金鑰（SSH_KEY_SOURCE=$SSH_KEY_SOURCE）"
-if [ "$SSH_KEY_SOURCE" = agent ]; then
-  # 客戶：金鑰對由 CyberArk 產生與輪替，公鑰由 SSH Key Manager／CPM 推到各主機；私鑰只在這次作業的 ssh-agent 裡
-  agent_keys=$(ssh-add -l 2>/dev/null)
-  if [ -n "$agent_keys" ] && [[ $agent_keys != *"no identities"* ]]; then
-    ok "ssh-agent 裡有金鑰：$(head -1 <<<"$agent_keys")"
-  else
-    ask_bank "（工程師自己做）從 CyberArk PVWA 取出「操作機 → 各主機」cpadmin 的私鑰，貼進 ssh-agent，不要存成檔案：" \
-             "    eval \$(ssh-agent -s); ssh-add -t 4h -     （貼上私鑰後按 Ctrl-D）；作業結束：ssh-agent -k"
-    fail "ssh-agent 裡沒有金鑰"
-    wait_for_bank
-  fi
-  public_key=$(ssh-add -L | head -1)
-else
-  # lab：自己產生一把放 ~/.ssh（和手把手第 3.1 站一樣）
-  [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -C "cpadmin@$OPS_HOST" -f ~/.ssh/id_ed25519
-  public_key=$(cat ~/.ssh/id_ed25519.pub)
+section "3.1 操作機的 ssh 金鑰（$SSH_KEY）"
+if [ "$SSH_KEY_REQUIRE_MOUNT" = 1 ] && ! mountpoint -q "$SSH_KEY_DIR"; then
+  ask_bank "3.1 OS 團隊：在操作機掛載放 ssh 私鑰的獨立（加密）file system 到 $SSH_KEY_DIR（擁有者 root、0700；備份與快照排除這個掛載點）。"
+  fail "$SSH_KEY_DIR 不是獨立掛載點（SSH_KEY_REQUIRE_MOUNT=1）"
+  wait_for_bank
 fi
-ok "公鑰：$public_key"
+install -d -m 0700 "$SSH_KEY_DIR"
+if [ ! -f "$SSH_KEY" ]; then
+  ssh-keygen -q -t ed25519 -N '' -C "cpuser-ops-$(date +%Y%m%d)" -f "$SSH_KEY" || die "ssh-keygen 失敗"
+  chmod 0400 "$SSH_KEY"
+fi
+key_state=$(stat -c '%U:%G %a' "$SSH_KEY")
+if [ "$key_state" = "root:root 400" ]; then ok "私鑰 $SSH_KEY（$key_state）"; else fail "私鑰 $SSH_KEY 擁有者與權限是 $key_state，應為 root:root 400"; fi
+# 手動操作時 ssh 不用每次帶 -i：操作機（root）連各主機一律用 cpuser 與這把金鑰
+install -d -m 0700 ~/.ssh
+if ! grep -q '^# cpuser-ops' ~/.ssh/config 2>/dev/null; then
+  printf '# cpuser-ops：操作機連各主機一律用 %s 與這把金鑰\nHost *.%s localhost\n  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n' \
+    "$SSH_USER" "$DOMAIN" "$SSH_USER" "$SSH_KEY" >> ~/.ssh/config
+  chmod 0600 ~/.ssh/config
+fi
+public_key_line=$(authorized_keys_line)
+ok "公鑰行（整行、不換行，放進每台 cpuser 的 authorized_keys）：$public_key_line"
 
-ask_bank "3.1 OS 團隊：上面這把公鑰放進每台主機（$ALL_HOSTS）cpadmin 的 authorized_keys，以及 $REPO_HOST 上 $REPO_DEPLOY_USER 的（有 SSH Key Manager 就由它推）。" \
+ask_bank "3.1 OS 團隊（依變更單；每台主機，含操作機自己 $OPS_HOST）：" \
+         "    a. 建本機帳號 $SSH_USER：UID／GID 固定 $SSH_USER_ID、家目錄 /home/$SSH_USER、shell /bin/bash、密碼保持鎖定（不要設密碼）。" \
+         "    b. /etc/ssh/sshd_config.d/50-cpuser.conf 寫 Match User $SSH_USER / PasswordAuthentication no / AuthenticationMethods publickey，重載 sshd。" \
+         "    c. 上面那一行公鑰行放進 /home/$SSH_USER/.ssh/authorized_keys（目錄 0700、檔 0600、擁有者 $SSH_USER）；$REPO_HOST 上 $REPO_DEPLOY_USER 的 authorized_keys 也放同一行。" \
+         "    d. 安裝與升級期的 sudo：/etc/sudoers.d/$SSH_USER 寫 $SSH_USER ALL=(ALL) NOPASSWD: ALL（0440，visudo -cf 檢查）；交付時移除（第 16、19 站）。" \
          "3.2 OS 團隊：每台主機信任銀行根憑證（$BANK_ROOT_CA + update-ca-trust），並有指向 OS 套件庫的 .repo（含 os-packages.txt 的套件）。" \
          "3.3 OS 團隊：JDK 21 的 tar 與 .sha256 放到 $LANDING/bank/。" \
          "3.4 AD 團隊：群組 kafka-admins、kafka-operators、kafka-devs；唯讀帳號 $AD_BIND_DN；測試人員 alice/bob/carol；" \
          "    LDAPS 憑證由銀行 CA 簽；密碼交付到 $SECRETS_DIR/ldap-bind.pass（查詢帳號）、ad-test-users.pass（測試人員），0600。" \
          "3.5 網路團隊：行內 NTP（$NTP_SERVER）可用；負載平衡 $LB_HOST 的 8082 轉到 ${RESTS// /、} 的 8082，$REST_VIP 指到它。"
 
-section "確認 3.1：每台都能用金鑰登入（第一次會把主機金鑰記進 known_hosts）"
+section "確認 3.1：每台都能用 $SSH_USER 的金鑰登入、有安裝期 sudo、密碼鎖定且 sshd 只收金鑰（第一次會把主機金鑰記進 known_hosts）"
 for host in $ALL_HOSTS; do
-  answer=$(ssh_run "$host" hostname 2>&1)
-  if [ "$answer" = "$host" ]; then ok "$host"; else fail "$host：$answer"; fi
+  answer=$(ssh_script "$host" <<'EOF' 2>&1
+me=$(id -un)
+sudo_state=$(sudo -n true 2>/dev/null && echo sudo || echo no-sudo)
+uid=$(id -u)
+lock_state=$(sudo -n getent shadow "$me" 2>/dev/null | cut -d: -f2 | cut -c1)
+sshd_state=$(sudo -n sshd -T -C "user=$me,host=localhost,addr=127.0.0.1" 2>/dev/null | awk '/^passwordauthentication /{p=$2} /^authenticationmethods /{m=$2} END{print p, m}')
+echo "$me $(hostname) $sudo_state $uid $lock_state $sshd_state"
+EOF
+)
+  expected="$SSH_USER $host sudo $SSH_USER_ID ! no publickey"
+  if [ "$answer" = "$expected" ]; then ok "$host：$answer"; else fail "$host：$answer（應為：$expected）"; fi
 done
 answer=$(ssh_run_as "$REPO_DEPLOY_USER" "$REPO_HOST" hostname 2>&1)
 if [ "$answer" = "$REPO_HOST" ]; then ok "$REPO_DEPLOY_USER@$REPO_HOST"; else fail "$REPO_DEPLOY_USER@$REPO_HOST：$answer"; fi

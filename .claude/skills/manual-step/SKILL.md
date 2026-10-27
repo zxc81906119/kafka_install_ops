@@ -7,12 +7,12 @@ description: Guide the user through an installation or operations step with raw 
 
 The user types every command themselves (including bank-side ones in the lab). Give, per step:
 
-1. **Role line** — 我方 (小安 / cpadmin) or 銀行 (which team), the host, the account.
+1. **Role line** — 我方 (小安 / on ops02 the account is root, on other hosts cpuser) or 銀行 (which team), the host, the account.
 2. **One sentence** on why; no essays.
 3. **Command** in a `bash` block — a single pasteable line per step (loops over hosts are fine; heredocs are
    pasted whole). Variables with secrets are read from 0600 files: `$(cat ~/secrets/x.pass)`, `-passout file:`.
 4. **Expected output** — the exact lines the user should see (or "N 行都是 …").
-5. **Verification** that the step took effect, with `sudo` where the target is 0750.
+5. **Verification** that the step took effect, with `sudo` where the target is 0750 on a cluster host (cpuser); on ops02 you are root.
 
 Checklist before handing a service-start command:
 - The systemd drop-in is in effect: `systemctl show <unit> -p ExecStart --value` shows our properties file.

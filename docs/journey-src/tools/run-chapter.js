@@ -1,11 +1,10 @@
 // usage: [MODE=customer] node run-chapter.js <journey.md> <fromChapter> <toChapterExclusive> <out.sh>
 // consecutive blocks on the same host/user run in ONE shell, fed from a file (stdin=/dev/null so ssh can't eat it)
 // MODE: only `customer` exists now (CyberArk PAM only); the variable is kept so older call sites still work.
-// On ops02 as cpadmin the engineer's ssh-agent socket is passed in: in customer mode cpadmin's private key exists only there.
+// ops02: people arrive as root (PVWA + PSMP in production, plain docker exec in the lab); root's ~/.ssh/config points at /secure/ssh/cpuser_ed25519, so nothing needs to be passed in.
 const fs=require("fs"); const [,, md, from, to, out]=process.argv;
 const MODE=process.env.MODE||"customer";
 if(MODE!=="customer") throw new Error("MODE must be customer (the only mode left)");
-const AGENT_SOCKET="/home/cpadmin/.ssh/engineer-agent.sock";
 const s=fs.readFileSync(md,"utf8");
 const a=s.indexOf(`\n# ${from}. `); let b=s.indexOf(`\n# ${to}. `); if(b<0) b=s.length;
 if(a<0) throw new Error("chapter not found "+from);
@@ -21,9 +20,8 @@ while((m=re.exec(sec))){
   let ex=null, key="local";
   if(!/Windows/.test(role.host)) {
     const c= role.host==="dl01" ? "dl01" : `lab-${role.host}-1`;
-    const u= role.user==="cpadmin" ? "-u cpadmin -w /home/cpadmin" : "";
-    const agent= role.host==="ops02" && role.user==="cpadmin" ? ` -e SSH_AUTH_SOCK=${AGENT_SOCKET}` : "";
-    ex=`docker exec ${u}${agent} ${c}`; key=c+"|"+role.user;
+    const u= role.host==="ops02" ? "-w /root" : "";
+    ex=`docker exec ${u} ${c}`.replace("docker exec  ","docker exec "); key=c+"|"+role.user;
   }
   const g=groups[groups.length-1];
   if(g && g.key===key) g.blocks.push({n,head,code,host:role.host,user:role.user}); else groups.push({key,ex,blocks:[{n,head,code,host:role.host,user:role.user}]});

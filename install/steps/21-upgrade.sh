@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 21 站：升級 Confluent 與 JDK —— 套件滾動升級、JDK 切換、finalize、回滾（手把手第 21 章）
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 # run: on-demand（不在安裝順序裡；要升級時直接執行這支）
 #
 # 用法（照順序；每段結束都跑一次第 19 站驗收）：
@@ -169,9 +169,9 @@ packages() {
        --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1; then ok "User:svc-rest ResourceOwner Topic:_confluent-command"; else fail "role binding"; fi
   for host in $RESTS; do change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
   local ops_packages; ops_packages=$(rpm -qa "confluent-*" --qf "%{NAME}-$version ")
-  sudo dnf -q versionlock delete "confluent-*" >/dev/null
+  dnf -q versionlock delete "confluent-*" >/dev/null
   # shellcheck disable=SC2086  # 套件清單要拆成多個參數
-  if sudo dnf -q -y install $ops_packages >/dev/null && sudo dnf -q versionlock add $ops_packages >/dev/null; then ok "$OPS_HOST：$(rpm -q --qf '%{VERSION}' confluent-server)"
+  if dnf -q -y install $ops_packages >/dev/null && dnf -q versionlock add $ops_packages >/dev/null; then ok "$OPS_HOST：$(rpm -q --qf '%{VERSION}' confluent-server)"
   else fail "$OPS_HOST 套件"; fi
   log "第一段完成：跑第 19 站驗收；features 還沒升，隨時可以 rollback"
 }
@@ -205,7 +205,7 @@ jdk() {
   for_each_controller_leader_last switch_jdk_on || die "controller 換 JDK 停下"
   for host in $BROKERS $RESTS; do selected "$host" || continue; switch_jdk_on "$host" || die "停在 $host"; done
   [ -n "$ONLY_HOSTS" ] && { log "ONLY_HOSTS=$ONLY_HOSTS：略過操作機"; return 0; }
-  sudo tar -xzf "$jdk_tar" -C /opt/java && sudo chown -R root:root "/opt/java/$jdk_dir" && sudo ln -sfn "/opt/java/$jdk_dir" /opt/java/current
+  tar -xzf "$jdk_tar" -C /opt/java && chown -R root:root "/opt/java/$jdk_dir" && ln -sfn "/opt/java/$jdk_dir" /opt/java/current
   ok "$OPS_HOST：$(java -version 2>&1 | head -1)"
   log "$C3_HOST 留在 $(ssh_run "$C3_HOST" 'readlink /opt/java/current')；第二段完成：跑第 19 站驗收"
 }

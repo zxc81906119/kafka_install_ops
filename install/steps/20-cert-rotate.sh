@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 20 站：憑證輪替 —— leaf 換發（同一個 CA 或新 CA 簽），以及換 CA 時同步信任清單
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 # run: on-demand（不在安裝順序裡；install.sh 照順序跑時略過，要換時直接執行這支）
 #
 # 用法：
@@ -239,7 +239,7 @@ trust_sync() {
     || fail "$C3_HOST: ca.pem"
   # OP menu 在操作機上的兩份
   if [ -d /etc/opmenu/ssl ]; then
-    sudo install -m 0644 "$CERTS_DIR/truststore.p12" /etc/opmenu/ssl/truststore.p12 && sudo install -m 0644 "$CERTS_DIR/bank-root.pem" /etc/opmenu/ssl/ca.pem && ok "OP menu 的 truststore、ca.pem 已同步"
+    install -m 0644 "$CERTS_DIR/truststore.p12" /etc/opmenu/ssl/truststore.p12 && install -m 0644 "$CERTS_DIR/bank-root.pem" /etc/opmenu/ssl/ca.pem && ok "OP menu 的 truststore、ca.pem 已同步"
   fi
   [ "$FAIL_COUNT" = 0 ] || die "派送失敗，不重啟"
   rolling_restart controllers brokers rests || die "滾動重啟有主機沒健康"

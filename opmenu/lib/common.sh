@@ -1,4 +1,4 @@
-# common.sh — 所有項目共用的東西:項目登記、紀錄、確認、輸入驗證、執行流程(時窗、並行鎖、結果判斷)、主機權限閘門、ssh 金鑰載入。
+# common.sh — 所有項目共用的東西:項目登記、紀錄、確認、輸入驗證、執行流程(時窗、並行鎖、結果判斷)、主機權限閘門、ssh 私鑰檔檢查。
 # 不知道環境細節:環境相依的事都透過 be_* 介面(lib/kafka.sh、lib/hosts.sh),機敏資料透過 secret_get(lib/secrets/*.sh)。
 #
 # 項目檔(items/<編號>-<名稱>.sh)的寫法:
@@ -76,7 +76,7 @@ v_tool()      { v_in "$1" "$OPMENU_EMERGENCY_TOOLS" "緊急模式工具"; }
 v_sanitize_log() { printf '%s' "$1" | tr -d '\000-\037\177' | tr '|' '/'; }   # 紀錄欄位:去掉控制字元(含換行),分隔符 | 換成 /
 
 # ── 暫存檔與清理 ──
-core_cleanup() { core_lock_release; rm -f "${OP_CLIENT_CONF:-}" "${OP_LAST_RAW:-}"; declare -F be_cleanup >/dev/null && be_cleanup; core_unload_ssh_key; return 0; }
+core_cleanup() { core_lock_release; rm -f "${OP_CLIENT_CONF:-}" "${OP_LAST_RAW:-}"; declare -F be_cleanup >/dev/null && be_cleanup; return 0; }
 core_sweep_residue() { # 啟動時清掉自己上次留下的暫存檔與 ssh 連線目錄(行程被強制終止時 trap 不會跑);只清自己的、且所屬行程已不存在的
   local f pid
   for f in "$OPMENU_TMPDIR"/opmenu.*.???????? "$OPMENU_TMPDIR"/opmenu-ssh.*.????????; do
@@ -88,22 +88,12 @@ core_sweep_residue() { # 啟動時清掉自己上次留下的暫存檔與 ssh �
   return 0
 }
 
-# ── 主機用的 SSH 私鑰:登入後從保管庫取,只進這個選單自己的 ssh-agent(不落地);離開時 agent 一起結束 ──
-core_load_ssh_key() {
-  [ -n "${OPMENU_SSH_KEY_SECRET:-}" ] || return 0
-  command -v ssh-agent >/dev/null && command -v ssh-add >/dev/null || { echo "${CR}找不到 ssh-agent / ssh-add${C0}"; return 1; }
-  local out; out=$(ssh-agent -s) || return 1
-  eval "$(printf '%s\n' "$out" | grep -E '^(SSH_AUTH_SOCK|SSH_AGENT_PID)=' | sed 's/; export.*//')"; export SSH_AUTH_SOCK SSH_AGENT_PID
-  OP_SSH_AGENT_PID="$SSH_AGENT_PID"
-  if ! secret_get "$OPMENU_SSH_KEY_SECRET" | ssh-add -q -t "${OPMENU_SSH_KEY_TTL:-14400}" - 2>/dev/null; then
-    echo "${CR}無法從保管庫取得主機用的 SSH 私鑰($OPMENU_SSH_KEY_SECRET),主機類動作將不可用${C0}"; core_log SSH_KEY_FAIL login "$OPMENU_SSH_KEY_SECRET"; core_unload_ssh_key; return 1
-  fi
-  core_log SSH_KEY_LOADED login "$OPMENU_SSH_KEY_SECRET ttl=${OPMENU_SSH_KEY_TTL:-14400}"
-}
-core_unload_ssh_key() { [ -n "${OP_SSH_AGENT_PID:-}" ] || return 0; ssh-agent -k >/dev/null 2>&1; kill "$OP_SSH_AGENT_PID" 2>/dev/null; unset OP_SSH_AGENT_PID SSH_AUTH_SOCK SSH_AGENT_PID; return 0; }
-# 私鑰什麼時候取：auto = on-demand（人工從 PVWA 貼上，等到真的要碰主機才取）；login = 登入就取
-core_ssh_key_on_demand() {
-  case "${OPMENU_SSH_KEY_LOAD:-auto}" in on-demand) return 0;; login) return 1;; *) return 0;; esac
+# ── 主機用的 SSH 私鑰:就是操作機獨立 file system 上的檔案 OPMENU_SSH_KEY_FILE(root 0400,安裝與維運共用同一把);不經 ssh-agent、不從保管庫取 ──
+# 碰主機之前確認它讀得到;沒有(例如 /secure/ssh 沒掛載)就擋下,不讓 ssh 去試別的金鑰
+core_check_ssh_key() {
+  [ -n "${OPMENU_SSH_KEY_FILE:-}" ] && [ -r "$OPMENU_SSH_KEY_FILE" ] && return 0
+  echo "${CR}找不到主機用的 SSH 私鑰 ${OPMENU_SSH_KEY_FILE:-(OPMENU_SSH_KEY_FILE 未設定)}:確認放私鑰的獨立 file system(例如 /secure/ssh)已掛載,主機類動作暫時不可用${C0}"
+  return 1
 }
 # 這個項目會不會碰主機：OPMENU_MENU_AUTHZ 裡標成 HOST 的（重啟、日誌、磁碟、診斷）
 core_item_touches_host() {
@@ -114,14 +104,6 @@ core_item_touches_host() {
   done
   [ "$spec" = HOST ]
 }
-# 確保 ssh-agent 裡有私鑰：已經有就不再取；沒有就取一次（manual 會提示從 PVWA 貼上）
-core_ensure_ssh_key() {
-  [ -n "${OPMENU_SSH_KEY_SECRET:-}" ] || return 0
-  if [ -n "${OP_SSH_AGENT_PID:-}" ] && ssh-add -l >/dev/null 2>&1; then return 0; fi
-  core_unload_ssh_key
-  core_load_ssh_key
-}
-
 # ── 執行一個項目的固定流程:看得到嗎 → 時窗 → 並行鎖 → 執行 → 依輸出判斷結果 → 記錄 ──
 _core_run() {
   local id="$1"; shift
@@ -138,11 +120,10 @@ _core_run() {
     fi
     core_lock_acquire "$id ${ACT_TITLE[$id]}" || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "lock held"; return 1; }
   fi
-  # 碰主機的項目：先過權限閘門，再確保私鑰在 ssh-agent 裡。要在這裡（主 shell）做：
-  # 項目本身在管線裡執行（子 shell），在那裡載入的 ssh-agent 下一個項目就看不到了
+  # 碰主機的項目:先過權限閘門,再確認主機用的私鑰檔在(沒掛載就擋下)
   if core_item_touches_host "$id"; then
     core_host_gate || { core_log DENIED "$id ${ACT_TITLE[$id]}" "host gate"; return 1; }
-    core_ensure_ssh_key || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "no ssh key"; return 1; }
+    core_check_ssh_key || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "no ssh key file"; return 1; }
   fi
   local rc shown t0; shown="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"; t0=$(date +%s)
   : > "$OP_LAST_RAW"
@@ -204,7 +185,8 @@ core_menu_permissions() { # -> OP_VISIBLE[<id>] = 1 / 0;問不到或回應看不
   for id in "${ACT_IDS[@]}"; do spec=$(core_item_authz "$id"); [ -z "$spec" ] || [ -n "${ok[$spec]:-}" ] || OP_VISIBLE[$id]=0; done
 }
 
-# ── 主機類動作的權限閘門:主機端的 cpadmin 是共用帳號,sudo 分不出是誰,所以碰主機前用本人的 token 問 MDS;任何錯誤一律視為拒絕 ──
+# ── 主機類動作的權限閘門:主機端的 cpuser 是共用帳號,sudo 分不出是誰,所以碰主機前用本人的 token 問 MDS;任何錯誤一律視為拒絕。
+#    注意:操作者在操作機上是 root,這道閘門是流程控管、不是硬性隔離(root 可以直接用金鑰 ssh);追溯靠 CyberArk 的登入紀錄與 PSMP 錄影 ──
 core_host_gate() {
   [ "${OP_EMERGENCY_HOST:-0}" = 1 ] && return 0   # 緊急主機模式：授權在登入時看過作業系統群組 OPMENU_EMERGENCY_GROUP
   [ -n "${OPMENU_HOST_ACTION_AUTHZ:-}" ] || return 0

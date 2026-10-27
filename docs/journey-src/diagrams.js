@@ -57,7 +57,7 @@ const D = {};
 D.cast = () => svg(760, 300, [
   region(20, 20, 300, 260, '我方（安裝團隊）', 'teal'),
   box(40, 60, 260, 56, '小安', ['新進安裝工程師，本篇主角', '所有「我方」指令由他敲'], 'teal'),
-  box(40, 130, 260, 56, '操作機 ops02', ['小安工作的地方（帳號 cpadmin）', '安裝、設定、驗證都從這裡出發'], 'teal'),
+  box(40, 130, 260, 56, '操作機 ops02', ['小安工作的地方（root，連主機用 cpuser）', '安裝、設定、驗證都從這裡出發'], 'teal'),
   box(40, 200, 260, 56, '下載機 dl01', ['唯一能連外網的機器', '只用來下載與驗證'], 'teal'),
   region(360, 20, 380, 260, '銀行端（行內各團隊）', 'amber'),
   box(380, 60, 160, 56, 'OS 團隊', ['開主機、套件來源', 'JDK、帳號、sudo'], 'amber'),
@@ -75,7 +75,7 @@ D.map = () => svg(760, 400, [
   box(520, 55, 200, 56, 'repo1.maven.org、GitHub', ['JMX jar、官方監控檔'], 'gray'),
   arrow(210, 83, 258, 83), arrow(480, 83, 518, 83),
   region(20, 150, 720, 230, '行內（離線）', 'amber'),
-  box(40, 190, 150, 56, '操作機 ops02', ['cpadmin', '安裝起點'], 'teal'),
+  box(40, 190, 150, 56, '操作機 ops02', ['root（PSMP 登入）', '安裝起點'], 'teal'),
   box(40, 300, 150, 56, 'repo01', ['套件庫 web server', 'NTP'], 'amber'),
   box(220, 190, 160, 56, 'controller ×3', ['kc01 kc02 kc03'], 'blue'),
   box(220, 300, 160, 56, 'broker ×4', ['kb01 kb02 kb03 kb04'], 'blue'),
@@ -135,7 +135,7 @@ D.intake = () => svg(760, 220, [
 // 6. bank preparation
 D.bankprep = () => svg(760, 300, [
   region(20, 20, 720, 260, '銀行端在安裝前要備妥的六件事（lab 裡由你扮演）', 'amber'),
-  box(40, 60, 220, 60, '主機與帳號', ['11 台 RHEL 9 最小安裝', 'cpadmin + SSH 金鑰 + sudo'], 'amber'),
+  box(40, 60, 220, 60, '主機與帳號', ['11 台 RHEL 9 最小安裝', 'cpuser + SSH 公鑰 + sudo'], 'amber'),
   box(280, 60, 220, 60, 'OS 套件來源', ['repo01 /os/：chrony、firewalld', 'C3 前置、工具'], 'amber'),
   box(520, 60, 200, 60, 'JDK 21', ['交付 tar 到操作機', '由我方安裝'], 'amber'),
   box(40, 140, 220, 60, 'AD', ['群組 kafka-admins/operators/devs', '唯讀帳號 svc-mds-bind'], 'amber'),
@@ -228,20 +228,22 @@ D.secretprotection = () => svg(800, 300, [
 
 // 14. OP menu: who runs what, where the secrets come from
 D.opmenu = () => svg(800, 310, [
-  box(20, 50, 150, 62, "維運人員", ["本機帳號 op01 登入操作機", "輸入自己的 AD 帳密"], "gray"),
-  box(220, 50, 200, 62, "OP menu(操作機)", ["只顯示本人有權限的項目", "每步留紀錄:AD 帳號 + os 帳號"], "blue"),
+  box(20, 50, 150, 62, "維運人員", ["經 PVWA + PSMP 登入操作機(root)", "輸入自己的 AD 帳密"], "gray"),
+  box(220, 50, 200, 62, "OP menu(操作機)", ["只顯示本人有權限的項目", "每步留紀錄:AD 帳號 + os=root"], "blue"),
   arrow(170, 81, 218, 81),
   box(470, 50, 150, 62, "MDS", ["AD 帳密換 token", "問:這個人能做什麼?"], "blue"),
   arrow(420, 81, 468, 81),
-  box(650, 50, 130, 62, "CyberArk", ["cpadmin SSH 私鑰", "breakglass 憑證"], "amber"),
-  arrow(650, 60, 320, 48, "啟動時取 SSH 私鑰進 ssh-agent;91 時取憑證,用完即丟", { via: [[635, 60], [635, 22], [320, 22]], lx: 478, ly: 16, dash: true }),
+  box(650, 50, 130, 62, "CyberArk PVWA", ["breakglass 憑證", "只有 91 用"], "amber"),
+  arrow(650, 60, 320, 48, "91 時人從 PVWA 取出貼上,用完即丟", { via: [[635, 60], [635, 22], [320, 22]], lx: 478, ly: 16, dash: true }),
   box(220, 140, 200, 62, "Kafka 類項目", ["以本人身分走 LDAP listener", "RBAC 依 AD 群組決定"], "blue"),
   arrow(320, 112, 320, 138),
   box(470, 140, 150, 62, "broker", ["topic、權限、lag、稽核"], "gray"),
   arrow(420, 171, 468, 171),
-  box(220, 225, 200, 62, "主機類項目(需 Operator)", ["ssh cpadmin@主機", "sudo 只開 restart / journalctl"], "blue"),
+  box(20, 225, 170, 62, "操作機的 ssh 私鑰", ["/secure/ssh,root 0400", "不經 PVWA、不經 agent"], "gray"),
+  arrow(190, 256, 218, 256),
+  box(220, 225, 200, 62, "主機類項目(需 Operator)", ["ssh cpuser@主機", "sudo 逐一列出 restart / journalctl"], "blue"),
   arrow(320, 202, 320, 223),
-  box(470, 225, 150, 62, "各主機", ["cpadmin,無 agent", "sudoers 兩段式"], "gray"),
+  box(470, 225, 150, 62, "各主機", ["cpuser,無 agent", "sudoers 兩段式"], "gray"),
   arrow(420, 256, 468, 256),
 ].join(""));
 

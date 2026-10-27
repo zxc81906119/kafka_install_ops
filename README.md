@@ -24,7 +24,7 @@
 | 主機 | 用途 | 誰管 |
 |---|---|---|
 | dl01 | 外網下載機，唯一能連 Internet | 我方 |
-| ops02 | 操作機：安裝與維運的起點，也是維運人員（經 PSMP）登入、跑 OP menu 的地方 | 我方（帳號 cpadmin） |
+| ops02 | 操作機：安裝與維運的起點，也是維運人員登入、跑 OP menu 的地方。人員在 CyberArk 的 PVWA 網頁登入（AD 帳密＋MFA），由 PSMP 代登進來，**進去是 root**；連其他主機一律用 `cpuser` 與一把金鑰 | 我方（root；連主機用 cpuser） |
 | kc01–kc03 | KRaft controller | 我方安裝，銀行提供主機 |
 | kb01–kb04 | broker（含 MDS） | 同上 |
 | rest01、rest02 | REST Proxy | 同上 |
@@ -32,16 +32,18 @@
 | repo01 | 行內套件庫 web server（lab 兼 NTP） | 銀行 |
 | ad01 | 行內 AD（lab 用 Samba） | 銀行 |
 | lb01 | 負載平衡（lab 用 nginx） | 銀行 |
-| PVWA | CyberArk PAM：密碼、金鑰的正本，人工取放（lab 用 `~/kafka-lab/pvwa/` 資料夾模擬） | 銀行 Secrets 團隊 |
+| PVWA、PSMP | CyberArk PAM：PVWA 是登入網頁與平台密碼的正本（人工取放，lab 用 `~/kafka-lab/pvwa/` 資料夾模擬）；PSMP 代登操作機（lab 無法模擬，直接 `docker exec` 以 root 進） | 銀行 Secrets 團隊 |
 
 ## 手冊只有一種模式：客戶情境
 
-銀行的 CyberArk 只有 PAM（PVWA、PSMP、SSH Key Manager、CPM），應用面（Conjur、Summon、CCP／CP）完全沒用；2026-10-27 起手冊與腳本都已刪除這些選配。
+銀行的 CyberArk 只有 PAM（PVWA、PSMP、CPM），應用面（Conjur、Summon、CCP／CP）完全沒用；2026-10-27 起手冊與腳本都已刪除這些選配。
 
 | 項目 | 做法 |
 |---|---|
 | 平台密碼 | Secret Protection 加密落地；master key、passphrase 正本在 PVWA，人工取放 |
-| cpadmin 私鑰 | 從 PVWA 貼進 ssh-agent，不落地 |
+| 人員進操作機 | PVWA 網頁登入（AD 帳密＋MFA）→ PSMP 代登 → root；沒有另外的堡壘機 |
+| ssh 私鑰 | 一組 ed25519，放操作機獨立加密 file system `/secure/ssh`（root、0400）；不放 CyberArk、不備份；操作機重建就重新產生，OS 團隊重新佈署公鑰 |
+| 各主機的 user | 每台（含操作機）本機帳號 `cpuser`（UID／GID 1500、鎖定密碼、只收金鑰）；公鑰只加 `from=` |
 | root、`svc-mds-bind` | 由 CPM 輪替 |
 
 ## 目錄
@@ -69,16 +71,16 @@ redesign/           設計討論紀錄
 
 | 工作 | 工具 | 執行帳號 | 誰能做 |
 |---|---|---|---|
-| 平台變更（安裝、升級、憑證輪替、controller 替換） | 操作機上的手動程序（或 `install/` 腳本） | `cpadmin`（私鑰正本在 PVWA，只放進 ssh-agent） | 平台工程師，變更時段 |
-| 日常維運（查看、重啟、日誌、topic 與權限作業） | OP menu（操作機） | 維運人員的本機帳號（經 PSMP 登入）；碰主機時用 cpadmin 金鑰，從 PVWA 取出貼進選單自己的 ssh-agent，結束即清除 | 依 AD 群組（Kafka RBAC） |
+| 平台變更（安裝、升級、憑證輪替、controller 替換） | 操作機上的手動程序（或 `install/` 腳本） | 操作機 root，連各主機用 `cpuser`（安裝與升級期 sudo 全權） | 平台工程師，變更時段 |
+| 日常維運（查看、重啟、日誌、topic 與權限作業） | OP menu（操作機） | 操作機 root（經 PVWA＋PSMP 登入）；碰主機時用 `/secure/ssh` 的同一把金鑰以 cpuser ssh，sudo 只開逐一列出的寫法 | 依 AD 群組（Kafka RBAC） |
 | 緊急處理 | OP menu 緊急模式 | `opmenu-breakglass` 憑證（正本在 PVWA） | 有權限的人，必填原因，記為 EMERGENCY |
 
-- SSH 金鑰只有 cpadmin 一組；主機上的公鑰可加 `from="操作機 IP"`、`restrict`，指令範圍由 sudoers 收窄（交付後只留 `cpadmin-ops` 窄規則）。
+- SSH 金鑰只有一組（cpuser）；主機上的公鑰只加 `from="操作機 IP,127.0.0.1,::1"`，指令範圍由 sudoers 收窄（交付後只留 `cpuser-ops`：每個服務、每種指令寫法逐一列出，不用 `confluent-*` 萬用字元，因為 sudoers 比對完整參數）。
 - Kafka 動作用本人 AD 帳密走 LDAP listener；碰主機之前，選單以本人 token 呼叫 MDS `PUT /security/1.0/authorize` 確認權限。選單紀錄與 Kafka 稽核日誌記的都是本人，紀錄同時送 syslog。
-- 選單取私鑰的方式：本案只有 PVWA，人從 PVWA 取出貼進選單。
+- 操作者在操作機上是 root，所以選單「碰主機前先問 MDS」是流程控管、不是硬性隔離；追溯靠 CyberArk 登入紀錄與 PSMP 錄影。Kafka 動作的權限與稽核由 Kafka 端依本人 AD 身分強制，繞不過。緊急憑證（91）仍由人從 PVWA 取出貼上。
 
 ## 已知限制
 
 - 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。2026-10-25 的結論「Confluent Server 不以 JMX 提供 raft 指標」被 2026-10-27 的實測推翻（單 controller 的拋棄式環境，官方規則抓得到 `kafka_server_raft_metrics_*`），**待在三台 controller 的完整 lab 複驗**；官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 17.9 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章尚未在完整 lab 從零跑過（見 .claude/state/status-redesign.md）。
-- CyberArk PAM 本身（PVWA 取用核准、CPM 排程、PSMP 代登與錄影、SSH Key Manager 推送）無法在 lab 模擬，只驗證我方拿到值之後的程序。
+- CyberArk PAM 本身（PVWA 登入與取用核准、CPM 排程、PSMP 代登與錄影）與放私鑰的加密 file system（LUKS）無法在 lab 模擬：lab 直接以 root 進操作機，`/secure/ssh` 用獨立的 docker volume 代替（獨立掛載點，沒有加密）；只驗證我方拿到值之後的程序。
 - MDS token 金鑰不排輪替（公鑰檔放兩把沒有用，無法零中斷切換）；只在私鑰外洩時用 `install/lab/mds-token-key-rotate.sh` 驗過的程序換。

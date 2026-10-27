@@ -8,7 +8,7 @@ export OPMENU_BROKER_SERVICES='kb01:confluent-server' OPMENU_HOSTS='kb01' OPMENU
 . lib/defaults.sh; . lib/common.sh
 # shellcheck source=/dev/null
 load_items items
-OP_USER=tester OP_LAST_RAW="$(mktemp)"
+OP_USER=tester OP_LAST_RAW="$(mktemp)"; OPMENU_SSH_KEY_FILE="$(mktemp)"   # 假私鑰檔:主機類項目過閘門後會檢查它在不在
 
 # 假後端:MDS authorize 的回應、kafka 工具的成敗由變數控制;重啟只留紀錄
 MDS_REPLY='["ALLOWED"]'; MDS_RC=0; KAFKA_RC=0; RESTARTED=""

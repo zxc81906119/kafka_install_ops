@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 19 站：驗收與收尾 —— 一次跑完、結果能附在驗收文件裡：平台健康、安全（正反向）、應用程式端、維運；最後列出要收的東西
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：
 #   19.1 平台健康：服務、quorum、MDS、沒有 under-replicated／offline partition、Self-Balancing、REST、C3、指標、JMX exporter
@@ -101,8 +101,8 @@ application_failures=$((FAIL_COUNT - health_failures - security_failures))
 
 section "19.4 維運"
 if [ "$OPMENU" = 1 ]; then
-  # 主機類項目要維運人員在終端機貼上從 PVWA 取出的私鑰，非互動做不到（第 16 站同樣只提醒）
-  warn "人工驗收項目：維運人員（bob）互動登入選單，選 21 重啟一台 broker、依提示貼上 PVWA 取出的 cpadmin 私鑰；成功後把選單紀錄那一行附在驗收文件"
+  # 選單要維運人員本人互動登入（輸入 AD 帳密），非互動做不到（第 16 站同樣只提醒）
+  warn "人工驗收項目：維運人員（bob）互動登入選單（經 PSMP 進操作機），選 21 重啟一台 broker；成功後把選單紀錄那一行附在驗收文件"
 else
   log "OPMENU=0 或選單沒裝：略過選單重啟"
 fi
@@ -125,7 +125,7 @@ EOF
 done
 log "留在操作機：$CONF_DIR（範本產出的設定）、$PKI_DIR、$SECRETS_DIR（0600）、$MONITORING_DIR、~/install-logs"
 log "可以刪：$LANDING、$REPO_DIR（$(du -sh "$LANDING" "$REPO_DIR" 2>/dev/null | cut -f1 | paste -sd' ')；套件庫才是正本）"
-ask_bank "交付時：OS 團隊移除各主機 /etc/sudoers.d/cpadmin（全權），只留 cpadmin-ops；$KEYS_DIR/svc-ops.key（super user）移到離線保管；" \
-         "    ~/.ssh/id_ed25519 正式環境由 CyberArk 保管，操作機不留。"
+ask_bank "交付時：OS 團隊移除各主機 /etc/sudoers.d/$SSH_USER（全權），只留 $SSH_USER-ops；$KEYS_DIR/svc-ops.key（super user）移到離線保管；" \
+         "    $SSH_KEY 留在操作機的獨立 file system（root、0400；不放 CyberArk、不備份，操作機重建就重新產生並重新佈署公鑰）。"
 log "驗收：$((CHECK_COUNT - FAIL_COUNT)) / $CHECK_COUNT 項通過（健康失敗 $health_failures、安全失敗 $security_failures、應用程式失敗 $application_failures）"
 finish_step

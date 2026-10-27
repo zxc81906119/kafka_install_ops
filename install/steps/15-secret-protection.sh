@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 15 站：Secret Protection —— 密碼加密留在主機的 security.properties，master key 交 CyberArk 保管
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 何時用：SECRETS_MODE=sp（銀行只有 PAM，本案客戶）；SECRETS_MODE=plain 時直接略過。
 # master key 落地在每台的 /etc/confluent/service.env（0600 root；PVWA 故障時仍能重啟）。

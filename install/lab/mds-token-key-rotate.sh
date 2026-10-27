@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# lab 專用：在 ops02 以 cpadmin 跑（bank-sim.sh push 之後 install/ 在 ~/install）。結論記在 redesign/README.md「MDS token 金鑰輪替」。
-# MDS token 金鑰實際輪替（7 台 controller／broker + REST + C3），同時量三種流量的影響。在 ops02 以 cpadmin 跑。
+# lab 專用：在 ops02 以 root 跑（bank-sim.sh push 之後 install/ 在 ~/install）。結論記在 redesign/README.md「MDS token 金鑰輪替」。
+# MDS token 金鑰實際輪替（7 台 controller／broker + REST + C3），同時量三種流量的影響。在 ops02 以 root 跑。
 #   流量 1：REST 經負載平衡（app 憑證；REST Proxy 內部用 token 連 broker）每 2 秒一次
 #   流量 2：應用程式 SCRAM 寫入（不靠 token）每秒 5 筆，持續整段
 #   流量 3：管理 client（svc-ops 憑證 → MDS token → TOKEN listener）每 10 秒一次

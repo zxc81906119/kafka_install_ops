@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Kafka 維運操作選單(OP menu)— 進入點:載入設定與共用程式、登入、取 ssh 金鑰、顯示選單、迴圈。
+# Kafka 維運操作選單(OP menu)— 進入點:載入設定與共用程式、登入、顯示選單、迴圈。
 #
 # 結構:
 #   /etc/opmenu/opmenu.conf   這個環境的設定(連線位址、主機、保管庫、命名規範);換環境只改這裡。範本見 opmenu.conf.example
 #   lib/defaults.sh           所有設定項目與預設值(說明文件兼保險;opmenu.conf 沒設的才用它)
-#   lib/common.sh             共用:項目登記、紀錄、確認、輸入驗證、執行流程、主機權限閘門、ssh 金鑰載入
+#   lib/common.sh             共用:項目登記、紀錄、確認、輸入驗證、執行流程、主機權限閘門、ssh 金鑰檔檢查
 #   lib/kafka.sh              共用:以操作者身分跑 Kafka 工具、呼叫 MDS;91 用保管庫憑證
 #   lib/hosts.sh              共用:ssh 到各主機重啟、看日誌、磁碟、診斷
-#   lib/secrets/manual.sh     機敏資料從哪裡取:維運人員從 CyberArk PVWA 取出後貼上(唯一的來源)
+#   lib/secrets/manual.sh     91 緊急憑證從哪裡取:維運人員從 CyberArk PVWA 取出後貼上(唯一的來源)
 #   items/<編號>-<名稱>.sh     每個選單項目一個檔:開頭 item 一行宣告,下面 run() 做事
 #
 # 用法:
@@ -28,7 +28,7 @@ if [ "${OPMENU_ALLOW_ENV_OVERRIDE:-0}" != 1 ]; then unset OPMENU_USER OPMENU_PAS
 core_guard_host_actions   # 碰主機的介面先過權限閘門
 load_items "$OPMENU_HOME/items" || exit 1
 
-# ── 登入:操作者本人的 AD 帳密 → 向 MDS 換 token;產生只有自己能讀的 Kafka 連線設定檔(記憶體檔案系統);推算沒填的設定;取 ssh 金鑰 ──
+# ── 登入:操作者本人的 AD 帳密 → 向 MDS 換 token;產生只有自己能讀的 Kafka 連線設定檔(記憶體檔案系統);推算沒填的設定 ──
 login() {
   local pass="${OPMENU_PASS:-}"
   OP_SID="$(date +%s)-$$"
@@ -58,8 +58,6 @@ EOC
   derive || { core_log DERIVE_FAIL login ""; exit 1; }
   unset pass
   export OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_TOKEN OP_SID
-  # 主機用的私鑰：login 模式登入就取（取不到不擋登入，Kafka 類項目照常）；on-demand 模式第一次做主機類項目才取（core_ensure_ssh_key）
-  core_ssh_key_on_demand || core_load_ssh_key || true
 }
 
 # 緊急主機模式：MDS 連不上時，AD 身分驗證與權限查詢都做不了。
@@ -70,7 +68,7 @@ emergency_login() {
   echo "${CR}無法連到 MDS（Kafka 的權限服務），AD 登入做不了。${C0}"
   if [ -z "${OPMENU_EMERGENCY_GROUP:-}" ]; then echo "請確認 cluster 狀態或通知管理員。"; exit 1; fi
   if ! id -nG | tr ' ' '\n' | grep -qx "$OPMENU_EMERGENCY_GROUP"; then
-    echo "緊急主機模式只開放給作業系統群組 $OPMENU_EMERGENCY_GROUP 的人（平常沒有人；事故時由 OS 團隊依程序臨時加入）。"
+    echo "緊急主機模式只開放給作業系統群組 $OPMENU_EMERGENCY_GROUP 的人（平常 root 不在群組、緊急模式關著；事故時由 OS 團隊依程序把 root 臨時加進群組，事後移出）。"
     core_log DENIED "emergency host mode" "os user not in $OPMENU_EMERGENCY_GROUP"
     exit 1
   fi
@@ -83,7 +81,6 @@ emergency_login() {
   export OP_EMERGENCY_HOST OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_SID
   core_log EMERGENCY_HOST login "$reason"
   echo "${CY}已進入緊急主機模式：只能做 $OPMENU_EMERGENCY_ITEMS（看日誌、磁碟、收集診斷、重啟服務）；每一步都留紀錄。${C0}"
-  core_ssh_key_on_demand || core_load_ssh_key || true
 }
 
 # 登入後推算沒填的設定(opmenu.conf 有填的一律優先)。刻意不從 cluster 推算 broker 與主機清單:它們是重啟、ssh 的允許清單,必須是審過的固定設定

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh —— 依序執行 steps/NN-*.sh（手把手文件一章一支）。在操作機以 cpadmin 執行。
+# install.sh —— 依序執行 steps/NN-*.sh（手把手文件一章一支）。在操作機以 root 執行。
 #
 #   bash install.sh              從第 2 站跑到最後（第 1 站在下載機跑，這裡只提示）
 #   bash install.sh --from 09    從第 9 站起

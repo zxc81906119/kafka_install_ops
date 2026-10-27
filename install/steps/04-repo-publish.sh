@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 4 站：上架到內部套件庫 —— 操作機建索引，用 tar 經 ssh 推給銀行 web server 的部署帳號
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：從銀行套件庫裝 createrepo_c、gettext → 組 ~/repo（RPM、公鑰、jar、SHA256SUMS）→ 建 repodata
 #         → tar 串流經 ssh 解到 repo01 的 /var/www/repo（只動我們的目錄，銀行的 os/ 不受影響）→ 用 HTTPS 讀回來確認。
@@ -11,7 +11,7 @@ source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 
 section "工具：createrepo_c、gettext（envsubst）從銀行套件庫安裝（--refresh：dnf 的套件清單快取 48 小時，剛上架的會找不到）"
-sudo dnf -q -y --refresh install createrepo_c gettext >/dev/null || die "裝不到 createrepo_c／gettext：確認銀行套件庫有 os-packages.txt 列的套件"
+dnf -q -y --refresh install createrepo_c gettext >/dev/null || die "裝不到 createrepo_c／gettext：確認銀行套件庫有 os-packages.txt 列的套件"
 ok "createrepo_c $(createrepo_c --version | head -1)、envsubst $(envsubst --version | head -1 | awk '{print $NF}')"
 
 section "組目錄、建索引"

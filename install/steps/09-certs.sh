@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 9 站：憑證 —— 私鑰與 CSR 在操作機產生（私鑰不離開行內）；銀行 CA 簽；回來逐張檢查後做成 keystore
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：依 conf/certs.txt 產生私鑰與 CSR → 等銀行 CA 簽回 incoming/ → 拆 leaf 與中繼 → 五項檢查 + 憑證鏈
 #         → 做成 PKCS12 keystore、只放銀行根憑證的 truststore、MDS token 金鑰對。

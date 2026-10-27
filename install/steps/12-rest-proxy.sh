@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 12 站：REST Proxy —— 只接受 client 憑證；principal 對應規則只列走 REST 的 app（不加 DEFAULT）
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：派送憑證 → kafka-rest.tpl 產生設定（principal 規則由 conf/apps.txt 的 cert 類 app 組成）
 #         → drop-in → 啟動並測三種情況：legacy app 憑證 200、其他憑證 401、沒憑證 TLS 就拒絕（000）→ 經負載平衡 200。

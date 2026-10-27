@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 6 站：安裝前檢查 —— 主機事實、時鐘、DNS/套件庫/AD、主機乾淨。每一項不符都是先回頭找銀行的事
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：只讀不寫的檢查。/tmp 要可執行且 ≥ 2 GB、時鐘差 ≤ 2 秒、每台都解析得到所有主機名、
 #         兩個套件庫都回 200、broker 驗得過 AD 的 LDAPS 憑證、叢集主機沒裝過 Confluent。

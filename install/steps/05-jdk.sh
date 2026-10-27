@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 5 站：JDK 21 —— 銀行給的 tar 解到 /opt/java/<版本>，/opt/java/current 指過去，alternatives + profile.d
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：所有設定一律寫 /opt/java/current，以後換版只改這個連結；java、keytool 用 alternatives 登記（RHEL 標準做法）；
 #         /etc/profile.d/java.sh 設 JAVA_HOME（服務的 systemd drop-in 另外再寫一次，不受全域切換影響）。

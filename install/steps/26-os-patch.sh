@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 26 站：OS 修補 —— 一台一台 dnf update（Confluent 由 versionlock 擋住），該重開就重開、健康了才做下一台（手把手第 26 章）
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 # run: on-demand（不在安裝順序裡；銀行每月發布 OS 修補之後執行）
 #
 # 用法：

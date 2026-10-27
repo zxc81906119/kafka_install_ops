@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 7 站：OS 調校 —— sysctl、limits、THP、時區/journald、chrony、firewalld
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：叢集 10 台做全部；操作機只做時區、journald、時間同步。
 #         核心參數的值在 templates/sysctl-<角色>.conf，要調就改那幾個檔。

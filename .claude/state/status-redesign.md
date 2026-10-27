@@ -1,6 +1,8 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-27 23:50（lab 使用中：監控改版的驗證；`lab-mon-*` 容器還在跑，見下）
+Updated: 2026-10-28 00:50（沒有動 lab；`lab-mon-*` 容器還在，舊叢集已壞，等人從零重建）
+
+**剛做完（2026-10-27 夜～28 凌晨）：主機存取新做法（cpuser、一組金鑰放 `/secure/ssh`、PVWA＋PSMP 進操作機是 root、sudoers 逐一列出、手動換金鑰）已進手冊與腳本**，取代 cpadmin／ssh-agent／SSH Key Manager 那一套：journey.md（第 0、3、15、16、19.4–19.6 章與全書的 ops02 身分／路徑，圖與 build.js／run-chapter.js）、install/（lib/ssh.sh、site.env、03／16／19 站、bank-sim／run-customer／run-all／run-upgrade-drill、opmenu 測試、README）、opmenu/（金鑰檔取代 ssh-agent；sudo 寫法固定；測試 test-ssh-key／test-sudo-forms）、問題清單、README／CLAUDE.md／skills。**只做了靜態檢查，沒有 commit，沒有從零重跑**；該驗證的清單見 redesign/README.md「新做法已進手冊與腳本」與 log/2026-10-27-access-in-manual.md。
 
 **進行中（2026-10-27 晚）：監控改成外部 Prometheus／Alertmanager／Grafana + JMX exporter**（手把手第 17 章整章重寫，另動第 1.4／1.6／2／7／13／14／19／23 章、install 17 站與 01／07／19 站、bank-sim 的 `monitoring`、問題清單第 11 章、redesign 新段落）。細節與證據見 log/2026-10-27-monitoring.md；決策見 redesign/README.md「監控改成外部…（2026-10-27 定案）」。**沒有 commit。** 狀態：
 - 已驗證（拋棄式環境 `lab-mon-kc/kb/rest/c3`，因為真叢集起不來，見下）：官方 exporter 規則掛上 4 種程序、4 個 job 的 target、21 條告警規則載入且指標都存在、32 個官方 dashboard 佈建進 Grafana（datasource 與 uid 兩項修正）、Grafana `/api/ds/query` 查得到資料、兩種 webhook 格式送達（含 resolved）、dashboard 覆蓋率 253／816 panel。
@@ -38,8 +40,8 @@ Updated: 2026-10-27 23:50（lab 使用中：監控改版的驗證；`lab-mon-*` 
    - ② 2026-10-26 14:35 通過：腳本版升級演練，LB 交握 8 次全部自動回覆；直連 6384 筆 0 遺失、**REST 1232 次 0 失敗**（上一輪沒排空是 4 失敗）、驗收 38/38×4。
    - ③ Conjur 手把手通過（歷史；模式已於 2026-10-27 刪除）。
    - ④ provider 0–22（歷史；模式已於 2026-10-27 刪除）：2026-10-27 從零重跑通過（324 塊、253 執行、0 失敗，五步 20 輪 REST 全 200）。上一輪在 21.3.3 倒掉（JDK cacerts 沒有新根，PKIX path building failed）已修（423a97f）：21.3.2／21.3.4／21.4.2／21.4.5 的 provider 專用 cacerts 區塊逐台驗證（加新根後每台 2、刪舊根後每台 1），階段二重啟後 controller／broker 全 active、MDS 200。第 13 章新加的 otlp 設定與標籤檢查也通過（剛啟動 5，穩定後 7）。
-6. 2026-10-27 和客戶討論後的主機存取做法（PSMP 代登 root、一組 SSH 金鑰放操作機 root 0400、每台 `cpuser`、sudoers 白名單、私鑰不放 CyberArk 也不備份）已記在 redesign/README.md「和客戶討論後的主機存取做法」；**手冊、install/、OP menu 還是舊設計（cpadmin、ssh-agent、SSH Key Manager）**，客戶正式採用後才改，改了要從零重跑。產出：`docs/Confluent-CyberArk登入與主機存取設計.docx`（來源 docs/access-src/）。（客戶資訊整理簡報已依使用者決定刪除。）使用者說晚點會請我從零重跑 lab，驗證手冊與腳本（需要 Docker Desktop；目前 lab 是舊的 provider 模式狀態，Conjur 已清掉）。細節見 log/2026-10-27-access-design-docs.md。
-7. 待辦（要 lab）：驗證換金鑰／公鑰佈署／鎖定密碼只靠金鑰的指令；install/steps/16-opmenu.sh（舊 17-opmenu.sh）的 sudoers 改成逐一列出服務（現行 `confluent-*` 會放行多個 unit）；客戶模式在刪除 Conjur 後從零重跑（必做，驗證新編號；含 `run-full.sh customer`、`run-customer.sh`、`run-upgrade-drill.sh`，第 13 章 otlp 修正也在這輪驗）。待使用者決定：webhook 方案（A／A＋D／C／E）與是否寫進第 17 章（新編號）、`docs/evidence/` 是否納入版控。
+6. 2026-10-27 和客戶討論後的主機存取做法（PSMP 代登 root、一組 SSH 金鑰放操作機 root 0400、每台 `cpuser`、sudoers 白名單、私鑰不放 CyberArk 也不備份）已記在 redesign/README.md「和客戶討論後的主機存取做法」；手冊、install/、OP menu 已在 2026-10-28 凌晨改成新設計（見最上面），**尚未從零重跑**。產出：`docs/Confluent-CyberArk登入與主機存取設計.docx`（來源 docs/access-src/）。（客戶資訊整理簡報已依使用者決定刪除。）使用者說晚點會請我從零重跑 lab，驗證手冊與腳本（需要 Docker Desktop；目前 lab 是舊的 provider 模式狀態，Conjur 已清掉）。細節見 log/2026-10-27-access-design-docs.md。
+7. 待辦（要 lab）：驗證換金鑰（19.6）／公鑰佈署（3.1）／鎖定密碼只靠金鑰的指令、16.4 窄規則（已改成逐一列出）、`opmenu-hostkey-test.sh`；客戶模式在刪除 Conjur 後從零重跑（必做，驗證新編號；含 `run-full.sh customer`、`run-customer.sh`、`run-upgrade-drill.sh`，第 13 章 otlp 修正也在這輪驗）。待使用者決定：webhook 方案（A／A＋D／C／E）與是否寫進第 17 章（新編號）、`docs/evidence/` 是否納入版控。
 - 從未 push。
 
 ## 環境狀態

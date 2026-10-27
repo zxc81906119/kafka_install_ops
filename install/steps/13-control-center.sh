@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 第 13 站：Control Center —— 內建 Prometheus、Alertmanager（mTLS、吃 PEM）與 C3（人員用 AD 帳密登入）
-# where: ops02 （cpadmin）
+# where: ops02 （root）
 #
 # 做什麼：派送憑證 → Prometheus／Alertmanager 的 TLS 與設定（*-generated.yml 要給 C3 自己能寫）
 #         → control-center.tpl 產生設定 → drop-in（含「等 MDS 起來才啟動」：C3 比 MDS 先起來會卡住不開 9021）

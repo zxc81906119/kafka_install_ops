@@ -1,19 +1,31 @@
-# install/lib/ssh.sh —— 操作機對各主機的連線（cpadmin 金鑰登入；要 root 的動作在遠端用 sudo）
+# install/lib/ssh.sh —— 操作機（root）對各主機的連線：用 $SSH_KEY 那一把私鑰以 $SSH_USER（cpuser）登入；要 root 的動作在遠端用 sudo
 #
-# 需要先 source conf/site.env（用到 fqdn）。主機一律傳短名（kb01），函式自己補成 FQDN。
+# 需要先 source conf/site.env（用到 fqdn、SSH_USER、SSH_KEY）。主機一律傳短名（kb01），函式自己補成 FQDN。
 #
 #   ssh_run          <主機> <一行指令>                  在那台主機跑一行指令
-#   ssh_run_as       <帳號> <主機> <一行指令>           用別的帳號登入（例如套件庫的 repodeploy）
+#   ssh_run_as       <帳號> <主機> <一行指令>           用別的帳號登入（例如套件庫的 repodeploy；同一把金鑰）
 #   ssh_script       <主機> [變數=值 …] <<'EOF' … EOF    把 heredoc 原樣送過去用 bash 跑；多行指令一律用這個
 #   copy_to_tmp      <主機> <檔案…>                     檔案放到那台主機的 /tmp/（之後在遠端 sudo install 到定位、再刪）
 #   restart_and_wait <主機> <服務> [健康檢查網址|-] [最多等幾秒]   重啟一台並等它健康
 #   rolling_restart  <角色…>                          controllers／brokers／rests／c3 依序一台一台重啟
 
-SSH_OPTIONS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o LogLevel=ERROR)
+SSH_OPTIONS=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o LogLevel=ERROR)
+
+# ops_from_addrs：公鑰 authorized_keys 行的 from= 要列的來源位址（逗號分隔、不加空格）。
+#   SSH_FROM_ADDRS 有設就照用；沒設 = 操作機的 IPv4 + 127.0.0.1 + ::1
+#   （操作機連自己時 sshd 看到的來源可能是這三種之一；用 localhost 連線時 ssh 先走 IPv6，所以 ::1 一定要列）
+ops_from_addrs() {
+  local ops_ip
+  if [ -n "${SSH_FROM_ADDRS:-}" ]; then echo "$SSH_FROM_ADDRS"; return; fi
+  ops_ip=$(getent ahostsv4 "$(fqdn "$OPS_HOST")" | awk 'NR==1{print $1}')
+  echo "$ops_ip,127.0.0.1,::1"
+}
+# authorized_keys_line：要放進每台 cpuser 的 authorized_keys 的整行（只有來源限制 from=，沒有 restrict、pty）
+authorized_keys_line() { printf 'from="%s" %s\n' "$(ops_from_addrs)" "$(cat "$SSH_KEY.pub")"; }
 
 ssh_run() {
   local host=$1; shift
-  ssh "${SSH_OPTIONS[@]}" "$(fqdn "$host")" "$@"
+  ssh "${SSH_OPTIONS[@]}" "$SSH_USER@$(fqdn "$host")" "$@"
 }
 
 ssh_run_as() {
@@ -35,12 +47,12 @@ ssh_script() {
   local host=$1; shift
   local env_args=""
   [ $# -gt 0 ] && env_args=$(printf '%q ' "$@")
-  ssh "${SSH_OPTIONS[@]}" "$(fqdn "$host")" "env $env_args bash -s"
+  ssh "${SSH_OPTIONS[@]}" "$SSH_USER@$(fqdn "$host")" "env $env_args bash -s"
 }
 
 copy_to_tmp() {
   local host=$1; shift
-  scp -q "${SSH_OPTIONS[@]}" "$@" "$(fqdn "$host"):/tmp/"
+  scp -q "${SSH_OPTIONS[@]}" "$@" "$SSH_USER@$(fqdn "$host"):/tmp/"
 }
 
 # restart_and_wait 的健康檢查（第三個參數）：

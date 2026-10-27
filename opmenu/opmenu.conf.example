@@ -18,16 +18,20 @@ OPMENU_BROKER_SERVICES='kb01.poc.lab:confluent-server kb02.poc.lab:confluent-ser
 OPMENU_AUX_SERVICES='rest01.poc.lab:confluent-kafka-rest rest02.poc.lab:confluent-kafka-rest c3-01.poc.lab:confluent-control-center'
 OPMENU_CONTROLLER_HOSTS='kc01.poc.lab kc02.poc.lab kc03.poc.lab'
 
-# 主機登入:操作機以 cpadmin ssh 到各主機(和安裝同一個帳號);私鑰由維運人員從 PVWA 取出、貼進選單自己的 ssh-agent,不落地
-OPMENU_SSH_USER=cpadmin
-# 主機上 cpadmin 的 sudo 永久只開(安裝、升級時才由 OS 團隊依變更單開全權):
-#   cpadmin ALL=(root) NOPASSWD: /usr/bin/systemctl restart confluent-*, /usr/bin/systemctl status confluent-*, /usr/bin/journalctl -u confluent-*
+# 主機登入:操作機(人員經 PSMP 登入就是 root)以 cpuser ssh 到各主機(和安裝同一個帳號),私鑰是操作機獨立 file system 上的檔案(root 0400,和安裝同一把)
+OPMENU_SSH_USER=cpuser
+OPMENU_SSH_KEY_FILE='/secure/ssh/cpuser_ed25519'
+# 主機上 cpuser 的 sudo 永久只開(安裝、升級時才由 OS 團隊依變更單開全權),逐一列出服務與指令寫法,不用 confluent-* 萬用字元
+# (sudoers 比對完整參數;選單只用這三種寫法,journalctl 的行數固定 200,見 lib/hosts.sh):
+#   cpuser ALL=(root) NOPASSWD: /usr/bin/systemctl restart confluent-server, \
+#       /usr/bin/systemctl status confluent-server, \
+#       /usr/bin/journalctl -u confluent-server -n 200 --no-pager
+#   (REST Proxy 主機把服務名換成 confluent-kafka-rest,C3 主機換成 confluent-control-center;每台只列自己的服務)
 
-# 操作者身分:操作機是本機個人帳號(opxx),所以操作者自己輸入 AD 帳號與密碼(Kafka 身分);作業系統帳號只在紀錄裡附註
+# 操作者身分:操作機上人員是 root(經 CyberArk PSMP 登入),所以操作者自己輸入 AD 帳號與密碼(Kafka 身分);作業系統帳號只在紀錄裡附註
 OPMENU_USER_FROM_OS=0
 
-# 機敏資料:維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh,唯一的來源);下面兩個是提示用的 object 名稱
-OPMENU_SSH_KEY_SECRET='kafka/ssh/cpadmin'               # PVWA 裡的 cpadmin 私鑰(SSH Key Manager 管理、推公鑰到各主機的那把)
+# 機敏資料:91 緊急模式的憑證由維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh,唯一的來源);下面是提示用的 object 名稱
 OPMENU_BREAKGLASS_SECRET='kafka/breakglass/pem'         # 91 緊急模式憑證(私鑰 + 憑證鏈 PEM),身分 User:opmenu-breakglass 在 MDS 綁 SystemAdmin
 
 # 規範(依客戶規定)

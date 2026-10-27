@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lab 專用：在 ops02 以 cpadmin 跑（bank-sim.sh push 之後 install/ 在 ~/install）。結論記在 redesign/README.md「MDS token 金鑰輪替」。
+# lab 專用：在 ops02 以 root 跑（bank-sim.sh push 之後 install/ 在 ~/install）。結論記在 redesign/README.md「MDS token 金鑰輪替」。
 # MDS token 金鑰輪替實驗，第二版：token 先用 curl 向「指定的 MDS」取、存成檔，client 直接拿這個檔連 broker
 # （第一版用 Confluent 的 TokenUserLoginCallbackHandler，它會自己挑 MDS，token 來源不受控）
 set -uo pipefail

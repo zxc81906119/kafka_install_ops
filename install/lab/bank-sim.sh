@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # install/lab/bank-sim.sh — lab 專用：在 Windows Git Bash 扮演「銀行」，做手把手文件裡橘色標籤的事。
 # 正式環境沒有這支；安裝腳本只會印「請銀行做」。lab 依 docs/journey-src/journey.md 第 0 章建好（~/kafka-lab）。
-#   bash bank-sim.sh push      把 install/ 送到 ops02（cpadmin）與 dl01（root）
+#   bash bank-sim.sh push      把 install/ 送到 ops02（root，/root/install）與 dl01（root）
 #   bash bank-sim.sh intake    2.2 檔案交換：落地區 → ops02 ~/landing（唯讀）
-#   bash bank-sim.sh prepare   3.1 公鑰派送、3.2 OS 套件庫＋根憑證信任、3.4 AD、3.5 NTP 與 LB
+#   bash bank-sim.sh prepare   3.1 各主機建 cpuser＋sshd 設定＋公鑰（from=）＋安裝期 sudo、3.2 OS 套件庫＋根憑證信任、3.4 AD、3.5 NTP 與 LB
 #   bash bank-sim.sh sign      9.2 銀行 CA 簽 ops02 ~/pki/requests/*.csr → ~/pki/incoming/
 #   bash bank-sim.sh reset     down -v 後重新 up（從零）；dl01 保留
-#   bash bank-sim.sh pvwa-key  客戶模式：CyberArk 產生 cpadmin 金鑰對（$LAB/pvwa/），prepare 改派這把的公鑰
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 LAB=${LAB:-$HOME/kafka-lab}; INSTALL=$(cd "$(dirname "$0")/.." && pwd)
@@ -14,48 +13,54 @@ source "$INSTALL/conf/site.env"
 container_of() { echo "lab-$1-1"; }          # 主機短名 → lab 的容器名稱
 windows_path() { cygpath -m "$1"; }       # Git Bash 路徑 → docker 看得懂的 Windows 路徑
 as_root_on() { docker exec "$(container_of "$1")" bash -c "$2"; }   # 在某台主機以 root 跑一段指令（扮演銀行的 OS 團隊）
-as_cpadmin_on_ops() {   # 在操作機以 cpadmin 跑一段指令
-  docker exec -u cpadmin -w /home/cpadmin "$(container_of "$OPS_HOST")" bash -c "$1"; }
+as_root_on_ops() {   # 在操作機以 root 跑一段指令（人員經 PSMP 登入操作機就是 root；lab 直接 docker exec 進去）
+  docker exec -w /root "$(container_of "$OPS_HOST")" bash -c "$1"; }
 announce() { printf '\n[bank] %s\n' "$*"; }
 
 push() {
-  announce "install/ → $OPS_HOST:/home/cpadmin/install、dl01:/root/install"
-  as_root_on "$OPS_HOST" 'rm -rf /home/cpadmin/install'; docker cp "$(windows_path "$INSTALL")" "$(container_of "$OPS_HOST"):/home/cpadmin/install"
-  as_root_on "$OPS_HOST" 'chown -R cpadmin:cpadmin /home/cpadmin/install && chmod +x /home/cpadmin/install/install.sh /home/cpadmin/install/steps/*.sh && ls /home/cpadmin/install/steps | wc -l'
+  announce "install/ → $OPS_HOST:/root/install、dl01:/root/install"
+  as_root_on "$OPS_HOST" 'rm -rf /root/install'; docker cp "$(windows_path "$INSTALL")" "$(container_of "$OPS_HOST"):/root/install"
+  as_root_on "$OPS_HOST" 'chmod +x /root/install/install.sh /root/install/steps/*.sh && ls /root/install/steps | wc -l'
   docker exec dl01 rm -rf /root/install; docker cp "$(windows_path "$INSTALL")" dl01:/root/install; docker exec dl01 bash -c 'chmod +x /root/install/steps/*.sh; ls /root/install/steps | wc -l'
 }
 
 intake() {
   announce "2.2 檔案交換：$LAB/landing → $OPS_HOST:~/landing（唯讀）"
-  as_root_on "$OPS_HOST" 'install -d -o cpadmin -g cpadmin /home/cpadmin/landing'
-  docker cp "$(windows_path "$LAB/landing")/." "$(container_of "$OPS_HOST"):/home/cpadmin/landing/"
-  as_root_on "$OPS_HOST" 'chown -R cpadmin:cpadmin /home/cpadmin/landing && chmod -R a-w /home/cpadmin/landing && echo "$(find /home/cpadmin/landing -type f | wc -l) files, $(du -sh /home/cpadmin/landing | cut -f1)"'
+  as_root_on "$OPS_HOST" 'install -d /root/landing'
+  docker cp "$(windows_path "$LAB/landing")/." "$(container_of "$OPS_HOST"):/root/landing/"
+  as_root_on "$OPS_HOST" 'chmod -R a-w /root/landing && echo "$(find /root/landing -type f | wc -l) files, $(du -sh /root/landing | cut -f1)"'
 }
 
-# 客戶模式（SSH_KEY_SOURCE=agent）：cpadmin 的金鑰對由 CyberArk 產生，lab 放在 $LAB/pvwa/ 扮演 PVWA 裡的那個 object
-PVWA_DIR=$LAB/pvwa
-pvwa_key() {
-  announce "CyberArk：產生 cpadmin（操作機 → 各主機）的金鑰對，私鑰留在 PVWA（$PVWA_DIR，0600）"
-  mkdir -p "$PVWA_DIR"
-  [ -f "$PVWA_DIR/cpadmin_ed25519" ] || ssh-keygen -q -t ed25519 -N "" -C "cpadmin@$OPS_HOST (cyberark)" -f "$PVWA_DIR/cpadmin_ed25519"
-  chmod 600 "$PVWA_DIR/cpadmin_ed25519"; cat "$PVWA_DIR/cpadmin_ed25519.pub"
+PVWA_DIR=$LAB/pvwa   # PVWA 資料夾：lab 用它扮演 PVWA（平台密碼的正本；ssh 私鑰不放這裡）
+
+# 3.1 OS 團隊在一台主機上做的事（以 root）：建 cpuser、sshd 設定、公鑰行、安裝期 sudo。參數：主機短名、authorized_keys 的整行
+os_team_cpuser() {
+  local host=$1 line=$2
+  docker exec -i -e LINE="$line" -e CPID="$SSH_USER_ID" -e CPUSER="$SSH_USER" "$(container_of "$host")" bash -s <<'BANK'
+set -e
+getent group "$CPUSER" >/dev/null || groupadd -g "$CPID" "$CPUSER"
+id "$CPUSER" >/dev/null 2>&1 || useradd -u "$CPID" -g "$CPID" -m -s /bin/bash "$CPUSER"
+printf 'Match User %s\n    PasswordAuthentication no\n    AuthenticationMethods publickey\n' "$CPUSER" > /etc/ssh/sshd_config.d/50-cpuser.conf
+sshd -t && systemctl reload sshd
+install -d -m 0700 -o "$CPUSER" -g "$CPUSER" "/home/$CPUSER/.ssh"
+printf '%s\n' "$LINE" > "/home/$CPUSER/.ssh/authorized_keys"
+chown "$CPUSER:$CPUSER" "/home/$CPUSER/.ssh/authorized_keys"; chmod 0600 "/home/$CPUSER/.ssh/authorized_keys"
+printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$CPUSER" > "/etc/sudoers.d/$CPUSER"; chmod 0440 "/etc/sudoers.d/$CPUSER"; visudo -cf "/etc/sudoers.d/$CPUSER" >/dev/null
+BANK
 }
 
 prepare() {
-  # 公鑰：看操作機 site.env 的 SSH_KEY_SOURCE——agent（客戶模式）用 CyberArk 產生的那把（pvwa_key），
-  # 其他用操作機自己產生的（lab 模式，第 3 站）。不能只看 pvwa/ 有沒有金鑰：前一輪客戶模式留下的那把會被誤用
-  local key_source
-  key_source=$(as_root_on "$OPS_HOST" "sed -n 's/^SSH_KEY_SOURCE=\\([a-z]*\\).*/\\1/p' /home/cpadmin/install/conf/site.env" 2>/dev/null)
-  if [ "$key_source" = agent ] && [ -f "$PVWA_DIR/cpadmin_ed25519.pub" ]; then
-    announce "3.1 OS 團隊（SSH Key Manager）：CyberArk 的 cpadmin 公鑰 → 所有主機 cpadmin 與 repo01 的 repodeploy"
-    # 用 stdin 送（ops02 的 /tmp 是 tmpfs，docker cp 寫進去容器裡看不到）
-    docker exec -i "$(container_of "$OPS_HOST")" bash -c 'cat > /tmp/cpadmin-cyberark.pub' < "$PVWA_DIR/cpadmin_ed25519.pub"
-    public_key_source=/tmp/cpadmin-cyberark.pub
-  else
-    announce "3.1 OS 團隊：ops02 的公鑰 → 所有主機 cpadmin 與 repo01 的 repodeploy（共用 authorized_keys.d volume）"
-    public_key_source=/home/cpadmin/.ssh/id_ed25519.pub
-  fi
-  as_root_on "$OPS_HOST" 'k=$(cat '"$public_key_source"'); install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/cpadmin <<<"$k"; install -m 0644 -o root -g root /dev/stdin /etc/ssh/authorized_keys.d/repodeploy <<<"$k"; ls /etc/ssh/authorized_keys.d/'
+  # 3.1：操作機（root）已在 /secure/ssh 產生金鑰對（第 3 站）。公鑰行 = from="<操作機 IP>,127.0.0.1,::1" + 公鑰；
+  # OS 團隊在每台主機（含操作機自己）建 cpuser 並放這一行；repo01 的 repodeploy 放同一行
+  local ops_ip public_key from_addrs line host
+  public_key=$(docker exec "$(container_of "$OPS_HOST")" cat "$SSH_KEY.pub" 2>/dev/null) || { echo "操作機上沒有 $SSH_KEY.pub：先跑第 3 站（bash install/install.sh --to 03）讓它產生金鑰"; return 1; }
+  ops_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$OPS_HOST")")
+  from_addrs=${SSH_FROM_ADDRS:-$ops_ip,127.0.0.1,::1}
+  line="from=\"$from_addrs\" $public_key"
+  announce "3.1 OS 團隊：每台主機（含 $OPS_HOST）建 $SSH_USER（UID $SSH_USER_ID）、sshd 只收金鑰、公鑰行 from=\"$from_addrs\"、安裝期 sudo"
+  for host in $ALL_HOSTS; do os_team_cpuser "$host" "$line" && printf '%s ' "$host"; done; echo
+  announce "3.1 套件庫 $REPO_HOST：$REPO_DEPLOY_USER 放同一行公鑰"
+  docker exec -i -e LINE="$line" "$(container_of "$REPO_HOST")" bash -c 'install -d -m 0700 -o repodeploy -g repodeploy /home/repodeploy/.ssh && printf "%s\n" "$LINE" > /home/repodeploy/.ssh/authorized_keys && chown repodeploy:repodeploy /home/repodeploy/.ssh/authorized_keys && chmod 0600 /home/repodeploy/.ssh/authorized_keys && ls -l /home/repodeploy/.ssh/authorized_keys'
 
   # repo01 的 HTTPS 憑證要驗得過 ca/root.crt：手把手第 20 章演練過換 CA 的 lab，repo.crt 會是 G2／G3 簽的，用現在的 CA 重簽
   local repo_tls=$LAB/images/web/tls
@@ -96,11 +101,11 @@ ls /out/Packages | wc -l'
   docker cp "$(windows_path "$LAB/ca/exchange/ad01-chain.crt")" "$(container_of "$AD_HOST"):/var/lib/samba/private/tls/cert.pem"
   docker cp "$(windows_path "$LAB/ca/root.crt")" "$(container_of "$AD_HOST"):/var/lib/samba/private/tls/ca.pem"
   as_root_on "$AD_HOST" 'cp /root/csr/ad01.key /var/lib/samba/private/tls/key.pem && chmod 600 /var/lib/samba/private/tls/key.pem && chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem && pkill -x samba; sleep 8; openssl s_client -connect localhost:636 -CAfile /var/lib/samba/private/tls/ca.pem </dev/null 2>/dev/null | grep "Verify return code"'
-  as_root_on "$OPS_HOST" 'install -d -o cpadmin -g cpadmin -m 0700 /home/cpadmin/secrets'
+  as_root_on "$OPS_HOST" 'install -d -m 0700 /root/secrets'
   for k in bind:ldap-bind users:ad-test-users; do
-    docker exec "$(container_of "$AD_HOST")" cat "/root/secrets/${k%%:*}.pass" | docker exec -i "$(container_of "$OPS_HOST")" bash -c "umask 077; cat > /home/cpadmin/secrets/${k#*:}.pass; chown cpadmin:cpadmin /home/cpadmin/secrets/${k#*:}.pass"
+    docker exec "$(container_of "$AD_HOST")" cat "/root/secrets/${k%%:*}.pass" | docker exec -i "$(container_of "$OPS_HOST")" bash -c "umask 077; cat > /root/secrets/${k#*:}.pass"
   done
-  as_root_on "$OPS_HOST" 'ls -la /home/cpadmin/secrets | tail -n +4'
+  as_root_on "$OPS_HOST" 'ls -la /root/secrets | tail -n +4'
 
   announce "3.5 NTP（repo01 兼任）與負載平衡（lb01 nginx L4）"
   install -m 0755 "$INSTALL/lab/lb-member.sh" "$LAB/lb-member.sh"   # 3.5：LB 團隊停用／恢復 REST 成員（手把手 12.1 的五步）
@@ -111,10 +116,10 @@ ls /out/Packages | wc -l'
 sign() {
   announce "9.2 CA 窗口：簽 ops02 ~/pki/requests/*.csr → ~/pki/incoming/"
   mkdir -p "$LAB/ca/exchange/signed"; rm -rf "$LAB/ca/exchange/requests"
-  docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/pki/requests" "$(windows_path "$LAB/ca/exchange/")"
+  docker cp "$(container_of "$OPS_HOST"):/root/pki/requests" "$(windows_path "$LAB/ca/exchange/")"
   for f in "$LAB"/ca/exchange/requests/*.csr; do n=$(basename "$f" .csr); bash "$LAB/ca/sign.sh" "$f" "$LAB/ca/exchange/signed/$n.crt"; done
-  for f in "$LAB"/ca/exchange/signed/*.crt; do docker cp "$(windows_path "$f")" "$(container_of "$OPS_HOST"):/home/cpadmin/pki/incoming/"; done
-  as_root_on "$OPS_HOST" 'chown cpadmin:cpadmin /home/cpadmin/pki/incoming/*; ls /home/cpadmin/pki/incoming | wc -l'
+  for f in "$LAB"/ca/exchange/signed/*.crt; do docker cp "$(windows_path "$f")" "$(container_of "$OPS_HOST"):/root/pki/incoming/"; done
+  as_root_on "$OPS_HOST" 'ls /root/pki/incoming | wc -l'
 }
 
 reset() {
@@ -135,7 +140,7 @@ monitoring() {   # 17.6（lab）：銀行監控團隊用小安給的 to-bank/ �
   local dir=$LAB/bank-monitoring hosts="" h tmp
   monitoring_stop >/dev/null
   rm -rf "$dir"; mkdir -p "$dir"/prometheus/confluent "$dir"/alertmanager "$dir"/grafana/provisioning/{datasources,dashboards} "$dir"/webhook
-  tmp=$dir/to-bank; docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/monitoring/to-bank" "$(windows_path "$tmp")"
+  tmp=$dir/to-bank; docker cp "$(container_of "$OPS_HOST"):/root/monitoring/to-bank" "$(windows_path "$tmp")"
   cp "$tmp"/prometheus/* "$dir/prometheus/confluent/"
   sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' "$tmp/alertmanager/alertmanager.yml" > "$dir/alertmanager/alertmanager.yml"
   sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' "$tmp/grafana/datasource-prometheus.yml" > "$dir/grafana/provisioning/datasources/prometheus.yml"
@@ -179,19 +184,19 @@ sign_next() {   # 20.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參
   local ca_dir=${1:-ca} csr cert_name
   announce "20.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
   rm -rf "$LAB/ca/exchange/next"; mkdir -p "$LAB/ca/exchange/next/signed"
-  docker cp "$(container_of "$OPS_HOST"):/home/cpadmin/pki/next/requests" "$(windows_path "$LAB/ca/exchange/next/")"
+  docker cp "$(container_of "$OPS_HOST"):/root/pki/next/requests" "$(windows_path "$LAB/ca/exchange/next/")"
   for csr in "$LAB"/ca/exchange/next/requests/*.csr; do cert_name=$(basename "$csr" .csr); bash "$LAB/$ca_dir/sign.sh" "$csr" "$LAB/ca/exchange/next/signed/$cert_name.crt"; done
-  for cert_file in "$LAB"/ca/exchange/next/signed/*.crt; do docker cp "$(windows_path "$cert_file")" "$(container_of "$OPS_HOST"):/home/cpadmin/pki/next/incoming/"; done
-  as_root_on "$OPS_HOST" 'chown cpadmin:cpadmin /home/cpadmin/pki/next/incoming/*; ls /home/cpadmin/pki/next/incoming | wc -l'
+  for cert_file in "$LAB"/ca/exchange/next/signed/*.crt; do docker cp "$(windows_path "$cert_file")" "$(container_of "$OPS_HOST"):/root/pki/next/incoming/"; done
+  as_root_on "$OPS_HOST" 'ls /root/pki/next/incoming | wc -l'
 }
 
 lb_watch() {   # 12.1（lab）：扮演 LB 團隊：操作機出現 ~/lb-requests/<主機>.<down|up> 就照做、回覆 .done；$LAB/lb-watch.stop 出現就結束
   local request host action stop_file=${1:-$LAB/lb-watch.stop}
   rm -f "$stop_file"; announce "LB 團隊待命（結束：touch $stop_file）"
   while [ ! -f "$stop_file" ]; do
-    for request in $(as_cpadmin_on_ops 'cd ~/lb-requests 2>/dev/null && for f in *.down *.up; do [ -f "$f" ] && [ ! -f "$f.done" ] && echo "$f"; done' 2>/dev/null); do
+    for request in $(as_root_on_ops 'cd ~/lb-requests 2>/dev/null && for f in *.down *.up; do [ -f "$f" ] && [ ! -f "$f.done" ] && echo "$f"; done' 2>/dev/null); do
       host=${request%.*}; action=${request##*.}
-      bash "$LAB/lb-member.sh" "$host" "$action" && as_cpadmin_on_ops "touch ~/lb-requests/$request.done"
+      bash "$LAB/lb-member.sh" "$host" "$action" && as_root_on_ops "touch ~/lb-requests/$request.done"
     done
     sleep 2
   done
@@ -200,4 +205,4 @@ lb_watch() {   # 12.1（lab）：扮演 LB 團隊：操作機出現 ~/lb-request
 case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboot) "$1";;
   monitoring-stop) monitoring_stop;;
   lb-watch) lb_watch "${2:-}";;
-  sign-next) sign_next "${2:-ca}";; pvwa-key) pvwa_key;; *) sed -n '2,11p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next pvwa-key lb-watch"; exit 1;; esac
+  sign-next) sign_next "${2:-ca}";; *) sed -n '2,11p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next lb-watch"; exit 1;; esac
