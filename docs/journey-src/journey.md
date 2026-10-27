@@ -1864,10 +1864,10 @@ kb01: 144 lines, unresolved=0
 
 @role 小安 | ops02 | root
 
-RPM 的 `confluent-server.service` 預設讀 `/etc/kafka/server.properties`，用 drop-in 覆寫成我們的設定、`JAVA_HOME`、heap（lab 規格：controller 384m、broker 512m）。**最後一定要看到 exec 指向我們的檔案**：
+RPM 的 `confluent-server.service` 預設讀 `/etc/kafka/server.properties`，用 drop-in 覆寫成我們的設定、`JAVA_HOME`、heap（lab 規格：controller 384m、broker 768m（官方 JMX exporter 規則每台 broker 約一萬多條序列，加上遷移期間的持續流量，512m 會 OutOfMemoryError））。**最後一定要看到 exec 指向我們的檔案**：
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do case $h in kc*) heap=384m;; *) heap=512m;; esac; ssh $h.poc.lab "sudo install -d -m 0755 /etc/systemd/system/confluent-server.service.d && sudo tee /etc/systemd/system/confluent-server.service.d/10-override.conf >/dev/null <<EOF
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do case $h in kc*) heap=384m;; *) heap=768m;; esac; ssh $h.poc.lab "sudo install -d -m 0755 /etc/systemd/system/confluent-server.service.d && sudo tee /etc/systemd/system/confluent-server.service.d/10-override.conf >/dev/null <<EOF
 [Service]
 ExecStart=
 ExecStart=/usr/bin/kafka-server-start /etc/confluent/kafka/server.properties
@@ -4584,7 +4584,7 @@ ok   AD 密碼錯 → 401
 直連的 app-orders（SCRAM）寫一筆、讀回來；經 REST Proxy 的 app-legacy-billing（mTLS）寫一筆，再由 alice 讀出來確認真的進了 topic：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && CID=$(curl -s --cacert $CA https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && M="acceptance-$(date +%s)" && echo "$M" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config ~/conf/app-orders.properties --topic orders.events >/dev/null 2>&1 && echo "app-orders SCRAM 直連寫入：ok"; kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events --group orders-acceptance --from-beginning --timeout-ms 15000 2>/dev/null | grep -c "$M" | sed 's/^/app-orders 讀回自己寫的：/'; code=$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"value\":{\"type\":\"JSON\",\"data\":\"$M-rest\"}}" "https://rest.poc.lab:8082/v3/clusters/$CID/topics/billing.events/records"); echo "app-legacy-billing 經 LB + REST Proxy（mTLS）寫入：HTTP $code"; kafka-console-consumer --bootstrap-server kb01.poc.lab:9096 --consumer.config ~/conf/client-alice.properties --topic billing.events --group billing-acceptance --from-beginning --timeout-ms 15000 2>/dev/null | grep -c "$M-rest" | sed 's/^/alice 在 billing.events 看到那筆：/'
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && CID=$(curl -s --cacert $CA https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && M="acceptance-$(date +%s)" && echo "$M" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config ~/conf/app-orders.properties --topic orders.events >/dev/null 2>&1 && echo "app-orders SCRAM 直連寫入：ok"; kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events --group orders-acceptance --from-beginning --timeout-ms 45000 2>/dev/null | grep -c "$M" | sed 's/^/app-orders 讀回自己寫的：/'; code=$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"value\":{\"type\":\"JSON\",\"data\":\"$M-rest\"}}" "https://rest.poc.lab:8082/v3/clusters/$CID/topics/billing.events/records"); echo "app-legacy-billing 經 LB + REST Proxy（mTLS）寫入：HTTP $code"; kafka-console-consumer --bootstrap-server kb01.poc.lab:9096 --consumer.config ~/conf/client-alice.properties --topic billing.events --group billing-acceptance --from-beginning --timeout-ms 15000 2>/dev/null | grep -c "$M-rest" | sed 's/^/alice 在 billing.events 看到那筆：/'
 ```
 
 ```out

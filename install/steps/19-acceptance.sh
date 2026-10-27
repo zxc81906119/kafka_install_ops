@@ -93,10 +93,10 @@ scram_app_group=${FIRST_SCRAM_APP#app-}-acceptance
 scram_app_topic=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}' | grep "^${FIRST_SCRAM_APP#app-}\." | head -1)
 rest_app_topic=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}' | grep "^${FIRST_REST_APP##*-}\." | head -1)
 check "$FIRST_SCRAM_APP（SCRAM 直連）寫入 $scram_app_topic" bash -c "echo $test_message | kafka-console-producer --bootstrap-server $FIRST_BROKER:9095 --producer.config $APP_CLIENT_CONF --topic $scram_app_topic"
-check "$FIRST_SCRAM_APP 讀回自己寫的" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9095 --consumer.config $APP_CLIENT_CONF --topic $scram_app_topic --group $scram_app_group --from-beginning --timeout-ms 15000 2>/dev/null | grep -q $test_message"
+check "$FIRST_SCRAM_APP 讀回自己寫的" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9095 --consumer.config $APP_CLIENT_CONF --topic $scram_app_topic --group $scram_app_group --from-beginning --timeout-ms 45000 2>/dev/null | grep -q $test_message"
 rest_body="{\"value\":{\"type\":\"JSON\",\"data\":\"$test_message-rest\"}}"
 check "$FIRST_REST_APP 經負載平衡 + REST Proxy（mTLS）寫入 $rest_app_topic" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA $(rest_app_curl_options) -X POST -H 'Content-Type: application/json' -d '$rest_body' https://$REST_VIP:8082/v3/clusters/$cluster_id/topics/$rest_app_topic/records)\" = 200 ]"
-check "alice 在 $rest_app_topic 讀到那筆" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9096 --consumer.config $ALICE_CLIENT_CONF --topic $rest_app_topic --group acceptance-alice --from-beginning --timeout-ms 15000 2>/dev/null | grep -q $test_message-rest"
+check "alice 在 $rest_app_topic 讀到那筆" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9096 --consumer.config $ALICE_CLIENT_CONF --topic $rest_app_topic --group acceptance-alice --from-beginning --timeout-ms 45000 2>/dev/null | grep -q $test_message-rest"
 application_failures=$((FAIL_COUNT - health_failures - security_failures))
 
 section "19.4 維運"

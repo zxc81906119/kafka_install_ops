@@ -121,5 +121,5 @@ agent_count=$(pgrep -x ssh-agent | wc -l)
 keys_on_disk=$(grep -rls 'PRIVATE KEY' /dev/shm /tmp 2>/dev/null | wc -l)
 summary="ssh-agent=$agent_count /dev/shm 與 /tmp 的私鑰=$keys_on_disk；金鑰檔 $(stat -c '%U:%G %a' "$SSH_KEY")"
 if [ "$agent_count $keys_on_disk" = "0 0" ] && [ "$(stat -c '%U:%G %a' "$SSH_KEY")" = "root:root 400" ]; then ok "$summary"; else fail "$summary"; fi
-tail -3 /var/log/opmenu/opmenu.log | cut -c1-110 | tee -a "$LOG_FILE"
+if [ -s /var/log/opmenu/opmenu.log ]; then tail -3 /var/log/opmenu/opmenu.log | cut -c1-110 | tee -a "$LOG_FILE"; else warn "選單紀錄還是空的（還沒有人用選單做事）；互動試跑後在 /var/log/opmenu/opmenu.log"; fi
 finish_step
