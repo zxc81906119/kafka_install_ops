@@ -13,21 +13,21 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 3.1 | 外網下載機由誰提供？能否連 `packages.confluent.io`、`repo1.maven.org`、`github.com`？ | 所有安裝檔都在下載機抓、驗證後才送進來 | 我方提供一台；只抓 Confluent 套件、監控用的 jar，以及 Confluent 官方的監控檔（GitHub 的 jmx-monitoring-stacks，固定在一個 commit：exporter 規則、告警規則、32 個 Grafana dashboard），OS 套件與 JDK 不下載 |
-| 3.2 | 檔案交換的方式與單次大小上限？ | 整批約 3.1 GB | 超過上限就分批送，每批附各自的雜湊清單 |
-| 3.3 | 放行標準：RPM 有原廠 GPG 簽章＋SHA256，是否足夠？jar、tar、GitHub 上的監控檔沒有原廠簽章，怎麼放行？ | 決定我們要準備哪些證明 | 附 SHA256SUMS 與驗證報告（RPM 原廠簽章逐一驗過、jar 比對 Maven 的雜湊、監控檔記下 commit 並列入 SHA256SUMS；監控檔都是純文字（YAML、JSON），可逐一審閱） |
-| 3.4 | 之後補帶檔案（修補版、升級版）的申請流程與時程？ | 升級、修補都要再走一次 | 每次升級前兩週提出 |
+| 2.1 | 外網下載機由誰提供？能否連 `packages.confluent.io`、`repo1.maven.org`、`github.com`？ | 所有安裝檔都在下載機抓、驗證後才送進來 | 我方提供一台；只抓 Confluent 套件、監控用的 jar，以及 Confluent 官方的監控檔（GitHub 的 jmx-monitoring-stacks，固定在一個 commit：exporter 規則、告警規則、32 個 Grafana dashboard），OS 套件與 JDK 不下載 |
+| 2.2 | 檔案交換的方式與單次大小上限？ | 整批約 3.1 GB | 超過上限就分批送，每批附各自的雜湊清單 |
+| 2.3 | 放行標準：RPM 有原廠 GPG 簽章＋SHA256，是否足夠？jar、tar、GitHub 上的監控檔沒有原廠簽章，怎麼放行？ | 決定我們要準備哪些證明 | 附 SHA256SUMS 與驗證報告（RPM 原廠簽章逐一驗過、jar 比對 Maven 的雜湊、監控檔記下 commit 並列入 SHA256SUMS；監控檔都是純文字（YAML、JSON），可逐一審閱） |
+| 2.4 | 之後補帶檔案（修補版、升級版）的申請流程與時程？ | 升級、修補都要再走一次 | 每次升級前兩週提出 |
 | 2.5 | 我們先裝 Confluent Platform 8.2.4，再遷移到 8.3.2：兩套 RPM（各約 3 GB，其中 `confluent-security` 與 Control Center 各超過 1 GB）加兩個 JDK 合計約 6 GB，能否一次掃描、一次送進來？ | 遷移時才補帶要再等一輪開單；單檔大小上限會卡住 | 一次送兩套（安裝基底與遷移目標分在兩個目錄），遷移時直接上架；若平台有單次容量上限，分兩批 |
 
 # 3. 套件來源與 JDK（OS 團隊）
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 第 4 章 | OS 套件從哪裡裝：Satellite、制品庫（Nexus／Artifactory）、還是 web server？`.repo` 由誰設定？ | 每台主機要能 `dnf install` | 對 dnf 都一樣；由 OS 團隊設定 `.repo`，我們只檢查裝得到 |
-| 5.1 | 下列 OS 套件是否都在套件來源裡：chrony、firewalld、cyrus-sasl、openssl-devel、python3-dnf-plugin-versionlock、gettext、createrepo_c？ | 安裝與 Control Center 需要 | 缺的請 OS 團隊補進套件來源 |
-| 5.2 | Confluent 的 RPM 上架到行內制品庫，還是由操作機自建一個套件目錄？由誰上架？ | 決定上架步驟與權限 | 操作機建好索引，經 ssh 推到銀行的 web server 一個目錄；不需要在 web server 上裝工具 |
-| 5.3 | JDK 由誰提供？tar 還是 RPM？版本？之後誰負責更新？Confluent Platform 8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（原廠建議仍是 21）：遷移到 8.3 時要不要一起換到 JDK 25？ | 安裝基底一定是 JDK 21（8.2.x 不支援 25）；25 是遷移時才用，選 25 要和原廠支援確認 | 銀行交付 JDK 21 與 JDK 25 兩個 tar，我們安裝到 `/opt/java/` 並登記 `alternatives`；沒有要求用 25 時遷移只做套件與 finalize，JDK 留在 21 |
-| 5.4 | 行內的 RHEL 9 套件庫現在是哪個小版本（例如 9.4、9.6）？套件庫是釘在特定小版本，還是追 RHEL 9 的最新？多久同步一次、誰操作？變更窗口前能否先同步到目標小版本？ | 我們的安裝基底假設是 9.6、遷移目標 9.8（lab 的假設）；`dnf update` 會一路更新到套件庫有的最新小版本，不是你以為的那一版；小版本更新要先有目標內容 | 步驟與小版本無關（手把手 30.0–30.5）：以銀行實際的小版本為準；套件庫若追最新，請釘住（或在變更窗口前同步到要的那一版）。更新前每台先做 VM 快照；更新時 Confluent 套件由 versionlock 鎖住，JDK 是 tar，兩者不受影響 |
+| 3.1 | OS 套件從哪裡裝：Satellite、制品庫（Nexus／Artifactory）、還是 web server？`.repo` 由誰設定？ | 每台主機要能 `dnf install` | 對 dnf 都一樣；由 OS 團隊設定 `.repo`，我們只檢查裝得到 |
+| 3.2 | 下列 OS 套件是否都在套件來源裡：chrony、firewalld、cyrus-sasl、openssl-devel、python3-dnf-plugin-versionlock、gettext、createrepo_c？ | 安裝與 Control Center 需要 | 缺的請 OS 團隊補進套件來源 |
+| 3.3 | Confluent 的 RPM 上架到行內制品庫，還是由操作機自建一個套件目錄？由誰上架？ | 決定上架步驟與權限 | 操作機建好索引，經 ssh 推到銀行的 web server 一個目錄；不需要在 web server 上裝工具 |
+| 3.4 | JDK 由誰提供？tar 還是 RPM？版本？之後誰負責更新？Confluent Platform 8.2.x 只支援 Java 17／21，8.3.x 支援 17／21／25（原廠建議仍是 21）：遷移到 8.3 時要不要一起換到 JDK 25？ | 安裝基底一定是 JDK 21（8.2.x 不支援 25）；25 是遷移時才用，選 25 要和原廠支援確認 | 銀行交付 JDK 21 與 JDK 25 兩個 tar，我們安裝到 `/opt/java/` 並登記 `alternatives`；沒有要求用 25 時遷移只做套件與 finalize，JDK 留在 21 |
+| 3.5 | 行內的 RHEL 9 套件庫現在是哪個小版本（例如 9.4、9.6）？套件庫是釘在特定小版本，還是追 RHEL 9 的最新？多久同步一次、誰操作？變更窗口前能否先同步到目標小版本？ | 我們的安裝基底假設是 9.6、遷移目標 9.8（lab 的假設）；`dnf update` 會一路更新到套件庫有的最新小版本，不是你以為的那一版；小版本更新要先有目標內容 | 步驟與小版本無關（手把手 30.0–30.5）：以銀行實際的小版本為準；套件庫若追最新，請釘住（或在變更窗口前同步到要的那一版）。更新前每台先做 VM 快照；更新時 Confluent 套件由 versionlock 鎖住，JDK 是 tar，兩者不受影響 |
 
 # 4. 主機與帳號（OS 團隊、資安）
 
@@ -46,13 +46,13 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 5.1 | 第 12 章的連線由誰開？主機上的 firewalld 可否由我們依角色設定？ | 每個元件要開的 port 不同 | 我們依角色只開必要的 port＋ssh |
+| 5.1 | 第 13 章的連線由誰開？主機上的 firewalld 可否由我們依角色設定？ | 每個元件要開的 port 不同 | 我們依角色只開必要的 port＋ssh |
 | 5.2 | 主機名稱解析用 DNS 還是 `/etc/hosts`？FQDN 命名規則？ | 憑證上的名稱必須和連線名稱一致 | 使用 DNS，名稱在申請憑證前確定 |
 | 5.3 | NTP 來源？ | 憑證與 token 要求時鐘誤差 2 秒內 | 指向行內 NTP |
 | 5.4 | REST Proxy 前的負載平衡：設備型態、VIP 名稱、能否做 L4 直通（不解 TLS）？ | 應用程式用 client 憑證，必須由 REST Proxy 自己驗 | L4 直通、依來源 IP 黏著 |
 | 5.5 | 維運人員從哪個網段連 Control Center（9021）？ | Control Center 直連，不經負載平衡 | 從維運網段（跳板或 VDI）直連 |
 | 5.6 | 變更時段內，LB 團隊能否配合「停用 REST Proxy 的一台 → 我方重啟 → 恢復 → 換另一台」？由誰操作、怎麼聯絡？LB 有沒有主動健康檢查（REST 是雙向 TLS）？ | 只靠被動檢查時，REST 每重啟一次就有幾秒的請求失敗（lab 升級演練實測 4 次）；先停用再重啟可以做到 0 失敗 | 每次重啟 REST 前由 LB 團隊停用該台、我方確認排空後重啟、200 後通知恢復（手把手 12.1） |
-
+| 5.7 | AD 的 LDAPS（636）只有 broker（kb01–kb04）會連，操作機、Control Center、REST Proxy 都不直接連 AD：防火牆可否只放行這四台到 AD？ | 人員與 C3 的 AD 驗證都經 MDS（在 broker 上）轉手；少開來源就少一個面 | 只放行 broker → AD 636 |
 # 6. 憑證（CA 窗口）
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
@@ -71,6 +71,7 @@
 | 7.2 | 平台用的群組（管理、維運、開發、稽核）命名與成員由誰管理？ | 權限只綁群組，不綁個人 | 群組由 AD 團隊依申請單管理 |
 | 7.3 | LDAPS 用哪幾台 DC？憑證由哪個 CA 簽？ | 平台要能驗 DC 的憑證、DC 故障時切換 | 設兩台以上，連線逾時 3 秒 |
 | 7.4 | 維運人員用 AD 帳密登入 Control Center 是否可以？是否要求 MFA？ | Control Center 只支援帳號密碼 | AD 帳密登入，不做 MFA |
+| 7.5 | Kafka 的權限管理（role binding 的增刪）由誰做：維運群組 `kafka-admins`（SystemAdmin）兼管，還是另有專責的帳號／資安團隊？若是後者，請提供 AD 群組名稱，我們綁 `UserAdmin`（只能管權限、碰不到資料） | 決定 RBAC 的分工與維運選單 42 授權項目給誰 | kafka-admins 兼管 |
 
 # 8. CyberArk 與密碼保管（Secrets 團隊、資安）
 
@@ -85,6 +86,7 @@
 | 8.5 | AD 查詢帳號 `svc-mds-bind` 的密碼換的時候一定要通知平台（換完要更新密文、滾動重啟）：由誰換、多久換？可否開 A／B 兩組帳號交替？ | 這個密碼加密後固定在主機上，悄悄換掉的話 broker 下次重啟時權限服務起不來 | 依變更單、單一帳號；AD 團隊換完交新密碼給平台工程師，平台更新密文、滾動重啟（約 10 分鐘，不中斷應用程式） |
 | 8.6 | 平台加密用的 master key 多久輪替一次？依哪一條規範？規範是否要求「加密金鑰本身」（data key）也定期更換？ | 決定 20.3 的輪替週期；data key 定期更換要另外排程 | master key 每年輪替一次，保管人異動時也換；data key 不例行更換，懷疑外洩時改換密碼本身並重新加密 |
 | 8.7 | 經 PSMP 登入操作機後：是否有指令白名單（要能執行 `ssh`、`scp`、`sudo`、`ssh-keygen`、`openssl`、`keytool`、Confluent CLI）？錄影或指令紀錄是否會記下鍵盤輸入的內容？ | 平台工程師在操作機以 root 執行安裝、換金鑰、換密碼 | 允許上述指令；輸入機密時一律關閉回顯（`read -s`），畫面與錄影不會出現值 |
+| 8.8 | 平台變更用的 `svc-ops` 憑證私鑰（RBAC SystemAdmin）安裝完成後要移到離線保管：用什麼保管（實體媒體、加密檔）、誰能取、取用有沒有紀錄？ | 它能做叢集上所有事；平時不該留在操作機上 | 加密後交銀行指定的保管方式，依變更單取回 |
 
 # 9. 維運選單與紀錄（維運、資安）
 
@@ -109,15 +111,22 @@
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
 | 11.1 | 監控採「JMX exporter＋行內 Prometheus＋行內 Alertmanager＋行內 Grafana」，行內 Prometheus、Alertmanager、Grafana 的版本與位置？ | 我們交付設定，不安裝這三套；版本影響設定寫法（自訂 webhook 內容要較新的 Alertmanager，我們在 0.34.1 實測；Prometheus 2.43 以上才有 scrape_config_files，我們用 3.5.0） | 銀行提供；我方交付 scrape 設定、21 條告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方 32 個 dashboard、根憑證、抓取密碼 |
-| 20.2 | 機房斷電演練時的開機順序可否配合（controller → broker → REST Proxy／Control Center）？ | 全部同時開機時 Control Center 要等權限服務起來 | 已加上等待機制；仍建議依順序開機 |
-| 11.2 | 行內 Prometheus 抓其他系統（主機、資料庫）用哪種認證：不加密、HTTPS＋帳密，還是 HTTPS＋client 憑證（mTLS）？ | 跟著行內既有慣例走，維運與稽核最省事 | HTTPS＋帳密（9 台共用一組抓取密碼，主機上只存加鹽雜湊）；要 mTLS 須另發 Prometheus 的 client 憑證 |
+| 11.2 | 機房斷電演練時的開機順序可否配合（controller → broker → REST Proxy／Control Center）？ | 全部同時開機時 Control Center 要等權限服務起來 | 已加上等待機制；仍建議依順序開機 |
+| 11.3 | 行內 Prometheus 抓其他系統（主機、資料庫）用哪種認證：不加密、HTTPS＋帳密，還是 HTTPS＋client 憑證（mTLS）？ | 跟著行內既有慣例走，維運與稽核最省事 | HTTPS＋帳密（9 台共用一組抓取密碼，主機上只存加鹽雜湊）；要 mTLS 須另發 Prometheus 的 client 憑證 |
 | 11.4 | 每台的 7071 可否只放行行內 Prometheus 的來源位址？請提供位址（或網段） | 抓取帳密是共用的，限制來源可以縮小外洩後的影響範圍 | 主機防火牆目前對所有來源開放 7071；拿到位址後改成只放行它 |
 | 11.5 | 告警要送到哪裡？接收端是 IBM Netcool/OMNIbus（下稱 omnibus）；我們送的 JSON 欄位（附範例）符合它的接收規格嗎？要不要認證（API token）？ | 我們準備了兩種 webhook 範例：Alertmanager 預設的 JSON，和照 omnibus 規格自訂的 JSON（source、ClassName、msg_catalog、msg、state、severity、sub_origin、origin、hostname、sub_source）；其中 source、ClassName、origin、hostname、sub_source 先填你們提供的範例值，請確認正式值 | 兩種都交付，銀行留一種；欄位對應（例如 critical → ERROR）依行內的定義改範本。token 放檔案、不寫進設定 |
 | 11.6 | Grafana 怎麼放 dashboard 與 datasource：檔案佈建（provisioning）還是手動匯入？登入用 AD（LDAP／SSO）嗎？誰能改 dashboard？ | 32 個官方 dashboard 以檔案佈建最容易維護與重建；Grafana 的權限要和平台的 RBAC 分開想 | 檔案佈建、唯讀；datasource 名稱與 uid 固定為 Prometheus |
 | 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |
 | 11.8 | 確認：告警與 dashboard 只用行內這一套，不在 Control Center 建 alert trigger／action（C3 內建的 Prometheus、Alertmanager 只給 C3 畫面用） | C3 內建 Alertmanager 的設定會被 C3 重寫、webhook 內容不能自訂 | 如此設計；請銀行確認沒有別的流程依賴 C3 的告警功能 |
 
-# 12. 附件：要開的連線
+# 12. 範圍確認（專案窗口）
+
+| # | 問題 | 為什麼要知道 | 我們的預設 |
+|---|---|---|---|
+| 12.1 | 跨機房的災難復原（第二個叢集、Cluster Linking、RPO／RTO）是否在這次範圍內？ | 手冊目前只涵蓋單一機房：叢集內 replication factor 3、每日中繼資料備份；跨機房要另外設計與採購 | 不在這次範圍，另案討論 |
+| 12.2 | 容量規劃與效能測試（主機規格、磁碟大小、流量壓測）由誰負責？ | 手冊的 lab 數字（heap、磁碟）不代表正式環境 | 銀行提供需求量，我方提出建議規格，上線前做一輪壓測 |
+
+# 13. 附件：要開的連線
 
 | 從 | 到 | port | 用途 |
 |---|---|---|---|
