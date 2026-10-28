@@ -58,7 +58,7 @@
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
 | 6.1 | 憑證申請流程、申請單格式、從申請到簽回要多久？ | 安裝第 9 站要等簽回 | 我們產生私鑰與 CSR（私鑰不離開操作機），附申請單 |
-| 6.2 | 同一張憑證可否同時有 serverAuth 與 clientAuth？簽發時會不會調整 SAN？ | controller 與 broker 之間（kafka-internal）兩端都要出示憑證；對外服務的 server 憑證（cp-server）與各 client 憑證（含 C3 連自己 Prometheus 用的 c3-monitoring）各自只用一種 | kafka-internal 兩種用途同一張；cp-server 只要 serverAuth；其餘 client 憑證只要 clientAuth；SAN 照 CSR。一共 9 張，請確認 CA 範本兩種用途都能簽 |
+| 6.2 | 同一張憑證可否同時有 serverAuth 與 clientAuth？簽發時會不會調整 SAN？ | controller 與 broker 之間（kafka-internal）兩端都要出示憑證；對外服務的 server 憑證（cp-server）與各 client 憑證（含內建 Prometheus 連 Alertmanager 用的 c3-monitoring）各自只用一種 | kafka-internal 兩種用途同一張；cp-server 只要 serverAuth；其餘 client 憑證只要 clientAuth；SAN 照 CSR。一共 9 張，請確認 CA 範本兩種用途都能簽 |
 | 6.3 | 回覆的格式：是否包含中繼 CA？ | 憑證鏈要完整 | PEM，leaf 後接中繼 CA |
 | 6.4 | 效期多久？到期前誰提醒？換根或中繼 CA 時會不會提前通知？ | 換 CA 要分三階段、各主機的信任清單要配合 | 效期一年；換 CA 提前一個月通知 |
 | 6.5 | 根憑證放進每台主機的作業系統信任清單，由誰做？ | 所有連線都靠它驗證 | OS 團隊放進 `/etc/pki/ca-trust/source/anchors/` |

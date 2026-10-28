@@ -12,14 +12,14 @@ source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 source "$INSTALL_DIR/lib/render.sh"
 
-section "派送憑證（Prometheus／Alertmanager 是 Go 程式，吃 PEM：cp-server.crt／.key 當 server、c3-monitoring.crt／.key 當 client、ca.pem）"
+section "派送憑證（Prometheus／Alertmanager 是 Go 程式，吃 PEM：cp-server.crt／.key 當 server、c3-monitoring.crt／.key 給 Prometheus 連 Alertmanager 當 client、ca.pem；C3 自己用 svc-c3.p12）"
 copy_to_tmp "$C3_HOST" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/cp-server.p12" "$CERTS_DIR/cp-server.crt" "$KEYS_DIR/cp-server.key" \
-  "$CERTS_DIR/c3-monitoring.p12" "$CERTS_DIR/c3-monitoring.crt" "$KEYS_DIR/c3-monitoring.key" \
+  "$CERTS_DIR/c3-monitoring.crt" "$KEYS_DIR/c3-monitoring.key" \
   "$CERTS_DIR/bank-root.pem" "$CERTS_DIR/svc-c3.p12" "$CERTS_DIR/mds-token-public.pem" || die "scp 失敗"
 file_count=$(ssh_script "$C3_HOST" <<'EOF'
 sudo install -d -o root -g root -m 0755 /etc/confluent
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center
-for file in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do
+for file in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do
   sudo install -o root -g confluent -m 0640 /tmp/$file /etc/confluent/ssl/
 done
 sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem
@@ -27,7 +27,7 @@ rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/m
 sudo ls /etc/confluent/ssl | wc -l
 EOF
 )
-if [ "$file_count" = 10 ]; then ok "$C3_HOST: 10 files"; else die "$C3_HOST: $file_count files（預期 10）"; fi
+if [ "$file_count" = 9 ]; then ok "$C3_HOST: 9 files"; else die "$C3_HOST: $file_count files（預期 9）"; fi
 
 section "Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定"
 export C3_FQDN

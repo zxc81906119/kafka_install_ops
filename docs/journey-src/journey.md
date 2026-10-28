@@ -1566,7 +1566,7 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 | kafka-internal | controller、broker 之間的 mTLS | serverAuth, clientAuth | kc01–03、kb01–04 |
 | cp-server | 所有對外服務的**伺服器端**：client listener、MDS、REST、C3、Prometheus。只當 server 憑證，不拿去當 client 出示 | serverAuth | 全部主機、rest.poc.lab、c3.poc.lab、localhost |
 | svc-rest、svc-c3、svc-ops | REST Proxy、C3、操作機向 MDS 換 token 的身分 | clientAuth | 無 |
-| c3-monitoring | C3 向自己內建的 Prometheus、Alertmanager 出示的 client 身分（第 13 章）。只做這件事，**不綁任何 Kafka 角色** | clientAuth | 無 |
+| c3-monitoring | 內建 Prometheus 向 Alertmanager 出示的 client 身分（第 13 章），只有 PEM 檔，沒有 keystore。只做這件事，**不綁任何 Kafka 角色**（C3 本身連 Prometheus、Alertmanager 用自己的 `svc-c3`） | clientAuth | 無 |
 | app-legacy-billing | 走 REST Proxy 的應用程式 | clientAuth | 無 |
 | opmenu-breakglass | 維運選單（第 16 章）緊急模式用的身分 | clientAuth | 無 |
 | svc-backup | 每日備份（第 25 章）匯出叢集中繼資料的唯讀身分 | clientAuth | 無 |
@@ -2460,14 +2460,14 @@ kill $(cat /tmp/lbprobe.pid); sleep 1; echo "經 LB 打了 $(wc -l < /tmp/lbprob
 C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。內建的 Prometheus、Alertmanager 是給 C3 自己的畫面用的；**監控與告警不走它們**（第 17 章用行內的 Prometheus、Alertmanager、Grafana），所以這一章只把它們設到 C3 畫面能用，不要在 C3 畫面建 alert trigger 或 action。
 
 ```bash
-scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-server.crt ~/pki/keys/cp-server.key ~/pki/certs/c3-monitoring.p12 ~/pki/certs/c3-monitoring.crt ~/pki/keys/c3-monitoring.key ~/pki/certs/bank-root.pem ~/pki/certs/svc-c3.p12 ~/pki/certs/mds-token-public.pem c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center && for f in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem; rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/mds-token-public.pem; echo "c3-01: $(sudo ls /etc/confluent/ssl | wc -l) files"'
+scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-server.crt ~/pki/keys/cp-server.key ~/pki/certs/c3-monitoring.crt ~/pki/keys/c3-monitoring.key ~/pki/certs/bank-root.pem ~/pki/certs/svc-c3.p12 ~/pki/certs/mds-token-public.pem c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center && for f in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem; rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/mds-token-public.pem; echo "c3-01: $(sudo ls /etc/confluent/ssl | wc -l) files"'
 ```
 
 ```out
-c3-01: 10 files
+c3-01: 9 files
 ```
 
-Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。兩個角色用兩張憑證：它們自己對外出示的是 `cp-server`（只有 serverAuth，純 server 憑證）；C3 去連它們、Prometheus 去連 Alertmanager 時出示的是 `c3-monitoring`（只有 clientAuth，不綁任何 Kafka 角色）。這樣 `cp-server` 即使外洩，也不能拿去當 client 登入任何需要 client 憑證的服務；Prometheus／Alertmanager 的 `client_auth_type` 只驗憑證鏈與用途，不看 CN，所以不用另外設定誰能連。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
+Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。三種身分各用各的憑證：Prometheus、Alertmanager 自己對外出示的是 `cp-server`（只有 serverAuth，純 server 憑證）；C3（Java）去連它們時出示 C3 自己的 client 憑證 `svc-c3`（keystore 就是 C3 已經在用的 `svc-c3.p12`，不用新檔）；Prometheus（Go）去連 Alertmanager 時出示 `c3-monitoring`（只有 clientAuth、不綁任何 Kafka 角色，用 PEM 檔，所以沒有 `SystemAdmin` 的私鑰以 PEM 留在磁碟上）。這樣 `cp-server` 即使外洩，也不能拿去當 client 登入任何需要 client 憑證的服務；Prometheus／Alertmanager 的 `client_auth_type` 只驗憑證鏈與用途，不看 CN，所以不用另外設定誰能連。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
 
 ```bash
 ssh c3-01.poc.lab 'sudo tee /etc/confluent-control-center/web-config-prom.yml >/dev/null <<EOF
@@ -2575,18 +2575,18 @@ confluent.controlcenter.prometheus.url=https://c3-01.poc.lab:9090
 confluent.controlcenter.prometheus.rules.file=/etc/confluent-control-center/trigger_rules-generated.yml
 confluent.controlcenter.prometheus.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.controlcenter.prometheus.ssl.truststore.password=${STORE_PASSWORD}
-confluent.controlcenter.prometheus.ssl.keystore.location=/etc/confluent/ssl/c3-monitoring.p12
+confluent.controlcenter.prometheus.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
 confluent.controlcenter.prometheus.ssl.keystore.password=${STORE_PASSWORD}
 confluent.controlcenter.prometheus.ssl.key.password=${STORE_PASSWORD}
-confluent.controlcenter.prometheus.alias.name=c3-monitoring
+confluent.controlcenter.prometheus.alias.name=svc-c3
 confluent.controlcenter.alertmanager.url=https://c3-01.poc.lab:9093
 confluent.controlcenter.alertmanager.config.file=/etc/confluent-control-center/alertmanager-generated.yml
 confluent.controlcenter.alertmanager.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.controlcenter.alertmanager.ssl.truststore.password=${STORE_PASSWORD}
-confluent.controlcenter.alertmanager.ssl.keystore.location=/etc/confluent/ssl/c3-monitoring.p12
+confluent.controlcenter.alertmanager.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
 confluent.controlcenter.alertmanager.ssl.keystore.password=${STORE_PASSWORD}
 confluent.controlcenter.alertmanager.ssl.key.password=${STORE_PASSWORD}
-confluent.controlcenter.alertmanager.alias.name=c3-monitoring
+confluent.controlcenter.alertmanager.alias.name=svc-c3
 EOF
 cd ~/conf && export STORE_PASSWORD=$(cat ~/pki/store.pass) && (umask 077; envsubst '${STORE_PASSWORD}' < control-center.tpl > c3-01.control-center.properties) && unset STORE_PASSWORD && scp -q c3-01.control-center.properties c3-01.poc.lab:/tmp/control-center.properties && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/control-center.properties /etc/confluent/control-center/control-center.properties && rm -f /tmp/control-center.properties && sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/confluent/control-center && sudo install -d -m 0755 /etc/systemd/system/confluent-control-center.service.d && sudo tee /etc/systemd/system/confluent-control-center.service.d/10-override.conf >/dev/null <<EOF
 [Service]
@@ -4992,7 +4992,7 @@ cp-server: old=F343BC54 new=F343BC5C
 | controller | kafka-internal.p12 | confluent-server |
 | broker | kafka-internal.p12、cp-server.p12 | confluent-server（JMX exporter 一起） |
 | REST Proxy | cp-server.p12、svc-rest.p12 | confluent-kafka-rest |
-| C3 | cp-server.p12、cp-server.crt／.key、c3-monitoring.p12、c3-monitoring.crt／.key、svc-c3.p12 | prometheus、alertmanager、confluent-control-center |
+| C3 | cp-server.p12、cp-server.crt／.key、c3-monitoring.crt／.key、svc-c3.p12 | prometheus、alertmanager、confluent-control-center |
 
 一台一台：放檔 → 重啟 → 等健康 → 確認那台出示的是新序號，才做下一台：
 
@@ -5012,7 +5012,7 @@ kb01 MDS=200 9092=new 9095=new
 REST Proxy 與 C3（REST 的健康檢查用應用程式的**舊**憑證，證明舊 leaf 在換發期間仍然有效）：
 
 ```bash
-cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.p12 certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
 ```
 
 ```out
@@ -5353,7 +5353,7 @@ kb01 MDS=200 9092=new 9095=new
 **20.2.4 REST Proxy 與 C3**
 
 ```bash
-cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.p12 certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
 ```
 
 ```out
@@ -5740,7 +5740,7 @@ kb01 MDS=200 9092=new 9095=new
 REST Proxy 與 C3（C3 的 `cp-server.key`、`c3-monitoring.key` 沒變，照樣一起放，指令和 20.2.4 一致）：
 
 ```bash
-cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/c3-monitoring.p12 certs/c3-monitoring.crt ../keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(via c3-01.poc.lab:9021)" = "$G3" ] && echo new || echo OLD) 9090=$([ "$(via c3-01.poc.lab:9090)" = "$G3" ] && echo new || echo OLD)"
+cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/c3-monitoring.crt ../keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(via c3-01.poc.lab:9021)" = "$G3" ] && echo new || echo OLD) 9090=$([ "$(via c3-01.poc.lab:9090)" = "$G3" ] && echo new || echo OLD)"
 ```
 
 ```out

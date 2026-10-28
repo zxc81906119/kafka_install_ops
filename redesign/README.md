@@ -286,7 +286,7 @@
 
 ### cp-server 改成純 server 憑證（2026-10-25 討論；2026-10-28 定案並改進手冊與腳本）
 
-- **定案（2026-10-28）**：cp-server 只有 serverAuth；新增 `c3-monitoring`（clientAuth、無 RBAC、無 SAN）給 C3 的 keystore（prometheus／alertmanager 兩組）、`prometheus-generated.yml` 的 tls_config、第 13／14／19 站的檢查指令用；憑證共 9 張。web-config 的 `cp-server.crt/.key` 是 Prometheus／Alertmanager 的 server 端，不變。第 20 章換發、C3 派送一起帶 c3-monitoring；問題清單 6.2 說明。19 站新增一項驗收：cp-server 只有 serverAuth 且拿來連 9090 被拒。**還沒從零實跑驗證**（下一輪乾淨手冊實跑與腳本重跑要確認：keystore alias 讀得到、C3 連線正常、cp-server 被拒）。
+- **定案（2026-10-28）**：cp-server 只有 serverAuth；新增 `c3-monitoring`（clientAuth、無 RBAC、無 SAN）給內建 Prometheus 連 Alertmanager（`prometheus-generated.yml` 的 tls_config，PEM，沒有 p12）和第 13／14／19 站的檢查指令用；C3 自己連 Prometheus／Alertmanager 的 keystore 用 `svc-c3.p12`（alias svc-c3，使用者 2026-10-28 指正：C3 用自己的 client 憑證即可）；憑證共 9 張。web-config 的 `cp-server.crt/.key` 是 Prometheus／Alertmanager 的 server 端，不變。第 20 章換發、C3 派送一起帶 c3-monitoring；問題清單 6.2 說明。19 站新增一項驗收：cp-server 只有 serverAuth 且拿來連 9090 被拒。**還沒從零實跑驗證**（下一輪乾淨手冊實跑與腳本重跑要確認：keystore alias 讀得到、C3 連線正常、cp-server 被拒）。
 
 - 目標：cp-server 的 EKU 只留 serverAuth。現在當 client 用的只有 C3 ↔ 內建 Prometheus／Alertmanager（C3 的 keystore、prometheus-generated.yml 的 tls_config）與操作機的檢查指令（curl --cert cp-server 連 9090）。broker／REST／MDS／JMX exporter 只當 server 用；telemetry 用 kafka-internal。
 - Claude 的建議（未定案）：另發 `c3-monitoring`（clientAuth、無 RBAC）給 C3 監控元件用；不用 svc-c3（它是 SystemAdmin，Prometheus 需要明文 PEM 私鑰）；檢查指令改用 svc-ops；已上線環境先改 C3 再換發 cp-server（21.2）；可選 `client_allowed_sans`（要先確認 C3 附的 Prometheus 版本支援）。
