@@ -108,6 +108,8 @@ Details of the architecture and every component: @README.md
 - Windows Git Bash has no real `python3` (it is the Microsoft Store stub: silent, exit 0): run Python inside a container or on ops02.
 - Never edit a bash script that is running (`install/lab/run-customer.sh`, `tools/run-full.sh` runners): bash reads the file as it goes, so later
   stages execute the edited text against the old copy already pushed to ops02 (2026-10-28: a run died at stage 17 looking for the renamed `29-upgrade.sh`).
+- MDS / authorizer / audit logs are **not** in the journal: the RPM log4j2.yaml sends them to `/var/log/kafka/metadata-service.log` (and `kafka-authorizer.log`). A broker stuck at `Waiting for all of the authorizer futures` (then `Authorizer did not start up within the timeout` after 10 min, systemd restart loop) = look there first; `LDAP … data 52e` is a wrong `svc-mds-bind` password.
+- Secret Protection cipher keys are `<config-file basename>/<field>`: `confluent secret file update --config-file X` must use the **same basename** the deployed properties reference (`${securepass:…:kb01.server.properties/…}`), or it silently adds new lines and the broker keeps the old cipher (2026-10-29: a whole MDS layer died on the next restarts). Manual 15.3 and step 15 both name files `<host>.server.properties` / `.kafka-rest.properties` / `.control-center.properties`.
 - Check run logs line by line, not only `scan-log.sh`: an empty value after "：" means the check's precondition was missing.
 - Building a package set with `dnf download --resolve`: use a clean container and download **before** installing
   tools, or the tools' dependencies are missed (`createrepo_c-libs`).

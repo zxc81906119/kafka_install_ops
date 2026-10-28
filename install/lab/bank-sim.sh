@@ -270,6 +270,44 @@ ad_drill() {   # 11.2：AD 不通時，人員登不進 MDS、緊急帳號 kafka-
   return $rc
 }
 
+broker_stop() {   # 28.3（lab）：主機團隊／意外：把一台 broker 的服務停掉（容器裡以 root 停，不經 cpuser）
+  local b=${1:-}; [ -n "$b" ] || { echo "用法：bank-sim.sh broker-stop <broker>"; return 1; }
+  announce "28.3 $b 的 confluent-server 停掉（模擬主機或服務掛了）"
+  docker exec "$(container_of "$b")" systemctl stop confluent-server && sleep 15 && echo "$b confluent-server：$(docker exec "$(container_of "$b")" systemctl is-active confluent-server)"
+}
+
+_alerts() {   # 銀行 Prometheus 現在的告警：firing：…；pending：…
+  docker run --rm --network lab_labnet "$NODE_IMAGE" bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
+import json, sys
+a = json.load(sys.stdin)[\"data\"][\"alerts\"]
+print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(\" + x[\"labels\"].get(\"hostname\", x[\"labels\"].get(\"env\", \"\")) + \")\" for x in a if x[\"state\"] == \"firing\"))) or \"無\") + \"；pending：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x in a if x[\"state\"] == \"pending\"))) or \"無\"))"'
+}
+alerts_wait() {   # 28.3（lab）：等這些告警都 firing（預設 ConfluentTargetDown KafkaUnderReplicatedPartitions；最多 7 分鐘）
+  local want=${1:-ConfluentTargetDown KafkaUnderReplicatedPartitions} i r w all
+  announce "28.3 監控團隊：等告警 firing（$want）"
+  for i in $(seq 1 42); do r=$(_alerts); all=1; for w in $want; do grep -qE "firing：[^；]*$w" <<<"$r" || all=0; done; [ "$all" = 1 ] && break; sleep 10; done
+  echo "等了約 $((i*10)) 秒：$r"; [ "$all" = 1 ]
+}
+alerts_clear() {   # 28.3（lab）：等告警全部解除（最多 3 分鐘）
+  local i r
+  announce "28.3 監控團隊：等告警解除"
+  for i in $(seq 1 18); do r=$(_alerts); grep -q '^firing：無' <<<"$r" && break; sleep 10; done
+  echo "等了約 $((i*10)) 秒：$r"; grep -q '^firing：無' <<<"$r"
+}
+
+sign_app() {   # 27.3（lab）：CA 窗口只簽一張新應用程式的 CSR（~/pki/requests/<名稱>.csr → ~/pki/incoming/<名稱>.crt），用現行的 CA（21.3 換過之後是 ca/g2）
+  local n=${1:-} d="" c; [ -n "$n" ] || { echo "用法：bank-sim.sh sign-app <憑證名稱>"; return 1; }
+  # 現行的 CA＝中繼憑證能被平台現在信任的根驗證通過的那個目錄（21.3 換過 CA 之後是 ca/g2）；不能只看目錄存不存在
+  mkdir -p "$LAB/ca/exchange"; docker exec "$(container_of "$OPS_HOST")" cat /etc/pki/ca-trust/source/anchors/bank-root.pem > "$LAB/ca/exchange/anchor.pem"
+  for c in "$LAB/ca" "$LAB/ca/g2"; do [ -f "$c/issuing.crt" ] && openssl verify -CAfile "$(windows_path "$LAB/ca/exchange/anchor.pem")" "$(windows_path "$c/issuing.crt")" >/dev/null 2>&1 && d=$c; done
+  [ -n "$d" ] || { echo "沒有一個 CA 目錄的中繼憑證能被平台信任"; return 1; }
+  announce "27.3 CA 窗口：用 $(basename "$d") 簽 ~/pki/requests/$n.csr → ~/pki/incoming/$n.crt"
+  mkdir -p "$LAB/ca/exchange/requests" "$LAB/ca/exchange/signed"
+  docker cp "$(container_of "$OPS_HOST"):/root/pki/requests/$n.csr" "$(windows_path "$LAB/ca/exchange/requests/$n.csr")" || return 1
+  bash "$d/sign.sh" "$LAB/ca/exchange/requests/$n.csr" "$LAB/ca/exchange/signed/$n.crt" || return 1
+  docker cp "$(windows_path "$LAB/ca/exchange/signed/$n.crt")" "$(container_of "$OPS_HOST"):/root/pki/incoming/"
+}
+
 sign_next() {   # 21.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
   local ca_dir=${1:-ca} csr cert_name
   announce "21.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
@@ -300,4 +338,8 @@ case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboo
   monitoring-reload) monitoring_reload;;
   lb-watch) lb_watch "${2:-}";;
   sign-next) sign_next "${2:-ca}";;
-  ad-drill) ad_drill;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop monitoring-reload（24.2）coldboot（19.4）sign-next lb-watch"; exit 1;; esac
+  sign-app) sign_app "${2:-}";;
+  ad-drill) ad_drill;;
+  broker-stop) broker_stop "${2:-}";;
+  alerts-wait) alerts_wait "${2:-}";;
+  alerts-clear) alerts_clear;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop monitoring-reload（24.2）broker-stop alerts-wait alerts-clear（28.3）sign-app（27.3）coldboot（19.4）sign-next lb-watch"; exit 1;; esac

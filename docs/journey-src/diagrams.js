@@ -773,6 +773,41 @@ D.disk = () => svg(800, 440, [
   box(26, 382, 750, 36, "不要做的事：手動 rm /var/lib/kafka/data 底下的檔（broker 會壞掉、ISR 掉出去）；也不要停 broker 來「省空間」", [], "gray"),
 ].join(""));
 
+// 24 troubleshooting triage (chapter 28): the first three checks, the platform snapshot, then branch by symptom
+D.triage = () => svg(800, 470, [
+  box(20, 20, 230, 74, "① 告警或有人回報", ["Alertmanager 的告警名稱（第 17 章）", "或應用程式／C3 畫面看到的症狀"], "coral"), num(20, 20, "1"),
+  box(285, 20, 230, 74, "② 一分鐘快照（28.2）", ["quorum leader、broker 在線數", "under-replicated／offline、MDS、REST、C3"], "teal"), num(285, 20, "2"),
+  box(550, 20, 230, 74, "③ 那一台的三件事", ["systemctl is-active", "ExecStart 指向我們的設定？", "journalctl 最後 20 行的 ERROR"], "teal"), num(550, 20, "3"),
+  arrow(250, 57, 283, 57), arrow(515, 57, 548, 57),
+  region(20, 118, 760, 236, "④ 依症狀分支（28.1 速查表）", "blue"),
+  box(36, 150, 170, 90, "一台 broker 掉了", ["TargetDown＋UnderReplicated", "restart（選單 21）", "起不來 → 25.2 換"], "blue"),
+  box(222, 150, 170, 90, "沒有 leader／寫入失敗", ["ActiveControllerCount≠1", "OfflinePartitions、UnderMinIsr", "controller quorum（25.1）"], "blue"),
+  box(408, 150, 170, 90, "人員登不進", ["MDS 401、AD 636 不通", "11.2：應用程式不受影響", "kafka-admin 緊急帳號"], "purple"),
+  box(594, 150, 170, 90, "憑證過期", ["TLS handshake 失敗", "21 章換發；22 章提前告警", "truststore 也要看"], "purple"),
+  box(36, 254, 170, 86, "REST 經 LB 失敗", ["LB 的 pool member 狀態", "12.1：單台 curl 8082", "client 憑證對不對"], "amber"),
+  box(222, 254, 170, 86, "C3 畫面空白／舊資料", ["ControlCenterStreams*", "C3 比 MDS 先起來（14.3）", "restart confluent-control-center"], "amber"),
+  box(408, 254, 170, 86, "磁碟滿／快滿", ["第 24 章", "找最大 topic、縮 retention", "搬 partition、擴容"], "amber"),
+  box(594, 254, 170, 86, "ISR 一直縮小、延遲高", ["IsrShrinking、ProduceLatency", "磁碟延遲、網路、GC", "JvmHeapHigh → 調 -Xmx"], "amber"),
+  box(20, 378, 370, 76, "⑤ 處理後回到 ②", ["快照全綠、告警解除才算結案", "動到設定的改法記進變更單"], "teal"),
+  box(410, 378, 370, 76, "⑥ 自己解不掉：收集 diagnostics（選單 18）", ["各台最近日誌、topics、consumer groups、磁碟", "交二線或原廠；28.5 列清單"], "gray"),
+].join(""));
+
+// 25 onboarding a new application (chapter 27): the two kinds of application, what each step creates, and who does it
+D.onboard = () => svg(800, 470, [
+  box(20, 20, 230, 86, "① 申請單（應用程式團隊）", ["系統代號、topic 清單與保留天數", "直連 SCRAM 還是走 REST（憑證）", "流量 → 配額；消費者群組前綴"], "amber"), num(20, 20, "1"),
+  box(285, 20, 230, 86, "② 建 topic（選單 31／32）", ["<系統>.<名稱>，RF 3、min.insync 2", "retention 照申請單", "kafka-topics --create"], "teal"), num(285, 20, "2"),
+  box(550, 20, 230, 86, "③ 身分", ["SCRAM：A／B 兩個帳號（選單 34）", "REST：憑證 CSR → 銀行 CA 簽", "principal = 帳號名 或 憑證 CN"], "purple"), num(550, 20, "3"),
+  arrow(250, 63, 283, 63), arrow(515, 63, 548, 63),
+  box(20, 140, 230, 86, "④ 權限與配額", ["role binding：Topic:<系統>. 前綴", "Group:<系統>- 前綴（讀）", "kafka-configs 配額（選單 34 一起做）"], "purple"), num(20, 140, "4"),
+  box(285, 140, 230, 86, "⑤ 交付", ["SCRAM：密碼寫交接檔，交完刪", "REST：.p12＋它自己的密碼、CA 憑證", "連線資訊：9095 或 rest:8082"], "amber"), num(285, 140, "5"),
+  box(550, 140, 230, 86, "⑥ 驗證", ["用該身分寫一筆、讀一筆", "稽核日誌看得到（第 18 章）", "C3 看得到 topic 與流量"], "blue"), num(550, 140, "6"),
+  arrow(650, 106, 135, 138, null, { via: [[650, 122], [135, 122]] }), arrow(250, 183, 283, 183), arrow(515, 183, 548, 183),
+  region(20, 258, 760, 110, "兩種應用程式", "gray"),
+  box(36, 290, 360, 64, "直連 Kafka（SCRAM，CLIENT 9095）", ["帳號 <app>-a／-b 同權限；換密碼換閒置的那個（20.6）", "Kafka client 原生協定；consumer group 用 <系統>- 前綴"], "teal"),
+  box(416, 290, 348, 64, "走 REST Proxy（憑證，LB rest:8082）", ["REST 只收 client 憑證，沒有密碼；principal 是 CN", "過期前換發（第 21 章）；只能 HTTP produce／consume"], "teal"),
+  box(20, 388, 760, 66, "⑦ 下線（選單 37）", ["解除 binding → SCRAM 密碼覆寫成隨機值（帳號留著，稽核還查得到）／憑證到期不續 → topic 等保留期過了再刪（選單 33）", "正式環境由申請單驅動，每一步都是選單；本章是選單背後的手動指令"], "gray"),
+].join(""));
+
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;

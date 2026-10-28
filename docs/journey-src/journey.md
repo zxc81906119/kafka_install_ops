@@ -4217,14 +4217,16 @@ ldap-bind.pass: 20 chars
 
 @role 小安 | ops02 | root
 
-不用重做 15.3：`confluent secret file update` 只重算指定欄位的密文，properties 本身不動（裡面本來就是 `${securepass:…}` 參照）。controller 和 broker 共 7 個檔有這個欄位，所以 `security.properties` 裡應該剛好變 7 行：
+不用重做 15.3：`confluent secret file update` 只重算指定欄位的密文，properties 本身不動（裡面本來就是 `${securepass:…}` 參照）。**密文的 key 是「加密時的檔名／欄位」**（`${securepass:…:kb01.server.properties/ldap…}` 的最後一段），`update` 也用 `--config-file` 的檔名當 key：檔名對不上就會**多出 7 行新密文、舊的 7 行原封不動**，broker 讀到的還是舊密碼——當下沒事（群組快取撐著），下一次重啟 MDS 就卡在 `Waiting for all of the authorizer futures`（2026-10-29 lab 真的踩到：腳本版第 15 站用 `kb01.properties` 加密、手動 20.4 用 `kb01.server.properties` 更新）。所以先從每台設定檔的參照讀出 key 名，再用那個檔名更新；controller 和 broker 共 7 個檔有這個欄位，所以 `security.properties` 剛好變 7 行、總行數不變：
 
 ```bash
-cd ~/conf && cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do confluent secret file update --config-file $h.server.properties --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "ldap.java.naming.security.credentials=$(cat ~/secrets/ldap-bind.pass)" >/dev/null || echo "$h: update FAILED"; done; unset CONFLUENT_SECURITY_MASTER_KEY; d=$(grep -vxFf ~/secrets/security.properties.bak ~/secrets/security.properties); echo "changed lines: $(grep -c . <<<"$d"), of which ldap credentials: $(grep -c 'ldap.java.naming.security.credentials' <<<"$d")"
+cd ~/conf && cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && T=$(mktemp -d) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do k=$(ssh $h.poc.lab "sudo grep -o 'security.properties:[^/]*' /etc/confluent/kafka/server.properties | head -1 | cut -d: -f2"); cp $h.server.properties $T/$k; confluent secret file update --config-file $T/$k --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "ldap.java.naming.security.credentials=$(cat ~/secrets/ldap-bind.pass)" >/dev/null && echo "$h: key=$k" || echo "$h: update FAILED"; done; rm -rf $T; unset CONFLUENT_SECURITY_MASTER_KEY; d=$(grep -vxFf ~/secrets/security.properties.bak ~/secrets/security.properties); echo "changed lines: $(grep -c . <<<"$d"), of which ldap credentials: $(grep -c 'ldap.java.naming.security.credentials' <<<"$d")；總行數 $(grep -c . ~/secrets/security.properties.bak) → $(grep -c . ~/secrets/security.properties)（要相同）"
 ```
 
 ```out
-changed lines: 7, of which ldap credentials: 7
+kc01: key=kc01.server.properties
+（7 行）
+changed lines: 7, of which ldap credentials: 7；總行數 151 → 151（要相同）
 ```
 
 > 新密碼會短暫出現在這台操作機的行程參數裡（`--config` 只吃命令列）。能登入操作機的只有經 PSMP 進來的人員（root，全程錄影），可以接受；介意的話就改走 15.3 整批重新加密。
@@ -6348,11 +6350,389 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 
 # 27. 第二十七站：新應用上線
 
-**這一章在做什麼**（待補）：一個新應用程式從申請到上線的完整流程：topic 命名與建立、SCRAM 帳號或 client 憑證、RBAC／ACL、配額、交付密碼或憑證給應用程式團隊、驗證讀寫；日常用維運選單（第 16 章）的 31／34／42 做，這一章把流程串起來。
+下面這張圖是一個新應用程式從申請到上線、到下線的七步，和兩種應用程式（直連 SCRAM、走 REST 憑證）各自不同的地方。
+
+![onboard]
+
+**這一章在做什麼**：第 11、12 章建的是安裝時的範例應用程式；正式環境之後每一個新系統都要走同一條路：申請單（27.1）→ 建 topic（27.2）→ 身分、權限、配額（27.3）→ 交付（27.4）→ 驗證（27.5）→ 將來下線（27.6）。日常由維運人員用 OP menu 31／34／42 做，這一章是選單背後的手動指令，lab 用兩個假的系統走一遍：`app-inventory` 直連（SCRAM A／B）、`app-shipping` 走 REST Proxy（憑證）。前提：第 11 章的 `client-admin.properties`、第 9 章的 `~/pki`、第 12 章的 REST Proxy 都在。完成的樣子：兩個系統各寫一筆、讀回一筆（走 REST 的那個要先進 REST Proxy 的 CN 白名單、照 12.1 重啟兩台）；下線後帳號登不進、binding 0 條、topic 刪掉、`~/pki` 沒留下 app-shipping。
+
+## 27.1 申請單：應用程式團隊要給什麼
+
+@role 應用程式團隊 → 維運人員 | — | —
+
+| 欄位 | 例子 | 用在哪 |
+|---|---|---|
+| 系統代號 | `inventory`、`shipping` | topic 前綴 `<系統>.`、consumer group 前綴 `<系統>-`、帳號名 `app-<系統>` |
+| topic 清單：名稱、partition 數、保留天數 | `inventory.stock` 3 個 partition、3 天 | 27.2；partition 數決定消費者最多幾個平行；RF 固定 3、`min.insync.replicas` 固定 2，不開放申請 |
+| 連線方式 | 直連 Kafka（SCRAM）或走 REST Proxy（憑證） | 27.3：SCRAM 給 A／B 兩個帳號；REST 給一張 client 憑證（REST 只收憑證） |
+| 讀、寫哪些 topic；要不要自己建 topic | 讀寫 `inventory.*`、不建 | role binding 的 role：`DeveloperRead`／`DeveloperWrite`，要自己建才給 `DeveloperManage` |
+| 流量（每秒 MB、請求數） | 寫 5 MB/s、讀 10 MB/s | 配額 `producer_byte_rate`、`consumer_byte_rate`、`request_percentage`（每台 broker） |
+| 聯絡人、環境、上線日 | — | 交付對象；稽核日誌（第 18 章）查得到是誰 |
+
+兩種連線方式的差別：直連用 Kafka 原生協定（9095，SASL_SSL＋SCRAM-SHA-512），consumer group 自己管；走 REST 只有 HTTP produce／consume，身分是憑證的 CN，沒有密碼可換、憑證到期前要換發（第 21 章）。沒有第三種：REST 不開密碼登入，直連不發憑證給應用程式。
+
+## 27.2 建 topic
+
+@role 維運人員 | ops02 | root
+
+命名 `<系統>.<名稱>`；RF 3、`min.insync.replicas=2` 是 broker 預設（第 10 章），不在這裡改；保留天數照申請單。選單 31 做的就是這個：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && kafka-topics $A --create --if-not-exists --topic inventory.stock --partitions 3 --replication-factor 3 --config retention.ms=259200000 >/dev/null && kafka-topics $A --create --if-not-exists --topic shipping.events --partitions 3 --replication-factor 3 --config retention.ms=604800000 >/dev/null && for t in inventory.stock shipping.events; do echo "$t: $(kafka-topics $A --describe --topic $t | head -1 | grep -oE 'PartitionCount: [0-9]+\s+ReplicationFactor: [0-9]+' | tr -s '\t' ' ')，retention $(kafka-configs $A --describe --entity-type topics --entity-name $t | grep -oE 'retention.ms=[0-9]+' | head -1)"; done
+```
+
+```out
+inventory.stock: PartitionCount: 3 ReplicationFactor: 3，retention retention.ms=259200000
+shipping.events: PartitionCount: 3 ReplicationFactor: 3，retention retention.ms=604800000
+```
+
+## 27.3 身分、權限、配額
+
+@role 維運人員 | ops02 | root
+
+**直連的系統：A／B 兩個 SCRAM 帳號**（第 11 章的做法，選單 34 一次做完）。密碼各自產生、各自一個 0600 檔；兩個帳號權限一模一樣：`inventory.` 前綴的讀寫、`inventory-` 前綴的 consumer group；配額照申請單，兩個帳號都設：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && for a in app-inventory-a app-inventory-b; do (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$a.pass); kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/$a.pass)]" >/dev/null 2>&1 && kafka-configs $A --alter --entity-type users --entity-name $a --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' >/dev/null 2>&1 && for r in DeveloperWrite DeveloperRead; do confluent iam rbac role-binding create --principal User:$a --role $r --resource Topic:inventory. --prefix --kafka-cluster $CLUSTER_ID >/dev/null; done && confluent iam rbac role-binding create --principal User:$a --role DeveloperRead --resource Group:inventory- --prefix --kafka-cluster $CLUSTER_ID >/dev/null && echo "$a: SCRAM $(kafka-configs $A --describe --entity-type users --entity-name $a 2>/dev/null | grep -o 'SCRAM-SHA-512=iterations=[0-9]*' | head -1)，配額 $(kafka-configs $A --describe --entity-type users --entity-name $a 2>/dev/null | grep -o 'producer_byte_rate=[0-9.]*' | head -1)，binding $(confluent iam rbac role-binding list --principal User:$a --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"') 條"; done
+```
+
+```out
+app-inventory-a: SCRAM SCRAM-SHA-512=iterations=8192，配額 producer_byte_rate=5242880.0，binding 3 條
+app-inventory-b: SCRAM SCRAM-SHA-512=iterations=8192，配額 producer_byte_rate=5242880.0，binding 3 條
+```
+
+**走 REST 的系統：一張 client 憑證**。和第 9 章一樣：操作機產私鑰與 CSR（CN 就是帳號名，EKU `clientAuth`），加進 `~/pki/requests.txt`（之後第 21 章換發時才會一起算進去），送銀行 CA 簽：
+
+```bash
+cd ~/pki && grep -q '^app-shipping ' requests.txt || echo 'app-shipping       clientAuth             -' >> requests.txt; (umask 077; openssl genrsa -out keys/app-shipping.key 2048 2>/dev/null) && openssl req -new -key keys/app-shipping.key -sha256 -subj "/CN=app-shipping/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=clientAuth" -out requests/app-shipping.csr && echo "app-shipping: csr ok；$(openssl req -in requests/app-shipping.csr -noout -subject)"
+```
+
+```out
+app-shipping: csr ok；subject=CN = app-shipping, O = PoC Bank, C = TW
+```
+
+@role 銀行 CA 窗口（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+正式環境走 9.2 一樣的管道（檔案交換平台送 CSR、收回憑證鏈）。lab：只簽這一張，放回 `~/pki/incoming/`；用**現行**的 CA：不是看目錄存不存在，而是看哪個目錄的中繼憑證能被平台現在信任的根（操作機的 `bank-root.pem`）驗證通過（21.3 換過 CA 之後是 `ca/g2`，沒換過是 `ca`）：
+
+```bash
+cd ~/kafka-lab && docker exec lab-ops02-1 cat /etc/pki/ca-trust/source/anchors/bank-root.pem > ca/exchange/anchor.pem && d=""; for c in ca ca/g2; do [ -f $c/issuing.crt ] && openssl verify -CAfile "$(cygpath -m ca/exchange/anchor.pem)" "$(cygpath -m $c/issuing.crt)" >/dev/null 2>&1 && d=$c; done; [ -n "$d" ] || { echo "沒有一個 CA 目錄的中繼憑證能被平台信任"; false; } && mkdir -p ca/exchange/requests ca/exchange/signed && docker cp lab-ops02-1:/root/pki/requests/app-shipping.csr "$(cygpath -m "$PWD/ca/exchange/requests/app-shipping.csr")" && bash $d/sign.sh ca/exchange/requests/app-shipping.csr ca/exchange/signed/app-shipping.crt | sed "s/  (.*//" && docker cp "$(cygpath -m "$PWD/ca/exchange/signed/app-shipping.crt")" lab-ops02-1:/root/pki/incoming/ && echo "用 $d 簽"
+```
+
+```out
+signed app-shipping.csr -> app-shipping.crt
+用 ca 簽
+```
+
+@role 維運人員 | ops02 | root
+
+收回來照 9.3 檢查（公鑰對得上私鑰、CN、EKU、鏈驗證、天數），做成 `.crt`（leaf＋中繼）和交給應用程式的 `.p12`。這個 p12 用**它自己的密碼**（`~/secrets/app-shipping-p12.pass`），不用平台的 `store.pass`：
+
+```bash
+cd ~/pki && n=app-shipping && awk -v n=$n 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$n.crt && mv incoming/$n.part1 incoming/$n.leaf.pem && cat incoming/$n.part[2-9] > incoming/$n.issuers.pem 2>/dev/null; rm -f incoming/$n.part*; leaf=incoming/$n.leaf.pem; k1=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16); k2=$(openssl pkey -in keys/$n.key -pubout 2>/dev/null | sha256sum | cut -c1-16); cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'); eku=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '); days=$(( ($(date -d "$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); chain=$(openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$n.issuers.pem $leaf 2>&1 | grep -c ': OK'); printf '%s key=%s cn=%s eku=%s days=%s chain=%s\n' $n $([ $k1 = $k2 ] && echo ok || echo MISMATCH) $([ "$cn" = "$n" ] && echo ok || echo "$cn") "$eku" $days $([ $chain = 1 ] && echo ok || echo FAIL) && cat incoming/$n.leaf.pem incoming/$n.issuers.pem > certs/$n.crt && (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$n-p12.pass) && openssl pkcs12 -export -name $n -inkey keys/$n.key -in certs/$n.crt -out certs/$n.p12 -passout file:$HOME/secrets/$n-p12.pass && chmod 0600 certs/$n.p12 && echo "certs/$n.crt、certs/$n.p12 做好（p12 密碼 ~/secrets/$n-p12.pass）"
+```
+
+```out
+app-shipping key=ok cn=ok eku=TLSWebClientAuthentication days=364 chain=ok
+certs/app-shipping.crt、certs/app-shipping.p12 做好（p12 密碼 ~/secrets/app-shipping-p12.pass）
+```
+
+憑證的身分是 `User:app-shipping`（CN）。綁 `shipping.` 前綴的讀寫，配額一樣設在這個 principal 上（REST Proxy 用應用程式的身分向 Kafka 寫，配額照樣算）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && source ~/conf/kraft.env && for r in DeveloperWrite DeveloperRead; do confluent iam rbac role-binding create --principal User:app-shipping --role $r --resource Topic:shipping. --prefix --kafka-cluster $CLUSTER_ID >/dev/null; done && kafka-configs $A --alter --entity-type users --entity-name app-shipping --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null 2>&1 && echo "app-shipping: binding $(confluent iam rbac role-binding list --principal User:app-shipping --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"') 條，配額 $(kafka-configs $A --describe --entity-type users --entity-name app-shipping 2>/dev/null | grep -o 'producer_byte_rate=[0-9.]*' | head -1)"
+```
+
+```out
+app-shipping: binding 2 條，配額 producer_byte_rate=1048576.0
+```
+
+**REST Proxy 的白名單**：REST Proxy 不是看到任何銀行簽的憑證都放行，第 12 章的 `auth.ssl.principal.mapping.rules` 只把**列在規則裡的 CN** 對應成 principal（來源是安裝時的 `apps.txt`），其他憑證一律 401（19.2 驗過：svc-ops 的憑證也進不來）。所以新 REST 應用程式還要把 CN 加進兩台 REST 的規則，再照 12.1 一台一台重啟（規則不是密碼欄位，直接改各台的設定檔就好；操作機上的副本一起改，下次第 12 章重派送才不會蓋掉）：
+
+```bash
+for h in rest01 rest02; do ssh $h.poc.lab "sudo sed -i -E '/principal\.mapping\.rules/ { /\(app-shipping[)|]|\|app-shipping[)|]/! s/CN=\(([^)]*)\)/CN=(\1|app-shipping)/ }' /etc/confluent/kafka-rest/kafka-rest.properties"; for f in ~/conf/$h.kafka-rest.properties ~/conf/sp/$h.kafka-rest.properties ~/conf/sp/$h.properties; do [ -f $f ] && sed -i -E '/principal\.mapping\.rules/ { /\(app-shipping[)|]|\|app-shipping[)|]/! s/CN=\(([^)]*)\)/CN=(\1|app-shipping)/ }' $f; done; echo "$h: $(ssh $h.poc.lab "sudo grep -o 'CN=([^)]*)' /etc/confluent/kafka-rest/kafka-rest.properties | sort -u")"; done
+```
+
+```out
+rest01: CN=(app-legacy-billing|app-shipping)
+rest02: CN=(app-legacy-billing|app-shipping)
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 維運人員 | ops02 | root
+
+```bash
+~/conf/rest-restart.sh rest01
+```
+
+```out
+rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up && bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
+LB：rest01 rest02
+LB：rest01 rest02（停用）
+```
+
+@role 維運人員 | ops02 | root
+
+```bash
+~/conf/rest-restart.sh rest02
+```
+
+```out
+rest02：排空等了 0 秒，重啟後 REST 200（約 10 秒）
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+> 腳本版（`27-onboard.sh onboard <系統> cert`）是把應用程式加進 `conf/apps.txt` 再重跑第 12 站：規則由範本重新產生、兩台 REST 重啟。正式環境也可以這樣做，但重啟一定要照 12.1 先請 LB 團隊停用那一台。
+
+## 27.4 交付
+
+@role 維運人員 | ops02 | root
+
+| 給誰 | 什麼 | 怎麼給 |
+|---|---|---|
+| 直連的系統 | `app-inventory-a`、`-b` 的密碼、bootstrap `kb01..kb04:9095`、銀行根憑證（truststore 用）、SASL 設定範例 | 密碼寫進交接檔（0600，只有本人讀得到），走銀行的機敏資料交付管道給應用程式團隊，交完刪；選單 34 自動寫交接檔 |
+| 走 REST 的系統 | `app-shipping.p12`、它的密碼（另一個管道）、銀行根憑證、網址 `https://rest.poc.lab:8082` | 同上；p12 和密碼分開送 |
+| 稽核 | 申請單編號、建了什麼（topic、帳號、binding、配額）、交給誰 | 變更單；Kafka 稽核日誌（第 18 章）記得到之後每一次存取 |
+
+lab 把交接檔寫出來看格式（內容不印到畫面）：
+
+```bash
+install -d -m 0700 ~/handover && (umask 077; { echo "app-inventory（$(date +%F)）：bootstrap kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095；SASL_SSL／SCRAM-SHA-512；平常用 -a"; for a in app-inventory-a app-inventory-b; do echo "$a $(cat ~/secrets/$a.pass)"; done; } > ~/handover/app-inventory-$(date +%F).txt; install -d -m 0700 ~/handover/app-shipping && cp ~/pki/certs/app-shipping.p12 ~/pki/certs/bank-root.pem ~/handover/app-shipping/ && echo "p12 密碼另送：$(cat ~/secrets/app-shipping-p12.pass)" > ~/handover/app-shipping/README-password.txt) && find ~/handover -type f -printf '%m %u %s %P\n' | sort -k4
+```
+
+```out
+600 root 3 app-inventory-2026-10-29.txt
+600 root 1 app-shipping/README-password.txt
+600 root 1 app-shipping/app-shipping.p12
+600 root 1 app-shipping/bank-root.pem
+```
+
+## 27.5 驗證：用該身分寫一筆、讀一筆
+
+@role 維運人員 | ops02 | root
+
+直連：拿 `-a` 的密碼做一份暫存的 client 設定（和 11 章的 `app-orders.properties` 同格式），寫一筆到 `inventory.stock`、用 `inventory-` 前綴的 group 讀回；走 REST：用 `app-shipping` 的憑證經 LB POST 一筆到 `shipping.events`。注意 REST v3 的 produce **一律回 HTTP 200**，成功或被拒要看回應 JSON 的 `error_code`（200 成功、40301 沒權限）。兩個都做完，稽核日誌（第 18 章）會看到這兩個身分：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && c=$(mktemp) && (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-inventory-a" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/root/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/app-inventory-a.pass)" "$(cat ~/pki/store.pass)" > $c) && M="onboard-$(date +%s)" && echo "$M" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config $c --topic inventory.stock >/dev/null 2>&1 && echo "app-inventory-a 寫入 inventory.stock：ok；讀回：$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config $c --topic inventory.stock --group inventory-check --from-beginning --max-messages 1 --timeout-ms 30000 2>/dev/null | grep -c "^$M$")"; rm -f $c; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && CID=$(curl -s --cacert $CA https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && rp() { curl -s --cacert $CA --cert ~/pki/certs/app-shipping.crt --key ~/pki/keys/app-shipping.key -X POST -H 'Content-Type: application/json' -d "{\"value\":{\"type\":\"JSON\",\"data\":\"$2\"}}" "https://rest.poc.lab:8082/v3/clusters/$CID/topics/$1/records" | grep -o '"error_code":[0-9]*' | cut -d: -f2; }; echo "app-shipping 經 REST 寫入 shipping.events：error_code $(rp shipping.events $M-rest)；寫別人的 topic：error_code $(rp inventory.stock x)（應被拒：40301）"
+```
+
+```out
+app-inventory-a 寫入 inventory.stock：ok；讀回：1
+app-shipping 經 REST 寫入 shipping.events：error_code 200；寫別人的 topic：error_code 40301（應被拒：40301）
+```
+
+## 27.6 下線
+
+@role 維運人員 | ops02 | root
+
+系統退役時反過來做（選單 37 做前兩步）：解除 binding → SCRAM 密碼覆寫成隨機值（帳號留著，稽核日誌裡的名字才查得到；配額一起拿掉）→ 憑證：從 `requests.txt` 拿掉、私鑰與憑證刪掉、到期不續（REST 的授權靠 binding，拿掉就進不來；REST 白名單裡的 CN 留著無害，下次照 12.1 重啟 REST 時一併拿掉）→ topic 等保留期過了再刪（lab 直接刪）。最後確認：舊密碼登不進、binding 0 條、topic 不在：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && source ~/conf/kraft.env && old=$(cat ~/secrets/app-inventory-a.pass) && for p in app-inventory-a app-inventory-b app-shipping; do for b in $(confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | python3 -c 'import json,sys; [print(b["role"], b.get("resource_type",""), b.get("name",""), b.get("pattern_type","")) for b in json.load(sys.stdin)]' | tr ' ' '|'); do IFS='|' read -r role rtype rname pat <<<"$b"; for i in 1 2 3; do confluent iam rbac role-binding delete --principal User:$p --role $role --resource $rtype:$rname $([ "$pat" = PREFIXED ] && echo --prefix) --kafka-cluster $CLUSTER_ID --force >/dev/null 2>&1 && break; sleep 5; done; done; kafka-configs $A --alter --entity-type users --entity-name $p --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1; done && for a in app-inventory-a app-inventory-b; do kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)]" >/dev/null 2>&1; rm -f ~/secrets/$a.pass; done && cd ~/pki && sed -i '/^app-shipping /d' requests.txt && rm -f keys/app-shipping.key requests/app-shipping.csr incoming/app-shipping.* certs/app-shipping.crt certs/app-shipping.p12 ~/secrets/app-shipping-p12.pass && rm -rf ~/handover/app-inventory-*.txt ~/handover/app-shipping && for t in inventory.stock shipping.events; do kafka-topics $A --delete --topic $t >/dev/null 2>&1; done && c=$(mktemp) && (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-inventory-a" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/root/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$old" "$(cat ~/pki/store.pass)" > $c) && echo "舊密碼登入：$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $c --list >/dev/null 2>&1 && echo 成功 || echo 被拒)；binding：$(for p in app-inventory-a app-inventory-b app-shipping; do confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"'; done | awk '{s+=$1} END{print s+0}') 條；topic：$(kafka-topics $A --list 2>/dev/null | grep -cE '^(inventory|shipping)\.')；pki 殘留：$(ls ~/pki/keys ~/pki/certs | grep -c app-shipping)"; rm -f $c; unset old
+```
+
+```out
+舊密碼登入：被拒；binding：0 條；topic：0；pki 殘留：0
+```
+
+> MDS 把寫入轉給 master writer，writer 剛換過（broker 重啟後）會短暫回 `50003 … not the current leader`：每一條 binding 的刪除都重試三次，不要只做一次就當成功。
+>
+> 正式環境不要急著刪 topic：先只拿掉 binding（沒人寫得進、讀得到），等申請單寫的保留期過了、確認沒有下游還在讀（選單 13 看 consumer lag），再用選單 33 刪。帳號不刪：稽核日誌裡的 principal 才對得上人。
+
 
 # 28. 第二十八站：故障排查速查
 
-**這一章在做什麼**（待補）：常見症狀對應「看哪個指標、跑哪個指令、怎麼處理」：broker 離線、ISR 縮小、leader 選舉卡住、under-replicated 不歸零、憑證過期、AD 不通、MDS 起不來、C3 畫面空白、REST 經 LB 失敗、磁碟滿。
+下面這張圖是出事時的走法：先快照、再看那一台的三件事、然後依症狀分支，處理完回到快照，解不掉就收集 diagnostics。
+
+![triage]
+
+**這一章在做什麼**：安裝期的「出問題先看哪裡」在 14.1；這一章是**上線後**的版本：告警響了或有人回報，依症狀查表（28.1），先跑一分鐘快照（28.2），用 lab 演一次最常見的「一台 broker 掉了」（28.3），再列常見錯誤訊息的意思（28.4）與要找原廠時帶什麼（28.5）。前提：第 17 章的監控接著、第 16 章的選單裝好。完成的樣子：快照在健康叢集全綠；演練裡 kb04 停掉 → 快照看到 3／4 台、under-replicated、MDS 連不上，銀行 Prometheus 兩條告警 firing → 重啟 → 歸零、告警解除。
+
+## 28.1 速查表：症狀 → 看什麼 → 做什麼
+
+@role 維運人員 | ops02 | root
+
+每一列都是「先看哪個告警或指令，再做哪一章／哪個選單」。選單編號是第 16 章的 OP menu。
+
+| 症狀（告警名稱，第 17 章） | 先看 | 處理 | 詳細 |
+|---|---|---|---|
+| 一台 broker 掉了（`ConfluentTargetDown` + `KafkaUnderReplicatedPartitions`） | 28.2 快照：broker 在線 3／4、under-replicated > 0；那台 `systemctl is-active`、日誌最後 20 行 | 選單 21 重啟那一台（或 `ssh <host> sudo systemctl restart confluent-server`）；主機或資料碟壞了 → 25.2 remove、換、add | 28.3 演練 |
+| 沒有 leader、寫入失敗（`KafkaActiveControllerCountNotOne`、`KafkaOfflinePartitions`、`KafkaUnderMinIsrPartitions`） | `kafka-metadata-quorum describe --status` 的 LeaderId；offline partition 清單 | controller 少於兩台活著就先救 controller（重啟；起不來 → 25.1 換）；offline 是 broker 問題（上一列） | 25.1 |
+| ISR 一直縮、延遲高（`KafkaIsrShrinkingWithoutExpand`、`KafkaProduceLatencyHigh`、`KafkaRequestHandlerBusy`） | 哪台 broker 慢：`kafka-topics --under-replicated-partitions` 看缺的是哪個 broker id；那台的磁碟延遲、GC（`JvmHeapHigh`）、網路 | 磁碟或網路由銀行主機團隊；heap 不夠改 drop-in 的 `-Xmx` 滾動重啟（選單 27） | 第 24 章（磁碟） |
+| 人員登不進 MDS／選單（HTTP 401；AD 636 不通） | `openssl s_client -connect ad01.poc.lab:636`；broker 日誌 `LdapException`；`svc-mds-bind` 密碼是否被 AD 換了 | AD 不通：應用程式（SCRAM／憑證）不受影響，等 AD；非得動平台用 `kafka-admin` 緊急帳號（11.2）；密碼換了：更新密文、滾動重啟（15 章） | 11.2 |
+| 憑證過期或快過期（client 看到 `certificate has expired`、`SSLHandshakeException`） | 選單 17（各端點實際出示的憑證到期日）；`openssl s_client … \| openssl x509 -enddate` | 21 章換發（leaf／CA／鏈三種）；truststore 裡的 CA 也會過期 | 21、22 |
+| REST Proxy 經 LB 失敗（`RestProxyErrors`；client 回 502／503） | 單台 `curl https://rest0N:8082/v3/clusters` 分出 LB 還是 REST；LB 的 pool member 狀態；client 憑證對不對（REST 只收憑證） | 單台壞：選單 22 重啟那台；LB：請 LB 團隊（12.1） | 12.1 |
+| C3 畫面空白或是舊資料（`ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed`） | `journalctl -u confluent-control-center`；是不是 broker 剛全部重啟過（C3 比 MDS 先起來會卡住，14.3） | 選單 22 重啟 C3；它的內建 Prometheus 滿了會讓畫面慢（13 章 `METRICS_RETENTION_DAYS`） | 13、14.3 |
+| 磁碟滿或快滿（`KafkaDataDiskFillingUp`、`KafkaLogDirOffline`） | 24.1：哪台、哪個 topic | 24.3：縮 retention、搬 partition、擴容 | 24 |
+| MDS 起不來（broker `active` 但 8090／9094 不開；10 分鐘後 `Authorizer did not start up within the timeout` 自殺、systemd 再拉起） | journal 停在 `Waiting for all of the authorizer futures`；**真正的原因在 `/var/log/kafka/metadata-service.log`**（MDS 的 log4j2 appender 另外寫檔）：`LDAP search failed … error code 49 … data 52e` = `svc-mds-bind` 密碼和 AD 不一致（20.4 換密碼時密文 key 名對不上也會這樣） | 對齊密碼（20.4 的更新方式）、派送、重啟；全部 broker 都卡住就四台一起停、一起起 | 14.1、20.4 |
+| 應用程式被拒（`TopicAuthorizationException`、`SaslAuthenticationException`） | 選單 41 看該帳號的權限；選單 45 查稽核日誌誰被拒 | 權限：選單 42；密碼錯：20.6 換閒置帳號再切 | 18、20.6 |
+| 服務起不來、起來又死（`Scheduled restart job`） | 三件事：`is-active`、`systemctl show -p ExecStart` 指向我們的設定、日誌最後 20 行 ERROR | 設定被改壞：從 29.2 的備份或操作機 `~/conf` 重派（10–13 章的派送可重跑） | 14.2 |
+
+## 28.2 一分鐘快照：出事先跑這一段
+
+@role 維運人員 | ops02 | root
+
+六個數字一次看完：quorum 有沒有 leader、幾台 broker 在線、under-replicated 與 offline 幾個、每台 broker 的 MDS 回不回 200、REST 經 LB 與 C3 回不回 200（選單 11 做的是同一件事；這裡是它背後的指令）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && echo "quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -E '^LeaderId' | tr -s ' ')" && echo "broker 在線：$(kafka-broker-api-versions $A 2>/dev/null | grep -oE '^[a-z0-9.]+:9094' | sort | paste -sd' ')" && echo "under-replicated：$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)；offline：$(kafka-topics $A --describe --unavailable-partitions 2>/dev/null | grep -c Partition:)" && echo "MDS：$(for h in kb01 kb02 kb03 kb04; do printf '%s=%s ' $h $(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id); done)" && echo "REST 經 LB：$(curl -s -m 30 -o /dev/null -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)；C3：$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+```
+
+```out
+quorum：LeaderId: 2
+broker 在線：kb01.poc.lab:9094 kb02.poc.lab:9094 kb03.poc.lab:9094 kb04.poc.lab:9094
+under-replicated：0；offline：0
+MDS：kb01=200 kb02=200 kb03=200 kb04=200
+REST 經 LB：200；C3：200
+```
+
+bootstrap 給三台 broker 是故意的：出事時 kb01 可能就是掛掉的那台。`LeaderId` 空白代表 controller 沒有 leader，那是最嚴重的情況，先救 controller。
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+同時看 Alertmanager／Prometheus 現在有哪些告警（正式環境看 Alertmanager 畫面或 omnibus；lab 查 Prometheus 的 API，`firing` 是已過 `for` 時間、`pending` 是條件成立但還在等）：
+
+```bash
+docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
+import json, sys
+a = json.load(sys.stdin)[\"data\"][\"alerts\"]
+print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(\" + x[\"labels\"].get(\"hostname\", x[\"labels\"].get(\"env\", \"\")) + \")\" for x in a if x[\"state\"] == \"firing\"))) or \"無\") + \"；pending：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x in a if x[\"state\"] == \"pending\"))) or \"無\"))"'
+```
+
+```out
+firing：無；pending：JvmHeapHigh
+```
+
+（lab 的 `JvmHeapHigh` 常常 pending：lab 給 controller 的 heap 小，kc02 的 heap 在 80–90% 徘徊、偶爾過 90% 但撐不到 `for` 的 10 分鐘；正式環境 heap 在第 10 章的 drop-in 依主機規格（請銀行確認的事項 4.1）給足就不會。pending 不會送到 Alertmanager。）
+
+## 28.3 演練：一台 broker 掉了
+
+@role 銀行 OS 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+lab 把 kb04 的服務直接停掉，當作主機或服務掛了（正式環境是主機團隊或告警通知你）：
+
+```bash
+docker exec lab-kb04-1 systemctl stop confluent-server && sleep 15 && echo "kb04 confluent-server：$(docker exec lab-kb04-1 systemctl is-active confluent-server) $(date +%T)"
+```
+
+```out
+kb04 confluent-server：failed 03:35:36
+```
+
+> `systemctl stop` 後狀態是 `failed` 不是 `inactive`：Kafka 收到 SIGTERM 以 143 結束，RPM 的 unit 沒把 143 列為正常結束碼。看到 `failed` 先看日誌最後幾行是 `shut down completed` 還是 ERROR，前者只是被停掉。
+
+@role 維運人員 | ops02 | root
+
+快照：broker 在線剩三台、under-replicated 不是 0（kb04 上的 replica 都不同步）、kb04 的 MDS 連不上（000）；REST 與 C3 照常，應用程式只要 `acks=all` 與 `min.insync.replicas=2` 都還寫得進。再看那一台的三件事（`is-active`、日誌最後幾行）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && echo "broker 在線：$(kafka-broker-api-versions $A 2>/dev/null | grep -oE '^[a-z0-9.]+:9094' | sort | paste -sd' ')" && echo "under-replicated：$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)；offline：$(kafka-topics $A --describe --unavailable-partitions 2>/dev/null | grep -c Partition:)；缺的 broker：$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -oE 'Replicas: [0-9,]+\s+Isr: [0-9,]+' | head -1)" && echo "MDS：$(for h in kb01 kb02 kb03 kb04; do printf '%s=%s ' $h $(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id); done)" && echo "REST 經 LB：$(curl -s -m 30 -o /dev/null -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)；C3：$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" && ssh kb04.poc.lab 'echo "kb04：$(systemctl is-active confluent-server)；日誌最後一行：$(sudo journalctl -u confluent-server -n 200 --no-pager | tail -1 | cut -c1-120)"'
+```
+
+```out
+broker 在線：kb01.poc.lab:9094 kb02.poc.lab:9094 kb03.poc.lab:9094
+under-replicated：149；offline：0；缺的 broker：Replicas: 101,102,104	Isr: 101,102
+MDS：kb01=200 kb02=200 kb03=200 kb04=000
+REST 經 LB：200；C3：200
+kb04：failed；日誌最後一行：Oct 29 03:35:36 kb04 systemd[1]: confluent-server.service: Consumed 7min 22.983s CPU time.
+```
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+告警：`ConfluentTargetDown` 2 分鐘後 firing、`KafkaUnderReplicatedPartitions` 5 分鐘後 firing（`for` 是故意放寬的，滾動重啟時才不會叫人）。lab 每 10 秒看一次、最多等 7 分鐘：
+
+```bash
+for i in $(seq 1 42); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
+import json, sys
+a = json.load(sys.stdin)[\"data\"][\"alerts\"]
+print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(\" + x[\"labels\"].get(\"hostname\", x[\"labels\"].get(\"env\", \"\")) + \")\" for x in a if x[\"state\"] == \"firing\"))) or \"無\") + \"；pending：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x in a if x[\"state\"] == \"pending\"))) or \"無\"))"'); grep -qE 'firing：[^；]*KafkaUnderReplicatedPartitions' <<<"$r" && break; sleep 10; done; echo "等了約 $((i*10)) 秒：$r"
+```
+
+```out
+等了約 300 秒：firing：ConfluentTargetDown(kb04.poc.lab), KafkaUnderReplicatedPartitions(lab)；pending：JvmHeapHigh
+```
+
+@role 維運人員 | ops02 | root
+
+處理：重啟那一台（選單 21 做的就是這個；`cpuser-ops` 的 sudo 只允許這個寫法），等 under-replicated 歸零、kb04 的 MDS 回 200：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && ssh kb04.poc.lab 'sudo systemctl restart confluent-server && echo "kb04：$(systemctl is-active confluent-server)"' && for i in $(seq 1 30); do u=$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); m=$(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id); [ "$u" = 0 ] && [ "$m" = 200 ] && break; sleep 10; done; echo "等了約 $((i*10)) 秒：under-replicated $u、kb04 MDS $m；broker 在線：$(kafka-broker-api-versions $A 2>/dev/null | grep -oE '^[a-z0-9.]+:9094' | wc -l) / 4"
+```
+
+```out
+kb04：active
+等了約 20 秒：under-replicated 0、kb04 MDS 200；broker 在線：4 / 4
+```
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+告警自己解除（條件不成立就從 firing 消失，Alertmanager 送 resolved）：
+
+```bash
+for i in $(seq 1 18); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
+import json, sys
+a = json.load(sys.stdin)[\"data\"][\"alerts\"]
+print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x in a if x[\"state\"] == \"firing\"))) or \"無\"))"'); grep -q '^firing：無' <<<"$r" && break; sleep 10; done; echo "等了約 $((i*10)) 秒：$r"
+```
+
+```out
+等了約 140 秒：firing：無
+```
+
+> 起不來怎麼辦：日誌說資料目錄壞了（`KafkaStorageException`、`LogDirectoryOffline`）就是換碟，走 25.2（先 remove 讓 Self-Balancing 搬走，換完 add 回來）；說 `meta.properties` 不符是有人重新格式化過，同樣走 25.2 以空的 broker 加回。一次只動一台：第二台 broker 也掉的話 RF 3 的 partition 會 under-min-ISR，寫入開始失敗。
+
+## 28.4 常見錯誤訊息對照
+
+@role 維運人員 | ops02 | root
+
+| 看到的訊息 | 在哪裡 | 意思 | 處理 |
+|---|---|---|---|
+| `Waiting for all of the authorizer futures to be completed` 之後沒下文（10 分鐘後 `Authorizer did not start up within the timeout`） | broker journal | authorizer 等 MDS 的 writer 初始化；原因要看 `/var/log/kafka/metadata-service.log`：`LDAP search failed … data 52e` 是 `svc-mds-bind` 密碼不對（AD 換了、或 20.4 更新的密文 key 名不對）；AD 不通是 `CommunicationException` | 14.1 陷阱；20.4；11.2 |
+| `Failed to fetch MDS URLs … Client has already been closed` | C3 日誌 | C3 比 MDS 先起來 | 重啟 C3（14.3） |
+| `TopicAuthorizationException: Not authorized to access topics` | 應用程式／稽核日誌 | 帳號沒有那個 topic 的 role binding 或 ACL | 選單 41 看、42 給 |
+| `SaslAuthenticationException: Authentication failed` | 應用程式 | SCRAM 帳號或密碼錯（換密碼時換到正在用的那個） | 20.6：換閒置帳號、應用程式再切 |
+| `SSLHandshakeException` / `certificate has expired` / `unable to find valid certification path` | 應用程式、REST、C3 | 憑證過期、對方的 CA 不在自己的 truststore | 21 章；選單 17 看到期日 |
+| `NotEnoughReplicasException` | 應用程式（`acks=all`） | ISR 少於 `min.insync.replicas`（兩台 broker 掉了） | 先救 broker（28.3） |
+| `KafkaStorageException` / `LogDirectoryOffline` | broker 日誌 | 資料碟壞或滿 | 24 章、25.2 換碟 |
+| `Scheduled restart job, restart counter is at N` | journalctl | 服務起來就死，systemd 一直重試 | 三件事：ExecStart、設定、日誌第一個 ERROR（14.2） |
+| `HTTP 401` 登 MDS | 選單、confluent CLI | AD 帳密錯、AD 不通、token 過期（1 小時） | 重新登入；AD 不通看 11.2 |
+| `Pool overlaps`、`timeout 5 ip addr` 卡住 | lab 專用 | Docker 網段或 VM 網路層問題 | 14.3 |
+
+## 28.5 自己解不掉：收集 diagnostics
+
+@role 維運人員 | ops02 | root
+
+要找二線或原廠時帶這些（選單 18 一次打包：各台最近 200 行日誌、`kafka-topics --describe`、consumer groups、磁碟用量）。原廠通常還會要：broker 的設定檔（去掉密碼：Secret Protection 的密文本來就不是明文）、`kafka-metadata-quorum describe --replication`、告警時間軸（Alertmanager）、變更單（最近動過什麼）。密碼、私鑰、master key 永遠不交出去。
+
 
 # 29. 第二十九站：遷移到新版 Confluent 與 JDK
 

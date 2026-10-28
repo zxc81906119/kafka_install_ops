@@ -25,6 +25,8 @@ if [ "$SECRETS_MODE" != sp ]; then log "SECRETS_MODE=$SECRETS_MODE：第 15 站�
 export JAVA_HOME=/opt/java/current
 
 SP_CONF_DIR=$CONF_DIR/sp                                # 每台產出的（加密後的）設定
+# 加密時的檔名就是 security.properties 裡密文的 key（${securepass:…:<檔名>/<欄位>}）：和手動 15.3 一致，依角色命名；20.4 換 AD 密碼時要用同一個名字更新
+sp_name_of() { case $1 in rest*) echo "$1.kafka-rest.properties";; c3*) echo "$1.control-center.properties";; *) echo "$1.server.properties";; esac; }
 MASTER_KEY_FILE=$SECRETS_DIR/master.key                 # master key（CLI 不保存；操作機這份 0600，各主機 service.env 另有一份）
 PASSPHRASE_FILE=$SECRETS_DIR/sp-passphrase.txt          # 產生、輪替 master key 用的 passphrase（只在操作機，0600）
 LOCAL_SECRETS_FILE=$SECRETS_DIR/security.properties     # 所有主機共用的密文檔（操作機這份是正本）
@@ -73,7 +75,7 @@ if [ -f "$CONF_DIR/audit.rendered.tpl" ]; then
 fi
 for host in $CLUSTER_HOSTS; do
   HOST_FQDN=$(fqdn "$host"); NODE_ID=$(node_id_of "$host"); RACK=$(rack_of "$host"); REST_ID=$host
-  out_file=$SP_CONF_DIR/$host.properties
+  out_file=$SP_CONF_DIR/$(sp_name_of "$host")
   # shellcheck disable=SC2086
   case $host in
     kc*)   render_templates "$out_file" $TEMPLATE_VARS -- "$TEMPLATE_DIR/controller.tpl" "$TEMPLATE_DIR/common.tpl" $audit_fragment;;
@@ -88,7 +90,7 @@ unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD
 export CONFLUENT_SECURITY_MASTER_KEY
 CONFLUENT_SECURITY_MASTER_KEY=$(cat "$MASTER_KEY_FILE")
 for host in $CLUSTER_HOSTS; do
-  props_file=$SP_CONF_DIR/$host.properties
+  props_file=$SP_CONF_DIR/$(sp_name_of "$host")
   # 加密的規則在 lib/render.sh 的 sp_encrypt_props（第 10／12／13 站重跑時用同一個）
   sp_encrypt_props "$props_file" || { fail "$host: encrypt"; continue; }
   encrypted_count=$(grep -c '\${securepass:' "$props_file")
@@ -104,10 +106,10 @@ ok "security.properties：$(grep -c '^[^_].*ENC\[' "$LOCAL_SECRETS_FILE") 筆密
 # properties、security.properties 放到定位；master key 放 service.env（0600 root），systemd 以 EnvironmentFile 讀進服務環境
 INSTALL_PROPERTIES=$(cat <<'EOF2'
 set -e
-sudo install -o root -g confluent -m 0640 /tmp/$HOST.properties "$PROPS"
+sudo install -o root -g confluent -m 0640 /tmp/$SPNAME "$PROPS"
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets
 sudo install -o root -g confluent -m 0640 /tmp/security.properties "$REMOTE_SECRETS"
-rm -f /tmp/$HOST.properties /tmp/security.properties
+rm -f /tmp/$SPNAME /tmp/security.properties
 EOF2
 )
 SETUP_SERVICE_ENV=$(cat <<'EOF2'
@@ -121,8 +123,8 @@ EOF2
 section "15.4 派送：properties、security.properties，service.env + EnvironmentFile"
 (umask 077; echo "CONFLUENT_SECURITY_MASTER_KEY=$(cat "$MASTER_KEY_FILE")" > "$SP_CONF_DIR/service.env")
 for host in $CLUSTER_HOSTS; do
-  copy_to_tmp "$host" "$SP_CONF_DIR/$host.properties" "$LOCAL_SECRETS_FILE" "$SP_CONF_DIR/service.env" || { fail "$host: scp"; continue; }
-  result=$(ssh_script "$host" HOST="$host" UNIT="$(unit_of "$host")" PROPS="$(props_path_of "$host")" REMOTE_SECRETS="$REMOTE_SECRETS_PATH" \
+  copy_to_tmp "$host" "$SP_CONF_DIR/$(sp_name_of "$host")" "$LOCAL_SECRETS_FILE" "$SP_CONF_DIR/service.env" || { fail "$host: scp"; continue; }
+  result=$(ssh_script "$host" HOST="$host" SPNAME="$(sp_name_of "$host")" UNIT="$(unit_of "$host")" PROPS="$(props_path_of "$host")" REMOTE_SECRETS="$REMOTE_SECRETS_PATH" \
              <<<"$INSTALL_PROPERTIES
 $SETUP_SERVICE_ENV")
   case $result in *"env=/etc/confluent/service.env") ok "$host: $result";; *) fail "$host: $result";; esac
