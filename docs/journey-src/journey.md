@@ -1803,7 +1803,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 
 ```out
 alice 登入 MDS：HTTP 401
-kafka-admin 從 9095 列 topic：14 個
+kafka-admin 從 9095 列 topic：10 個
 ```
 
 > alice 拿不到 token 是因為 MDS 要向 AD 驗她的密碼；已經拿到 token 的人在 token 到期（預設 1 小時）前不受影響。`kafka-admin` 走 SCRAM，憑據在 KRaft 中繼資料裡，所以 AD 不通照樣能登入；它能做什麼由 binding 決定（SystemAdmin）。
@@ -1815,7 +1815,7 @@ docker start lab-ad01-1 >/dev/null && for i in $(seq 1 30); do docker exec lab-o
 ```
 
 ```out
-ad01 已開回（LDAPS 約 15 秒後可用）
+ad01 已開回（LDAPS 約 10 秒後可用）
 ```
 
 @role 小安 | ops02 | root
@@ -2625,16 +2625,16 @@ export JAVA_HOME=/opt/java/current && confluent login --url https://kb01.poc.lab
 維運群組要能跑健康檢查與重啟前的檢查（`kafka-topics --describe` 對每個 topic 都要 DescribeConfigs），只有 Operator 不夠；開發群組在自己的 prefix 上也要 DescribeConfigs 才看得到 topic 明細：
 
 ```bash
-export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperManage --resource 'Topic:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Group:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-devs --role DeveloperManage --resource Topic:orders. --prefix --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal Group:kafka-operators --kafka-cluster "$CID" 2>/dev/null | tail -n +3
+export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Topic:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Group:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-devs --role DeveloperManage --resource Topic:orders. --prefix --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal Group:kafka-operators --kafka-cluster "$CID" 2>/dev/null | tail -n +3
 ```
 
 ```out
-  Group:kafka-operators | DeveloperManage | Topic         | *    | LITERAL
+  Group:kafka-operators | DeveloperRead   | Topic         | *    | LITERAL
   Group:kafka-operators | DeveloperRead   | Group         | *    | LITERAL
   Group:kafka-operators | Operator        | Cluster       |      |
 ```
 
-> `DeveloperManage Topic:*` 同時給了建刪 topic 的能力。銀行若不接受，改給 ClusterAdmin，或規定健康檢查由管理員做。
+> 維運群組只給 `DeveloperRead Topic:*`：健康檢查與重啟前的檢查要的 Describe／DescribeConfigs 它就有；建、刪 topic 不在裡面，那是 kafka-admins 的事（2026-10-28 實測 DeveloperManage 會讓維運群組能建 topic，已收回）。
 
 ## 16.3 裝選單
 
@@ -2824,7 +2824,7 @@ Oct 25 09:57:24 kb04 kafka-server-start[2266]: [2026-10-25 09:57:24,799] INFO Up
 Oct 25 09:58:24 kb04 kafka-server-start[2266]: [2026-10-25 09:58:24,782] INFO Updated lag of 0 group …
 已重啟 kb04.poc.lab 的 confluent-server
 kb04 MDS=200 after ~20s
-91 緊急模式列出的 topic：14
+91 緊急模式列出的 topic：15
 將執行:刪除 topic orders.optest,資料不可復原
 ```
 
@@ -3824,10 +3824,9 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
   User:app-orders  Metadata   payments.events              DENIED   x1
 == confluent-audit-log-events
   total events: 247
-  User:alice       Authorize  __opmenu-host-ops            ALLOWED  x28
-  User:alice       Authorize  kafka-cluster                ALLOWED  x26
-  User:bob         Authorize  kafka-cluster                DENIED   x27
-  User:carol       Authorize  __opmenu-host-ops            DENIED   x12
+  User:alice       Authorize  kafka-cluster                ALLOWED  x1
+  User:bob         Authorize  __opmenu-host-ops            ALLOWED  x2
+  User:bob         Authorize  kafka-cluster                DENIED   x1
   （… 第 16 站 OP menu 問 MDS 留下的授權事件）
 ```
 
@@ -4640,6 +4639,17 @@ chmod 0700 ~/conf/rolling-restart.sh && echo rolling-restart.sh ok
 
 我方的信任清單：truststore 加一個 alias `bank-root-g2`；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
 
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成新舊兩個根的 bundle，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
+
+```bash
+cp ~/kafka-lab/ca/bundle-g1-g2.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+```
+
+```out
+Prometheus target up：10 / 10（約 70 秒）
+```
 @role 小安 | ops02 | root
 
 ```bash
@@ -4710,7 +4720,6 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | root
 
-> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 節交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
 
 ### 21.3.3 階段二：全部改由新 CA 簽
 
@@ -4926,6 +4935,17 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 
 truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem 只留新根，派送、滾動重啟：
 
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成只有新根 G2，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
+
+```bash
+cp ~/kafka-lab/ca/g2/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+```
+
+```out
+Prometheus target up：10 / 10（約 70 秒）
+```
 @role 小安 | ops02 | root
 
 ```bash
@@ -5059,6 +5079,17 @@ ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01
 
 truststore 加 alias `bank-root-g3`（bundle 的第二張），C3 與 OP menu 的 ca.pem 換成 bundle，派送、滾動重啟（21.3.2 寫的那支 `rolling-restart.sh`）：
 
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成G2＋G3 的 bundle，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
+
+```bash
+cp ~/kafka-lab/ca/bundle-g2-g3.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+```
+
+```out
+Prometheus target up：10 / 10（約 70 秒）
+```
 @role 小安 | ops02 | root
 
 ```bash
@@ -5298,6 +5329,17 @@ cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 re
 ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01:1
 ```
 
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成只有 G3，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
+
+```bash
+cp ~/kafka-lab/ca/g3/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+```
+
+```out
+Prometheus target up：10 / 10（約 70 秒）
+```
 @role 小安 | ops02 | root
 
 ```bash
