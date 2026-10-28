@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-29 07:00（lab 使用中：補章全部做完，準備從零重跑；叢集健康）
+Updated: 2026-10-29 07:05（lab 使用中：腳本版從零重跑 run-customer 34 段進行中，紀錄在 ~/kafka-lab-runs/current-script-log.txt 指到的檔；會先拆掉整個 lab）
 
 ## 現在在做什麼
 `bash docs/journey-src/tools/run-full.sh customer` 從零跑（開始 10:46，紀錄 `~/kafka-lab-runs/run-customer-0-99-20261028-1046.log`，路徑也在 `~/kafka-lab-runs/current-log.txt`）。
