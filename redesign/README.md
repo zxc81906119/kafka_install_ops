@@ -514,3 +514,7 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 定案：`super.users=User:kafka-internal`；`svc-ops`、`kafka-admin` 都綁 `SystemAdmin`；第 11 章 bootstrap 用 `kafka-internal` 憑證登入 MDS 建第一條 binding（`User:svc-ops → SystemAdmin`），之後全部用 `svc-ops`。
 - 新增驗證（第 11 章或第 19 章）：停 ad01 → alice 向 MDS 要 token 失敗、`kafka-admin` 從 9095 仍可列／建 topic → 開回 ad01、alice 恢復。
 - 動到：第 10 章（`common.tpl` 的 super.users、說明）、第 11 章開頭與 `rbac.txt`、11.2、第 19 章「svc-ops 是 super user」的收尾說明；install 10／11 站；README／CLAUDE.md。等目前腳本重跑結束後改，再從零重跑。
+
+### C3 的 JDK 也換成 25（2026-10-28 定案）
+
+- 原本「C3 留在 21」的理由是原廠對 Control Center 只寫「最低 Java 17」、沒明列 25（[Control Center System Requirements](https://docs.confluent.io/control-center/current/installation/system-requirements.html)），CP 8.3 的建議版本也是 21（[Supported Versions](https://docs.confluent.io/platform/current/installation/versions-interoperability.html)）。使用者決定全部節點一致用 25；手冊 29.7、29.10、第 31 章表格、`29-upgrade.sh jdk`、`run-customer.sh expect_versions`、README 已改。上線前向原廠支援確認 C3 2.6 在 Java 25 的支援。**尚未實跑**（下一輪從零）。

@@ -9,7 +9,7 @@
 #   bash steps/29-upgrade.sh backup                  29.2 每台 /etc/confluent 與 drop-in、features、操作機套件清單 → ~/upgrade-backup/<時間>/
 #   bash steps/29-upgrade.sh packages [版本]         29.3–29.6 第一段：C3 → broker 逐台 → controller 逐台（leader 最後）→ REST → 操作機
 #                                                   版本預設 site.env 的 CP_TARGET_VERSION；C3 換成 C3_TARGET_VERSION（2.5.x 只支援到 CP 8.2.x，所以 C3 先升）
-#   bash steps/29-upgrade.sh jdk [主版號]            29.7 第二段：切到 landing/bank/ 裡最新的 OpenJDK<主版號>U（預設 JDK_TARGET_MAJOR），C3 不動
+#   bash steps/29-upgrade.sh jdk [主版號]            29.7 第二段：切到 landing/bank/ 裡最新的 OpenJDK<主版號>U（預設 JDK_TARGET_MAJOR），含 C3
 #   CONFIRM_CLUSTER_ID=<cluster id> bash steps/29-upgrade.sh finalize <release>
 #                                                   29.9 第三段：kafka-features upgrade --release-version <release>（例如 4.3）；不能退，所以要帶 cluster id 確認
 #   bash steps/29-upgrade.sh rollback <主機> [版本]   29.8 finalize 之前：這台 JDK 切回最新的 jdk-<JDK_MAJOR>*、套件 downgrade 到 <版本>（預設 CP_VERSION）
@@ -195,7 +195,7 @@ jdk() {
   [ -n "$jdk_tar" ] || die "$LANDING/bank/ 沒有 OpenJDK${major}U 的 tar（銀行交付）"
   (cd "$LANDING/bank" && sha256sum -c --quiet "$(basename "$jdk_tar").sha256") || die "$(basename "$jdk_tar") 的 sha256 不符"
   jdk_dir=$(tar -tzf "$jdk_tar" | head -1 | cut -d/ -f1)
-  section "29.7 JDK $JDK_MAJOR → $jdk_dir（$C3_HOST 不動）"
+  section "29.7 JDK $JDK_MAJOR → $jdk_dir（controller、broker、REST、C3、操作機）"
   switch_jdk_on() {
     local host=$1 linked process_java
     copy_to_tmp "$host" "$jdk_tar" || { fail "$host scp"; return 1; }
@@ -208,11 +208,11 @@ jdk() {
     case $process_java in "/opt/java/$jdk_dir/bin/java") ok "$host：$linked，程序用 $process_java";; *) fail "$host：程序用 $process_java";; esac
   }
   for_each_controller_leader_last switch_jdk_on || die "controller 換 JDK 停下"
-  for host in $BROKERS $RESTS; do selected "$host" || continue; switch_jdk_on "$host" || die "停在 $host"; done
+  for host in $BROKERS $RESTS $C3_HOST; do selected "$host" || continue; switch_jdk_on "$host" || die "停在 $host"; done
   [ -n "$ONLY_HOSTS" ] && { log "ONLY_HOSTS=$ONLY_HOSTS：略過操作機"; return 0; }
   tar -xzf "$jdk_tar" -C /opt/java && chown -R root:root "/opt/java/$jdk_dir" && ln -sfn "/opt/java/$jdk_dir" /opt/java/current
   ok "$OPS_HOST：$(java -version 2>&1 | head -1)"
-  log "$C3_HOST 留在 $(ssh_run "$C3_HOST" 'readlink /opt/java/current')；第二段完成：跑第 19 站驗收"
+  log "第二段完成：跑第 19 站驗收"
 }
 
 finalize() {

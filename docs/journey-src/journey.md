@@ -5962,7 +5962,7 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 | 段 | 做什麼 | 出問題怎麼退 |
 |---|---|---|
 | 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3（2.5.1 → 2.6.1）→ broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（29.8） |
-| 二 | JDK 21 → 25：controller、broker、REST Proxy、操作機逐台切換 `/opt/java/current`；C3 留在 21 | 連結切回 21、重啟 |
+| 二 | JDK 21 → 25：controller、broker、REST Proxy、C3、操作機逐台切換 `/opt/java/current` | 連結切回 21、重啟 |
 | 三 | finalize：features 升到 4.3（`kafka-features upgrade --release-version 4.3`） | **不能退**：之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降回去可能要從備份還原 |
 
 要回 8.2 時順序反過來：先把 JDK 切回 21（8.2 不支援 25），再 `dnf downgrade`。所以**前兩段都驗收過才做第三段**。
@@ -6189,7 +6189,7 @@ rest02 confluent-kafka-rest-8.3.2-1.noarch
 
 @role 小安 | ops02 | root
 
-**這一節在做什麼**：把 controller、broker、REST Proxy、操作機的 JDK 從 21 換成 25（C3 不換）。前提：第一段已全部完成並驗收。和7.1 節一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。**c3-01 不動**（原廠沒有寫 C3 2.6 支援 Java 25）。
+**這一節在做什麼**：把 controller、broker、REST Proxy、C3、操作機的 JDK 全部從 21 換成 25。前提：第一段已全部完成並驗收。和7.1 節一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。C3 也換：原廠對 Control Center 只寫「最低 Java 17」、沒有明列 25 的測試結果，本案決定全部節點一致用 25（上線前請向原廠支援確認）；C3 只有一台，重啟時畫面約 1 分鐘不能用。
 
 > Java 25 在 CP 8.3 的相容表上是「支援」，原廠部署文件的建議版本仍是 21。這一段是照銀行「升 8.3 時一起換 25」的要求做；銀行沒有這個要求時，留在 21 就好（只做第一、三段）。
 
@@ -6205,16 +6205,16 @@ kc01 java=/opt/java/jdk-25.0.5+8/bin/java Lag=0
 （3 台，每台約 15 秒）
 ```
 
-再 broker、操作機（REST Proxy 在下面另外做）：
+再 broker、操作機、C3（REST Proxy 在下面另外做；C3 重啟期間畫面不能用，broker 與應用程式不受影響）：
 
 ```bash
-JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do case $h in kb*) unit=confluent-server; url=https://$h.poc.lab:8090/v1/metadata/id; opt="";; *) unit=confluent-kafka-rest; url=https://$h.poc.lab:8082/v3/clusters; opt="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key";; esac; scp -q "$JDK_TAR" $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo systemctl restart $unit"; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' $opt $url)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "$h java=$(ssh $h.poc.lab "sudo readlink /proc/\$(systemctl show $unit -p MainPID --value)/exe") 200（約 $((i*5)) 秒）under-replicated=$u"; done; sudo tar -xzf "$JDK_TAR" -C /opt/java && chown -R root:root /opt/java/$JDK_DIR && ln -sfn /opt/java/$JDK_DIR /opt/java/current && echo "ops02 $(java -version 2>&1 | head -1)"; echo "c3-01 $(ssh c3-01.poc.lab 'readlink /opt/java/current')"
+JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do case $h in kb*) unit=confluent-server; url=https://$h.poc.lab:8090/v1/metadata/id; opt="";; *) unit=confluent-kafka-rest; url=https://$h.poc.lab:8082/v3/clusters; opt="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key";; esac; scp -q "$JDK_TAR" $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo systemctl restart $unit"; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' $opt $url)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "$h java=$(ssh $h.poc.lab "sudo readlink /proc/\$(systemctl show $unit -p MainPID --value)/exe") 200（約 $((i*5)) 秒）under-replicated=$u"; done; sudo tar -xzf "$JDK_TAR" -C /opt/java && chown -R root:root /opt/java/$JDK_DIR && ln -sfn /opt/java/$JDK_DIR /opt/java/current && echo "ops02 $(java -version 2>&1 | head -1)"; scp -q "$JDK_TAR" c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab "sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && rm -f /tmp/$(basename $JDK_TAR) && sudo chown -R root:root /opt/java/$JDK_DIR && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo systemctl restart confluent-control-center"; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 java=$(ssh c3-01.poc.lab "sudo readlink /proc/\$(systemctl show confluent-control-center -p MainPID --value)/exe") 200（約 $((i*5)) 秒）"
 ```
 
 ```out
 kb01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 20 秒）under-replicated=0
 ops02 openjdk version "25.0.5" … LTS
-c3-01 /opt/java/jdk-21.0.x+y
+c3-01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 60 秒）
 ```
 
 REST Proxy 照 12.1 一台一台換：先從 LB 停用、解壓新 JDK、切 `current`、重啟：
@@ -6362,7 +6362,7 @@ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.l
 ```out
 kc01 java=jdk-25.0.x+y confluent=8.3.2 os=9.6
 （kb01–kb04、rest01、rest02 同上）
-c3-01 java=jdk-21.0.x+y confluent=2.6.1 os=9.6
+c3-01 java=jdk-25.0.5+8 confluent=2.6.1 os=9.6
 ```
 
 `os=9.6` 還沒動，那是第 30 章的事。**記下新的基準**：之後新增或換掉主機（25.1、25.2 節）要裝**現行版本**——7.1 節裝 JDK 25（`OpenJDK25U-*`）、第 8 章的版本號換成 8.3.2 與 2.6.1，不是這本書前面寫的 8.2.4／2.5.1。用 `install/` 腳本的話，改 `conf/site.env` 的 `CP_VERSION`、`C3_VERSION`、`JDK_MAJOR` 三個值就行（`21-upgrade.sh adopt` 會代改）。
@@ -6623,7 +6623,7 @@ Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Pl
 | 相容性 | 先查原廠的相容表：新版 C3 要支援目前的 CP 版本（2.6.x：CP 7.5.15 到 8.3.x；2.5.x 只到 8.2.x，所以**不能**把已經是 8.3 的叢集的 C3 退回 2.5.x）。CP 要升級時，**C3 先升**（29.3） |
 | 停機 | 只有一台：升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看） |
 | 資料 | 內建 Prometheus 的歷史指標在 C3 的資料目錄，換套件不會清掉 |
-| JDK | C3 留在 JDK 21（29.7）：原廠對 Control Center 只寫「最低 Java 17」，沒有列出 25 的測試結果，而 CP 8.3 的建議版本也是 21 |
+| JDK | 和其他節點一樣是 JDK 25（29.7）。原廠對 Control Center 只寫「最低 Java 17」，沒有明列 25，上線前向原廠支援確認 |
 | 回滾 | `dnf downgrade` 回舊版（舊版的 RPM 一直留在套件庫，第 6 章） |
 
 lab 裡：已經是原廠最新的 2.6.1（29.3 升好的），所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾；2.6.0 也在 CP 8.3 的支援範圍內），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 31.3。

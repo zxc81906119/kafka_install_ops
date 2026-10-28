@@ -2,7 +2,7 @@
 # install/lab/run-customer.sh —— lab：用「客戶模式」從零實跑整條遷移主線（Windows Git Bash）
 #
 #   bash run-customer.sh                  從零（bank-sim reset）：先裝安裝基底（CP 8.2.4、C3 2.5.1、JDK 21、OS 9.6）到第 19 站驗收，
-#                                         再遷移到 CP 8.3.2、C3 2.6.1、JDK 25、OS 9.8（第 21、26、27 章），每段之後都驗收
+#                                         再遷移到 CP 8.3.2、C3 2.6.1、JDK 25、OS 9.8（第 29、30、31 章），每段之後都驗收
 #   FROM=6 bash run-customer.sh           從第 6 段接著跑（段號在每段的 ######## 標題裡）
 #   TO=15 bash run-customer.sh            跑到第 14 段（基底的驗收）就停
 #   IDEMPOTENCE=1 bash run-customer.sh    基底裝完（第 14 站）後再跑一次 02–14，驗證重跑是安全的（原本 run-all.sh --no-reset 的用途）
@@ -83,17 +83,17 @@ done
 PROBE
 )
 show_versions() { printf '\n-- 版本（%s）：主機 OS JDK 套件\n' "$1"; on_ops "$VERSION_PROBE"; }
-# expect_versions <CP 版本> <C3 版本> <JDK 主版號> <OS 小版本>：c3-01 的 JDK 一直留在基底（21），其他主機照第三個參數；不符就停
+# expect_versions <CP 版本> <C3 版本> <JDK 主版號> <OS 小版本>：每台主機都照這三個參數（c3-01 的套件看 C3 版本）；不符就停
 expect_versions() {
   local cp=$1 c3=$2 jdk=$3 os=$4 host host_os host_jdk host_version want_version want_jdk bad=0
   while read -r host host_os host_jdk host_version; do
-    case $host in c3-01) want_version=$c3; want_jdk=$BASE_JDK;; *) want_version=$cp; want_jdk=$jdk;; esac
+    case $host in c3-01) want_version=$c3; want_jdk=$jdk;; *) want_version=$cp; want_jdk=$jdk;; esac
     if [ "$host_os $host_jdk $host_version" != "$os $want_jdk $want_version" ]; then
       echo "$host：OS/JDK/套件 = $host_os/$host_jdk/$host_version（預期 $os/$want_jdk/$want_version）"; bad=1
     fi
   done < <(on_ops "$VERSION_PROBE")
   [ "$bad" = 0 ] || return 1
-  echo "10 台都符合：OS $os、Confluent $cp、C3 $c3、JDK $jdk（c3-01 留在 21）"
+  echo "10 台都符合：OS $os、Confluent $cp、C3 $c3、JDK $jdk"
 }
 
 # 工程師：確認操作機上的私鑰在獨立的 file system（lab：docker volume）、root:root 0400、不是系統碟的一部分
