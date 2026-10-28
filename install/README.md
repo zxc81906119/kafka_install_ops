@@ -3,7 +3,7 @@
 `docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 2–31 章的每一章，對應一支 `steps/NN-*.sh`（檔名照章號；第 7 章三支 07-1/2/3、第 25 章兩支 25-1/2；第 1 章與兩個附錄沒有腳本）（手把手只教手打指令，兩者的對照在下面「每一站」）。
 腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
 
-**版本路徑**：主線是「先裝安裝基底、再遷移」——基底 Confluent Platform 8.2.4＋Control Center 2.5.1＋JDK 21＋RHEL 9.6（第 1–20 站），遷移到 8.3.2＋2.6.1＋JDK 25＋RHEL 9.8（第 21、26 站，第 31 站單獨換 C3 版本）。版本都在 `conf/site.env`：基底 `CP_VERSION`／`C3_VERSION`／`JDK_MAJOR`／`OS_BASE_VERSION`，目標 `*_TARGET_*`。
+**版本路徑**：主線是「先裝安裝基底、再遷移」——基底 Confluent Platform 8.2.4＋Control Center 2.5.1＋JDK 21＋RHEL 9.6（第 2–19 站），遷移到 8.3.2＋2.6.1＋JDK 25＋RHEL 9.8（第 29、30 站，第 31 站單獨換 C3 版本）。版本都在 `conf/site.env`：基底 `CP_VERSION`／`C3_VERSION`／`JDK_MAJOR`／`OS_BASE_VERSION`，目標 `*_TARGET_*`。
 
 **作業系統**：以 RHEL 9 為準（lab 用 Rocky Linux 9.6 → 9.8 從零跑完整條路；容器不能真的重開機，26 站遇到「要重開機」改重啟平台服務）。RHEL 10 是 Confluent Platform 8.2 起官方支援的，但這些腳本**沒有在 RHEL 10 實測過**；要上 RHEL 10 之前至少先驗 versionlock 外掛、原廠公鑰匯入與驗章、C3 前置套件，以及 CPU 是否支援 x86-64-v3。
 
@@ -128,7 +128,7 @@ install/
 ## lab 驗證
 
 ```bash
-bash install/lab/run-customer.sh       # 從零跑整條主線：基底（8.2.4／C3 2.5.1／JDK 21／OS 9.6）→ 第 19 站驗收 → 20 → 21 遷移（C3、8.3.2、JDK 25、finalize）→ 22–25 → 26 OS 9.8 → 27 → 驗收；每段之後驗收，遷移期間持續流量。FROM=N 從第 N 段接著跑、TO=N 跑到第 N 段、IDEMPOTENCE=1 在基底裝完後再重跑 02–14 驗冪等
+bash install/lab/run-customer.sh       # 從零跑整條主線：基底（8.2.4／C3 2.5.1／JDK 21／OS 9.6）→ 第 19 站驗收 → 21 憑證輪替 → 29 遷移（C3、8.3.2、JDK 25、finalize）→ 26、23、25-1、25-2 → 30 OS 9.8 → 31 → 驗收；每段之後驗收，遷移期間持續流量。FROM=N 從第 N 段接著跑、TO=N 跑到第 N 段、IDEMPOTENCE=1 在基底裝完後再重跑 02–14 驗冪等
 bash install/lab/opmenu-hostkey-test.sh # 選單的私鑰檔與 sudoers 窄規則實測（第 16 站之後）
 ```
 
