@@ -61,7 +61,7 @@ install/
 | 18 | `--only 18` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15 留下的）處理 |
 | 19 | `--only 19` | 印「驗收：N / N 項通過」；冷開機（19.4）交給機房演練 |
 | 21 | `bash install/steps/21-cert-rotate.sh status｜leaf｜chain 新中繼.pem｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；`chain` 用在中繼沒換私鑰（leaf 不重簽、只把新中繼重包進 p12）；換 CA 三階段 = `trust-sync` → `leaf`（或 `chain`）→ `trust-sync`。先看手把手 21.0 判斷是哪一種 |
-| 23 | `bash install/steps/23-metadata-backup.sh grant｜run｜schedule｜compare` | 不在安裝順序裡。`svc-backup` 憑證由第 9 站一起發（`conf/certs.txt`）；`grant` 給最小權限（SecurityAdmin＋Topic／Cluster 的 Describe、DescribeConfigs ACL）並做反向檢查；`schedule` 裝每天 02:00 的 timer（和手把手 23.4 同名，裝哪一個都是同一個 timer）；備份在 `~/backup/metadata/`，保留 `KEEP_DAYS`（預設 30）天 |
+| 23 | `bash install/steps/23-metadata-backup.sh grant｜run｜schedule｜compare｜restore <備份目錄> <topic|-> <帳號|->｜drill` | 不在安裝順序裡。`svc-backup` 憑證由第 9 站一起發（`conf/certs.txt`）；`grant` 給最小權限（SecurityAdmin＋Topic／Cluster 的 Describe、DescribeConfigs ACL）並做反向檢查；`schedule` 裝每天 02:00 的 timer（和手把手 23.4 同名，裝哪一個都是同一個 timer）；備份在 `~/backup/metadata/`，保留 `KEEP_DAYS`（預設 30）天 |
 | 25.1 | `bash install/steps/25-1-controller-replace.sh status｜replace kc03` | 不在安裝順序裡。同名主機（換碟或換機器且已照 3、5、7、8、10 站準備好）：移出舊成員 → 清空並以觀察者格式化 → 追上 → `add-controller`；一次一台 |
 | 25.2 | `bash install/steps/25-2-broker-scale.sh status｜remove kb04｜add kb04` | 不在安裝順序裡。`remove` 由 Self-Balancing 搬走 replica、停用服務；`add` 清空並以觀察者格式化、啟動，Self-Balancing 自動搬回；永久縮減後改 `BROKERS`、重跑 12、13、16 站 |
 | 26 | `bash install/steps/26-license.sh status｜check｜schedule` | 不在安裝順序裡。`schedule` 裝操作機的 systemd timer（每天 08:00 跑 `check`，寫 syslog tag `confluent-license`）；rc 0 正常、2 剩不到 `LICENSE_WARN_DAYS`（預設 90）天、1 過期或讀不到 |

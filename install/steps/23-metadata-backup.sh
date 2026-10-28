@@ -9,6 +9,8 @@
 #   bash steps/23-metadata-backup.sh run        匯出一次到 ~/backup/metadata/<時間>/（變更前手動跑一次當快照）
 #   bash steps/23-metadata-backup.sh schedule   操作機的 systemd timer：每天 02:00 跑 run（以 root 身分）
 #   bash steps/23-metadata-backup.sh compare    比對最近兩次的備份，哪些檔有變
+#   bash steps/23-metadata-backup.sh restore <備份目錄> <topic|-> <帳號|->   23.6 從備份重建一個 topic、一個 principal 的 binding、一個 SCRAM 帳號（密碼讀 ~/secrets/<帳號>.pass）
+#   bash steps/23-metadata-backup.sh drill      23.6 還原演練：建演練物件 → 備份 → 誤刪 → restore → 寫讀一筆 → 清掉
 #
 # 各台的 /etc/confluent 由銀行的主機備份系統備；私鑰、密碼、master key 在事件發生時交 CyberArk，不在這支。
 set -uo pipefail
@@ -108,10 +110,87 @@ compare() {
     awk '{printf "%-18s %s\n", $1, ($2 == $3 ? "相同" : "有變")}' | while read -r line; do log "$line"; done
 }
 
+
+# 23.6 還原：從備份目錄重建 topic（partition 數、RF、動態設定）、一個 principal 的 role binding、SCRAM 帳號（迭代次數、配額）。
+#   密碼不在備份裡：讀 $SECRETS_DIR/<帳號>.pass（0600）。topic 或帳號給 - 就跳過那一項。
+restore() {   # restore <備份目錄> <topic|-> <帳號|->
+  local dir=$1 topic=${2:--} user=${3:--}
+  local admin=(--bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF")
+  [ -d "$dir" ] || die "沒有備份目錄 $dir"
+  section "23.6 從 $dir 還原（topic：$topic、帳號：$user）"
+  if [ "$topic" != - ]; then
+    local partitions rf kv cfg=()
+    read -r partitions rf <<<"$(grep -P "^Topic: $topic\t" "$dir/topics.txt" | head -1 | sed 's/.*PartitionCount: \([0-9]*\).*ReplicationFactor: \([0-9]*\).*/\1 \2/')"
+    [ -n "$partitions" ] || die "備份裡沒有 topic $topic（$dir/topics.txt）"
+    while read -r kv; do [ -n "$kv" ] && cfg+=(--config "$kv"); done < <(awk -v t="$topic" '$0 == "Dynamic configs for topic " t " are:"{p=1;next} /^Dynamic configs/{p=0} p{print $1}' "$dir/topic-configs.txt")
+    if kafka-topics "${admin[@]}" --create --topic "$topic" --partitions "$partitions" --replication-factor "$rf" "${cfg[@]}" >/dev/null 2>&1; then
+      ok "topic $topic：partitions=$partitions rf=$rf 動態設定 $(( ${#cfg[@]} / 2 )) 個"
+    else fail "topic $topic 建不回來"; fi
+  fi
+  if [ "$user" != - ]; then
+    local n=0 principal role rtype rname pattern args iter quota cid; cid=$(cluster_id)
+    while IFS='|' read -r principal role rtype rname pattern; do
+      principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
+      args=(--principal "$principal" --role "$role" --kafka-cluster "$cid"); [ -n "$rtype" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
+      cli_as svc-ops iam rbac role-binding create "${args[@]}" >/dev/null 2>&1 && n=$((n+1))
+    done < <(awk -v u="User:$user" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$dir/rbac.txt")
+    ok "role binding：$n 條"
+    iter=$(grep "SCRAM credential configs for user-principal '$user'" "$dir/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
+    quota=$(grep "Quota configs for user-principal '$user'" "$dir/users.txt" | sed 's/.* are //; s/\.0\b//g; s/, /,/g')
+    [ -s "$SECRETS_DIR/$user.pass" ] || die "沒有 $SECRETS_DIR/$user.pass：密碼不在備份裡，先放密碼檔"
+    if kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config "SCRAM-SHA-512=[${iter:-iterations=8192},password=$(cat "$SECRETS_DIR/$user.pass")]" >/dev/null 2>&1; then ok "SCRAM $user：${iter:-iterations=8192}"; else fail "SCRAM $user"; fi
+    if [ -n "$quota" ]; then
+      if kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config "$quota" >/dev/null 2>&1; then ok "配額：$quota"; else fail "配額 $quota"; fi
+    fi
+  fi
+}
+
+# 23.6 演練（lab 與驗收用）：建演練物件 → 備份 → 誤刪 → 還原 → 用該帳號寫讀一筆 → 清掉
+drill() {
+  local topic=orders.restore-demo user=app-restore cid dir client_conf role
+  local admin=(--bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF")
+  cid=$(cluster_id)
+  section "23.6 還原演練：建演練物件（topic 帶動態設定、帳號帶配額、三條 binding）、備份"
+  kafka-topics "${admin[@]}" --create --if-not-exists --topic "$topic" --partitions 3 --replication-factor 3 --config retention.ms=3600000 >/dev/null 2>&1 || die "建 $topic 失敗"
+  [ -s "$SECRETS_DIR/$user.pass" ] || (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$SECRETS_DIR/$user.pass")
+  kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat "$SECRETS_DIR/$user.pass")]" >/dev/null 2>&1 || die "建 SCRAM $user 失敗"
+  kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null 2>&1 || die "配額失敗"
+  for role in DeveloperRead DeveloperWrite; do cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" >/dev/null 2>&1 || die "binding $role 失敗"; done
+  cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" >/dev/null 2>&1 || die "binding Group 失敗"
+  run_backup; dir=$(ls -d "$BACKUP_ROOT"/20* | tail -1)
+  [ "$(grep -c "$topic" "$dir/topics.txt")" -gt 0 ] && [ "$(grep -c "^== User:$user" "$dir/rbac.txt")" = 1 ] && ok "備份 $dir 含演練物件" || die "備份裡沒有演練物件"
+  section "23.6 誤刪：topic、三條 binding、SCRAM 憑據與配額"
+  kafka-topics "${admin[@]}" --delete --topic "$topic" >/dev/null 2>&1
+  for role in DeveloperRead DeveloperWrite; do cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" --force >/dev/null 2>&1; done
+  cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" --force >/dev/null 2>&1
+  kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config SCRAM-SHA-512 >/dev/null 2>&1
+  kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
+  local left; left="topic $(kafka-topics "${admin[@]}" --list 2>/dev/null | grep -c "^$topic$") binding $(cli_as svc-ops iam rbac role-binding list --principal "User:$user" --kafka-cluster "$cid" 2>/dev/null | grep -c "User:$user") 帳號設定 $(kafka-configs "${admin[@]}" --describe --entity-type users --entity-name "$user" 2>/dev/null | grep -c .)"
+  if [ "$left" = "topic 0 binding 0 帳號設定 0" ]; then ok "都刪掉了（$left）"; else die "沒刪乾淨：$left"; fi
+  restore "$dir" "$topic" "$user"
+  section "23.6 驗證：$user 從 9095 寫一筆、讀回一筆；再清掉演練物件"
+  client_conf=$(mktemp); grep -v '^sasl.jaas.config' "$CONF_DIR/${SCRAM_APPS%% *}.properties" > "$client_conf"
+  printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\n' "$user" "$(cat "$SECRETS_DIR/$user.pass")" >> "$client_conf"
+  local got=0
+  echo "restore-$(date +%s)" | kafka-console-producer --bootstrap-server "$BROKER_CLIENT" --producer.config "$client_conf" --topic "$topic" >/dev/null 2>&1 &&
+    got=$(kafka-console-consumer --bootstrap-server "$BROKER_CLIENT" --consumer.config "$client_conf" --topic "$topic" --group restore-check --from-beginning --max-messages 1 --timeout-ms 20000 2>/dev/null | grep -c restore-)
+  rm -f "$client_conf"
+  if [ "$got" = 1 ]; then ok "$user 寫一筆、讀回 1 筆"; else fail "$user 寫讀失敗（got=$got）"; fi
+  kafka-topics "${admin[@]}" --delete --topic "$topic" >/dev/null 2>&1
+  for role in DeveloperRead DeveloperWrite; do cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" --force >/dev/null 2>&1; done
+  cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" --force >/dev/null 2>&1
+  kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config SCRAM-SHA-512 >/dev/null 2>&1
+  kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
+  rm -f "$SECRETS_DIR/$user.pass"
+  log "演練物件已清掉"
+}
+
 case $ACTION in
   grant)    grant; finish_step;;
   run)      run_backup; [ "$FAIL_COUNT" = 0 ];;
   schedule) schedule; finish_step;;
   compare)  compare;;
-  *) die "用法：bash $0 grant|run|schedule|compare";;
+  restore)  restore "${2:-}" "${3:--}" "${4:--}"; [ "$FAIL_COUNT" = 0 ];;
+  drill)    drill; [ "$FAIL_COUNT" = 0 ];;
+  *) die "用法：bash $0 grant|run|schedule|compare|restore <備份目錄> <topic|-> <帳號|->|drill";;
 esac

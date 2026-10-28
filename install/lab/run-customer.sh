@@ -20,7 +20,7 @@
 #   工程師        第 15 站在操作機自己產生 passphrase 與 master key，存 ~/secrets（0600）；平台的密碼與金鑰不放 CyberArk
 #   LB 團隊       重啟 REST 前停用那一台（bank-sim lb-watch）
 #
-# 遷移期間（段 17–22 的 Confluent／JDK 遷移、段 27 的 OS 更新）各跑一段持續流量（install/tools/load.sh）：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次。
+# 遷移期間（段 17–22 的 Confluent／JDK 遷移、段 28 的 OS 更新）各跑一段持續流量（install/tools/load.sh）：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次。
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 LAB_TOOLS_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -165,9 +165,10 @@ stage 24 "23 日常備份：grant、run、schedule、compare" && {
   step_on_ops 23-metadata-backup.sh grant && step_on_ops 23-metadata-backup.sh run || exit 1
   sleep 61; step_on_ops 23-metadata-backup.sh schedule && step_on_ops 23-metadata-backup.sh compare || exit 1
 }
-stage 25 "25.1 換 controller（kc03 清空重建）" && { step_on_ops 25-1-controller-replace.sh replace kc03 || exit 1; }
-stage 26 "25.2 broker 縮減與擴充（kb04）" && { step_on_ops 25-2-broker-scale.sh remove kb04 && step_on_ops 25-2-broker-scale.sh add kb04 || exit 1; }
-stage 27 "30 OS 小版本更新 9.6 → 9.8：銀行套件庫同步、plan、apply、verify（lab 不能真的重開機）" && {
+stage 25 "23.6 還原演練：建演練物件 → 備份 → 誤刪 → restore → 寫讀一筆 → 清掉" && { step_on_ops 23-metadata-backup.sh drill || exit 1; }
+stage 26 "25.1 換 controller（kc03 清空重建）" && { step_on_ops 25-1-controller-replace.sh replace kc03 || exit 1; }
+stage 27 "25.2 broker 縮減與擴充（kb04）" && { step_on_ops 25-2-broker-scale.sh remove kb04 && step_on_ops 25-2-broker-scale.sh add kb04 || exit 1; }
+stage 28 "30 OS 小版本更新 9.6 → 9.8：銀行套件庫同步、plan、apply、verify（lab 不能真的重開機）" && {
   on_ops 'bash install/tools/load.sh start' || exit 1
   $BANK os-sync || exit 1
   step_on_ops 30-os-patch.sh plan || exit 1
@@ -178,11 +179,11 @@ stage 27 "30 OS 小版本更新 9.6 → 9.8：銀行套件庫同步、plan、app
   show_versions "OS 更新後（第 30 章）"
   expect_versions "$TARGET_CP" "$TARGET_C3" "$TARGET_JDK" "$TARGET_OS" || exit 1
 }
-stage 28 "31 C3：帶進 2.6.0、退回、升回 2.6.1（回滾程序；2.6.x 都支援 CP 8.3）" && {
+stage 29 "31 C3：帶進 2.6.0、退回、升回 2.6.1（回滾程序；2.6.x 都支援 CP 8.3）" && {
   bring_in_c3_drill_version || exit 1
   step_on_ops 29-upgrade.sh publish c3 || exit 1
   step_on_ops 29-upgrade.sh c3 2.6.0 && step_on_ops 29-upgrade.sh c3 "$TARGET_C3" || exit 1
 }
-stage 29 "19 驗收（全部做完）" && { acceptance "全部做完"; install_on_ops --list; }
+stage 30 "19 驗收（全部做完）" && { acceptance "全部做完"; install_on_ops --list; }
 # TO= 讓最後幾段被略過時，最後一個 stage 會回 1；走到這裡就是成功
 exit 0

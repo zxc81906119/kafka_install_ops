@@ -26,3 +26,8 @@
 - 風險：dnf 只看啟用 repo 裡的最高版本；套件庫若把 9.6／9.8／10 混在同一份 repodata（Satellite／Nexus 常見），`dnf upgrade` 會越過 9.8 直升 10（大版本只能用 leapp），glibc／kernel 不在 versionlock 裡擋不住。
 - 要補：30.1（與 `30-os-patch.sh plan`）加檢查：`dnf check-update` 裡 release 套件（rocky-release／redhat-release）的目標版本必須等於預期的小版本、主版本必須仍是 9，否則 abort；手冊說明 `subscription-manager release --set=9.8`（RHEL 正規做法）與 `--releasever` 的限制。問題清單第 3 章加一題：銀行套件庫怎麼釘小版本、RHEL 10 內容會不會和 9 混在同一個 repo。
 - 時機：等目前手冊實跑結束後補，與其他補章一起驗（lab 可模擬：repo01 多放一個假的高版號 release 套件，看 plan 會不會停）。
+
+## 23.6 還原演練：完成（2026-10-29 02:30）
+- 手動：lab 上建演練物件（topic＋動態設定、SCRAM 帳號＋配額、3 條 binding）→ 備份 → 誤刪 → 用 `~/conf/metadata-restore.sh <備份目錄> <topic> <帳號>` 重建 → 帳號從 9095 寫讀一筆 → 清掉。手冊 23.6 四個區塊，`run-full.sh customer 23 23` 12/12 通過。
+- 腳本：`23-metadata-backup.sh restore|drill`，run-customer 新第 25 段（後面段號 +1，共 30 段）；drill 在 lab 實跑通過。
+- 教訓：SCRAM 憑據與配額要分開 `--delete-config`，合在一起 kafka-configs 整句拒絕；備份沒有密碼（讀 ~/secrets）；rbac.txt 是表格，解析靠 `|` 欄位。
