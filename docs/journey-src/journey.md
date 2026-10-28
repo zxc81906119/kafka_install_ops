@@ -349,7 +349,7 @@ jdk-ok: OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz
 @role 小安 | dl01 | root
 
 ```bash
-cd /out && find rpm rpm-target tools gpg-keys monitoring -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS && wc -l SHA256SUMS
+cd /out && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" | LC_ALL=C sort | xargs sha256sum > SHA256SUMS && wc -l SHA256SUMS
 ```
 
 ```out
@@ -5987,7 +5987,7 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 **這一節在做什麼**：把 8.3.2／2.6.1 的 RPM 上架到內部套件庫，並確認叢集現在是健康的，才開始升。**注意：`~/landing/rpm-target/` 與 `~/landing/bank/` 裡的 JDK 25 要保留到第 29 章全部做完（含 29.7）；19.5 的收尾不要先刪掉它們。**目標版本的 RPM 已經在落地區（`~/landing/rpm-target/`，第 3 章核對過 sha256 與簽章）。把它們加進內部套件庫：**基底版本不刪，回滾要用**，只推 `confluent/` 這個目錄：
 
 ```bash
-(cd ~/landing && sha256sum -c --quiet SHA256SUMS) && cp ~/landing/rpm-target/*.rpm ~/repo/confluent/ && createrepo_c -q --update ~/repo/confluent && tar -C ~/repo -cf - confluent | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/repo -xpf -' && ssh c3-01.poc.lab 'echo "套件庫裡的 confluent-server：$(sudo dnf -q --refresh --showduplicates list confluent-server 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/^1://; s/-1\$//" | sort -uV | paste -sd" " -)"; echo "套件庫裡的 C3：$(sudo dnf -q --showduplicates list confluent-control-center-next-gen 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/-1\$//" | sort -uV | paste -sd" " -)"'
+(cd ~/landing && grep " rpm-target/" SHA256SUMS | sha256sum -c --quiet) && cp ~/landing/rpm-target/*.rpm ~/repo/confluent/ && createrepo_c -q --update ~/repo/confluent && tar -C ~/repo -cf - confluent | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/repo -xpf -' && ssh c3-01.poc.lab 'echo "套件庫裡的 confluent-server：$(sudo dnf -q --refresh --showduplicates list confluent-server 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/^1://; s/-1\$//" | sort -uV | paste -sd" " -)"; echo "套件庫裡的 C3：$(sudo dnf -q --showduplicates list confluent-control-center-next-gen 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/-1\$//" | sort -uV | paste -sd" " -)"'
 ```
 
 ```out

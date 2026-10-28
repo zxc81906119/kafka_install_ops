@@ -265,7 +265,7 @@ publish() {
   local source_dir=${1:-rpm-target}   # 預設 rpm-target（目標版本，第 1、2 站已帶進來）；c3 = 第 31 章帶進來的單一 C3 版本
   section "29.1 上架：$LANDING/$source_dir/ → 內部套件庫"
   [ -n "$(ls "$LANDING/$source_dir"/*.rpm 2>/dev/null)" ] || die "$LANDING/$source_dir/ 沒有 RPM：照第 1、2 站（或 31.1、31.2）把檔案帶進來"
-  if [ "$source_dir" = rpm-target ]; then (cd "$LANDING" && sha256sum -c --quiet SHA256SUMS) || die "落地區 SHA256SUMS 核對失敗"
+  if [ "$source_dir" = rpm-target ]; then (cd "$LANDING" && grep " rpm-target/" SHA256SUMS | sha256sum -c --quiet) || die "落地區 SHA256SUMS 的 rpm-target 核對失敗"
   else (cd "$LANDING/$source_dir" && sha256sum -c --quiet SHA256SUMS) || die "$source_dir/SHA256SUMS 核對失敗"; fi
   mkdir -p "$REPO_DIR/confluent"
   cp "$LANDING/$source_dir"/*.rpm "$REPO_DIR/confluent/"
