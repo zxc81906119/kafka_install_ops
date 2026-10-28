@@ -11,8 +11,8 @@
 #                                                   版本預設 site.env 的 CP_TARGET_VERSION；C3 換成 C3_TARGET_VERSION（2.5.x 只支援到 CP 8.2.x，所以 C3 先升）
 #   bash steps/21-upgrade.sh jdk [主版號]            21.7 第二段：切到 landing/bank/ 裡最新的 OpenJDK<主版號>U（預設 JDK_TARGET_MAJOR），C3 不動
 #   CONFIRM_CLUSTER_ID=<cluster id> bash steps/21-upgrade.sh finalize <release>
-#                                                   21.8 第三段：kafka-features upgrade --release-version <release>（例如 4.3）；不能退，所以要帶 cluster id 確認
-#   bash steps/21-upgrade.sh rollback <主機> [版本]   21.9 finalize 之前：這台 JDK 切回最新的 jdk-<JDK_MAJOR>*、套件 downgrade 到 <版本>（預設 CP_VERSION）
+#                                                   21.9 第三段：kafka-features upgrade --release-version <release>（例如 4.3）；不能退，所以要帶 cluster id 確認
+#   bash steps/21-upgrade.sh rollback <主機> [版本]   21.8 finalize 之前：這台 JDK 切回最新的 jdk-<JDK_MAJOR>*、套件 downgrade 到 <版本>（預設 CP_VERSION）
 #   bash steps/21-upgrade.sh adopt                   21.10 遷移完成：把 site.env 的 CP_VERSION／C3_VERSION／JDK_MAJOR 改成目標值（之後新增主機、重跑第 8 站才會裝現行版本）
 #   bash steps/21-upgrade.sh c3 <版本>              只換 Control Center（手把手第 21.3、27）：比現在新就 install、比較舊就 downgrade（回滾）；
 #                                                   套件要先上架到內部套件庫
@@ -218,7 +218,7 @@ jdk() {
 finalize() {
   local release=${1:?用法：finalize <release>，例如 finalize 4.3}
   source "$CONF_DIR/kraft.env"
-  section "21.8 finalize：features → $release（之後不能退回舊版）"
+  section "21.9 finalize：features → $release（之後不能退回舊版）"
   features version-mapping --release-version "$release" | tee -a "$LOG_FILE"
   features upgrade --release-version "$release" --dry-run | tee -a "$LOG_FILE"
   if [ "${CONFIRM_CLUSTER_ID:-}" != "$CLUSTER_ID" ]; then
@@ -231,7 +231,7 @@ finalize() {
 
 rollback() {
   local host=${1:?用法：rollback <主機> [版本]} version=${2:-$CP_VERSION}
-  section "21.9 回滾 $host → $version（JDK 先切回最新的 jdk-$JDK_MAJOR*）"
+  section "21.8 回滾 $host → $version（JDK 先切回最新的 jdk-$JDK_MAJOR*）"
   if grep -q "CP-${version%.*}" <<<"$(features describe | grep confluent.metadata.version)"; then :; else
     warn "features 已經不是 ${version%.*}：finalize 之後 downgrade 不保證可行"
   fi

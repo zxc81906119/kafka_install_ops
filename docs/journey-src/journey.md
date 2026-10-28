@@ -31,7 +31,7 @@
 | 主機 | 用途 | 誰管 |
 |---|---|---|
 | dl01 | 外網下載機，唯一能連 Internet 的機器 | 我方 |
-| ops02 | 操作機：安裝起點，小安整天待在這裡；人員經 CyberArk（PVWA 網頁＋PSMP）登入就是 root，連各主機用 cpuser | 我方（root；連主機用 cpuser） |
+| ops02 | 操作機：安裝起點，小安整天待在這裡；人員經 CyberArk（PVWA 網頁登入、PSMP 代登 ssh）登入就是 root，連各主機用 cpuser | 我方（root；連主機用 cpuser） |
 | kc01、kc02、kc03 | KRaft controller | 我方安裝，銀行提供主機 |
 | kb01–kb04 | Kafka broker | 同上 |
 | rest01、rest02 | REST Proxy | 同上 |
@@ -50,6 +50,7 @@
 
 ## 0.4 怎麼讀這本
 
+- 稱呼：本手冊的「章」就是標題寫「第 N 站」的那一段（例如第 9 章 = 第九站），「節」是 9.1 這種小標；內文引用一律寫「第 N 章」或「N.M 節」。「操作機」就是主機名稱 ops02，內文叫操作機，指令與 `@role` 裡寫 ops02。「小安」是手冊裡的虛構新人，代表你。「行內」與「銀行」同義：行內的套件庫、AD 就是銀行準備的套件庫、AD。
 - 綠色標籤 **我方**：小安敲的指令。橘色標籤 **銀行**：銀行各團隊的事，lab 裡由你代勞。
 - 每個指令上方都有一行「▶ 在哪台（用哪個帳號）執行」。要換機器的那一個指令（以及每章第一個指令）會附上 lab 裡切過去的指令，例如 `docker exec -it -w /root lab-ops02-1 bash`；從一台容器換到另一台時，先 `exit` 回到 Git Bash 再切。正式環境進操作機是在 CyberArk 的 PVWA 網頁選目標、由 PSMP 代登（進去是 root）；從操作機連其他主機一律用 cpuser 的金鑰 ssh。
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
@@ -58,7 +59,7 @@
 - **主線是「先裝基底、再遷移」**：第 1–20 章裝的是安裝基底，第 21、26、27 章把它遷移到目標版本，每一段之後都跑第 19 章的驗收。兩組版本的來由與限制在下面「版本路徑」。
 - 主線是本案客戶的情境：銀行的 CyberArk 只有 PAM（PVWA、PSMP、CPM），平台密碼由人從 PVWA 取放；操作機到各主機的 ssh 金鑰是操作機自己的，不放 CyberArk（3.1）。
 
-- 指令很長是為了「整段貼上就能跑」。看不懂沒關係，先照做；每一站開頭說這站要做什麼，結尾說看到什麼代表成功。
+- 指令很長是為了「整段貼上就能跑」。看不懂沒關係，先照做；每一章開頭說這章要做什麼，結尾說看到什麼代表成功。
 
 > 陷阱：在各主機上（以 cpuser 登入）確認用的 `ls`、`stat` 看 `/etc/confluent/ssl`、`/var/lib/kafka` 這類 0750 的目錄要加 `sudo`，不然會 Permission denied，誤以為前一步失敗。操作機上你是 root，不需要。
 
@@ -71,7 +72,7 @@
 | JDK | 21 | 25 | 8.2.x 只支援 Java 17／21，**不支援 25**，所以基底一定是 21；8.3.x 才支援 25（原廠建議版本仍是 21）（21.7） |
 | OS（RHEL 9） | 9.6 | 9.8 | 第 26.5 節：小版本更新；Confluent 與 JDK 被 versionlock、tar 擋住，只動 OS 套件 |
 
-基底的 Confluent、C3、JDK 版本寫在 `install/conf/site.env`（`CP_VERSION`、`C3_VERSION`、`JDK_MAJOR`），目標版本是同一檔的 `*_TARGET_*`。做完遷移後把基底值改成目標值（21.10），之後新增主機照第 8 站才會裝到現行版本。
+基底的 Confluent、C3、JDK 版本寫在 `install/conf/site.env`（`CP_VERSION`、`C3_VERSION`、`JDK_MAJOR`），目標版本是同一檔的 `*_TARGET_*`。做完遷移後把基底值改成目標值（21.10），之後新增主機照第 8 章才會裝到現行版本。
 
 **lab 的限制先講清楚**：lab 的主機是 Rocky Linux 9 的容器，不是 RHEL；容器共用 WSL2 的核心，不能真的重開機（26.5 會講怎麼替代）；Rocky 的 9.6 套件來自它的 vault 倉庫，9.8 來自現行倉庫。正式環境是銀行的 RHEL 9.x 與銀行自己的套件庫，版本以銀行實際的為準（問題清單有問）。
 
@@ -93,7 +94,7 @@
 | systemd drop-in | 不改 RPM 附的服務設定，另外放一個覆寫檔（`/etc/systemd/system/<unit>.service.d/`） |
 | versionlock | dnf 的鎖版本插件，避免 OS 例行更新把 Confluent 升掉 |
 | 落地區 | 外網下載好的檔案暫放的地方，經掃描核准後搬進內網 |
-| CyberArk PAM | 銀行的特權帳號系統：管人與帳號（Vault、PVWA、CPM、PSMP）。本案只用 PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA）、由 PSMP 代登進操作機（root）；平台密碼由人從 PVWA 取放；CPM 輪替 root 與 svc-mds-bind |
+| CyberArk PAM | 銀行的特權帳號系統：管人與帳號。元件：Vault（保管庫）、PVWA（Password Vault Web Access，人用的網頁）、CPM（Central Policy Manager，定期自動換密碼）、PSMP（Privileged Session Manager for SSH，代登 ssh 並錄影）。本案只用 PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA）、由 PSMP 代登進操作機（root）；平台密碼由人從 PVWA 取放；CPM 輪替 root 與 svc-mds-bind |
 | cpuser | 每台主機（含操作機）同名的本機帳號，是安裝與維運的唯一 user：密碼鎖定、只收金鑰、UID／GID 都是 1500；操作機用 `/secure/ssh` 裡那一把私鑰連過去（3.1） |
 | Secret Protection | Confluent 的密碼加密功能：密文留在 `security.properties`，master key 以環境變數給服務 |
 | OP menu | 給維運人員的文字選單（在操作機以 root 跑）：用本人 AD 身分做 Kafka 類作業，主機類作業以 cpuser ssh（金鑰就是 `/secure/ssh` 的那把） |
@@ -112,7 +113,7 @@
 
 ### 每一站大概要多久
 
-| 站 | 時間 | 慢在哪 |
+| 章 | 時間 | 慢在哪 |
 |---|---|---|
 | 0 建 lab | 20–30 分 | 建映像檔要連外網下載 |
 | 1 下載 | 60–90 分 | 兩套各約 3 GB 從外網抓；lab 的 Windows 資料夾讀寫慢 |
@@ -136,9 +137,11 @@
 
 ## 0.5 自己把 lab 建起來
 
+> 這一節只有練習用的 lab 需要。正式環境的主機、AD、CA、套件庫都是銀行準備好的，直接從第 1 章開始。
+
 @role Lab 管理員（扮演銀行） | Windows 終端（Git Bash） | 本機
 
-需要 Docker Desktop 和 Git Bash。整個 lab 放在家目錄的 `kafka-lab/`，不依賴任何現成的專案；下面每個檔案都是用 heredoc 寫出來的，整段貼到 `EOF` 即可。先開一個 Git Bash，做兩個全域設定（之後所有 Windows 端指令都在這個視窗）：
+這一節在你的 Windows 筆電上用 Docker 蓋出一整套模擬環境：十幾台假主機，加上扮演銀行的 AD、CA、套件庫、負載平衡。做完 0.5 之後，你就有一個可以照第 1 章以後逐章練習的環境。需要 Docker Desktop 和 Git Bash。整個 lab 放在家目錄的 `kafka-lab/`，不依賴任何現成的專案；下面每個檔案都是用 heredoc 寫出來的，整段貼到 `EOF` 即可。先開一個 Git Bash，做兩個全域設定（之後所有 Windows 端指令都在這個視窗）：
 
 ```bash
 export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} && cd ~/kafka-lab && pwd
@@ -152,7 +155,7 @@ export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,imag
 
 ### 0.5.1 主機映像檔：模擬「裸機 RHEL 9」
 
-每台主機都是同一個映像：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。安裝與維運用的帳號 `cpuser` 不在映像裡，和銀行開給我們的主機一樣，是第 3 章由銀行 OS 團隊建立。沒有 JDK、沒有 Confluent、公開 repo 關閉，和銀行開給我們的主機一樣。
+（lab 專用）這一節建出所有主機共用的映像檔。每台主機都是同一個映像：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。安裝與維運用的帳號 `cpuser` 不在映像裡，和銀行開給我們的主機一樣，是第 3 章由銀行 OS 團隊建立。沒有 JDK、沒有 Confluent、公開 repo 關閉，和銀行開給我們的主機一樣。
 
 > 重點：**Rocky 的 9.6 映像裡預設的 repo 設定指向「最新的 9.x」**（mirrorlist 用 `$releasever` = 9），不動它的話 `dnf install` 裝到的是 9.8 的套件。所以先換成 vault 的 9.6 倉庫（`dl.rockylinux.org/vault/rocky/9.6`），再 `dnf update` 到 9.6 的最新修補，主機才是乾淨的 9.6。映像、下載機、後面 3.2 銀行套件庫的內容都用同一份 vault 設定。映像的 tag 用 `lab-node:96`：舊的 9.8 映像（`lab-node:1`）不會被誤用。
 
@@ -205,7 +208,7 @@ Rocky Linux release 9.6 (Blue Onyx)
 
 ### 0.5.2 銀行的套件庫 web server（repo01）
 
-銀行自己管的 httpd，只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
+（lab 專用）這一節建出模擬銀行套件庫的網站，3.2 節與第 4 章把 OS 套件與 Confluent RPM 放上去。銀行自己管的 httpd，只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
 
 ```bash
 cat > images/web/Dockerfile <<'EOF'
@@ -249,7 +252,7 @@ docker build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | tail -1
 
 ### 0.5.3 銀行的 AD（Samba AD DC）
 
-RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
+（lab 專用）這一節建出模擬銀行 AD 的主機，3.4 節在裡面建群組與帳號。RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
 
 ```bash
 cat > images/ad/Dockerfile <<'EOF'
@@ -292,6 +295,8 @@ docker build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | tail -1
 
 ### 0.5.4 銀行的負載平衡（nginx L4）
 
+（lab 專用）這一節建出模擬銀行負載平衡的 nginx，3.5 節設定轉發到兩台 REST Proxy。
+
 ```bash
 cat > images/lb/Dockerfile <<'EOF'
 FROM nginx:1.28
@@ -314,7 +319,7 @@ docker build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | tail -1 && dock
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-正式環境這是行內 PKI；lab 用 openssl 建一個兩層 CA（根 CA 離線保存，簽發 CA 簽日常憑證）：
+（lab 專用）這一節建出模擬銀行 CA 的簽發工具，3.4 與 9.2 節用它簽憑證。正式環境這是行內 PKI；lab 裡：用 openssl 建一個兩層 CA（根 CA 離線保存，簽發 CA 簽日常憑證）：
 
 ```bash
 cd ~/kafka-lab/ca && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA 01/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -fingerprint -sha256
@@ -369,7 +374,7 @@ signed repo.csr -> repo.crt  (CN = repo01.poc.lab, O = PoC Bank, C = TW; EKU ser
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
+（lab 專用）這一節用 docker compose 一次定義所有主機與網路，並產生共用的密碼檔。14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
 
 ```bash
 cd ~/kafka-lab && [ -f secrets.env ] || { until p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20); [[ $p =~ [A-Z] && $p =~ [a-z] && $p =~ [0-9] ]]; do :; done; (umask 077; printf 'AD_ADMIN_PASSWORD=%s\n' "$p" > secrets.env); unset p; }; cat > compose.yml <<'EOF'
@@ -502,7 +507,7 @@ docker compose -f compose.yml up -d 2>&1 | grep -c Started
 
 ### 0.5.7 下載機
 
-下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 1 站列給銀行的 OS 套件版本才是 9.6 的：
+（lab 專用）這一節建出第 1 章用的外網下載機 dl01。下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 1 章列給銀行的 OS 套件版本才是 9.6 的：
 
 ```bash
 docker run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && docker exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
@@ -514,7 +519,7 @@ internet: 200
 
 ### 0.5.8 進入各台機器
 
-之後會一直用到的三條（換主機名稱即可）：
+（lab 專用）整本手冊切換主機都用 `docker exec`；正式環境則是從操作機 ssh 到各台。之後會一直用到的三條（換主機名稱即可）：
 
 ```bash
 docker exec -it dl01 bash
@@ -534,17 +539,21 @@ docker exec -it lab-repo01-1 bash
 
 ### 0.5.9 收工與重開
 
-想暫停：`cd ~/kafka-lab && docker compose -f compose.yml stop`，資料都在 volume 裡；繼續：`docker compose -f compose.yml start`。Windows 重開機後容器會自己起來（`restart: unless-stopped`），Kafka 服務設了 enable 也會自己起來；只有下載機 dl01 要手動 `docker start dl01`。操作機重開後 `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見 3.1）。全部清掉重來：`docker compose -f compose.yml down -v && docker rm -f dl01`（落地區 `~/kafka-lab/landing` 不會被刪）。
+（lab 專用）暫停、繼續與重建 lab 的方法。想暫停：`cd ~/kafka-lab && docker compose -f compose.yml stop`，資料都在 volume 裡；繼續：`docker compose -f compose.yml start`。Windows 重開機後容器會自己起來（`restart: unless-stopped`），Kafka 服務設了 enable 也會自己起來；只有下載機 dl01 要手動 `docker start dl01`。操作機重開後 `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見 3.1）。全部清掉重來：`docker compose -f compose.yml down -v && docker rm -f dl01`（落地區 `~/kafka-lab/landing` 不會被刪）。
 
-> 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：ops02 的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 3、9 站會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
+> 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：操作機的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 3、9 章會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
 # 1. 第一站：外網下載機
 
 ![download]
 
+**這一章在做什麼**：在唯一能連外網的下載機 dl01 上，把安裝要用的檔案抓齊、驗過簽章，整批打包成清單，下一章送進銀行內網。全部由我方（小安）做，不需要銀行配合；之後的主機都離線，缺了什麼檔案只能再回來這一章補。
+
 小安的第一個任務：把 Confluent 的套件抓下來，而且只抓需要的。這次要抓**兩套**：安裝基底（Confluent Platform 8.2.4＋Control Center 2.5.1）放 `/out/rpm`，遷移目標（8.3.2＋2.6.1）放 `/out/rpm-target`，一次掃描、一次送進去，遷移（第 21 章）時就不用再開一次單。Java 和 OS 套件不下載，那是銀行的事（lab 的下載機只替銀行抓兩個 JDK，見 1.5）。
 
 ## 1.1 設定 Confluent repo、匯入原廠公鑰
+
+先讓下載機信任 Confluent 的簽章公鑰、設好三個原廠 repo（8.2、8.3、Control Center），後面才能下載並驗證套件。
 
 @role 小安 | dl01 | root
 
@@ -556,7 +565,7 @@ mkdir -p /out/rpm /out/rpm-target /out/gpg-keys /out/tools && curl -fsSL https:/
 Confluent Packaging <packages@confluent.io> public key
 ```
 
-三個網址（8.2、8.3、C3）給的其實是同一把公鑰（sha256 相同），所以只會出現一行；8.2 和 8.3 共用，只存一份 `confluent.asc`。
+指令成功時只會出現一行：三個網址（8.2、8.3、C3）給的其實是同一把公鑰（sha256 相同），8.2 和 8.3 共用，只存一份 `confluent.asc`。
 
 ```bash
 cat > /etc/yum.repos.d/confluent.repo <<'EOF'
@@ -595,7 +604,7 @@ confluent-server.noarch                          1:8.3.2-1         confluent-8.3
 
 > **為什麼基底的 C3 是 2.5.1，不是最新的 2.6.1**（原廠相容表，docs.confluent.io「Versions and interoperability」，2026-10-28 查）：Control Center 2.5.x 支援 Confluent Platform「7.5.11 以上、7.6.8 以上，到 8.2.x」；2.6.x 才支援「到 8.3.x」（2.6.x 的下限寫 7.5.15 以上，所以 2.6.x 也能配 8.2.x）。安裝基底是 CP 8.2.4，用 2.5 系列最新的 2.5.1，**和 CP 的相容範圍剛好對上**；遷移到 8.3 之前 C3 必須先升到 2.6.x（21.3）。2.5.1 與 2.6.1 的 RPM 只相依 bash，套件預設設定檔（`/etc/confluent-control-center/`）逐檔比對只差 `control-center-dev.properties` 多一行 `confluent.controlcenter.docs.host`（我們不用 dev 檔），所以第 13 章的 Prometheus／Alertmanager 設定兩個版本通用。
 
-> 第一次執行會先下載 repo 的中繼資料（幾十 MB），等一兩分鐘是正常的。
+> 上一個指令第一次執行會先下載 repo 的中繼資料（幾十 MB），等一兩分鐘是正常的。
 
 ## 1.2 下載：兩套精確版本
 
@@ -613,7 +622,7 @@ dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm --disabler
 dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm-target --disablerepo='*' --enablerepo=confluent-8.3,confluent-c3 confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2 confluent-control-center-next-gen-2.6.1
 ```
 
-每套約 3 GB，lab 裡因為落地區是 Windows 資料夾，最後核對檔案那段會慢（看起來像卡在 99%），耐心等它結束。
+每套約 3 GB。lab 裡：落地區是 Windows 資料夾，最後核對檔案那段會慢（看起來像卡在 99%），耐心等它結束。
 
 ```bash
 for d in rpm rpm-target; do echo "== $d"; ls /out/$d | sort; ls /out/$d | wc -l; done
@@ -642,6 +651,8 @@ confluent-telemetry-8.2.4-1.noarch.rpm
 
 ## 1.3 驗原廠簽章、確認相依
 
+兩件事：確認每個 RPM 的簽章是 Confluent 簽的、沒被改過；確認這些 RPM 除了 bash 和 glibc 之外不依賴任何 OS 套件（這樣銀行的 OS 套件庫不用為 Confluent 額外準備東西）。
+
 @role 小安 | dl01 | root
 
 ```bash
@@ -669,7 +680,7 @@ glibc-2.34-168.el9_6.24.x86_64
 
 @role 小安 | dl01 | root
 
-JMX exporter 不是 RPM，用 Maven Central 的 sha1 核對：
+第 17 章的監控需要 JMX exporter（Prometheus 用的 Java agent jar）和 Confluent 官方的規則檔，這兩樣都不是 RPM，要另外抓。先抓 jar，用 Maven Central 公布的 sha1 核對：
 
 ```bash
 curl -fsSL -o /out/tools/jmx_prometheus_javaagent-1.0.1.jar https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/1.0.1/jmx_prometheus_javaagent-1.0.1.jar && [ "$(sha1sum /out/tools/jmx_prometheus_javaagent-1.0.1.jar | cut -d' ' -f1)" = "$(curl -fsSL https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/1.0.1/jmx_prometheus_javaagent-1.0.1.jar.sha1)" ] && echo jar-sha1-ok
@@ -711,7 +722,7 @@ python3-dnf-plugin-versionlock	4.3.0-20.el9	vault96-baseos
 | chrony、firewalld | 全部 | 時間同步、主機防火牆 |
 | cyrus-sasl、openssl-devel | C3 | 原廠文件要求的前置套件 |
 | python3-dnf-plugin-versionlock | 裝 Confluent 的主機 | 鎖版本，避免 OS 例行更新把 Confluent 升掉 |
-| gettext、createrepo_c | 操作機 | `envsubst` 由範本產生設定檔；建內部套件庫的索引（第 4 站） |
+| gettext、createrepo_c | 操作機 | `envsubst` 由範本產生設定檔；建內部套件庫的索引（第 4 章） |
 
 銀行的 OS 套件庫本來就是完整的 RHEL，這份清單只是讓銀行確認這幾個在。lab 在 3.2 自己建 `/os/` 時多放了 httpd、jq、openldap-clients 等，那是 lab 主機自己要用的工具，不是交給銀行的需求。
 
@@ -719,7 +730,7 @@ python3-dnf-plugin-versionlock	4.3.0-20.el9	vault96-baseos
 
 @role 銀行 OS 團隊（lab 由下載機代勞） | dl01 | root
 
-正式環境 JDK 是銀行交付的；lab 沒有銀行，就用這台下載機從 Adoptium 抓 Temurin，連同官方的 sha256 一起放到 `/out/bank/`，當作「銀行給的檔案」。**要兩個**：JDK 21 給安裝基底（第 5 站）；JDK 25 留到遷移（21.7）才裝——8.2.x 不支援 Java 25，所以基底一定是 21，但 25 先一起帶進來，遷移時不用再送一次：
+正式環境 JDK 是銀行交付的；lab 沒有銀行，就用這台下載機從 Adoptium 抓 Temurin，連同官方的 sha256 一起放到 `/out/bank/`，當作「銀行給的檔案」。**要兩個**：JDK 21 給安裝基底（第 5 章）；JDK 25 留到遷移（21.7）才裝——8.2.x 不支援 Java 25，所以基底一定是 21，但 25 先一起帶進來，遷移時不用再送一次：
 
 ```bash
 mkdir -p /out/bank && for v in 21 25; do meta=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/$v/hotspot?os=linux&architecture=x64&image_type=jdk&vendor=eclipse") && url=$(echo "$meta" | grep -o '"link": *"[^"]*\.tar\.gz"' | head -1 | cut -d'"' -f4) && sha=$(echo "$meta" | grep -o '"checksum": *"[0-9a-f]\{64\}"' | head -1 | cut -d'"' -f4) && f=$(basename "$url") && curl -fsSL -o "/out/bank/$f" "$url" && echo "$sha  $f" > "/out/bank/$f.sha256" && (cd /out/bank && sha256sum -c --quiet "$f.sha256" && echo "jdk-ok: $f"); done
@@ -750,17 +761,19 @@ cd /out && find rpm rpm-target tools gpg-keys monitoring -type f | LC_ALL=C sort
 
 ![intake]
 
+**這一章在做什麼**：把上一章打包好的檔案送進內網的操作機。路上有三道關：資安掃描（2.1，銀行資安）、檔案交換（2.2，銀行）、進內網後我方用 `SHA256SUMS` 再驗一次（2.3，小安）。這一章做完，操作機的 `~/landing` 就是之後所有安裝的唯一來源。
+
 ## 2.1 掃描與開單
 
 @role 銀行 資安 | 行內掃描平台 | —
 
-正式環境：落地區的檔案上傳到行內的惡意程式掃描平台取得 OK 報告，開單時附上安裝檔、掃描報告、`SHA256SUMS`。注意 `confluent-security`（約 1 GB）和 C3（約 1 GB）單檔都超過 1 GB，要先確認平台的大小上限；兩套合計約 6 GB。lab 裡略過。
+正式環境：落地區的檔案上傳到行內的惡意程式掃描平台取得 OK 報告，開單時附上安裝檔、掃描報告、`SHA256SUMS`。注意 `confluent-security`（約 1 GB）和 C3（約 1 GB）單檔都超過 1 GB，要先確認平台的大小上限；兩套合計約 6 GB。lab 裡：略過這一步。
 
 ## 2.2 檔案交換：送到操作機
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-正式環境由行內的檔案交換平台把核准的檔案送到操作機。lab 用 `docker cp` 模擬，送到操作機 root 的 `~/landing`，唯讀（對 root 其實擋不住寫入，只是約定）：
+正式環境由行內的檔案交換平台把核准的檔案送到操作機的 `~/landing`（root 的家目錄底下）。lab 裡：用 `docker cp` 模擬這個平台；送進去之後把目錄設成唯讀（對 root 其實擋不住寫入，只是約定「落地區的檔案不改」）：
 
 ```bash
 docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/ && docker exec lab-ops02-1 bash -c 'chmod -R a-w /root/landing && find /root/landing -type f | wc -l && du -sh /root/landing'
@@ -777,7 +790,7 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/
 
 @role 小安 | ops02 | root
 
-這是第二關，目的是證明搬運途中沒被動過，用的是一起送進來的 `SHA256SUMS`：
+這是第二道驗證（第一道是 dl01 上的 1.6）：證明搬運途中沒被動過，用的是一起送進來的 `SHA256SUMS`。看到 `72 files OK` 才往下；有任何一個檔不符就退回銀行重送，不要裝：
 
 ```bash
 cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) files OK"
@@ -787,7 +800,7 @@ cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) f
 72 files OK
 ```
 
-`rpm -K` 只認 rpm 資料庫裡的公鑰，所以要先匯入：
+接著再驗一次原廠簽章。`rpm -K` 只認 rpm 資料庫裡的公鑰，所以先把隨包送進來的公鑰匯入（22 個 RPM 都要是 `digests signatures OK`）：
 
 ```bash
 rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc && rpm -K ~/landing/rpm/*.rpm ~/landing/rpm-target/*.rpm
@@ -802,7 +815,7 @@ rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.as
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 27 章單獨換 C3 版本時的單一 RPM。遷移用的新版 RPM 與 JDK 25 已經在第 1、2 站一起進來了（`rpm-target/`、`bank/`），第 21 章只是把它們上架。流程和第 2 站一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）；操作機上已經有同名的目錄會先清掉再送，所以同一個目錄換新版也是這一條。落地區還沒有那個目錄就什麼都不做：
+延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 27 章單獨換 C3 版本時的單一 RPM。遷移用的新版 RPM 與 JDK 25 已經在第 1、2 章一起進來了（`rpm-target/`、`bank/`），第 21 章只是把它們上架。流程和第 2 章一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）；操作機上已經有同名的目錄會先清掉再送，所以同一個目錄換新版也是這一條。落地區還沒有那個目錄就什麼都不做：
 
 ```bash
 D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; docker exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
@@ -818,7 +831,7 @@ sha256-ok
 
 ![bankprep]
 
-小安在等的時候，銀行各團隊在做自己的事。這一章全部是銀行的工作，lab 裡由你扮演。正式環境只要確認結果（第 6 章的安裝前檢查會逐項看）。
+**這一章在做什麼**：安裝之前，銀行各團隊要先把主機帳號、SSH 公鑰、OS 套件庫、JDK、AD、NTP、負載平衡準備好。這一章全部是銀行的工作，lab 裡由你扮演；正式環境你不做，只要確認結果（第 6 章的安裝前檢查會逐項看）。哪一項銀行還沒給，後面就會在那裡卡住。
 
 開主機的時候，原廠對虛擬機與磁碟有幾條硬性建議，要在開單時就交代給 OS／虛擬化團隊（lab 是容器，沒有這些）：
 
@@ -832,7 +845,7 @@ sha256-ok
 
 ## 3.1 安裝帳號 cpuser 與 SSH 金鑰
 
-這一節把「人怎麼進操作機」和「操作機怎麼連各主機」分開（完整設計見《CyberArk 登入與主機存取設計》）：
+**這一節在做什麼**：先由銀行 OS 團隊在每台主機建好安裝帳號 `cpuser`，小安在操作機產生 SSH 金鑰對，OS 團隊把公鑰放進每台主機，最後驗證「只有操作機能用這把金鑰登入」。這一節把「人怎麼進操作機」和「操作機怎麼連各主機」分開（完整設計見《CyberArk 登入與主機存取設計》）：
 
 | 項目 | 做法 |
 |---|---|
@@ -843,7 +856,7 @@ sha256-ok
 | sudo | 安裝與升級期 cpuser 全權（`/etc/sudoers.d/cpuser`，OS 團隊依變更單開、交付時移除）；交付後只剩 16.4 的 `cpuser-ops` |
 | 追溯 | 誰在什麼時間進了操作機的 root：CyberArk 的登入紀錄與 PSMP 錄影；各主機上看到的是 cpuser 的操作紀錄 |
 
-lab 沒有的東西，這樣模擬：
+lab 裡：正式環境才有的三樣東西，這樣模擬：
 - **沒有 PVWA、PSMP**：你用 `docker exec -it -w /root lab-ops02-1 bash` 直接以 root 進操作機，就是「PSMP 代登之後」。Windows 上的 `~/kafka-lab/pvwa/` 資料夾仍用來模擬 PVWA 裡的平台密碼（「存進 PVWA」＝放進這個資料夾，「從 PVWA 取出」＝從這個資料夾複製貼上），但**不放 ssh 私鑰**。
 - **沒有 LUKS**：`/secure/ssh` 是 0.5.6 compose 裡的獨立 docker volume `ops-secure`，只模擬「獨立的 file system」（獨立掛載點、容器重啟還在），沒有加密。
 - **沒有 CPM**：root 與 `svc-mds-bind` 的輪替只在正式環境。
@@ -973,7 +986,7 @@ not from a permitted host (host=kb01.poc.lab, ip=172.35.0.31, public key ED25…
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-正式環境這是 Satellite 或 Nexus；lab 用 repo01 的 `/os/` 路徑模擬。銀行的套件庫**起初是 9.6 的內容**（安裝基底，26.5 才同步到 9.8）。先在一個乾淨容器把需要的 OS 套件從 Rocky vault 的 9.6 抓下來並建索引，放在 `~/kafka-lab/bank-os/9.6`（這是銀行套件庫的內容，不是我們交付的檔案，所以不在落地區）。**先下載、再裝工具**，順序反了會漏掉工具自己的相依：
+**這一節在做什麼**：讓每台主機能向行內的 OS 套件庫裝套件（第 5–8 章要用），並信任銀行的根憑證（之後 HTTPS 都靠它）。正式環境這是 Satellite 或 Nexus，銀行已經做好；lab 裡：用 repo01 的 `/os/` 路徑模擬。銀行的套件庫**起初是 9.6 的內容**（安裝基底，26.5 才同步到 9.8）。先在一個乾淨容器把需要的 OS 套件從 Rocky vault 的 9.6 抓下來並建索引，放在 `~/kafka-lab/bank-os/9.6`（這是銀行套件庫的內容，不是我們交付的檔案，所以不在落地區）。**先下載、再裝工具**，順序反了會漏掉工具自己的相依：
 
 ```bash
 cd ~/kafka-lab && mkdir -p bank-os/9.6 && docker run --rm -v "$(cygpath -m "$PWD/bank-os/9.6"):/out" lab-node:96 bash -c '
@@ -1017,7 +1030,7 @@ ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 
 @role 銀行 OS 團隊 | — | —
 
-銀行只交付壓縮檔，不裝、不設定。lab 裡那兩個檔案在 1.5 已經由下載機抓好，隨落地區一起送到了操作機的 `~/landing/bank/`，附銀行提供的 sha256。**JDK 21 是現在要裝的（第 5 站）；JDK 25 是遷移（21.7）才用**，先放著。小安先核對一次：
+銀行只交付壓縮檔，不裝、不設定。lab 裡那兩個檔案在 1.5 已經由下載機抓好，隨落地區一起送到了操作機的 `~/landing/bank/`，附銀行提供的 sha256。**JDK 21 是現在要裝的（第 5 章）；JDK 25 是遷移（21.7）才用**，先放著。小安先核對一次：
 
 @role 小安 | ops02 | root
 
@@ -1035,6 +1048,8 @@ OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz.sha256
 ## 3.4 AD：群組、唯讀查詢帳號、LDAPS 憑證
 
 @role 銀行 AD 團隊 | ad01 | root
+
+**這一節在做什麼**：銀行 AD 團隊建好三個群組（權限綁群組，不綁個人）、一個給 MDS 查詢用的唯讀帳號 `svc-mds-bind`、三個測試人員，並讓 AD 提供 LDAPS（加密的 LDAP）。AD 是行內的帳號目錄，第 11 章起 MDS 靠它確認「這個人屬於哪個群組」。lab 裡：用 Samba AD 模擬。
 
 密碼先產生到檔案，用環境變數傳進指令，不打在畫面上。AD 預設的密碼複雜度要求大寫、小寫、數字至少各一，隨機抽到不符合的就重抽（不然帳號建不起來）：
 
@@ -1090,7 +1105,7 @@ ldap-bind.pass
 
 @role 小安（從 PVWA 取出；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
-小安從 PVWA 取出，放進操作機的 `~/secrets/`（0700 目錄、0600 檔）。正式環境在 ops02 上每個檔執行一次 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/ldap-bind.pass; unset P; echo)`：`read -s` 讓貼上的密碼不顯示在畫面上（PSMP 錄影錄不到），`printf %s` 不多寫換行。lab 由 Windows 終端代貼：
+小安從 PVWA 取出，放進操作機的 `~/secrets/`（0700 目錄、0600 檔）。正式環境在操作機上每個檔執行一次 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/ldap-bind.pass; unset P; echo)`：`read -s` 讓貼上的密碼不顯示在畫面上（PSMP 錄影錄不到），`printf %s` 不多寫換行。lab 由 Windows 終端代貼：
 
 ```bash
 docker exec lab-ops02-1 install -d -m 0700 /root/secrets && for f in ldap-bind ad-test-users; do docker exec -i lab-ops02-1 bash -c "umask 077; cat > ~/secrets/$f.pass" < ~/kafka-lab/pvwa/$f.pass; done; docker exec lab-ops02-1 ls -la /root/secrets | tail -n +4
@@ -1103,9 +1118,11 @@ docker exec lab-ops02-1 install -d -m 0700 /root/secrets && for f in ldap-bind a
 
 ## 3.5 NTP 與負載平衡
 
+兩件銀行的基礎服務：時間同步（NTP，憑證與 Kafka 都怕時間不準）和 REST Proxy、C3 前面的負載平衡。
+
 @role 銀行 套件庫管理員 | repo01 | root
 
-正式環境有行內 NTP；lab 讓 repo01 兼任：
+正式環境有行內 NTP；lab 裡：讓 repo01 兼任 NTP：
 
 ```bash
 cat > /etc/yum.repos.d/bank-os.repo <<'EOF'
@@ -1175,6 +1192,8 @@ LB：rest01 rest02
 
 # 4. 第四站：上架到內部套件庫
 
+**這一章在做什麼**：把 Confluent 的 RPM 做成一個 dnf 套件庫，放到銀行的套件庫伺服器 repo01，之後 11 台主機都用 `dnf install` 從這裡裝。前提：第 2 章的 `~/landing` 已驗過、第 3.1 節的 repodeploy 金鑰可用。這一章只放安裝基底的 RPM；遷移目標的 RPM 在 21.1 才上架。
+
 @role 小安 | ops02 | root
 
 repo01 只有 httpd，沒有 `createrepo_c`，所以索引在操作機建好，連 RPM 一起推上去。先從銀行套件庫裝工具：
@@ -1223,11 +1242,13 @@ dnf -q --repofrompath=cp-test,https://repo01.poc.lab/confluent/ --repo=cp-test -
 
 # 5. 第五站：JDK 21
 
+**這一章在做什麼**：把銀行交付的 JDK 21 tar 解開，裝到操作機和其他 10 台主機的同一個位置。前提：3.3 已核對過 tar。Confluent 的 RPM 不含 JDK，沒有這一步後面的服務起不來。
+
 @role 小安 | ops02 | root
 
 ![hostfiles]
 
-銀行給的 tar 在 `~/landing/bank/`（有 21 和 25 兩個，這一站只裝 **21**：8.2.x 不支援 Java 25；25 在第 21 章遷移時才換上去）。決定：解壓到 `/opt/java/<版本目錄>`，再做一個固定的連結 `/opt/java/current` 指向它，所有設定一律寫 `/opt/java/current`，以後換版只改連結。`java`、`keytool` 用 alternatives 登記（RHEL 的標準做法），`/etc/profile.d/java.sh` 設 `JAVA_HOME`；服務自己的 systemd 設定還會再明確寫一次 `JAVA_HOME`，不受全域切換影響。
+銀行給的 tar 在 `~/landing/bank/`（有 21 和 25 兩個，這一章只裝 **21**：8.2.x 不支援 Java 25；25 在第 21 章遷移時才換上去）。決定：解壓到 `/opt/java/<版本目錄>`，再做一個固定的連結 `/opt/java/current` 指向它，所有設定一律寫 `/opt/java/current`，以後換版只改連結。`java`、`keytool` 用 alternatives 登記（RHEL 的標準做法），`/etc/profile.d/java.sh` 設 `JAVA_HOME`；服務自己的 systemd 設定還會再明確寫一次 `JAVA_HOME`，不受全域切換影響。
 
 先看壓縮檔的頂層目錄名稱，並準備 `profile.d` 的檔案（`bank/` 裡同一個主版本有新舊幾版時，`sort -V | tail -1` 挑版本最新的）：
 
@@ -1274,11 +1295,11 @@ kc01: openjdk version "21.0.x" … LTS JAVA_HOME=/opt/java/current
 
 # 6. 第六站：安裝前檢查
 
+**這一章在做什麼**：在動任何東西之前，逐項確認銀行準備的環境符合條件。這一章只看不改。每一項不符都是要先回頭找銀行的事，不要自己硬裝過去；全部符合才進第 7 章。
+
 @role 小安 | ops02 | root
 
-動任何東西之前，先確認銀行準備的環境符合條件。每一項不符都是要先回頭找銀行的事。
-
-**主機基本事實**（`/tmp` 不能 `noexec`、至少 2 GB）：
+**主機基本事實**（`/tmp` 不能 `noexec`、至少 2 GB）。過關條件：每台 `tmp_noexec=0`、`tmp_free` 不小於 2048、OS 版本與銀行說的一致：
 
 ```bash
 for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'printf "%-7s %s cpu=%s mem=%sMB tmp_free=%sMB tmp_noexec=%s\n" "$(hostname)" "$(. /etc/os-release; echo $ID-$VERSION_ID)" "$(nproc)" "$(free -m | awk "/Mem:/{print \$2}")" "$(df -m /tmp | awk "NR==2{print \$4}")" "$(findmnt -no OPTIONS /tmp | grep -c noexec)"'; done
@@ -1302,7 +1323,7 @@ kc01  /var/lib fstype=overlay free=712GB
 
 > `/tmp` 要能執行：broker 啟動時會把壓縮（snappy、zstd、lz4）的原生程式庫解壓到 `java.io.tmpdir`（預設 `/tmp`）再載入，`noexec` 的 `/tmp` 會讓用到這些壓縮的 producer／consumer 失敗。銀行的強化規範若要求 `/tmp` 一律 `noexec`，見 10.3 的 `java.io.tmpdir` 做法。
 
-**時鐘誤差**（TLS 與 MDS token 要求 2 秒內）：
+**時鐘誤差**（TLS 與 MDS token 要求 2 秒內；各台與操作機相差超過 2 秒就請銀行修 NTP）：
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do echo "$h skew=$(( $(ssh $h.poc.lab date +%s) - $(date +%s) ))s"; done
@@ -1313,7 +1334,7 @@ kc01 skew=0s
 （都是 0 或 1）
 ```
 
-**DNS、套件庫、AD 連線**：
+**DNS、套件庫、AD 連線**。過關條件：每台 `all resolved`、`os=200`、`confluent=200`，AD 那段 `Verify return code: 0 (ok)`（代表 LDAPS 憑證鏈信任成功）：
 
 ```bash
 for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'bad=""; for n in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 repo01 ad01 lb01; do getent hosts $n.poc.lab >/dev/null || bad="$bad $n"; done; echo "$(hostname): ${bad:-all resolved} os=$(curl -s -o /dev/null -w %{http_code} https://repo01.poc.lab/os/repodata/repomd.xml) confluent=$(curl -s -o /dev/null -w %{http_code} https://repo01.poc.lab/confluent/repodata/repomd.xml)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'echo "$(hostname): $(openssl s_client -connect ad01.poc.lab:636 </dev/null 2>/dev/null | grep "Verify return code")"'; done
@@ -1328,7 +1349,7 @@ kb01: Verify return code: 0 (ok)
 
 `curl` 沒有指定 CA 就能驗過，是因為銀行根憑證已在每台的 OS 信任清單裡。`getent hosts` 用的是系統解析順序（先 `/etc/hosts` 再 DNS），和程式連線時的行為一致。
 
-**主機是乾淨的**：
+**主機是乾淨的**（沒裝過 Confluent、沒有資料目錄；有殘留的舊資料會讓第 10 章的格式化出問題）：
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname): confluent_pkgs=$(rpm -qa "confluent-*" | wc -l) data_dir=$([ -e /var/lib/kafka ] && echo exists || echo none)"'; done
@@ -1341,9 +1362,11 @@ kc01: confluent_pkgs=0 data_dir=none
 
 # 7. 第七站：OS 調校
 
+**這一章在做什麼**：照 Confluent 的建議調整主機：核心參數、檔案數上限、關閉 THP（transparent hugepage）、時區、時間同步、防火牆只開需要的埠。每台逐一做，沒有順序相依，也沒有服務會被重啟。
+
 @role 小安 | ops02 | root
 
-10 台叢集主機要做，操作機只做時間同步。lab 是容器，sysctl 有兩個網路參數設不進去、THP 的單元會自動跳過，正式 VM 不會有這個限制。
+10 台叢集主機都要做，操作機只做時間同步與時區。lab 裡：主機是容器，sysctl 有兩個網路參數設不進去（`errors=2`）、THP 的單元會自動跳過；正式 VM 不會有這個限制，`errors` 應該是 0。
 
 **核心參數**：
 
@@ -1445,9 +1468,11 @@ c3-01: 7071/tcp 9021/tcp 9090/tcp
 
 # 8. 第八站：安裝 Confluent 套件
 
+**這一章在做什麼**：從行內套件庫把 Confluent 的 RPM 裝到各主機（各主機只裝自己角色需要的），並鎖定版本，之後 OS 例行更新不會把它們升掉。
+
 @role 小安 | ops02 | root
 
-裝的是**安裝基底**（Confluent Platform 8.2.4、Control Center 2.5.1，來自 `~/landing/rpm/`）；套件庫（第 4 站）此時只有這一套。目標版本（8.3.2、2.6.1）到第 21 章才上架。
+裝的是**安裝基底**（Confluent Platform 8.2.4、Control Center 2.5.1，來自 `~/landing/rpm/`）；套件庫（第 4 章）此時只有這一套。目標版本（8.3.2、2.6.1）到第 21 章才上架。
 
 每台放原廠公鑰、寫 repo 設定（11 台含操作機，gpgcheck 開著）：
 
@@ -1510,9 +1535,13 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 
 ![certs]
 
+**這一章在做什麼**：替平台的每個元件備好憑證。小安在操作機產生私鑰與 CSR（憑證申請單），交給銀行 CA 簽發，收回來逐張檢查，再做成 Java 用的 keystore／truststore。前提：第 3.2 節的銀行根憑證已在各主機，第 8 章套件已裝。後面第 10–13 章的 TLS 設定都用這一章的產出。
+
 平台內部所有連線都加密，而且用憑證識別身分。小安在操作機產生私鑰和 CSR（私鑰不離開行內），銀行 CA 簽完回來，小安逐張檢查後做成 Java 用的 keystore。
 
 ## 9.1 產生私鑰與 CSR
+
+先決定要幾張憑證、各自給誰用（下表），再一次把 8 組私鑰與 CSR 產生出來。私鑰留在操作機，只有 CSR 交給銀行。EKU（憑證用途）決定憑證能當伺服器、客戶端或兩者；SAN 是憑證適用的主機名稱，連線時名稱對不上會被拒。
 
 @role 小安 | ops02 | root
 
@@ -1544,7 +1573,7 @@ kafka-internal: csr ok
 （8 行）
 ```
 
-送出前自己看一次 CN、SAN、EKU：
+送出前自己看一次 CN、SAN、EKU 是否和上表一致（銀行 CA 的政策會檢查 EKU，漏了會被退件）：
 
 ```bash
 for f in ~/pki/requests/*.csr; do echo "== $(basename $f)"; openssl req -in $f -noout -subject -text | grep -E "^subject=|Alternative|Extended Key" -A1 | grep -v "^--" | sed 's/^ */  /'; done
@@ -1554,7 +1583,7 @@ for f in ~/pki/requests/*.csr; do echo "== $(basename $f)"; openssl req -in $f -
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 用 0.5.5 建好的 `sign.sh`，8 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和第 3 站簽給 ad01 的那張混在一起）：
+正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5.5 建好的 `sign.sh`，8 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和第 3 章簽給 ad01 的那張混在一起）：
 
 ```bash
 cd ~/kafka-lab && mkdir -p ca/exchange/signed && docker cp lab-ops02-1:/root/pki/requests "$(cygpath -m "$PWD/ca/exchange/")" && for f in ca/exchange/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/signed/$n.crt"; done && for f in ca/exchange/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/incoming/; done && docker exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
@@ -1567,6 +1596,8 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 ```
 
 ## 9.3 匯入前檢查、做成 keystore
+
+銀行回覆的憑證不能直接用：先拆開、逐張檢查，全部沒問題才打包成 Java 能讀的檔。這一節是小安防止「拿到錯的憑證才在啟動時才發現」的最後一關。
 
 @role 小安 | ops02 | root
 
@@ -1581,7 +1612,7 @@ kafka-internal: 1 issuer(s)
 （8 行）
 ```
 
-五項檢查：私鑰相符、CN、SAN、EKU、效期，再驗整條鏈到銀行根憑證：
+五項檢查：私鑰相符、CN、SAN、EKU、效期，再驗整條鏈到銀行根憑證。好結果是每一行的 key、cn、san、eku、chain 都是 `ok`，days 約 364（憑證效期一年）：
 
 ```bash
 cd ~/pki && while read -r name eku san; do leaf=incoming/$name.leaf.pem; k1=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16); k2=$(openssl pkey -in keys/$name.key -pubout 2>/dev/null | sha256sum | cut -c1-16); cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'); have_san=$(openssl x509 -in $leaf -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,); want_san=$([ "$san" = "-" ] && echo "" || echo "$san" | tr ',' '\n' | sort | paste -sd,); have_eku=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '); days=$(( ($(date -d "$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); chain=$(openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf 2>&1 | grep -c ": OK"); printf '%-19s key=%s cn=%s san=%s eku=%s days=%s chain=%s\n' $name $([ $k1 = $k2 ] && echo ok || echo MISMATCH) $([ "$cn" = "$name" ] && echo ok || echo "$cn") $([ "$have_san" = "$want_san" ] && echo ok || echo DIFF) "$have_eku" $days $([ $chain = 1 ] && echo ok || echo FAIL); done < requests.txt
@@ -1616,11 +1647,13 @@ Certificate was added to keystore
 
 ![startup]
 
+**這一章在做什麼**：把 controller（3 台）與 broker（4 台）設定好並啟動，讓 Kafka 叢集第一次跑起來。順序是：派送憑證（10.1）→ 產生並派送設定檔（10.2）→ 設定 systemd（10.3）→ 格式化儲存、先起 controller 再起 broker（10.4）。前提：第 9 章的憑證都簽好了、第 8 章套件已裝。
+
 ## 10.1 派送憑證
 
 @role 小安 | ops02 | root
 
-controller 4 個檔，broker 多一個 `cp-server.p12`（對外 listener 用）。目錄 root:confluent 0750，檔案 0640：
+把第 9 章的 keystore 與 truststore 放到各主機。controller 4 個檔，broker 多一個 `cp-server.p12`（對外 listener 用）。目錄 root:confluent 0750，檔案 0640：
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do case $h in kb*) extra=~/pki/certs/cp-server.p12;; *) extra="";; esac; scp -q ~/pki/certs/truststore.p12 ~/pki/certs/kafka-internal.p12 ~/pki/keys/mds-token.key ~/pki/certs/mds-token-public.pem $extra $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/kafka && for f in /tmp/truststore.p12 /tmp/kafka-internal.p12 /tmp/mds-token-public.pem /tmp/cp-server.p12; do [ -f $f ] && sudo install -o root -g confluent -m 0640 $f /etc/confluent/ssl/; done; sudo install -o root -g confluent -m 0640 /tmp/mds-token.key /etc/confluent/ssl/mds-token-keypair.pem; rm -f /tmp/*.p12 /tmp/mds-token*; printf "%-6s %s files: %s\n" "$(hostname)" "$(sudo ls /etc/confluent/ssl | wc -l)" "$(sudo ls /etc/confluent/ssl | paste -sd" ")"'; done
@@ -1636,7 +1669,7 @@ kb01   5 files: cp-server.p12 kafka-internal.p12 mds-token-keypair.pem mds-token
 
 @role 小安 | ops02 | root
 
-設定檔用範本產生：範本裡寫 `${變數}`，由 `envsubst` 換成每台的值；密碼從檔案讀進變數，不出現在畫面上。先裝工具：
+這一節產生每台的 `server.properties`（Kafka 的主要設定檔）。controller 與 broker 是同一個程式、不同設定：controller 管叢集狀態，broker 服務應用程式。設定檔用範本產生：範本裡寫 `${變數}`，由 `envsubst` 換成每台的值；密碼從檔案讀進變數，不出現在畫面上。先裝工具：
 
 ```bash
 dnf -q -y install gettext >/dev/null && echo envsubst-ok
@@ -1864,7 +1897,7 @@ kb01: 144 lines, unresolved=0
 
 @role 小安 | ops02 | root
 
-RPM 的 `confluent-server.service` 預設讀 `/etc/kafka/server.properties`，用 drop-in 覆寫成我們的設定、`JAVA_HOME`、heap（lab 規格：controller 384m、broker 768m（官方 JMX exporter 規則每台 broker 約一萬多條序列，加上遷移期間的持續流量，512m 會 OutOfMemoryError））。**最後一定要看到 exec 指向我們的檔案**：
+這一節讓 systemd 用我們的設定檔啟動服務，而不是 RPM 附的預設設定。RPM 的 `confluent-server.service` 預設讀 `/etc/kafka/server.properties`，用 drop-in 覆寫成我們的設定、`JAVA_HOME`、heap（lab 規格：controller 384m、broker 768m（官方 JMX exporter 規則每台 broker 約一萬多條序列，加上遷移期間的持續流量，512m 會 OutOfMemoryError））。**最後一定要看到 exec 指向我們的檔案**：
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do case $h in kc*) heap=384m;; *) heap=768m;; esac; ssh $h.poc.lab "sudo install -d -m 0755 /etc/systemd/system/confluent-server.service.d && sudo tee /etc/systemd/system/confluent-server.service.d/10-override.conf >/dev/null <<EOF
@@ -1892,13 +1925,13 @@ kc01  heap=384m exec=/etc/confluent/kafka/server.properties data=cp-kafka:conflu
 > `sudo install -d -o cp-kafka -g confluent -m 0750 /var/lib/kafka/tmp && printf '[Service]\nEnvironment="JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/var/lib/kafka/tmp"\n' | sudo tee /etc/systemd/system/confluent-server.service.d/15-tmpdir.conf`
 > 實測（2026-10-25，kb04）：重啟後 lz4 的原生程式庫改解在 `/var/lib/kafka/tmp`，snappy／zstd／lz4 壓縮的寫入都正常；日誌開頭會多一行 `Picked up JAVA_TOOL_OPTIONS`，屬正常。REST Proxy、C3 同理（各自的資料目錄）。
 
-> 陷阱：如果 exec 顯示的是 `/etc/kafka/server.properties`，代表 drop-in 沒生效。此時啟動會用 RPM 的預設設定起來（沒有加密、沒有認證）。小安在 REST Proxy 和 C3 都踩過這個坑。
+> 陷阱：如果 exec 顯示的是 `/etc/kafka/server.properties`，代表 drop-in 沒生效，此時啟動會用 RPM 的預設設定起來（沒有加密、沒有認證）。處理：不要啟動，先檢查 drop-in 檔的位置與內容、執行 `systemctl daemon-reload`，再看一次 ExecStart。REST Proxy（第 12 章）與 C3（第 13 章）啟動前都要做同樣的檢查。
 
 ## 10.4 格式化、啟動
 
 @role 小安 | ops02 | root
 
-cluster id 一個、每台 controller 一個 directory id；controller 用動態 quorum 格式化，並寫入緊急備用的 SCRAM 管理帳號 `kafka-admin`；broker 格式化成觀察者。
+格式化是替每台建立 Kafka 的儲存目錄與身分（只做一次）。整個叢集共用一個 cluster id、每台 controller 一個 directory id；controller 用動態 quorum（可以事後增減成員）格式化，並寫入緊急備用的 SCRAM 管理帳號 `kafka-admin`；broker 格式化成觀察者（observer：不參與 quorum 投票，只讀取 metadata）。
 
 ```bash
 export JAVA_HOME=/opt/java/current && (umask 077; { echo "CLUSTER_ID=$(kafka-storage random-uuid)"; for c in kc01 kc02 kc03; do echo "DIR_ID_$c=$(kafka-storage random-uuid)"; done; } > ~/conf/kraft.env; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/kafka-admin.pass) && cat ~/conf/kraft.env
@@ -1926,7 +1959,7 @@ kb01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx node.id=101
 
 格式化只做一次，重跑會被 `already formatted` 擋下，這是保護。
 
-操作機連 controller 的 client 設定（用內部憑證），然後啟動 controller、看 quorum：
+操作機連 controller 的 client 設定（用內部憑證），然後啟動 controller、看 quorum。好結果：3 台 controller 都在清單裡、有一個 leader、`Lag` 很小；有一台沒出現就先別啟動 broker：
 
 ```bash
 (umask 077; cat > ~/conf/client-internal.properties <<EOF
@@ -1951,7 +1984,7 @@ LeaderId:               1
 CurrentVoters:          [{"id": 1, …}, {"id": 2, …}, {"id": 3, …}]
 ```
 
-啟動 broker，確認註冊與 MDS：
+啟動 broker，確認註冊與 MDS。好結果：4 台 broker 都註冊成功，MDS（8090）回 200；MDS 要等 AD 查詢帳號連得上才會起來，所以慢幾十秒是正常的：
 
 ```bash
 for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl enable --now confluent-server >/dev/null 2>&1; sleep 1; printf "%-5s %s\n" "$(hostname)" "$(systemctl is-active confluent-server)"'; done; sleep 45; kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep CurrentObservers | cut -c1-100; for h in kb01 kb02 kb03 kb04; do echo "$h MDS=$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
@@ -1972,6 +2005,8 @@ kb04 MDS=200
 # 11. 第十一站：帳號與權限
 
 ![identity]
+
+**這一章在做什麼**：叢集起來之後，建立「誰能做什麼」：操作機的管理身分、應用程式的 SCRAM 帳號、綁在 AD 群組上的 RBAC 角色（Role-Based Access Control，角色式權限）。前提：第 10 章的 broker 與 MDS 都已經正常。
 
 @role 小安 | ops02 | root
 
@@ -2086,7 +2121,7 @@ carol: "role": "DeveloperRead"
 
 ## 11.1 密碼交 Secrets 團隊保管（PVWA）
 
-到這裡小安產生了幾組密碼，正本都要交銀行的 Secrets 團隊存進 PVWA；操作機上的 `~/secrets/`、`~/pki/store.pass` 只是作業用的副本：
+**這一節在做什麼**：把前面產生的密碼交給銀行保管。到這裡小安產生了幾組密碼，正本都要交銀行的 Secrets 團隊存進 PVWA；操作機上的 `~/secrets/`、`~/pki/store.pass` 只是作業用的副本：
 
 | 密碼 | 誰要用 | PVWA 裡的 object（名稱依銀行慣例，以下是建議） |
 |---|---|---|
@@ -2096,7 +2131,7 @@ carol: "role": "DeveloperRead"
 
 @role 銀行 Secrets 團隊（收下存進 PVWA；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-正式環境是小安在 PVWA 新增或更新 object、貼上內容；lab 把操作機上的檔案複製進 pvwa/：
+正式環境是小安在 PVWA 新增或更新 object、貼上內容。lab 裡：把操作機上的檔案複製進 `pvwa/` 資料夾來模擬：
 
 ```bash
 cd ~/kafka-lab && (umask 077; docker exec lab-ops02-1 cat /root/pki/store.pass > pvwa/store.pass; for f in kafka-admin app-orders app-payments; do docker exec lab-ops02-1 cat /root/secrets/$f.pass > pvwa/$f.pass; done) && for f in store kafka-admin app-orders app-payments; do printf '%s ' "$f:$(wc -c < pvwa/$f.pass)"; done; echo
@@ -2110,7 +2145,7 @@ store:24 kafka-admin:24 app-orders:24 app-payments:24
 
 ## 11.2 演練：緊急帳號 kafka-admin 用過就換密碼
 
-`kafka-admin` 是 MDS 故障時唯一進得去的管理身分（CLIENT 9095，SCRAM，super user）。平常沒人用；一旦有人在緊急時從 PVWA 取出來用過，這個密碼就算曝光了，**用完當天就要換**。CPM 沒有可以換 Kafka SCRAM 密碼的 plugin，所以由小安換、再交回 PVWA。平常沒有程式掛在這個帳號上，所以一個帳號直接換、不需要 A／B 兩組，也不會中斷任何服務（應用程式的 SCRAM 帳號才需要 A／B，見 OP menu 35）。
+這一節演練「緊急帳號被人用過之後怎麼收拾」。`kafka-admin` 是 MDS 故障時唯一進得去的管理身分（CLIENT 9095，SCRAM，super user）。平常沒人用；一旦有人在緊急時從 PVWA 取出來用過，這個密碼就算曝光了，**用完當天就要換**。CPM 沒有可以換 Kafka SCRAM 密碼的 plugin，所以由小安換、再交回 PVWA。平常沒有程式掛在這個帳號上，所以一個帳號直接換、不需要 A／B 兩組，也不會中斷任何服務（應用程式的 SCRAM 帳號才需要 A／B，見 OP menu 35）。
 
 @role 小安 | ops02 | root
 
@@ -2138,12 +2173,14 @@ cd ~/kafka-lab && cp -p pvwa/kafka-admin.pass pvwa/kafka-admin.prev.pass && (uma
 PVWA kafka-admin-scram 已更新：24 字元
 ```
 
-> 誰在什麼時候取用過 `kafka-admin-scram`，PVWA 的取用紀錄查得到；Kafka 那邊，稽核日誌（第 18 站）會記下 `User:kafka-admin` 做了什麼。兩邊對得上，才算這次緊急使用結案。
+> 誰在什麼時候取用過 `kafka-admin-scram`，PVWA 的取用紀錄查得到；Kafka 那邊，稽核日誌（第 18 章）會記下 `User:kafka-admin` 做了什麼。兩邊對得上，才算這次緊急使用結案。
 
 
 # 12. 第十二站：REST Proxy
 
 ![edge]
+
+**這一章在做什麼**：安裝 REST Proxy（讓不方便直連 Kafka 的應用程式用 HTTP 存取 Kafka）在 rest01、rest02 兩台，前面由銀行的負載平衡（LB）分流。REST Proxy 沒有密碼登入，應用程式一律用 client 憑證，憑證的 CN 對應到 Kafka 的身分（principal）。前提：第 10、11 章的 broker 與 MDS 已正常、第 9 章的 `svc-rest` 與 `app-legacy-billing` 憑證已做好。
 
 @role 小安 | ops02 | root
 
@@ -2249,7 +2286,7 @@ via LB: 200
 
 ## 12.1 之後每次重啟 REST Proxy：先請 LB 團隊停用那一台
 
-nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（遷移實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26 章）都照這個順序：
+**這一節在做什麼**：定出之後每次重啟 REST Proxy 的標準做法（先請 LB 團隊把那一台停用，等連線排空再重啟），避免應用程式在重啟那幾秒收到錯誤。原因：nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（遷移實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26 章）都照這個順序：
 
 1. LB 團隊停用 rest01 → 2. 小安等連線排空、重啟 rest01、確認 200 → 3. LB 團隊恢復 rest01、停用 rest02 → 4. 小安重啟 rest02 → 5. LB 團隊恢復 rest02
 
@@ -2369,6 +2406,8 @@ kill $(cat /tmp/lbprobe.pid); sleep 1; echo "經 LB 打了 $(wc -l < /tmp/lbprob
 > 對照：不排空、直接重啟兩台，同樣的探測 lab 實測 68 次裡 1 次失敗（請求剛好落在重啟的那一刻）。應用程式若用長連線（HTTP keep-alive），排空會等到它們斷線為止；60 秒還沒斷，腳本停下不重啟，要和應用程式團隊確認再做。
 
 # 13. 第十三站：Control Center
+
+**這一章在做什麼**：在 c3-01 安裝 Control Center（C3，Confluent 的網頁管理介面），讓維運人員用 AD 帳號登入、看叢集狀況。前提：第 10、11 章的 broker、MDS 與 RBAC 已就緒，第 9 章的 `svc-c3` 憑證已做好。完成的樣子：瀏覽器開 9021 可以用 alice 登入，且畫面有資料。
 
 @role 小安 | ops02 | root
 
@@ -2556,15 +2595,17 @@ REMOTE
 
 只要大於 0 就代表標籤有帶上來。數字會隨 telemetry 陸續送進來而增加，穩定後是 7（4 台 broker 加 3 台 controller，各自的 node id；實測剛啟動 10 秒時是 5）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 畫面上的圖會是空的。
 
-Windows 瀏覽器開 `https://localhost:19021`，用 alice 登入（密碼在 `~/secrets/ad-test-users.pass`）。憑證是銀行 CA 簽的，瀏覽器沒裝銀行根憑證會有警告，lab 先略過。Alertmanager 的 9093 只開給同一台的 C3，從操作機連不到是正常的。
+lab 裡：Windows 瀏覽器開 `https://localhost:19021`（正式環境是維運人員直連 C3 的 9021），用 alice 登入（密碼在 `~/secrets/ad-test-users.pass`）。憑證是銀行 CA 簽的，瀏覽器沒裝銀行根憑證會有警告，lab 先略過。Alertmanager 的 9093 只開給同一台的 C3，從操作機連不到是正常的。
 
 # 14. 終點：小安的檢查清單
 
+**這一章在做什麼**：基本安裝（第 1–13 章）到此告一段落。這一章先用幾個檢查確認整套健康，再給出「出問題先看哪裡」、「做錯了怎麼重來」、「常見的坑」三張查詢表，最後交代後面章節的走法。
+
 到這裡平台已經能用，但還不能交付。後面分兩段：
 
-- **交付前一定要做**：第 15 站把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 16 站維運選單；第 17 站監控（JMX exporter，交付行內 Prometheus、Alertmanager、Grafana 的設定）；第 18 站稽核日誌；第 22.2 的 license 到期排程、第 25 站每日備份；最後第 19 站驗收與收尾。
-- **遷移到目標版本**（主線，裝完基底的下一步）：第 21 站遷移 Confluent 與 JDK（8.2.4 → 8.3.2、JDK 21 → 25，C3 2.5.1 → 2.6.1）、第 26 站 OS 小版本更新（9.6 → 9.8）；每一段之後再跑第 19 站驗收。
-- **上線之後依需要**：第 20 站憑證輪替（每年）、第 23 站換 controller、第 24 站增減 broker、第 26 站每月 OS 修補、第 27 站單獨換 Control Center 版本。
+- **交付前一定要做**：第 15 章把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 16 章維運選單；第 17 章監控（JMX exporter，交付行內 Prometheus、Alertmanager、Grafana 的設定）；第 18 章稽核日誌；第 22.2 的 license 到期排程、第 25 章每日備份；最後第 19 章驗收與收尾。
+- **遷移到目標版本**（主線，裝完基底的下一步）：第 21 章遷移 Confluent 與 JDK（8.2.4 → 8.3.2、JDK 21 → 25，C3 2.5.1 → 2.6.1）、第 26 章 OS 小版本更新（9.6 → 9.8）；每一段之後再跑第 19 章驗收。
+- **上線之後依需要**：第 20 章憑證輪替（每年）、第 23 章換 controller、第 24 章增減 broker、第 26 章每月 OS 修補、第 27 章單獨換 Control Center 版本。
 
 @role 小安 | ops02 | root
 
@@ -2601,10 +2642,10 @@ metrics in prometheus: 111 kinds
 | controller、broker | kc*、kb* | `confluent-server` | `sudo journalctl -u confluent-server -n 100 --no-pager` | quorum 有 leader；broker 的 `https://<host>:8090/v1/metadata/id` 回 200 |
 | REST Proxy | rest* | `confluent-kafka-rest` | `sudo journalctl -u confluent-kafka-rest -n 100 --no-pager` | 帶 legacy 憑證 `curl …:8082/v3/clusters` 回 200 |
 | Control Center | c3-01 | `confluent-control-center`、`prometheus`、`alertmanager` | `sudo journalctl -u confluent-control-center -n 100 --no-pager` | `https://c3-01.poc.lab:9021/` 回 200 |
-| AD | ad01 | samba（entrypoint 常駐） | `docker logs lab-ad01-1` | `openssl s_client -connect ad01.poc.lab:636` 驗證通過 |
-| 套件庫 | repo01 | `httpd` | `docker exec lab-repo01-1 journalctl -u httpd -n 50` | `https://repo01.poc.lab/confluent/repodata/repomd.xml` 回 200 |
+| AD | ad01 | samba（entrypoint 常駐） | lab 裡：`docker logs lab-ad01-1` | `openssl s_client -connect ad01.poc.lab:636` 驗證通過 |
+| 套件庫 | repo01 | `httpd` | lab 裡：`docker exec lab-repo01-1 journalctl -u httpd -n 50` | `https://repo01.poc.lab/confluent/repodata/repomd.xml` 回 200 |
 
-先看三件事：服務是不是 `active`、ExecStart 指向哪份設定、日誌最後 20 行的 ERROR。九成的問題在這裡。
+任何服務起不來或行為不對，先看三件事：服務是不是 `active`、ExecStart 指向哪份設定、日誌最後 20 行的 ERROR。九成的問題在這裡。
 
 > 陷阱：broker 是 `active`、9092 也開了，但 9094／9095／9096 和 MDS 的 8090 一直沒開，日誌最後停在 `Waiting for all of the authorizer futures to be completed`、之後沒有任何 ERROR：多半是 AD 查詢帳號（svc-mds-bind）的密碼和 AD 上的不一致。broker 第一次向 AD 查群組失敗後只會安靜地重試，不印原因。對齊密碼（`ldap-bind.pass` 與 AD 帳號）後不用重啟，它會自己接著起來。
 
@@ -2612,11 +2653,11 @@ metrics in prometheus: 111 kinds
 
 | 步驟 | 能不能重跑 | 怎麼做 |
 |---|---|---|
-| 派送憑證、設定檔、drop-in（10–13 站） | 可以，重跑就是覆蓋成一樣的內容 | 改完記得 `sudo systemctl restart <unit>` |
+| 派送憑證、設定檔、drop-in（第 10–13 章） | 可以，重跑就是覆蓋成一樣的內容 | 改完記得 `sudo systemctl restart <unit>` |
 | 格式化儲存（10.4） | **不能**，`meta.properties` 存在就會拒絕 | 真要重來：停服務、`sudo rm -rf /var/lib/kafka/data/*`，所有 controller 和 broker 一起重做 |
-| 憑證（9 站） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留；已經上線的環境照第 20 站換發，不要重跑第 9 站 |
-| 裝套件（8 站） | 可以，dnf 看到已安裝就略過 | `versionlock add` 對已鎖的套件會再加一筆重複，重跑前先 `sudo dnf versionlock list` 看一下，已鎖的不要再加 |
-| 整台主機重置 | lab 可以 | `docker compose -f compose.yml rm -sf <host> && docker compose -f compose.yml up -d <host>`，再對那台重做：3.2（根憑證信任與 OS 套件來源）、第 5 站（JDK）、第 7 站（OS 調校）、第 8 站（套件），以及它的角色在第 10、12、13 站的派送與啟動 |
+| 憑證（第 9 章） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留；已經上線的環境照第 20 章換發，不要重跑第 9 章 |
+| 裝套件（第 8 章） | 可以，dnf 看到已安裝就略過 | `versionlock add` 對已鎖的套件會再加一筆重複，重跑前先 `sudo dnf versionlock list` 看一下，已鎖的不要再加 |
+| 整台主機重置 | lab 可以；正式環境由銀行重新交付主機 | `docker compose -f compose.yml rm -sf <host> && docker compose -f compose.yml up -d <host>`，再對那台重做：3.2（根憑證信任與 OS 套件來源）、第 5 章（JDK）、第 7 章（OS 調校）、第 8 章（套件），以及它的角色在第 10、12、13 章的派送與啟動 |
 
 ## 14.3 小安踩過的坑
 
@@ -2626,18 +2667,20 @@ metrics in prometheus: 111 kinds
 | `enable --now` 不重啟 | 改了設定沒生效 | 改設定後明確 `systemctl restart` |
 | 確認指令沒加 `sudo` | `ls /etc/confluent/ssl` Permission denied，以為沒放進去 | 0750 的目錄要 `sudo ls`、`sudo stat` |
 | 相對路徑 | `scp certs/cp-server.p12` 只在特定目錄下才找得到 | 指令裡一律寫 `~/pki/certs/…` |
-| C3 比 MDS 先起來 | 9021 不回應、日誌 `Failed to fetch MDS URLs … Client has already been closed`，而且不會自己好 | drop-in 加 `ExecStartPre` 等 MDS（第 13 站已加）；broker 全部重啟過一輪後若 C3 卡住，`systemctl restart confluent-control-center` |
-| Git Bash 的 openssl 看不懂 `/c/Users/...` | `sign.sh` 靜靜失敗、沒有產出 `.crt` | 路徑先用 `cygpath -m` 轉成 `C:/Users/...`（0.5.5 的腳本已內建） |
-| Docker 網段撞到別的 lab | `compose up` 報 `Pool overlaps` | 換 compose.yml 的 subnet 與 extra_hosts 的 IP（0.5.6） |
+| C3 比 MDS 先起來 | 9021 不回應、日誌 `Failed to fetch MDS URLs … Client has already been closed`，而且不會自己好 | drop-in 加 `ExecStartPre` 等 MDS（第 13 章已加）；broker 全部重啟過一輪後若 C3 卡住，`systemctl restart confluent-control-center` |
+| lab 專用：Git Bash 的 openssl 看不懂 `/c/Users/...` | `sign.sh` 靜靜失敗、沒有產出 `.crt` | 路徑先用 `cygpath -m` 轉成 `C:/Users/...`（0.5.5 的腳本已內建） |
+| lab 專用：Docker 網段撞到別的 lab | `compose up` 報 `Pool overlaps` | 換 compose.yml 的 subnet 與 extra_hosts 的 IP（0.5.6） |
 | C3 的 `*-generated.yml` 是 root 擁有 | `AccessDeniedException` | 四個 generated 檔給 `cp-control-center:confluent` |
 | dnf 快取太舊 | 剛上架的套件「找不到」 | 加 `--refresh` |
-| 建銀行 OS 套件庫（3.2）時先裝工具再下載 | 套件庫少了 `createrepo_c-libs` | 乾淨容器，先下載、再裝工具 |
+| lab 專用：建銀行 OS 套件庫（3.2）時先裝工具再下載 | 套件庫少了 `createrepo_c-libs` | 乾淨容器，先下載、再裝工具 |
 | lab 專用：Docker VM 網路層卡死 | 所有 Java 都變慢、`docker stats` 也卡 | 任一容器 `timeout 5 ip addr` 卡住就重啟 Docker Desktop，不要查設定 |
 
 # 15. 第十五站：Secret Protection，master key 交 CyberArk 保管
 
 
 ![secretprotection]
+
+**這一章在做什麼**：讓設定檔裡不再有明文密碼。小安用 Confluent 的 Secret Protection 把密碼加密，再把解密用的 master key 交銀行的 CyberArk 保管。前提：第 10–13 章的服務都已經起來、第 9 章的 `~/pki/store.pass` 與 `~/secrets/` 裡的密碼檔都在。這一章會**滾動重啟**所有 controller、broker、REST Proxy、C3（15.5），請在變更時段一台一台做。
 
 設定檔裡的密碼要加密。本案客戶的 CyberArk 只有 PAM（程式不會向保管庫取值），所以用 Confluent 自己的 **Secret Protection**：密碼加密後留在主機上的 `security.properties`，解密用的 master key 由 CyberArk 保管（PVWA），啟動時經環境變數給服務。
 
@@ -2675,7 +2718,7 @@ kafka-sp-passphrase: 32 chars
 
 @role 小安（從 PVWA 取出；lab 由 Windows 終端代貼） | Windows 終端 | 本機
 
-從 PVWA 取出 passphrase，放進操作機的 0600 檔（正式環境在 ops02 上 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/sp-passphrase.txt; unset P; echo)`，同 3.4 不顯示的寫法；不要貼進任何對話或工單）：
+從 PVWA 取出 passphrase，放進操作機的 0600 檔（正式環境在操作機上 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/sp-passphrase.txt; unset P; echo)`，同 3.4 不顯示的寫法；不要貼進任何對話或工單）：
 
 ```bash
 docker exec -i lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-passphrase.txt; echo "passphrase: $(wc -c < ~/secrets/sp-passphrase.txt) chars"' < ~/kafka-lab/pvwa/sp-passphrase.txt
@@ -2739,7 +2782,7 @@ kafka-sp-master-key stored, hash 3f9c0a…（12 碼雜湊）
 
 @role 小安 | ops02 | root
 
-先用第 10、12、13 站的方式從範本產生每台的設定（和之前完全一樣），再逐檔加密所有 `password`／`credentials` 欄位。加密後原檔裡的值變成 `${securepass:…}` 參照，密文集中寫進 `security.properties`：
+先用第 10、12、13 章的方式從範本產生每台的設定（和之前完全一樣，只是這次先留在操作機、不派送），再逐檔加密所有 `password`／`credentials` 欄位。加密後原檔裡的值變成 `${securepass:…}` 參照，密文集中寫進 `security.properties`：
 
 ```bash
 cd ~/conf && export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) AUDIT_PASSWORD=$(cat ~/secrets/confluent-audit.pass 2>/dev/null) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${REST_ID} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD} ${AUDIT_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; for h in rest01 rest02; do export HOST_FQDN=$h.poc.lab REST_ID=$h; (umask 077; envsubst "$V" < kafka-rest.tpl > $h.kafka-rest.properties); done; (umask 077; envsubst "$V" < control-center.tpl > c3-01.control-center.properties); unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD; echo "沒替換到的變數：$(grep -ho '${[A-Z_]*}' *.server.properties *.kafka-rest.properties c3-01.control-center.properties | sort -u | paste -sd' ' | sed 's/^$/0 個/')"; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties *.kafka-rest.properties c3-01.control-center.properties; do keys=$(grep -E '^[^#].*(password|credentials)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; echo "security.properties: $(grep -c '^[^_].*ENC\[' ~/secrets/security.properties) entries"
@@ -2770,6 +2813,8 @@ kc01: refs=11 plaintext=0 env=/etc/confluent/service.env
 ```
 
 ## 15.5 滾動重啟、驗證
+
+加密過的設定要重啟才會生效。順序：controller（一台一台，等 active）→ broker（一台一台，等 MDS 回 200，每台約 20–50 秒）→ C3 → REST Proxy（先請 LB 團隊停用那一台，見 12.1）。每一台健康了才做下一台，這樣叢集一直有多數派可用。
 
 @role 小安 | ops02 | root
 
@@ -3027,12 +3072,12 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 | 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 15.6，兩個 object 一起更新 |
 | 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟，與 master key 輪替無關。CPM 管的 AD 查詢密碼見 15.8 |
 
-> 陷阱：做過這一站之後，若回頭照第 10、12、13 站重新產生設定並派送，會把明文密碼寫回主機；改了設定要照 15.3–15.5 重新加密、派送、重啟。
+> 陷阱：做過這一章之後，若回頭照第 10、12、13 章重新產生設定並派送，會把明文密碼寫回主機；改了設定要照 15.3–15.5 重新加密、派送、重啟。
 
 ## 15.8 演練：CPM 換了 AD 查詢帳號的密碼
 
 
-`svc-mds-bind` 的密碼加密後固定在 `security.properties`。CPM 一換 AD 密碼，broker 手上就是舊的：當下靠群組快取撐著，下次重啟時 MDS 起不來（第 7 站的陷阱：卡在 `Waiting for all of the authorizer futures`）。所以 CPM 換完，平台要跟著做一次：從 PVWA 取新密碼 → 只更新這一個欄位的密文 → 派送 `security.properties` → 滾動重啟。
+`svc-mds-bind` 的密碼加密後固定在 `security.properties`。CPM 一換 AD 密碼，broker 手上就是舊的：當下靠群組快取撐著，下次重啟時 MDS 起不來（14.1 的陷阱：卡在 `Waiting for all of the authorizer futures`）。所以 CPM 換完，平台要跟著做一次：從 PVWA 取新密碼 → 只更新這一個欄位的密文 → 派送 `security.properties` → 滾動重啟。
 
 > 待銀行確認：這個帳號的 CPM 輪替要**關掉自動排程、改成依變更單觸發**（CPM 換完通知平台工程師接著做這一節），或開 A／B 兩組查詢帳號交替（CPM 只換閒置的那組，平台切過去再滾動重啟，中間沒有空窗）。手冊以「依變更單觸發、單一帳號」為準。
 
@@ -3099,6 +3144,8 @@ kb01 bind 欄位仍是密文參照：1
 
 ![opmenu]
 
+**這一章在做什麼**：裝一個給維運人員用的文字選單（OP menu），讓他們用自己的 AD 帳號做日常作業（看狀態、重啟、看日誌、建 topic、查權限），不用記指令。前提：第 11 章的 RBAC 與 AD 群組已經建好，第 9 章的 `opmenu-breakglass` 憑證已簽發，3.1 的 cpuser 金鑰可用。名詞：選單裡每個項目有編號（例如 21 重啟、23 看日誌、91 緊急模式）；「緊急模式」就是平常用不到、用於 MDS 故障時的備用路徑（break-glass）。
+
 平台交給維運之後，日常作業不該靠人記指令。小安帶了一個文字選單：維運人員經 CyberArk 登入操作機（進去是 root），執行選單、輸入自己的 AD 帳密，選單只顯示他有權限的項目，每一步留紀錄。重啟、看日誌這類要碰主機的動作，選單用 3.1 那把金鑰（`/secure/ssh/cpuser_ed25519`）以 cpuser ssh 過去做：金鑰就是檔案，**不再從 PVWA 取出貼進選單**；主機上不放任何代理程式，只靠 sudoers 限制 cpuser 能跑的指令（16.4：每個服務、每種寫法逐一列出）。
 
 > **誠實的限制**：操作者在操作機上是 root，root 讀得到金鑰。所以選單「碰主機前先問 MDS：本人有沒有 Operator 以上的權限」是**流程控管，不是硬性隔離**（root 可以直接用金鑰 ssh，繞過選單）。追溯靠 CyberArk 的登入紀錄與 PSMP 錄影（誰在什麼時間進了 root），再加上選單紀錄和主機上 cpuser 的操作紀錄。**Kafka 類動作不受這個限制**：權限與稽核由 Kafka 端依本人 AD 身分強制，繞不過。
@@ -3113,7 +3160,7 @@ kb01 bind 欄位仍是密文參照：1
 
 ## 16.1 銀行準備保管庫
 
-PVWA 裡選單要用的 object（名稱依銀行慣例，寫進 16.3 的設定，選單會在提示裡告訴維運人員去哪裡取）：
+**這一節在做什麼**：銀行 Secrets 團隊在 PVWA 先開好放緊急憑證的位置。PVWA 裡選單要用的 object（名稱依銀行慣例，寫進 16.3 的設定，選單會在提示裡告訴維運人員去哪裡取）：
 
 | object | 內容 | 誰放 |
 |---|---|---|
@@ -3123,7 +3170,7 @@ PVWA 裡選單要用的 object（名稱依銀行慣例，寫進 16.3 的設定�
 
 ## 16.2 交付緊急憑證、綁緊急身分的權限
 
-第 9 站簽好備用的 `opmenu-breakglass` 憑證（私鑰＋憑證鏈，PEM）交給保管庫，再把 `User:opmenu-breakglass` 綁成 SystemAdmin，這就是 91 緊急模式用的身分。
+**這一節在做什麼**：把緊急模式要用的身分準備好，並設定各群組的角色。第 9 章簽好備用的 `opmenu-breakglass` 憑證（私鑰＋憑證鏈，PEM）交給保管庫，再把 `User:opmenu-breakglass` 綁成 SystemAdmin，這就是選單 91（緊急模式）用的身分。
 
 @role 銀行 Secrets 團隊（收下存進 PVWA；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -3163,7 +3210,7 @@ export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v
 
 @role 小安 | Windows 終端 | 本機
 
-選單的原始碼是本專案的 `opmenu/`。在外網端打包（檔名帶日期與內容的雜湊，內容不同就不會蓋掉舊的），連同 SHA256SUMS 放進落地區，再照 2.4 送進來（`D=opmenu`）。落地區只留最新一版，下面的 `tar -xzf opmenu-*.tar.gz` 才不會同時解到兩個：
+**這一節在做什麼**：把選單套件經第 2 章的離線流程送進操作機，裝到 `/opt/opmenu` 並寫好設定。選單的原始碼是本專案的 `opmenu/`。在外網端打包（檔名帶日期與內容的雜湊，內容不同就不會蓋掉舊的），連同 SHA256SUMS 放進落地區，再照 2.4 送進來（`D=opmenu`）。落地區只留最新一版，下面的 `tar -xzf opmenu-*.tar.gz` 才不會同時解到兩個：
 
 ```bash
 cd <放 opmenu/ 原始碼的目錄> && v=$(date +%Y%m%d).$(find opmenu -type f | sort | xargs cat | sha256sum | cut -c1-8) && mkdir -p ~/kafka-lab/landing/tools/opmenu && rm -f ~/kafka-lab/landing/tools/opmenu/opmenu-*.tar.gz && tar -czf ~/kafka-lab/landing/tools/opmenu/opmenu-$v.tar.gz opmenu && (cd ~/kafka-lab/landing/tools/opmenu && sha256sum opmenu-*.tar.gz > SHA256SUMS && cat SHA256SUMS)
@@ -3255,7 +3302,7 @@ cpuser ALL=(root) NOPASSWD: /usr/bin/systemctl restart confluent-server, \
 
 @role 銀行 OS 團隊（lab 由小安代勞） | ops02 | root
 
-lab 為了之後還要做別的章節，全權那份先留著，只在 kb04 把它收掉，證明「只剩窄規則時選單仍能重啟」，同時驗證規則真的只放行列出的寫法。先把窄規則寫到每一台（同一行寫法，`visudo -cf` 檢查語法）：
+lab 裡：為了之後還要做別的章節，全權那份先留著，只在 kb04 把它收掉，證明「只剩窄規則時選單仍能重啟」，同時驗證規則真的只放行列出的寫法。先把窄規則寫到每一台（同一行寫法，`visudo -cf` 檢查語法）：
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in kc*|kb*) u=confluent-server;; rest*) u=confluent-kafka-rest;; c3*) u=confluent-control-center;; esac; printf 'cpuser ALL=(root) NOPASSWD: /usr/bin/systemctl restart %s, /usr/bin/systemctl status %s, /usr/bin/journalctl -u %s -n 200 --no-pager\n' $u $u $u | ssh $h.poc.lab 'sudo install -m 0440 /dev/stdin /etc/sudoers.d/cpuser-ops && sudo visudo -cf /etc/sudoers.d/cpuser-ops >/dev/null && printf "%s " $(hostname)'; done; echo
@@ -3297,7 +3344,7 @@ LIST'
 
 @role 小安（代打 bob、carol、alice） | ops02 | root
 
-互動模式就是人員經 PVWA 與 PSMP 登入操作機（root）後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 只印這個人看得到的編號：
+**這一節在做什麼**：用三個不同權限的人試跑選單，確認「權限不同、看到的項目不同」。好結果：alice（SystemAdmin）看到最多項目，bob（Operator）只有健康檢查與重啟，carol（開發者）只有自己 prefix 的 topic 項目；沒權限的編號直接輸入會被擋。互動模式就是人員經 PVWA 與 PSMP 登入操作機（root）後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 只印這個人看得到的編號：
 
 ```bash
 P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; for u in bob carol alice; do printf '%-6s ' $u; op $u menu | grep '@@MENU@@' | cut -d' ' -f2-; done; unset P
@@ -3354,7 +3401,7 @@ kb04 MDS=200 after ~20s
 
 @role 小安 | ops02 | root
 
-選單結束後不留東西：沒有殘留的 ssh-agent（選單根本不開 agent）、`/dev/shm` 與 `/tmp` 沒有私鑰（91 的緊急憑證用完即刪）；金鑰檔仍是 root:root 0400。紀錄每行有 AD 帳號、作業系統帳號、項目、結果；作業系統帳號在操作機上都是 root，真正的「人」是 AD 帳號那一欄（再往上追，是 CyberArk 的登入紀錄與 PSMP 錄影）：
+**這一節在做什麼**：確認選單用完不留下私鑰或殘留程序，紀錄檔有記到人。好結果：ssh-agent 0、私鑰檔 0、金鑰檔是 `root:root 400`。選單結束後不留東西：沒有殘留的 ssh-agent（選單根本不開 agent）、`/dev/shm` 與 `/tmp` 沒有私鑰（91 的緊急憑證用完即刪）；金鑰檔仍是 root:root 0400。紀錄每行有 AD 帳號、作業系統帳號、項目、結果；作業系統帳號在操作機上都是 root，真正的「人」是 AD 帳號那一欄（再往上追，是 CyberArk 的登入紀錄與 PSMP 錄影）：
 
 ```bash
 echo "ssh-agent: $(pgrep -x ssh-agent | wc -l); private keys in /dev/shm,/tmp: $(grep -rls 'PRIVATE KEY' /dev/shm /tmp 2>/dev/null | grep -v runner.sh | wc -l); key file: $(stat -c '%U:%G %a' /secure/ssh/cpuser_ed25519)"; tail -4 /var/log/opmenu/opmenu.log | cut -c1-120
@@ -3383,13 +3430,15 @@ kb04: full sudo back (change window)
 
 ![jmx]
 
+**這一章在做什麼**：讓銀行的監控系統看得到 Confluent 各程序的狀況，並在出事時發告警。前提：第 10–13 章的服務已經起來（第 15 章是否已做不影響步驟）；這一章會**滾動重啟**所有 Java 程序（17.4），請在變更時段一台一台做。名詞：JMX 是 Java 程序對外提供指標的介面，JMX exporter 把它轉成 Prometheus 讀得懂的 HTTPS 網頁。
+
 監控與告警的做法已定案：**每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），由銀行的 Prometheus 抓、銀行的 Alertmanager 發告警、銀行的 Grafana 看圖**。Prometheus、Alertmanager、Grafana 是銀行提供的；我方交付的是設定：exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方的 32 個 dashboard。
 
 > **C3 內建的 Prometheus、Alertmanager 不動**：它們是 C3 自己的畫面（第 13 章）要用的，`otlp` 等設定照舊。但**告警與 dashboard 不走它們**，也不要在 C3 畫面建 alert trigger 或 action（Webhook、Email、PagerDuty）。原因：C3 會把那份 Alertmanager 設定重寫（C3 重啟後手改的內容被蓋掉）、webhook 內容不能自訂、而且只看得到 C3 自己收到的 telemetry（沒有主機標籤、看不到 controller 的 raft 以外的 JMX）。這幾點 2026-10-26 在 lab 逐項實測過。
 
 | 誰 | 做什麼 |
 |---|---|
-| 小安 | exporter 的 jar 與 Confluent 官方規則檔已在第 1.4 站帶進來；產抓取密碼、組設定、派送、滾動重啟；產給銀行的 `to-bank/`（scrape 設定、告警規則、Alertmanager 設定、Grafana 設定與 dashboard、根憑證、抓取密碼） |
+| 小安 | exporter 的 jar 與 Confluent 官方規則檔已在 1.4 節帶進來；產抓取密碼、組設定、派送、滾動重啟；產給銀行的 `to-bank/`（scrape 設定、告警規則、Alertmanager 設定、Grafana 設定與 dashboard、根憑證、抓取密碼） |
 | 銀行監控團隊 | 把 `to-bank/` 放進自己的 Prometheus、Alertmanager、Grafana；確認 10 個 target 都是 up、規則載入、dashboard 都在；把 webhook 指到行內的事件系統（例如 Dynatrace） |
 
 四種程序各用哪份規則，抓得到什麼：
@@ -3490,7 +3539,7 @@ c3            36 行  httpServer=1 lowercaseOutputName=1
 
 @role 小安 | ops02 | root
 
-每台：jar 到 `/opt/jmx-exporter/`、設定檔到各元件的目錄、第四個 drop-in 把 `-javaagent` 放進環境變數：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在第 7 站的防火牆已經開了（C3 的 7071 也在）：
+每台：jar 到 `/opt/jmx-exporter/`、設定檔到各元件的目錄、第四個 drop-in 把 `-javaagent` 放進環境變數：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在第 7 章的防火牆已經開了（C3 的 7071 也在）：
 
 ```bash
 JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in kc*) role=controller; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; kb*) role=broker; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; rest*) role=rest; cfg=/etc/confluent/kafka-rest/jmx-exporter.yml; u=confluent-kafka-rest; var=KAFKAREST_OPTS;; c3*) role=c3; cfg=/etc/confluent/control-center/jmx-exporter.yml; u=confluent-control-center; var=CONTROL_CENTER_OPTS;; esac; cp ~/monitoring/jmx-$role.yml /tmp/jmx-$h.yml && scp -q ~/landing/tools/$JAR /tmp/jmx-$h.yml $h.poc.lab:/tmp/ && rm -f /tmp/jmx-$h.yml && ssh $h.poc.lab "sudo install -d -m 0755 /opt/jmx-exporter && sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-$h.yml $cfg && rm -f /tmp/$JAR /tmp/jmx-$h.yml && printf '[Service]\nEnvironment=\"$var=-javaagent:/opt/jmx-exporter/$JAR=7071:$cfg\"\n' | sudo tee /etc/systemd/system/$u.service.d/40-jmx.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1) \$(sudo wc -l $cfg | cut -d' ' -f1) lines\""; done
@@ -3509,7 +3558,7 @@ rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 54 lines
 c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 36 lines
 ```
 
-> 陷阱：落地區的檔案是唯讀的（第 2 站 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
+> 陷阱：落地區的檔案是唯讀的（第 2 章 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
 >
 > 陷阱：`sudo wc -l < 檔案` 的 `<` 是用 cpuser 的身分開檔，會 `Permission denied`；要寫成 `sudo wc -l 檔案`。
 
@@ -4367,7 +4416,9 @@ lab-mon-* 已收掉：0 個剩下
 
 ![audit]
 
-Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了什麼、准還是拒，每一筆都是一個事件，寫進 Kafka 自己的 topic。預設是用 broker 自己的身分寫、全部塞同一個 topic。銀行要的是：用一個**專用的低權限帳號**寫、**敏感 topic 的事件分開放、留久一點**、排除平台自己的雜訊。這一站把這三件事做上去，密碼一樣進 Secret Protection。
+**這一章在做什麼**：讓 Kafka 把「誰對什麼做了什麼」記成稽核事件，並依銀行要求分流與設定保留期。前提：第 15 章已做（密碼進 Secret Protection）、第 11 章的 RBAC 已建。這一章會**滾動重啟** controller 與 broker（18.2），請在變更時段一台一台做。
+
+Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了什麼、准還是拒，每一筆都是一個事件，寫進 Kafka 自己的 topic。預設是用 broker 自己的身分寫、全部塞同一個 topic。銀行要的是：用一個**專用的低權限帳號**寫、**敏感 topic 的事件分開放、留久一點**、排除平台自己的雜訊。這一章把這三件事做上去，密碼一樣進 Secret Protection。
 
 | 誰 | 做什麼 |
 |---|---|
@@ -4378,7 +4429,7 @@ Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了�
 
 @role 小安 | ops02 | root
 
-`confluent-audit` 是 SCRAM 帳號，只能寫與管理 `confluent-audit-log-events` 開頭的 topic（prefix 同時涵蓋 `_sensitive`），不是 super user：
+這一節建一個專門寫稽核事件的帳號，把權限壓到最小。`confluent-audit` 是 SCRAM 帳號，只能寫與管理 `confluent-audit-log-events` 開頭的 topic（prefix 同時涵蓋 `_sensitive`），不是 super user：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && BS=kb01.poc.lab:9094 && (umask 077; [ -s ~/secrets/confluent-audit.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/confluent-audit.pass) && P=$(cat ~/secrets/confluent-audit.pass) && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name confluent-audit --add-config "SCRAM-SHA-512=[iterations=8192,password=$P]" >/dev/null && unset P && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null 2>&1 && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && for r in DeveloperWrite DeveloperManage; do confluent iam rbac role-binding create --principal User:confluent-audit --role $r --resource Topic:confluent-audit-log-events --prefix --kafka-cluster "$CID" >/dev/null 2>&1; done; confluent iam rbac role-binding list --principal User:confluent-audit --kafka-cluster "$CID" 2>/dev/null | tail -n +3
@@ -4393,7 +4444,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 
 @role 小安 | ops02 | root
 
-接在 `common.tpl`（controller 與 broker 共用）後面。路由規則是一行 JSON：`payments.*` 的 produce／consume（允許與拒絕）和被拒絕的 describe 送到 `_sensitive`（留 365 天），其他送預設 topic（留 90 天），`kafka-internal`、`svc-c3` 的事件不記：
+這一節把稽核設定加進 controller 與 broker 共用的設定片段，決定誰寫、事件放哪個 topic、留幾天。接在 `common.tpl`（controller 與 broker 共用）後面。路由規則是一行 JSON：`payments.*` 的 produce／consume（允許與拒絕）和被拒絕的 describe 送到 `_sensitive`（留 365 天），其他送預設 topic（留 90 天），`kafka-internal`、`svc-c3` 的事件不記：
 
 ```bash
 cd ~/conf && cp common.tpl common.tpl.plain.pre-audit && cat >> common.tpl <<'EOF'
@@ -4421,7 +4472,7 @@ grep -c 'security.event' common.tpl
 
 @role 小安 | ops02 | root
 
-重新產生 7 台的 `server.properties`（第 15 站的流程：明文渲染 → Secret Protection 加密，新增的兩個密碼欄位會被一起加密進同一份 `security.properties`）、派送、滾動重啟。REST Proxy 與 C3 不受影響：
+重新產生 7 台的 `server.properties`（第 15 章的流程：明文渲染 → Secret Protection 加密，新增的兩個密碼欄位會被一起加密進同一份 `security.properties`）、派送、滾動重啟。REST Proxy 與 C3 不受影響：
 
 ```bash
 cd ~/conf && export STORE_PASSWORD=$(cat ~/pki/store.pass) LDAP_BIND_PASSWORD=$(cat ~/secrets/ldap-bind.pass) AUDIT_PASSWORD=$(cat ~/secrets/confluent-audit.pass) && V='${HOST_FQDN} ${NODE_ID} ${RACK} ${STORE_PASSWORD} ${LDAP_BIND_PASSWORD} ${AUDIT_PASSWORD}' && for h in kc01:1:- kc02:2:- kc03:3:- kb01:101:rack-a kb02:102:rack-a kb03:103:rack-b kb04:104:rack-b; do IFS=: read -r n id rack <<<"$h"; export HOST_FQDN=$n.poc.lab NODE_ID=$id RACK=$rack; case $n in kc*) tpl=controller.tpl;; *) tpl=broker.tpl;; esac; (umask 077; { envsubst "$V" < $tpl; echo; envsubst "$V" < common.tpl; } > $n.server.properties); done; unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD; export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key); for f in *.server.properties; do keys=$(grep -E '^[^#].*(password|credentials|jaas.config)=' $f | cut -d= -f1 | paste -sd,); confluent secret file encrypt --config-file $f --local-secrets-file ~/secrets/security.properties --remote-secrets-file /etc/confluent/secrets/security.properties --config "$keys" >/dev/null && echo "$f: $(grep -c '\${securepass:' $f) encrypted, plaintext=$(grep -cE '^[^#].*(password|credentials)=[^$]' $f)"; done; unset CONFLUENT_SECURITY_MASTER_KEY; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do scp -q $h.server.properties ~/secrets/security.properties $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -o root -g confluent -m 0640 /tmp/$h.server.properties /etc/confluent/kafka/server.properties && sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/$h.server.properties /tmp/security.properties && printf '%s ' \$(hostname)"; done; echo
@@ -4455,7 +4506,7 @@ confluent-audit-log-events_sensitive
 
 @role 小安 | ops02 | root
 
-alice（SystemAdmin）往 `payments.events` 寫一筆（允許、敏感 → `_sensitive`）；`app-orders` 想讀 `payments.events`（它只有 orders.* 的權限 → 拒絕、敏感 → `_sensitive`）；`app-orders` 讀自己的 `orders.events`（允許、不敏感 → 預設 topic）：
+這一節故意製造「允許」與「拒絕」的事件，再讀稽核 topic 確認有被記下來、而且放對 topic。alice（SystemAdmin）往 `payments.events` 寫一筆（允許、敏感 → `_sensitive`）；`app-orders` 想讀 `payments.events`（它只有 orders.* 的權限 → 拒絕、敏感 → `_sensitive`）；`app-orders` 讀自己的 `orders.events`（允許、不敏感 → 預設 topic）：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && (umask 077; cat > ~/conf/client-alice.properties <<EOF
@@ -4507,7 +4558,7 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
   （… 第 16 站 OP menu 問 MDS 留下的授權事件）
 ```
 
-> 三件事值得看清楚：(1) 敏感 topic 的事件在 `_sensitive`：alice 的 produce（允許）和 app-orders 想讀時的 Metadata（describe 被拒）。(2) **一般 topic 的 produce／consume 不會被記**：app-orders 讀 orders.events 沒有出現在任何 topic，因為 Confluent 預設只記「管理類」與「授權類」事件（例如上面 MDS 的 Authorize，那是第 16 站 OP menu 問權限留下的），produce／consume 只在路由裡明確列出的 topic 才記。要記全部就把 `crn:///kafka=*/topic=*` 的 produce／consume 也寫進 routes，量會很大。(3) `kafka-internal`、`svc-c3` 完全不出現。OP menu 的 43（匯出）、45（查詢）讀的就是這兩個 topic。
+> 三件事值得看清楚：(1) 敏感 topic 的事件在 `_sensitive`：alice 的 produce（允許）和 app-orders 想讀時的 Metadata（describe 被拒）。(2) **一般 topic 的 produce／consume 不會被記**：app-orders 讀 orders.events 沒有出現在任何 topic，因為 Confluent 預設只記「管理類」與「授權類」事件（例如上面 MDS 的 Authorize，那是第 16 章 OP menu 問權限留下的），produce／consume 只在路由裡明確列出的 topic 才記。要記全部就把 `crn:///kafka=*/topic=*` 的 produce／consume 也寫進 routes，量會很大。(3) `kafka-internal`、`svc-c3` 完全不出現。OP menu 的 43（匯出）、45（查詢）讀的就是這兩個 topic。
 
 ## 18.4 要跟稽核單位說清楚的事
 
@@ -4517,7 +4568,7 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
 | 保留 | 預設 topic 90 天、`_sensitive` 365 天，都是 topic 的 retention；要更久就外送 SIEM |
 | 誰能讀 | 綁了 audit topic DeveloperRead 的群組（lab 是 SystemAdmin 直接讀）；稽核群組用 OP menu 43／45 匯出與查詢 |
 | 量 | `kafka-internal`、`svc-c3` 已排除；只有路由列出的 topic 才記 produce／consume，要擴大範圍前先估磁碟 |
-| 改規則 | 改 `common.tpl` 的 router JSON → 重新加密派送 → 滾動重啟（和這一站一樣） |
+| 改規則 | 改 `common.tpl` 的 router JSON → 重新加密派送 → 滾動重啟（和這一章一樣） |
 | 可靠度 | 兩個 audit topic 都是 replication factor 3（lab 確認：`kafka-topics --describe`），`min.insync.replicas=1`：稽核寫入不因少一台 broker 而停；原廠建議稽核量大或要求隔離時，送到**專用的稽核叢集**（`confluent.security.event.logger.exporter.kafka.bootstrap.servers` 指過去） |
 
 確認 replication factor（換 broker、縮減之後也看一次）：
@@ -4537,7 +4588,9 @@ Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.repl
 
 ![acceptance]
 
-每一站結尾都有自己的檢查，但交付前要有一份**一次跑完、結果能附在驗收文件裡**的清單。四組：平台健康、安全（正向與反向都測）、應用程式端、維運。最後是收尾：安裝期間留在操作機與主機上的東西，哪些要留、哪些要收。
+**這一章在做什麼**：交付前把整個平台完整驗一遍，並把安裝期間留下的東西收乾淨。前提：第 1–18 章都做完（沒做的延伸章節，對應的檢查項目會是 FAIL，先確認是不是該章沒做）。通過標準：19.1–19.3 每一組都是「N / N 項通過」，沒有任何 FAIL；19.4 的重啟與冷開機要自己回來。
+
+每一章結尾都有自己的檢查，但交付前要有一份**一次跑完、結果能附在驗收文件裡**的清單。四組：平台健康、安全（正向與反向都測）、應用程式端、維運。最後是收尾：安裝期間留在操作機與主機上的東西，哪些要留、哪些要收。
 
 這份驗收不綁版本：裝完**安裝基底**（8.2.4）跑一次，第 21 章遷移的每一段（C3 與套件、JDK 25、finalize）之後各跑一次，第 26 章 OS 更新到 9.8 之後再跑一次，結果都要全數通過。
 
@@ -4575,7 +4628,7 @@ ok   AD 密碼錯 → 401
 安全：15 / 15 項通過
 ```
 
-> carol 的群組在第 16 站拿到 `orders.` prefix 的 DeveloperManage，所以她在自己的 prefix 裡是能建 topic 的；反向測試要用她沒有權限的 prefix。
+> carol 的群組在第 16 章拿到 `orders.` prefix 的 DeveloperManage，所以她在自己的 prefix 裡是能建 topic 的；反向測試要用她沒有權限的 prefix。
 
 ## 19.3 應用程式端
 
@@ -4596,7 +4649,7 @@ alice 在 billing.events 看到那筆：1
 
 ## 19.4 維運：選單重啟、冷開機
 
-維運人員用選單重啟一台 broker（第 16 站的路徑：bob 登入選單 → MDS 確認權限 → cpuser ssh → sudo 只開的 restart），叢集不中斷。
+**這一節在做什麼**：驗證兩件事：維運人員用選單重啟一台 broker 時叢集不中斷；整批機器同時斷電再開機時，平台自己回來。維運人員用選單重啟一台 broker（第 16 章的路徑：bob 登入選單 → MDS 確認權限 → cpuser ssh → sudo 只開的 restart），叢集不中斷。
 
 
 @role 維運人員 bob（lab 由 Windows 終端代打） | Windows 終端 | 本機
@@ -4613,7 +4666,7 @@ kb03 MDS=200 after ~20s; under-replicated=0
 
 @role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
 
-冷開機：全部主機同時關、同時開，看平台自己回來的順序與時間。C3 比 MDS 先起來時會等（第 13 站的 drop-in）。
+冷開機：全部主機同時關、同時開，看平台自己回來的順序與時間。lab 裡：用 `docker compose stop／start` 模擬停電。看什麼才算過：4 台 broker 的 MDS 都回 200、C3 回 200、REST 經 LB 回 200、broker 的重試次數是 0。C3 比 MDS 先起來時會等（第 13 章的 drop-in）。
 
 
 @role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
@@ -4631,7 +4684,7 @@ REST 經 LB：200
 kb01 confluent-server 重試次數：0
 ```
 
-master key 落地在每台的 `service.env`，開機不依賴保管庫，所以重試次數是 0。C3 在第 13 站的 drop-in 加了「等 MDS」之後約 2–3 分鐘回來；沒加之前 lab 實測是 12 分鐘（C3 比 MDS 先起來會卡住不開 9021）。
+master key 落地在每台的 `service.env`，開機不依賴保管庫，所以重試次數是 0。C3 在第 13 章的 drop-in 加了「等 MDS」之後約 2–3 分鐘回來；沒加之前 lab 實測是 12 分鐘（C3 比 MDS 先起來會卡住不開 9021）。
 
 操作機也重開了。`/secure/ssh` 的 volume 還在，金鑰不用重放；正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機（沒掛載好時 ssh 找不到金鑰檔）。確認金鑰還在、連得上各主機：
 
@@ -4649,11 +4702,13 @@ kb01
 
 ## 19.5 收尾：安裝完成後要收的東西
 
+**這一節在做什麼**：交付前清掉安裝期間的暫存與不再需要的權限，只留日後維運要用的。**提醒：`~/landing/rpm-target/` 與 `~/landing/bank/` 的 JDK 25 要保留到第 21 章（遷移）全部做完，不要先刪；細節見 21.1。**
+
 @role 小安 | ops02 | root
 
 | 留在操作機 | 收掉或交出去 |
 |---|---|
-| `~/conf/`（範本與產出的設定，之後改設定都從這裡）、`~/pki/`（憑證、CSR、keystore 密碼）、`~/secrets/`（0600）、`~/monitoring/` | `~/landing/`、`~/repo/` 可以刪（套件已上架；要回滾用套件庫裡的舊版） |
+| `~/conf/`（範本與產出的設定，之後改設定都從這裡）、`~/pki/`（憑證、CSR、keystore 密碼）、`~/secrets/`（0600）、`~/monitoring/` | `~/landing/`、`~/repo/` 可以刪（套件已上架；要回滾用套件庫裡的舊版）。例外：還要照第 21 章遷移的話，`~/landing/rpm-target/` 與 `~/landing/bank/` 的 JDK 25 要留到遷移完成 |
 | ssh 私鑰 `/secure/ssh/cpuser_ed25519`（root、0400）留在操作機的獨立 file system；不放 CyberArk、不備份，操作機重建就重新產生並重新佈署公鑰（3.1） | `/tmp/` 裡安裝期間的暫存檔 |
 | | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它是 super user）；憑證輪替（第 20 章）、升級（第 21 章）前要先取回 |
 | | 各主機 cpuser 的全權 sudo（`/etc/sudoers.d/cpuser`）：移除，只留 `cpuser-ops` 窄規則（lab 留著，後面章節還要用） |
@@ -4704,7 +4759,7 @@ sleep 1; echo "探針已開始"
 探針已開始
 ```
 
-步驟 1–3：產生新金鑰對（註解多加時分，因為演練可能和安裝同一天，要分得出新舊）；從 ops02 自己的 `authorized_keys` 取出現在的 `from=`，把新公鑰行加進每一台（用舊金鑰登入）和 repo01 的 repodeploy；用新金鑰逐台測試（`-F /dev/null` 不讀 ssh config，不然 config 裡的舊金鑰會讓測試假通過）：
+步驟 1–3：產生新金鑰對（註解多加時分，因為演練可能和安裝同一天，要分得出新舊）；從操作機自己的 `authorized_keys` 取出現在的 `from=`，把新公鑰行加進每一台（用舊金鑰登入）和 repo01 的 repodeploy；用新金鑰逐台測試（`-F /dev/null` 不讀 ssh config，不然 config 裡的舊金鑰會讓測試假通過）：
 
 ```bash
 cd /secure/ssh && T="cpuser@ops02 cpuser@kc01 cpuser@kc02 cpuser@kc03 cpuser@kb01 cpuser@kb02 cpuser@kb03 cpuser@kb04 cpuser@rest01 cpuser@rest02 cpuser@c3-01 repodeploy@repo01" && OLD_COMMENT=$(awk '{print $3}' cpuser_ed25519.pub) && ssh-keygen -q -t ed25519 -N '' -C "cpuser-ops-$(date +%Y%m%d-%H%M)" -f cpuser_ed25519.new && chmod 0400 cpuser_ed25519.new && FROM=$(sed -n 's/^\(from="[^"]*"\) .*/\1/p' /home/cpuser/.ssh/authorized_keys | head -1) && NEWLINE="$FROM $(cat cpuser_ed25519.new.pub)" && for t in $T; do ssh $t.poc.lab "printf '%s\n' '$NEWLINE' >> ~/.ssh/authorized_keys" || echo "$t: 加新公鑰失敗"; done; ok=0; for t in $T; do ssh -F /dev/null -i cpuser_ed25519.new -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new $t.poc.lab true 2>/dev/null && ok=$((ok+1)); done; echo "舊：$OLD_COMMENT；新：$(awk '{print $3}' cpuser_ed25519.new.pub)；新金鑰登入：$ok/12 台"
@@ -4755,7 +4810,9 @@ touch /tmp/probe.stop; sleep 3; read n f < /tmp/probe.result; echo "探針：換
 
 ![certrotate]
 
-第 9 站簽的憑證效期一年，到期前一定要換。這一站做兩件事：每年都會遇到的 **leaf 換發**（同一個銀行 CA 重簽），以及幾年一次、銀行決定的 **換 CA**（三階段：先加新根 → 換 leaf → 移除舊根）。MDS token 金鑰不是銀行 CA 簽的、沒有到期日，不在這一站（只在外洩時才換）。
+**怎麼用這一章**：先讀 20.0，判斷銀行說的「換憑證」是下表哪一種，再跳到對應的節。只是到期前換發就做 20.1 → 20.2；銀行換 CA 才需要 20.3 或 20.4。每一次換發都要**滾動重啟**所有元件（含 REST Proxy 的 LB 停用／恢復），請在變更時段做，一台健康了才做下一台。
+
+第 9 章簽的憑證效期一年，到期前一定要換。這一章做兩件事：每年都會遇到的 **leaf 換發**（同一個銀行 CA 重簽），以及幾年一次、銀行決定的 **換 CA**（三階段：先加新根 → 換 leaf → 移除舊根）。MDS token 金鑰不是銀行 CA 簽的、沒有到期日，不在這一章（只在外洩時才換）。
 
 | 情境 | 多久一次 | 會不會斷線 |
 |---|---|---|
@@ -4799,7 +4856,7 @@ for f in old-ca.pem new-ca.pem; do echo "$f: $(openssl x509 -in $f -noout -subje
 
 @role 小安 | ops02 | root
 
-每張憑證的序號、剩幾天，以及各服務**實際出示**的是哪一張（換完之後用同一條指令確認每個端點都換到了）：
+**這一節在做什麼**：換發前後各跑一次的對照。先看每張憑證的序號、剩幾天，以及各服務**實際出示**的是哪一張（換完之後用同一條指令確認每個端點都換到了）：
 
 ```bash
 cd ~/pki && for n in $(awk '{print $1}' requests.txt); do printf '%-19s serial=%s days=%s\n' $n "$(openssl x509 -in certs/$n.crt -noout -serial | cut -d= -f2 | tail -c 9)" $(( ($(date -d "$(openssl x509 -in certs/$n.crt -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); done; echo "-- 各端點出示的憑證（序號末 8 碼）"; for ep in kc01.poc.lab:9093 kb01.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 rest01.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090; do printf '%-22s %s\n' $ep "$(openssl s_client -connect $ep -servername ${ep%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial -subject -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/serial=//; s/subject=.*CN=\([^,]*\).*/\1/' | paste -sd' ' | sed 's/^\(.*\)\(........\) \(.*\)$/\2 \3/')"; done
@@ -4820,11 +4877,13 @@ kb01.poc.lab:9095      F343BC54 cp-server
 
 ## 20.2 換發 leaf（同一個 CA）
 
+**這一節在做什麼**：每年的例行換發。流程五步：產生新私鑰與 CSR（20.2.1）→ 銀行簽發（20.2.2）→ 檢查並做成新 keystore（20.2.3）→ 派送並滾動重啟（20.2.4）→ 確認都換好後替換正本（20.2.5）。新舊憑證在滾動期間都被信任，所以不會斷線；到 20.2.5 之前隨時可以放棄，舊的都還在原位。
+
 ### 20.2.1 新私鑰與 CSR
 
 @role 小安 | ops02 | root
 
-照第 9 站的 `requests.txt`（名稱、EKU、SAN 不變），每張產生新私鑰與 CSR，放 `~/pki/next/`：
+照第 9 章的 `requests.txt`（名稱、EKU、SAN 不變），每張產生新私鑰與 CSR，放 `~/pki/next/`：
 
 ```bash
 install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/incoming ~/pki/next/certs && cd ~/pki && while read -r name eku san; do (umask 077; openssl genrsa -out next/keys/$name.key 2048 2>/dev/null); ext=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$eku"); [ "$san" != "-" ] && ext+=(-addext "subjectAltName=$(echo "$san" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -)"); openssl req -new -key next/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" "${ext[@]}" -out next/requests/$name.csr && echo "$name: csr ok"; done < requests.txt
@@ -5016,6 +5075,10 @@ PVWA opmenu-breakglass 已更新，序號末 8 碼 …
 ## 20.3 換 CA（三階段）
 
 
+**這一節在做什麼**：銀行換了根憑證（新私鑰）、或換了簽發 CA 時的做法。名詞：根憑證（root）是信任的起點，簽發 CA（中繼）用它簽 leaf；lab 裡原本的根是 0.5.5 建的，20.3 換成的新 CA 叫 G2，20.4 再換成的叫 G3。
+
+**不可逆的點**：階段三「拿掉舊根」之後，凡是還出示舊 CA 簽的憑證的，一律被拒，要退回只能重新加回舊根。所以階段二的每個端點（含銀行的 AD、套件庫，以及應用程式的憑證）都確認換好之後，才進階段三。
+
 銀行換根憑證（或換簽發 CA）時，不能一次全換：只要有一台還不信新的根，它就會拒絕新憑證。三個階段，每段結束時所有元件都同時信任新舊兩個根：
 
 | 階段 | 誰做 | 做什麼 | 之後的狀態 |
@@ -5154,7 +5217,7 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | root
 
-> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（第 17.5 站交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
+> 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 節交給銀行的那份）也要由監控團隊換成 bundle，否則階段二換完憑證就抓不到。
 
 ### 20.3.3 階段二：全部改由新 CA 簽
 
@@ -5462,7 +5525,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 ## 20.4 換鏈：中繼沒換私鑰，只換憑證鏈
 
-20.0 表裡「中繼沿用私鑰」的那幾列：leaf 不用重簽（簽它的私鑰沒變），但每個 p12 裡夾帶的中繼要換成銀行給的新那張。不用 CSR、不用銀行簽任何東西，只是把「現在的 leaf＋新中繼」重新包成 p12、派送、滾動重啟。
+**這一節在做什麼**：處理 20.0 表裡「中繼沿用私鑰」的情況，只換 p12 裡夾帶的憑證鏈，不重簽 leaf。這一節是最複雜的一種，只有銀行明確說是這種情況才需要。20.0 表裡「中繼沿用私鑰」的那幾列：leaf 不用重簽（簽它的私鑰沒變），但每個 p12 裡夾帶的中繼要換成銀行給的新那張。不用 CSR、不用銀行簽任何東西，只是把「現在的 leaf＋新中繼」重新包成 p12、派送、滾動重啟。
 
 這一節演練最麻煩的那一列：**銀行換根（G3，新私鑰），中繼 G2 沿用私鑰、由 G3 重簽**。信任清單一樣走三階段，階段二從「重簽 leaf」換成「換鏈」。只有中繼續簽、根不動的情況（表的第 3 列），跳過 20.4.2 和 20.4.5，只做 20.4.3、20.4.4。
 
@@ -5839,7 +5902,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 ```
 
 
-> 實測（2026-10-25，lab，接在 20.3 之後做）：三個階段 12 塊指令全部一次通過；換鏈期間 REST、MDS、C3 都維持 200，舊鏈與新鏈的應用程式憑證在階段二都能用，階段三之後舊鏈被拒。銀行端（Windows 的 openssl）算出的 key 雜湊和 ops02 算的不同，是 PEM 換行字元不同造成的，各自那一邊的兩行相同就對了。
+> 實測（2026-10-25，lab，接在 20.3 之後做）：三個階段 12 塊指令全部一次通過；換鏈期間 REST、MDS、C3 都維持 200，舊鏈與新鏈的應用程式憑證在階段二都能用，階段三之後舊鏈被拒。銀行端（Windows 的 openssl）算出的 key 雜湊和操作機算的不同，是 PEM 換行字元不同造成的，各自那一邊的兩行相同就對了。
 
 > 這就是 20.0 說的「拿掉舊根一定排在每個端點都換好鏈之後」：舊鏈的 leaf 本身沒問題，被拒是因為它夾帶的中繼指向已經不信的 G2。應用程式（REST 走 mTLS 的那些）的 p12 也一樣要換鏈，否則階段三那一刻就斷。
 
@@ -5847,23 +5910,34 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 ![upgrade]
 
-安裝基底（第 1–20 章）裝的是 **Confluent Platform 8.2.4**、**Control Center 2.5.1**、**JDK 21**。這一站是主線的下一步：遷移到 **Confluent Platform 8.3.2**，C3 同時升到 **2.6.1**，並把 **JDK 21 換成 25**。順序和原因：
+安裝基底（第 1–20 章）裝的是 **Confluent Platform 8.2.4**、**Control Center 2.5.1**、**JDK 21**。這一章是主線的下一步：遷移到 **Confluent Platform 8.3.2**，C3 同時升到 **2.6.1**，並把 **JDK 21 換成 25**。順序和原因：
 
 - **C3 先升**：原廠相容表上 C3 2.5.x 只支援到 CP 8.2.x，2.6.x 才支援到 8.3.x（2.6.x 的範圍是 7.5.15 到 8.3.x，所以 2.6.1 配著 8.2.4 也在支援範圍內）。CP 一升到 8.3，2.5.1 就落在支援範圍外，所以 C3 要在 broker 之前換（21.3）。
 - **JDK 25 在 CP 升完之後才換**：8.2.x 只支援 Java 17／21，8.3.x 才支援 25；注意原廠對 8.3 的**建議**版本仍是 21，25 是「支援」，選 25 要和原廠支援確認（銀行沒有這個要求時，留在 21 就好，只做第一、三段）。C3 留在 JDK 21（原廠沒有寫 C3 2.6 支援 Java 25）。
 - **OS 小版本（9.6 → 9.8）不在這一章**，是第 26 章的 26.5：Confluent 套件被 versionlock 鎖住、JDK 是 tar，OS 更新碰不到它們，所以兩條線可以分開做；本章每一段結束都跑第 19 章的驗收。
 
-> 前提：安裝基底已經裝好並通過第 19 章驗收；目標版本的 RPM 與 JDK 25 已經在第 1、2 站隨落地區進來（`~/landing/rpm-target/`、`~/landing/bank/`），這一章 21.1 才把它們上架。第 20 章的憑證輪替做過沒做過都行，順序沒有相依。
+> 前提：安裝基底已經裝好並通過第 19 章驗收；目標版本的 RPM 與 JDK 25 已經在第 1、2 章隨落地區進來（`~/landing/rpm-target/`、`~/landing/bank/`），這一章 21.1 才把它們上架。第 20 章的憑證輪替做過沒做過都行，順序沒有相依。
 
 分三段，每段結束都可以停下來驗收：
 
 | 段 | 做什麼 | 出問題怎麼退 |
 |---|---|---|
-| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3（2.5.1 → 2.6.1）→ broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（21.9） |
+| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3（2.5.1 → 2.6.1）→ broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（21.8） |
 | 二 | JDK 21 → 25：controller、broker、REST Proxy、操作機逐台切換 `/opt/java/current`；C3 留在 21 | 連結切回 21、重啟 |
 | 三 | finalize：features 升到 4.3（`kafka-features upgrade --release-version 4.3`） | **不能退**：之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降回去可能要從備份還原 |
 
 要回 8.2 時順序反過來：先把 JDK 切回 21（8.2 不支援 25），再 `dnf downgrade`。所以**前兩段都驗收過才做第三段**。
+
+**各節的順序**（照這個順序做，不要跳）：
+
+1. 21.1 上架目標版本、升級前檢查 → 21.2 備份。
+2. 第一段：21.3 C3 → 21.4 broker → 21.5 controller → 21.6 REST Proxy 與操作機工具。
+3. 第二段：21.7 JDK 25（銀行不要求 25 就略過）。
+4. 21.8 回滾演練：趁 finalize 之前，證明真的退得回去（kb04 退回再升回來）。
+5. 21.9 第三段 finalize。**這是不能回頭的點**：做完之後叢集無法降回 8.2，要退只能靠 21.2 的備份與原廠的還原程序。
+6. 21.10 確認版本、記下新基準。
+
+每一段、每一台都要等健康（MDS 回 200、under-replicated 為 0、quorum Lag 為 0）才做下一台。
 
 > 實測（lab，全程持續流量，2026-10-26 的升級演練，當時 C3 不動；這一版多了 C3 先升的一步，從零重跑後以新數字為準）：約 48 分鐘。直連應用程式送出 14,009 筆、讀回 14,009 筆，遺失 0；經負載平衡的 REST 2,684 次中失敗 2 次（HTTP 402，都發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 19 章的驗收，都全數通過。
 
@@ -5871,7 +5945,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 @role 小安 | ops02 | root
 
-目標版本的 RPM 已經在落地區（`~/landing/rpm-target/`，第 2 站核對過 sha256 與簽章）。把它們加進內部套件庫：**基底版本不刪，回滾要用**，只推 `confluent/` 這個目錄：
+**這一節在做什麼**：把 8.3.2／2.6.1 的 RPM 上架到內部套件庫，並確認叢集現在是健康的，才開始升。**注意：`~/landing/rpm-target/` 與 `~/landing/bank/` 裡的 JDK 25 要保留到第 21 章全部做完（含 21.7）；19.5 的收尾不要先刪掉它們。**目標版本的 RPM 已經在落地區（`~/landing/rpm-target/`，第 2 章核對過 sha256 與簽章）。把它們加進內部套件庫：**基底版本不刪，回滾要用**，只推 `confluent/` 這個目錄：
 
 ```bash
 (cd ~/landing && sha256sum -c --quiet SHA256SUMS) && cp ~/landing/rpm-target/*.rpm ~/repo/confluent/ && createrepo_c -q --update ~/repo/confluent && tar -C ~/repo -cf - confluent | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/repo -xpf -' && ssh c3-01.poc.lab 'echo "套件庫裡的 confluent-server：$(sudo dnf -q --refresh --showduplicates list confluent-server 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/^1://; s/-1\$//" | sort -uV | paste -sd" " -)"; echo "套件庫裡的 C3：$(sudo dnf -q --showduplicates list confluent-control-center-next-gen 2>/dev/null | awk "/confluent-internal/{print \$2}" | sed "s/-1\$//" | sort -uV | paste -sd" " -)"'
@@ -5902,7 +5976,7 @@ kc01:0 kc02:0 kc03:0 kb01:0 kb02:0 kb03:0 kb04:0
 
 @role 小安 | ops02 | root
 
-每台的 `/etc/confluent` 與 systemd drop-in、features 狀態、操作機的套件清單，打包回操作機（0700）。master key（`service.env`）不放進備份：master key 的正本在 CyberArk，備份檔就不必當成機敏資料保管。回滾、或 finalize 之後真的要退，都從這裡拿：
+**這一節在做什麼**：升級前留一份可以還原的備份。每台的 `/etc/confluent` 與 systemd drop-in、features 狀態、操作機的套件清單，打包回操作機（0700）。master key（`service.env`）不放進備份：master key 的正本在 CyberArk，備份檔就不必當成機敏資料保管。回滾、或 finalize 之後真的要退，都從這裡拿：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && B=~/upgrade-backup/$(date +%Y%m%d-%H%M) && install -d -m 0700 $B && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > $B/$h.tar.gz && printf '%s %s  ' $h "$(du -h $B/$h.tar.gz | cut -f1)"; done; echo; kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe > $B/features.txt 2>/dev/null; rpm -qa 'confluent-*' | sort > $B/ops02-packages.txt; echo "$B"
@@ -5917,7 +5991,7 @@ kc01 28K  kc02 28K  kc03 28K  kb01 32K  kb02 32K  kb03 32K  kb04 32K  rest01 28K
 
 @role 小安 | ops02 | root
 
-原廠要求 C3 比 broker、controller 先升，而且 2.5.1 不支援 8.3，所以這一步一定要先做。C3 只有一台，升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看）。設定檔不用改（第 13 章的設定 2.5.1 與 2.6.1 通用）。
+**這一節在做什麼**：先升 Control Center。原廠要求 C3 比 broker、controller 先升，而且 2.5.1 不支援 8.3，所以這一步一定要先做。C3 只有一台，升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看）。設定檔不用改（第 13 章的設定 2.5.1 與 2.6.1 通用）。
 
 換版本的步驟寫成 `~/conf/c3-change.sh`，升級與回滾是同一段，只差 `dnf install` 或 `dnf downgrade`（第 27 章還會用到）：解鎖 → 換版本 → 鎖回新的版本 → `daemon-reload`（RPM 會換掉 unit 檔）→ 把 C3 自己要寫的 4 個 generated 檔改回 `cp-control-center`（RPM 換版本會把它們改回 root）→ 確認設定檔沒被動、`ExecStart` 還是指著我們的設定 → 重啟 Prometheus、Alertmanager、C3 → 等畫面 200：
 
@@ -6071,13 +6145,13 @@ rest01 confluent-kafka-rest-8.3.2-1.noarch
 rest02 confluent-kafka-rest-8.3.2-1.noarch
 ```
 
-第一段結束：照第 19 章 19.1–19.3 再驗一次（實測全數通過）。這時 features 還是 8.2，隨時可以照 21.9 退回。
+第一段結束：照第 19 章 19.1–19.3 再驗一次（實測全數通過）。這時 features 還是 8.2，隨時可以照 21.8 退回。
 
 ## 21.7 第二段：JDK 21 → 25
 
 @role 小安 | ops02 | root
 
-和第 5 站一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。**c3-01 不動**（原廠沒有寫 C3 2.6 支援 Java 25）。
+**這一節在做什麼**：把 controller、broker、REST Proxy、操作機的 JDK 從 21 換成 25（C3 不換）。前提：第一段已全部完成並驗收。和第 5 章一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。**c3-01 不動**（原廠沒有寫 C3 2.6 支援 Java 25）。
 
 > Java 25 在 CP 8.3 的相容表上是「支援」，原廠部署文件的建議版本仍是 21。這一段是照銀行「升 8.3 時一起換 25」的要求做；銀行沒有這個要求時，留在 21 就好（只做第一、三段）。
 
@@ -6177,7 +6251,7 @@ broker 的日誌會多一則 `WARNING: A terminally deprecated method in sun.mis
 
 @role 小安 | ops02 | root
 
-任何一段出問題、features 還沒升（`describe` 看到的還是 `CP-8.2-…`），就逐台退：先把 JDK 切回 21，再把套件 `downgrade` 回 8.2.4、重新鎖、`daemon-reload`、重啟。順序和升級相反（操作機、REST Proxy → controller → broker；C3 不用退，2.6.x 也支援 8.2.x，真的要退照第 27 章的 `c3-change.sh`）。實測拿 kb04 單台演練（其他台都是 8.3.2）：
+**這一節在做什麼**：在 finalize 之前，實際演練一次「退回 8.2.4」，確認出事時真的退得回去，再升回來。這是 finalize 前最後一個還能退的機會。任何一段出問題、features 還沒升（`describe` 看到的還是 `CP-8.2-…`），就逐台退：先把 JDK 切回 21，再把套件 `downgrade` 回 8.2.4、重新鎖、`daemon-reload`、重啟。順序和升級相反（操作機、REST Proxy → controller → broker；C3 不用退，2.6.x 也支援 8.2.x，真的要退照第 27 章的 `c3-change.sh`）。實測拿 kb04 單台演練（其他台都是 8.3.2）：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-21* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.2.4 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh downgrade $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; sudo systemctl restart confluent-server' || exit 1; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
@@ -6208,7 +6282,7 @@ kb04 confluent-server-8.3.2-1.noarch /opt/java/jdk-25.0.5+8/bin/java MDS 200（�
 
 @role 小安 | ops02 | root
 
-先看 4.3 會把哪些 feature 升到多少，再 `--dry-run`：
+**這一節在做什麼**：把叢集的 metadata 版本（features）升到 4.3，正式啟用 8.3 的新功能。**這一步做完不能回頭**：前兩段、21.8 的回滾演練都完成並觀察一段時間後才做。先看 4.3 會把哪些 feature 升到多少，再 `--dry-run`（只預演、不真的升）：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && F="kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties" && $F version-mapping --release-version 4.3 2>/dev/null && $F upgrade --release-version 4.3 --dry-run 2>/dev/null
@@ -6244,7 +6318,7 @@ confluent.metadata.version CP-8.3-IV0B
 
 @role 小安 | ops02 | root
 
-三段都驗收過、觀察一段時間之後，用一張表確認每台主機的版本都是預期的（Confluent 與 JDK 是目標版本；C3 的 JDK 一直留在 21）：
+**這一節在做什麼**：收尾確認，並把「新基準版本」記下來。三段都驗收過、觀察一段時間之後，用一張表確認每台主機的版本都是預期的（Confluent 與 JDK 是目標版本；C3 的 JDK 一直留在 21）：
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname) java=$(readlink /opt/java/current | sed s#/opt/java/##) confluent=$(rpm -qa "confluent-*" --qf "%{VERSION}\n" | sort -u | paste -sd,) os=$(. /etc/os-release; echo $VERSION_ID)"'; done
@@ -6256,11 +6330,13 @@ kc01 java=jdk-25.0.x+y confluent=8.3.2 os=9.6
 c3-01 java=jdk-21.0.x+y confluent=2.6.1 os=9.6
 ```
 
-`os=9.6` 還沒動，那是第 26 章的事。**記下新的基準**：之後新增或換掉主機（第 23、24 章）要裝**現行版本**——第 5 站裝 JDK 25（`OpenJDK25U-*`）、第 8 站的版本號換成 8.3.2 與 2.6.1，不是這本書前面寫的 8.2.4／2.5.1。用 `install/` 腳本的話，改 `conf/site.env` 的 `CP_VERSION`、`C3_VERSION`、`JDK_MAJOR` 三個值就行（`21-upgrade.sh adopt` 會代改）。
+`os=9.6` 還沒動，那是第 26 章的事。**記下新的基準**：之後新增或換掉主機（第 23、24 章）要裝**現行版本**——第 5 章裝 JDK 25（`OpenJDK25U-*`）、第 8 章的版本號換成 8.3.2 與 2.6.1，不是這本書前面寫的 8.2.4／2.5.1。用 `install/` 腳本的話，改 `conf/site.env` 的 `CP_VERSION`、`C3_VERSION`、`JDK_MAJOR` 三個值就行（`21-upgrade.sh adopt` 會代改）。
 
 # 22. 第二十二站：License 到期監控
 
-平台目前用的是試用 license（第 10 站 `confluent.license` 沒有設）。試用期 30 天；正式 license 一般一年一約。到期之後 broker 仍會繼續服務、只是日誌一直報錯，但**重啟時 RBAC／MDS 等安全外掛與 Control Center 起不來**，等於下一次維運重啟就停擺。原廠只在 C3 畫面（到期前 90 天開始）與 broker 日誌提醒，**沒有提供到期日的 JMX 指標**，所以行內監控要自己讀。
+**這一章在做什麼**：license（授權）到期前提早知道。做法：22.1 學會讀出到期日、22.2 設每天一次的自動檢查、22.3 買到正式 license 之後怎麼換上去。前提：叢集已運作（第 10 章之後任何時間都可以做）。
+
+平台目前用的是試用 license（第 10 章 `confluent.license` 沒有設）。試用期 30 天；正式 license 一般一年一約。到期之後 broker 仍會繼續服務、只是日誌一直報錯，但**重啟時 RBAC／MDS 等安全外掛與 Control Center 起不來**，等於下一次維運重啟就停擺。原廠只在 C3 畫面（到期前 90 天開始）與 broker 日誌提醒，**沒有提供到期日的 JMX 指標**，所以行內監控要自己讀。
 
 生效中的 license 是一個 JWT，broker 會把它存進 `_confluent-command` topic。讀出來、解開中間那段，`exp` 就是到期時間。
 
@@ -6339,7 +6415,7 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 銀行向 Confluent 買到 license 後會拿到一串 JWT（`eyJ` 開頭）。它和密碼一樣交由 Secrets 團隊放進 PVWA，小安取用時放 `~/secrets/license.jwt`（0600）。依原廠文件：
 
 1. `~/conf/common.tpl` 的 License 區塊加 `confluent.license=${LICENSE}`（controller 與 broker 共用）；REST Proxy、C3 的範本各加一行 `confluent.license=${LICENSE}`。
-2. 照第 10、12、13 站重新產生設定（`LICENSE=$(cat ~/secrets/license.jwt)` 帶進 `envsubst`）；密碼欄位照 15.3 一起加密。
+2. 照第 10、12、13 章重新產生設定（`LICENSE=$(cat ~/secrets/license.jwt)` 帶進 `envsubst`）；密碼欄位照 15.3 一起加密。
 3. 照 15.4、15.5 派送與滾動重啟（controller → broker → REST → C3）。
 4. 用 22.1 確認：類型不再是 `trial`、到期日是合約的日期。
 
@@ -6347,15 +6423,17 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 
 # 23. 第二十三站：換掉一台 controller
 
-controller 的 quorum 是動態的（第 10 站用 `--initial-controllers` 格式化）：成員是「node id＋directory id」。換一台 controller，就是把舊的那組移出 quorum、把新的那組加進來，一次只動一個成員。
+**這一章在做什麼**：controller 的主機壞了或資料碟壞了，怎麼把它換成一台新的，而不中斷叢集。順序：先看 quorum（23.1）→ 模擬壞掉（23.2，lab 專用）→ 把舊成員移出（23.3）→ 重新格式化並追上（23.4）→ 加回（23.5）。前提：其他兩台 controller 健康。
+
+controller 的 quorum 是動態的（第 10 章用 `--initial-controllers` 格式化）：成員是「node id＋directory id」。換一台 controller，就是把舊的那組移出 quorum、把新的那組加進來，一次只動一個成員。
 
 | 情況 | 要做的事 |
 |---|---|
 | 同一台主機，資料碟壞了換新 | 本章：移出舊成員 → 重新格式化（觀察者）→ 追上 → 加入 |
-| 換一台新機器，沿用同一個主機名稱 | 先照第 3、5、7、8 站把新機器準備好（銀行的帳號、套件庫、JDK、OS 調校、套件；**裝現行版本**：遷移後是 JDK 25、Confluent 8.3.2，見 21.10），派送憑證與設定（第 10 站），再做本章 |
+| 換一台新機器，沿用同一個主機名稱 | 先照第 3、5、7、8 章把新機器準備好（銀行的帳號、套件庫、JDK、OS 調校、套件；**裝現行版本**：遷移後是 JDK 25、Confluent 8.3.2，見 21.10），派送憑證與設定（第 10 章），再做本章 |
 | 換成不同名稱的主機 | 另外要重簽 `kafka-internal`（SAN 列了所有主機名稱，20.2），所有節點的 `controller.quorum.bootstrap.servers` 改成新名單並滾動重啟；本章未演練 |
 
-> 一次只換一台。換的過程中 quorum 只剩兩個成員，兩個都要在才能選出 leader：**這段時間不要重啟 kc01、kc02**。
+> 注意：一次只換一台。換的過程中 quorum 只剩兩個成員，兩個都要在才能選出 leader；這段時間重啟 kc01 或 kc02，叢集會失去多數派而停擺。處理：換完、kc03 追上並重新加入之前，不要動另外兩台。
 
 ## 23.1 換之前：看 quorum
 
@@ -6378,7 +6456,7 @@ NodeId  DirectoryId             LogEndOffset  Lag  LastFetchTimestamp  LastCaugh
 
 @role Lab 管理員 | Windows 終端 | 本機
 
-正式環境是「主機團隊換了碟、掛回同一個路徑」；lab 用清空資料目錄模擬：
+正式環境是「主機團隊換了碟、掛回同一個路徑」。lab 裡：用清空資料目錄模擬：
 
 ```bash
 docker exec lab-kc03-1 bash -c 'systemctl stop confluent-server && rm -rf /var/lib/kafka/data/* && echo "kc03 data: $(ls -A /var/lib/kafka/data | wc -l) files, $(stat -c %U:%G:%a /var/lib/kafka/data)"'
@@ -6424,7 +6502,7 @@ Removed  KRaft controller 3 with directory id OwqboMUaS4C4y6JYkevW7w
 
 @role 小安 | ops02 | root
 
-用原本的 cluster id、`--no-initial-controllers`（以觀察者身分加入，不是自己宣告成員）。設定檔有 `${securepass:…}`（第 15 站），格式化工具也要拿得到 master key：從 `service.env` 讀：
+用原本的 cluster id、`--no-initial-controllers`（以觀察者身分加入，不是自己宣告成員）。設定檔有 `${securepass:…}`（第 15 章），格式化工具也要拿得到 master key：從 `service.env` 讀：
 
 ```bash
 source ~/conf/kraft.env && ssh kc03.poc.lab "sudo bash -c 'run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl start confluent-server && echo \"kc03 \$(systemctl is-active confluent-server) dir=\$(sudo sed -n 's/^directory.id=//p' /var/lib/kafka/data/meta.properties)\"" && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for i in $(seq 1 60); do L=$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication 2>/dev/null | awk '$1==3'); [ "$(awk '{print $4, $NF}' <<<"$L")" = "0 Observer" ] && break; sleep 5; done; echo "kc03：$(awk '{print "Lag="$4, $NF}' <<<"$L")"
@@ -6456,7 +6534,7 @@ NodeId  DirectoryId             LogEndOffset  Lag  …  Status
 3       eELCq6OM-4WuTdfGQSmOgQ  30989         0    …  Follower
 ```
 
-最後確認：kc03 的監控端點（官方規則有 `startDelaySeconds: 120`，剛啟動兩分鐘內是空的，所以等到有指標）、整體健康（14.0 的檢查清單）：
+最後確認：kc03 的監控端點（官方規則有 `startDelaySeconds: 120`，剛啟動兩分鐘內是空的，所以等到有指標）、整體健康（第 14 章的檢查清單）：
 
 ```bash
 CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && for i in $(seq 1 24); do n=$(curl -s --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" https://kc03.poc.lab:7071/metrics | grep -c '^kafka_'); [ "$n" -gt 20 ] && break; sleep 10; done; echo "kc03 7071：${n}個指標" && for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo
@@ -6469,7 +6547,9 @@ kb01 MDS=200 kb02 MDS=200 kb03 MDS=200 kb04 MDS=200
 
 # 24. 第二十四站：broker 縮減與擴充
 
-broker 的資料由 Self-Balancing（第 10 站 `confluent.balancer.enable=true`）搬：縮減時用 `kafka-remove-brokers` 把要拿掉的那台的 replica 全部搬走、它自己關機；擴充時空的 broker 一加入，Self-Balancing 自動把資料搬過去。
+**這一章在做什麼**：拿掉一台 broker（縮減）、或加一台 broker（擴充），應用程式不中斷。順序：先做前置檢查（24.1）→ 縮減（24.2）→ 擴充（24.3）。名詞：Self-Balancing 是 Confluent 的自動資料平衡功能，負責把 partition 的 replica 搬到合適的 broker。
+
+broker 的資料由 Self-Balancing（第 10 章 `confluent.balancer.enable=true`）搬：縮減時用 `kafka-remove-brokers` 把要拿掉的那台的 replica 全部搬走、它自己關機；擴充時空的 broker 一加入，Self-Balancing 自動把資料搬過去。
 
 | 前提 | 原因 |
 |---|---|
@@ -6477,7 +6557,7 @@ broker 的資料由 Self-Balancing（第 10 站 `confluent.balancer.enable=true`
 | 沒有 under-replicated partition | 搬資料前叢集要健康 |
 | Self-Balancing 是 `ENABLED` | `kafka-remove-brokers` 靠它搬 |
 
-lab 用 kb04（node id 104）演練：先縮減、再當成一台空的新 broker 加回來。過程中持續有應用程式寫入。
+lab 裡：用 kb04（node id 104）演練：先縮減、再當成一台空的新 broker 加回來。過程中持續有應用程式寫入。
 
 ## 24.1 前置檢查
 
@@ -6543,7 +6623,7 @@ under-replicated：0
 
 @role 小安 | ops02 | root
 
-加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 3、5、7、8 站準備，憑證的 SAN 要有它的名稱（20.2）：
+加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 3、5、7、8 章準備，憑證的 SAN 要有它的名稱（20.2）：
 
 ```bash
 source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka/data/*; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
@@ -6579,6 +6659,8 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 
 # 25. 第二十五站：日常備份
 
+**這一章在做什麼**：每天自動把叢集的「設定類」中繼資料（誰有什麼權限、有哪些 topic 與設定）匯出成文字檔，遇到誤刪時能照著重建。訊息本身不備份。順序：建專用的唯讀身分（25.1、25.2）→ 匯出腳本（25.3）→ 排程（25.4）→ 怎麼比對與還原（25.5）。
+
 要備份的東西分成三類，各走各的路：
 
 | 類別 | 內容 | 怎麼備 | 誰做 |
@@ -6595,7 +6677,7 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 
 @role 小安 | ops02 | root
 
-`svc-backup` 憑證在第 9 站已經和其他憑證一起發了（`~/pki/certs/svc-backup.p12`）。client 設定從管理用的那份複製，換成 svc-backup 的 keystore：
+`svc-backup` 憑證在第 9 章已經和其他憑證一起發了（`~/pki/certs/svc-backup.p12`）。client 設定從管理用的那份複製，換成 svc-backup 的 keystore：
 
 ```bash
 (umask 077; sed 's#/svc-ops.p12#/svc-backup.p12#' ~/conf/client-admin.properties > ~/conf/client-backup.properties) && echo "client-backup.properties：$(grep -c svc-backup ~/conf/client-backup.properties) 處指向 svc-backup；憑證 $(openssl x509 -in ~/pki/certs/svc-backup.crt -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')，剩 $(( ($(date -d "$(openssl x509 -in ~/pki/certs/svc-backup.crt -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )) 天"
@@ -6614,7 +6696,7 @@ lab 逐項試過（2026-10-25）：
 | 要匯出的 | 需要的操作 | 給法 |
 |---|---|---|
 | role binding | MDS 查詢 | RBAC `SecurityAdmin`（只能看：`DescribeAccess`、`SecurityMetadata Describe`；試建 binding 回 403） |
-| topic 清單與設定、partition 分布 | Topic 的 `Describe`、`DescribeConfigs` | KRaft ACL（第 10 站 `access.rule.providers` 有開 `KRAFT_ACL`） |
+| topic 清單與設定、partition 分布 | Topic 的 `Describe`、`DescribeConfigs` | KRaft ACL（第 10 章 `access.rule.providers` 有開 `KRAFT_ACL`） |
 | SCRAM 帳號清單、配額、broker 動態設定、ACL 清單 | Cluster 的 `Describe`、`DescribeConfigs` | KRaft ACL |
 | features | 不用額外權限 | — |
 
@@ -6775,7 +6857,9 @@ orders.backup-demo 還在嗎：0
 
 # 26. 第二十六站：OS 修補與小版本更新
 
-銀行每月的 OS 修補照常由銀行的套件庫（Satellite／Nexus／web server）發布；平台這邊要做的只是「一台一台修、該重開就重開、健康了才做下一台」。Confluent 套件被 versionlock 鎖住（第 8 站），JDK 是 tar（第 5 站），所以 `dnf update` 只會動 OS 套件；C3 的前置套件 `cyrus-sasl`、`openssl-devel` 跟著 OS 修補走（不鎖）。
+**這一章在做什麼**：銀行的作業系統要更新（每月修補，或 9.6 → 9.8 小版本）時，我方怎麼一台一台修，修完確認平台健康。前提：Confluent 套件已被 versionlock 鎖住（第 8 章）。主線上接在第 21 章之後。
+
+銀行每月的 OS 修補照常由銀行的套件庫（Satellite／Nexus／web server）發布；平台這邊要做的只是「一台一台修、該重開就重開、健康了才做下一台」。Confluent 套件被 versionlock 鎖住（第 8 章），JDK 是 tar（第 5 章），所以 `dnf update` 只會動 OS 套件；C3 的前置套件 `cyrus-sasl`、`openssl-devel` 跟著 OS 修補走（不鎖）。
 
 這一章處理兩種情境，**步驟完全一樣**，差別只在套件庫裡有什麼、更新量多大、幾乎一定要重開機：
 
@@ -6794,7 +6878,7 @@ orders.backup-demo 還在嗎：0
 
 要不要重開機、要不要重啟服務，用 `dnf needs-restarting` 判斷，不靠人記：`-r` 看核心程式庫（kernel、glibc、systemd…）有沒有更新，`-s` 列出用到被更新程式庫、需要重啟的服務。JVM 自帶 TLS 實作，OS 的 openssl 更新通常不會把 Confluent 服務列進 `-s`；但 JVM 載入的 glibc 換了，**服務要重啟（或重開機）才會用到新的**。
 
-> **lab 是容器，不能真的重開機**（核心是 WSL2 的，`systemctl reboot` 會失敗：Could not activate remote peer）；kernel 更新也不會生效，因為容器根本沒有自己的核心。26.2–26.4 的指令用 `systemd-detect-virt -c` 判斷主機是不是容器：是的話，「要重開機：是」改成重啟該主機的平台服務（讓 JVM 載入新的 glibc），正式環境才是 `sudo systemctl reboot`。這是 lab 能做到的最接近的替代，**不等於重開機的驗證**：開機順序、fstab、網卡、核心模組、systemd unit 的 enable 狀態都沒有被測到，正式環境第一次做小版本更新請排在變更窗口，並先在測試環境走一遍。
+> **lab 限制**：**lab 是容器，不能真的重開機**（核心是 WSL2 的，`systemctl reboot` 會失敗：Could not activate remote peer）；kernel 更新也不會生效，因為容器根本沒有自己的核心。26.2–26.4 的指令用 `systemd-detect-virt -c` 判斷主機是不是容器：是的話，「要重開機：是」改成重啟該主機的平台服務（讓 JVM 載入新的 glibc），正式環境才是 `sudo systemctl reboot`。這是 lab 能做到的最接近的替代，**不等於重開機的驗證**：開機順序、fstab、網卡、核心模組、systemd unit 的 enable 狀態都沒有被測到，正式環境第一次做小版本更新請排在變更窗口，並先在測試環境走一遍。
 
 ## 26.0 銀行先把套件庫同步到要更新的版本
 
@@ -6843,7 +6927,7 @@ Upgrade  148 Packages
 （kb01、rest01、c3-01、ops02 同上，數字依各台裝的套件而不同；confluent-* 一律 0 個）
 ```
 
-> 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 站重新鎖。Confluent 的升級只走第 21 章。每月修補時「套件庫的 release 套件」和目前的 OS 版本相同，可更新的數量就小得多（原本實測：6 個，含 openssh-server，修補過程中 ssh 連線不斷）。
+> 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 章重新鎖。Confluent 的升級只走第 21 章。每月修補時「套件庫的 release 套件」和目前的 OS 版本相同，可更新的數量就小得多（原本實測：6 個，含 openssh-server，修補過程中 ssh 連線不斷）。
 
 ## 26.2 broker 逐台
 
@@ -7015,6 +7099,8 @@ under-replicated：0；REST 經 LB=200 C3=200
 
 # 27. 第二十七站：單獨更換 Control Center 版本
 
+**這一章在做什麼**：只換 C3 的版本，不動 Confluent Platform。前提：C3 已依第 13、21.3 裝好。順序：下載驗簽（27.1）→ 送進內網上架（27.2）→ 回滾程序演練（27.3，lab 專用）→ 升級（27.4）。
+
 Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Platform 頻繁，可以單獨更換。遷移主線裡 C3 已經在 21.3 從 2.5.1 升到 2.6.1（那是 CP 升 8.3 的前提）；這一章是**之後**的情況：C3 出新的 2.6.x 修補版、或原廠要求換版本時，單獨處理，不動 CP。和第 21 章不同的地方：
 
 | 項目 | 說明 |
@@ -7023,15 +7109,15 @@ Control Center（Next Gen）有自己的版號（2.x），改版比 Confluent Pl
 | 停機 | 只有一台：升級期間畫面約 1–2 分鐘不能用；broker、REST、應用程式不受影響（C3 只是看） |
 | 資料 | 內建 Prometheus 的歷史指標在 C3 的資料目錄，換套件不會清掉 |
 | JDK | C3 留在 JDK 21（21.7） |
-| 回滾 | `dnf downgrade` 回舊版（舊版的 RPM 一直留在套件庫，第 4 站） |
+| 回滾 | `dnf downgrade` 回舊版（舊版的 RPM 一直留在套件庫，第 4 章） |
 
-lab 上已經是原廠最新的 2.6.1（21.3 升好的），所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾；2.6.0 也在 CP 8.3 的支援範圍內），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 27.3。
+lab 裡：已經是原廠最新的 2.6.1（21.3 升好的），所以演練是：先把 2.6.0 帶進來、退回 2.6.0（同時驗證回滾；2.6.0 也在 CP 8.3 的支援範圍內），再照正式程序升回 2.6.1。正式環境只要把版號換成新版、跳過 27.3。
 
 ## 27.1 下載、驗簽章
 
 @role 小安 | dl01 | root
 
-和第 1 站一樣指定精確版本；C3 的相依（`cyrus-sasl`、`openssl-devel`）來自銀行的 OS 套件庫，已經裝過，不用 `--resolve`：
+和第 1 章一樣指定精確版本；C3 的相依（`cyrus-sasl`、`openssl-devel`）來自銀行的 OS 套件庫，已經裝過，不用 `--resolve`：
 
 ```bash
 V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && dnf -q download --destdir /out/c3 confluent-control-center-next-gen-$V && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls
