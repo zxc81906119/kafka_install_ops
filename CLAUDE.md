@@ -35,7 +35,7 @@ Details of the architecture and every component: @README.md
   blocks on the lab (`run-chapter.js` extracts them, `scan-log.sh` flags rc=0 output that is really a failure).
 - `docs/questions-src/questions.md` → `docs/Confluent-請銀行確認的事項.docx` (`node build.js`).
 - `docs/deck-src/install.js` + `install-steps.js` → `docs/Confluent-RPM安裝流程.pptx` (14-page deck for bank managers).
-- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/02–30` named by chapter; chapters 7 and 25 are `07-1/2/3-*.sh` and `25-1/2-*.sh`, `conf/site.env`);
+- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/02–30` named by chapter incl. the on-demand ones 21/22/23/24/26/27/28/29/30; chapters 7 and 25 are `07-1/2/3-*.sh` and `25-1/2-*.sh`, `conf/site.env`);
   `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh` = the whole path from zero: baseline → acceptance → migration → OS 9.8 → C3; no separate upgrade drill).
 - `opmenu/` — OP menu source (the **only** copy; never edit a sibling project such as `untitled6`).
 - `redesign/README.md` — design decisions, lessons, open questions.

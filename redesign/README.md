@@ -524,3 +524,12 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 第 11 章／11 站對 `apps.txt` 裡 scram 類的應用各建 `<app>-a`、`<app>-b`（同一組 binding 與配額；`rbac.txt` 明寫兩行）；驗收、稽核、持續流量用 -a（`FIRST_SCRAM_ACCOUNT`）。
 - 20.6：手動輪替演練（-a 背景寫入 600 筆 0 錯誤、換 -b、新密碼成功舊密碼被拒、應用切到 -b 寫讀一筆）；16.5／16 站加 OP menu 35 的試跑（用 app-payments）。19 站多兩項：-a、-b 都能登入（42/42）。
 - lab 實測：2026-10-29 凌晨手動 11 章 12/12、19 站 42/42、20.6 手動通過。
+
+### 補章做完：22、24、27、28、23.6、20.6、30 保險（2026-10-29）
+
+- **第 24 章 磁碟與容量**：`kafka-log-dirs` 整理每台合計與最大 topic；第二個規則檔 `confluent-alerts-disk.yml`（`KafkaLogDirOffline` 我方、`KafkaDataDiskFillingUp` 給銀行 node_exporter 的範例）；縮短 retention 與 `kafka-reassign-partitions` 在 lab 實做。空間不是改完就回來：等 broker 的 retention 檢查（預設 5 分鐘）。
+- **第 28 章 故障排查**：症狀表 → 一分鐘快照 → 「一台 broker 掉了」演練（告警 firing 300 秒、重啟後 20 秒歸零）→ 錯誤訊息表 → 選單 18 收 diagnostics。
+- **第 27 章 新應用上線**：兩種應用（SCRAM A／B 直連、憑證走 REST）。**REST Proxy 只放行白名單 CN**（第 12 章 `auth.ssl.principal.mapping.rules`，來源 `apps.txt`）：新 REST 應用要把 CN 加進兩台 REST 的規則並照 12.1 重啟；腳本版是改 `apps.txt` 重跑第 12 站。REST v3 produce 一律 HTTP 200，成敗看回應的 `error_code`。
+- **第 22 章 憑證到期監控（選配）**：銀行 Prometheus 的 blackbox_exporter `tls` 模組探 24 個端點（mTLS 的 listener 也會出示 server 憑證，不需 client 憑證）＋三條規則＋`promtool test rules`；操作機每天 `cert-expiry.sh` 讀 `~/pki/certs`（含 client 憑證）寫 syslog。客戶沒有 blackbox 就只做第二層＋選單 17（問題清單 11.10）。
+- **第 30 章保險**：30.1 比對套件庫 release 套件的主版本；lab 用 dl01 對 Rocky 10 公開倉庫證明會停（問題清單 3.6）。
+- **教訓（2026-10-29 事故）**：20.4 用錯 Secret Protection 的密文 key 名（`kb01.server.properties` vs 腳本版的 `kb01.properties`），broker 靠群組快取撐到重啟才爆成 `Waiting for all of the authorizer futures` → 10 分鐘自殺循環，連鎖讓整個 MDS 層卡死。真相只在 `/var/log/kafka/metadata-service.log`。已統一命名（第 15 站依角色 `<主機>.server.properties` 等）、20.4 改從設定檔的參照讀 key 名、28 章指到正確的日誌。
