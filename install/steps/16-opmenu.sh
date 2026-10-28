@@ -112,8 +112,14 @@ bob_create=$(run_menu_as bob 31 orders.optest-bob 1 | tail -3)
 if grep -q "Kafka 拒絕" <<<"$bob_create"; then ok "bob（Operator）建 topic 被 Kafka 拒絕"; else fail "bob 建 topic 應被拒：$bob_create"; fi
 bob_91=$(run_menu_as bob 91 kafka-topics --list | tail -3)
 if grep -q "Authorization failed" <<<"$bob_91"; then ok "bob 進 91 緊急模式被管理員閘門擋下"; else fail "bob 的 91 應被擋：$bob_91"; fi
+run_menu_as alice 33 orders.optest >/dev/null 2>&1   # 重跑時上一輪的示範 topic 可能還在
 alice_create=$(run_menu_as alice 31 orders.optest 1 | tail -1)
 if grep -q "Created topic" <<<"$alice_create"; then ok "alice（SystemAdmin）建 topic orders.optest"; else fail "alice 建 topic：$alice_create"; fi
+SECOND_SCRAM_APP=$(awk '{print $2}' <<<"$SCRAM_APPS"); SECOND_SCRAM_APP=${SECOND_SCRAM_APP:-$FIRST_SCRAM_APP}
+# 35：A／B 輪替——只換應用程式沒在用的那個帳號（用 app-payments 示範，app-orders 留給 19 站驗收與手把手 20.6）
+rotate_out=$(run_menu_as alice 35 "$SECOND_SCRAM_APP" "$SECOND_SCRAM_APP-a" | tail -3)
+if grep -q "下一步：請應用程式改用 $SECOND_SCRAM_APP-b" <<<"$rotate_out"; then ok "35 換了閒置的 $SECOND_SCRAM_APP-b，應用程式用的 -a 不受影響"; else fail "35：$rotate_out"; fi
+shred -u "$HOME"/opmenu-handover/"$SECOND_SCRAM_APP"-b-*.pass 2>/dev/null && log "35 的交接檔已 shred（lab 不交付）"
 
 # 健康檢查、重啟、緊急模式要動主機（ssh 用 $SSH_KEY）或用緊急憑證（讀 ~/secrets/opmenu-breakglass.pem、要人填原因），非互動試跑做不了
 warn "重啟、看日誌要由維運人員互動登入試跑（手把手 16.5）；緊急模式要互動填原因"

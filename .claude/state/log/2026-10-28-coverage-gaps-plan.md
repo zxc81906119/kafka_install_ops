@@ -31,3 +31,8 @@
 - 手動：lab 上建演練物件（topic＋動態設定、SCRAM 帳號＋配額、3 條 binding）→ 備份 → 誤刪 → 用 `~/conf/metadata-restore.sh <備份目錄> <topic> <帳號>` 重建 → 帳號從 9095 寫讀一筆 → 清掉。手冊 23.6 四個區塊，`run-full.sh customer 23 23` 12/12 通過。
 - 腳本：`23-metadata-backup.sh restore|drill`，run-customer 新第 25 段（後面段號 +1，共 30 段）；drill 在 lab 實跑通過。
 - 教訓：SCRAM 憑據與配額要分開 `--delete-config`，合在一起 kafka-configs 整句拒絕；備份沒有密碼（讀 ~/secrets）；rbac.txt 是表格，解析靠 `|` 欄位。
+
+## 20.6 應用程式 SCRAM A／B 輪替：手動與文件完成（2026-10-29 02:45）
+- install：site.env `SCRAM_SUFFIXES`、`FIRST_SCRAM_ACCOUNT`；rbac.txt 明寫 -a／-b；11 站建兩帳號＋配額各一份；18／19／load 用 -a；19 站多兩項（42/42）；16 站加 35 試跑。
+- 手冊：第 11 章帳號、properties、rbac 列表、配額、11.1 檔案；18.3 principal 改 -a；新 20.6（三個區塊，手動實測通過）；16.5 加 35。
+- 驗證中：run-full 16 16 → 20 20（紀錄 ~/kafka-lab-runs/manual-16-20-*.log）。

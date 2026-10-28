@@ -119,7 +119,7 @@ if [ ! -f "$APP_CLIENT_CONF" ]; then
   (umask 077; cat > "$APP_CLIENT_CONF" <<EOF
 security.protocol=SASL_SSL
 sasl.mechanism=SCRAM-SHA-512
-sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="$FIRST_SCRAM_APP" password="$(cat "$SECRETS_DIR/$FIRST_SCRAM_APP.pass")";
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="$FIRST_SCRAM_ACCOUNT" password="$(cat "$SECRETS_DIR/$FIRST_SCRAM_ACCOUNT.pass")";
 ssl.truststore.type=PKCS12
 ssl.truststore.location=$CERTS_DIR/truststore.p12
 ssl.truststore.password=$(cat "$PKI_DIR/store.pass")
@@ -137,7 +137,7 @@ sleep 10   # 等事件寫進 audit topic
 sensitive_events=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9096" --consumer.config "$ALICE_CLIENT_CONF" \
                      --topic confluent-audit-log-events_sensitive --from-beginning --timeout-ms 20000 2>/dev/null | tr -d ' ')
 alice_produce_allowed=$(grep '"principal":"User:alice"' <<<"$sensitive_events" | grep '"methodName":"kafka.Produce"' | grep -c '"granted":true')
-app_denied=$(grep "\"principal\":\"User:$FIRST_SCRAM_APP\"" <<<"$sensitive_events" | grep -c '"granted":false')
+app_denied=$(grep "\"principal\":\"User:$FIRST_SCRAM_ACCOUNT\"" <<<"$sensitive_events" | grep -c '"granted":false')
 event_counts="alice 寫入（允許）$alice_produce_allowed 筆、$FIRST_SCRAM_APP（拒絕）$app_denied 筆"
 if [ "$alice_produce_allowed" -gt 0 ] && [ "$app_denied" -gt 0 ]; then ok "_sensitive 裡：$event_counts"; else fail "_sensitive 裡：$event_counts"; fi
 log "預設只記管理／授權事件；一般 topic 的 produce／consume 只在路由列出的 topic（$AUDIT_SENSITIVE_PREFIX*）才記。"

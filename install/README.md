@@ -53,7 +53,7 @@ install/
 | 6–8 | `--only 06` … `--only 08` | 7 是三支（07-1 JDK、07-2 檢查只讀、07-3 OS 調校）；8 裝套件並 versionlock |
 | 9 | `--only 09` | 第一次產生私鑰與 CSR 後停在「請銀行簽」；回覆放進 `~/pki/incoming/` 再跑一次 |
 | 10 | `--only 10` | 重跑時設定或 drop-in 有變、服務在跑的主機一台一台重啟；15 做過會照樣加密，18 做過會帶上稽核設定 |
-| 11–13 | `--only 11` … `--only 13` | 12、13 重跑時 15 做過會照樣加密 |
+| 11–13 | `--only 11` … `--only 13` | 11 替每個 scram 類應用建 `<app>-a`、`<app>-b` 兩個同權限帳號（A／B 輪替，手把手 20.6；驗收與稽核用 -a）；12、13 重跑時 15 做過會照樣加密 |
 | 14 | `--only 14` | 只讀的總檢查。3–14 可一次跑：`bash install/install.sh --to 14` |
 | 15 | `--only 15` | `SECRETS_MODE=sp` 才用；沒有 passphrase 檔且沒有 master key 時，由工程師在操作機自己產生（`~/secrets/sp-passphrase.txt`，0600），接著產生 master key（`~/secrets/master.key`），不用等任何人；20.3 輪替不在腳本裡 |
 | 16 | `--only 16` | `OPMENU=1`；選單以 root 跑；16.4 寫每台的 `/etc/sudoers.d/cpuser-ops`（逐一列出服務與寫法）；重啟、看日誌要維運人員互動登入選單試跑（`lab/opmenu-hostkey-test.sh` 驗 sudoers 與私鑰檔） |

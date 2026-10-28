@@ -518,3 +518,9 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 ### C3 的 JDK 也換成 25（2026-10-28 定案）
 
 - 原本「C3 留在 21」的理由是原廠對 Control Center 只寫「最低 Java 17」、沒明列 25（[Control Center System Requirements](https://docs.confluent.io/control-center/current/installation/system-requirements.html)），CP 8.3 的建議版本也是 21（[Supported Versions](https://docs.confluent.io/platform/current/installation/versions-interoperability.html)）。使用者決定全部節點一致用 25；手冊 29.7、29.10、第 31 章表格、`29-upgrade.sh jdk`、`run-customer.sh expect_versions`、README 已改。上線前向原廠支援確認 C3 2.6 在 Java 25 的支援。**尚未實跑**（下一輪從零）。
+
+### 應用程式 SCRAM 帳號一律 A／B 兩個（2026-10-29 做完）
+
+- 第 11 章／11 站對 `apps.txt` 裡 scram 類的應用各建 `<app>-a`、`<app>-b`（同一組 binding 與配額；`rbac.txt` 明寫兩行）；驗收、稽核、持續流量用 -a（`FIRST_SCRAM_ACCOUNT`）。
+- 20.6：手動輪替演練（-a 背景寫入 600 筆 0 錯誤、換 -b、新密碼成功舊密碼被拒、應用切到 -b 寫讀一筆）；16.5／16 站加 OP menu 35 的試跑（用 app-payments）。19 站多兩項：-a、-b 都能登入（42/42）。
+- lab 實測：2026-10-29 凌晨手動 11 章 12/12、19 站 42/42、20.6 手動通過。

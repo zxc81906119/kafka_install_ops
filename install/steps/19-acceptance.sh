@@ -42,7 +42,7 @@ if [ ! -f "$ALICE_CLIENT_CONF" ]; then
 fi
 if [ ! -f "$APP_CLIENT_CONF" ]; then
   (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' \
-     "$FIRST_SCRAM_APP" "$(cat "$SECRETS_DIR/$FIRST_SCRAM_APP.pass")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$APP_CLIENT_CONF")
+     "$FIRST_SCRAM_ACCOUNT" "$(cat "$SECRETS_DIR/$FIRST_SCRAM_ACCOUNT.pass")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$APP_CLIENT_CONF")
 fi
 
 section "19.1 平台健康"
@@ -94,6 +94,7 @@ scram_app_group=${FIRST_SCRAM_APP#app-}-acceptance
 scram_app_topic=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}' | grep "^${FIRST_SCRAM_APP#app-}\." | head -1)
 rest_app_topic=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}' | grep "^${FIRST_REST_APP##*-}\." | head -1)
 check "$FIRST_SCRAM_APP（SCRAM 直連）寫入 $scram_app_topic" bash -c "echo $test_message | kafka-console-producer --bootstrap-server $FIRST_BROKER:9095 --producer.config $APP_CLIENT_CONF --topic $scram_app_topic"
+for suffix in $SCRAM_SUFFIXES; do check "$FIRST_SCRAM_APP$suffix（A／B 兩個帳號）能用 SCRAM 登入" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9095 --consumer.config <(sed 's/username=\"[^\"]*\" password=\"[^\"]*\"/username=\"$FIRST_SCRAM_APP$suffix\" password=\"$(cat $SECRETS_DIR/$FIRST_SCRAM_APP$suffix.pass)\"/' $APP_CLIENT_CONF) --topic $scram_app_topic --group ${scram_app_group}-$suffix --max-messages 1 --timeout-ms 8000 2>&1 | grep -qv SaslAuthenticationException"; done
 check "$FIRST_SCRAM_APP 讀回自己寫的" bash -c "kafka-console-consumer --bootstrap-server $FIRST_BROKER:9095 --consumer.config $APP_CLIENT_CONF --topic $scram_app_topic --group $scram_app_group --from-beginning --timeout-ms 45000 2>/dev/null | grep -q $test_message"
 rest_body="{\"value\":{\"type\":\"JSON\",\"data\":\"$test_message-rest\"}}"
 check "$FIRST_REST_APP 經負載平衡 + REST Proxy（mTLS）寫入 $rest_app_topic" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA $(rest_app_curl_options) -X POST -H 'Content-Type: application/json' -d '$rest_body' https://$REST_VIP:8082/v3/clusters/$cluster_id/topics/$rest_app_topic/records)\" = 200 ]"

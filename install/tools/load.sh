@@ -23,7 +23,7 @@ install -d -m 0700 "$LOAD_DIR"
 ensure_scram_client_conf() {
   [ -f "$SCRAM_CLIENT_CONF" ] && return 0
   (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' \
-     "$FIRST_SCRAM_APP" "$(cat "$SECRETS_DIR/$FIRST_SCRAM_APP.pass")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$SCRAM_CLIENT_CONF")
+     "$FIRST_SCRAM_ACCOUNT" "$(cat "$SECRETS_DIR/$FIRST_SCRAM_ACCOUNT.pass")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$SCRAM_CLIENT_CONF")
 }
 
 start_load() {

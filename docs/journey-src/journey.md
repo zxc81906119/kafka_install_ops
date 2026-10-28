@@ -1676,21 +1676,23 @@ confluent-audit-log-events
 應用程式的 SCRAM 帳號（直連 Kafka 的 app）：
 
 ```bash
-for a in app-orders app-payments; do (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$a.pass); P=$(cat ~/secrets/$a.pass); kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$P]" >/dev/null && echo "$a: scram created"; done; unset P; for a in app-orders app-payments kafka-admin; do echo "$a: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name $a | grep -o 'SCRAM-SHA-512=[^,]*' | head -1)"; done
+for a in app-orders-a app-orders-b app-payments-a app-payments-b; do (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$a.pass); P=$(cat ~/secrets/$a.pass); kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$P]" >/dev/null && echo "$a: scram created"; done; unset P; for a in app-orders-a app-orders-b app-payments-a app-payments-b kafka-admin; do echo "$a: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name $a | grep -o 'SCRAM-SHA-512=[^,]*' | head -1)"; done
 ```
 
 ```out
-app-orders: scram created
-app-payments: scram created
-app-orders: SCRAM-SHA-512=iterations=8192
-app-payments: SCRAM-SHA-512=iterations=8192
+app-orders-a: scram created
+app-orders-b: scram created
+app-payments-a: scram created
+app-payments-b: scram created
+app-orders-a: SCRAM-SHA-512=iterations=8192
+（4 個帳號）
 kafka-admin: SCRAM-SHA-512=iterations=4096
 ```
 
-應用程式這一端的連線設定（扮演 app-orders 直連 CLIENT 9095；第 18、19 章驗證時都會用到）。密碼從 0600 檔讀，設定檔一樣是 0600：
+每個直連 Kafka 的應用程式建**兩個**同權限的 SCRAM 帳號 `<app>-a`、`<app>-b`：應用程式平常用 -a，-b 閒置；換密碼時換閒置的那個、應用程式再切過去，就不會中斷（20.6 演練；OP menu 34／35 做的是同一件事）。應用程式這一端的連線設定（扮演 app-orders，用 `app-orders-a` 直連 CLIENT 9095；第 18、19 章驗證時都會用到）。密碼從 0600 檔讀，設定檔一樣是 0600：
 
 ```bash
-(umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/root/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/app-orders.pass)" "$(cat ~/pki/store.pass)" > ~/conf/app-orders.properties) && echo "$(grep -c . ~/conf/app-orders.properties) lines, $(stat -c %a ~/conf/app-orders.properties)"
+(umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-orders-a" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/root/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$(cat ~/secrets/app-orders-a.pass)" "$(cat ~/pki/store.pass)" > ~/conf/app-orders.properties) && echo "$(grep -c . ~/conf/app-orders.properties) lines, $(stat -c %a ~/conf/app-orders.properties)"
 ```
 
 ```out
@@ -1711,12 +1713,18 @@ User:svc-c3             SystemAdmin    -                                        
 User:svc-rest           DeveloperRead  Topic:_confluent-license                     LITERAL
 User:svc-rest           DeveloperRead  Topic:_confluent-command                     LITERAL
 User:svc-rest           DeveloperRead  Topic:__internal_confluent_only_broker_info  LITERAL
-User:app-orders         DeveloperWrite Topic:orders.                                PREFIXED
-User:app-orders         DeveloperRead  Topic:orders.                                PREFIXED
-User:app-orders         DeveloperManage Topic:orders.                               PREFIXED
-User:app-orders         DeveloperRead  Group:orders-                                PREFIXED
-User:app-payments       DeveloperWrite Topic:payments.                              PREFIXED
-User:app-payments       DeveloperRead  Topic:payments.                              PREFIXED
+User:app-orders-a       DeveloperWrite Topic:orders.                                PREFIXED
+User:app-orders-b       DeveloperWrite Topic:orders.                                PREFIXED
+User:app-orders-a       DeveloperRead  Topic:orders.                                PREFIXED
+User:app-orders-b       DeveloperRead  Topic:orders.                                PREFIXED
+User:app-orders-a       DeveloperManage Topic:orders.                               PREFIXED
+User:app-orders-b       DeveloperManage Topic:orders.                               PREFIXED
+User:app-orders-a       DeveloperRead  Group:orders-                                PREFIXED
+User:app-orders-b       DeveloperRead  Group:orders-                                PREFIXED
+User:app-payments-a     DeveloperWrite Topic:payments.                              PREFIXED
+User:app-payments-b     DeveloperWrite Topic:payments.                              PREFIXED
+User:app-payments-a     DeveloperRead  Topic:payments.                              PREFIXED
+User:app-payments-b     DeveloperRead  Topic:payments.                              PREFIXED
 User:app-legacy-billing DeveloperWrite Topic:billing.                               PREFIXED
 User:app-legacy-billing DeveloperRead  Topic:billing.                               PREFIXED
 User:app-legacy-billing DeveloperRead  Group:billing-                               PREFIXED
@@ -1726,18 +1734,18 @@ while read -r p role res pat; do args=(--principal "$p" --role "$role" --kafka-c
 
 ```out
 ok  Group:kafka-admins SystemAdmin
-（19 行 ok；svc-ops 那條 bootstrap 已經建過，重建是 no-op）
+（25 行 ok；svc-ops 那條 bootstrap 已經建過，重建是 no-op）
 ```
 
 配額與範例 topic：
 
 ```bash
-kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-orders --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-payments --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-legacy-billing --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' && for t in orders.events:6 payments.events:6 billing.events:3; do kafka-topics --bootstrap-server $BS --command-config ~/conf/client-admin.properties --create --if-not-exists --topic ${t%%:*} --partitions ${t#*:} --replication-factor 3 --config min.insync.replicas=2 >/dev/null && echo "topic ${t%%:*}"; done
+kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-orders-a --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' && for a in app-orders-b app-payments-a app-payments-b; do kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name $a --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50'; done && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-legacy-billing --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' && for t in orders.events:6 payments.events:6 billing.events:3; do kafka-topics --bootstrap-server $BS --command-config ~/conf/client-admin.properties --create --if-not-exists --topic ${t%%:*} --partitions ${t#*:} --replication-factor 3 --config min.insync.replicas=2 >/dev/null && echo "topic ${t%%:*}"; done
 ```
 
 ```out
-Completed updating config for user app-orders.
-（3 行）
+Completed updating config for user app-orders-a.
+（5 行）
 topic orders.events
 topic payments.events
 topic billing.events
@@ -1762,21 +1770,23 @@ carol: "role": "DeveloperRead"
 |---|---|---|
 | `~/pki/store.pass`（所有 keystore／truststore） | 操作機，0600 | 平台工程師 |
 | `~/secrets/kafka-admin.pass`（緊急備用的 SCRAM 管理帳號，10.4） | 操作機，0600 | 平台工程師，MDS 故障時 |
-| `~/secrets/app-orders.pass`、`app-payments.pass` | 操作機，0600 | 各應用程式團隊（交付方式由銀行與應用程式團隊決定，不經過平台） |
+| `~/secrets/app-orders-a.pass`、`-b.pass`、`app-payments-a.pass`、`-b.pass` | 操作機，0600 | 各應用程式團隊（交付方式由銀行與應用程式團隊決定，不經過平台） |
 
 @role 小安 | ops02 | root
 
 確認這幾個檔都只有 root 讀得到：
 
 ```bash
-stat -c '%a %U %s 位元組 %n' ~/pki/store.pass ~/secrets/kafka-admin.pass ~/secrets/app-orders.pass ~/secrets/app-payments.pass
+stat -c '%a %U %s 位元組 %n' ~/pki/store.pass ~/secrets/kafka-admin.pass ~/secrets/app-orders-a.pass ~/secrets/app-orders-b.pass ~/secrets/app-payments-a.pass ~/secrets/app-payments-b.pass
 ```
 
 ```out
 600 root 24 位元組 /root/pki/store.pass
 600 root 24 位元組 /root/secrets/kafka-admin.pass
-600 root 24 位元組 /root/secrets/app-orders.pass
-600 root 24 位元組 /root/secrets/app-payments.pass
+600 root 24 位元組 /root/secrets/app-orders-a.pass
+600 root 24 位元組 /root/secrets/app-orders-b.pass
+600 root 24 位元組 /root/secrets/app-payments-a.pass
+600 root 24 位元組 /root/secrets/app-payments-b.pass
 ```
 
 > 這些檔案各只有一份。操作機重建時要重新產生並到叢集重設（`kafka-admin`、應用程式的 SCRAM 要用 MDS 或 `kafka-configs` 重設；keystore 要重簽或重新打包），所以操作機的備份要由銀行自己的備份機制處理，而且必須加密（已列入問題清單）。密碼換了（OP menu 35 換服務密碼）就要把新密碼交給應用程式團隊。
@@ -2828,6 +2838,21 @@ kb04 MDS=200 after ~20s
 將執行:刪除 topic orders.optest,資料不可復原
 ```
 
+@role 維運人員 alice（kafka-admins）；lab 由小安代打 | ops02 | root
+
+換應用程式 SCRAM 密碼用 35：告訴它應用程式現在用哪一個帳號，它只換另一個（A／B，20.6 是背後的手動步驟）；新密碼寫在操作者的交接檔，交出去後 `shred`。這裡用 app-payments 示範（app-orders 留給第 19 章驗收與 20.6）：
+
+```bash
+P=$(cat ~/secrets/ad-test-users.pass); env OPMENU_USER=alice OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run 35 app-payments app-payments-a 2>&1 | grep -v '^SLF4J' | sed 's/[[0-9;]*m//g' | grep -E '將執行|新密碼已寫到|下一步' | sed -E 's/-[0-9]{8}-[0-9]{6}.pass/-<時間>.pass/g'; unset P; shred -u ~/opmenu-handover/app-payments-b-*.pass && echo "交接檔已 shred"
+```
+
+```out
+將執行:更換 app-payments-b 的密碼（應用程式現在用 app-payments-a，不受影響）
+新密碼已寫到 /root/opmenu-handover/app-payments-b-<時間>.pass（只有你讀得到）。請照應用程式團隊的交付方式交出去，完成後刪除：shred -u /root/opmenu-handover/app-payments-b-<時間>.pass
+下一步：請應用程式改用 app-payments-b 與新密碼；下次輪替時換 app-payments-a
+交接檔已 shred
+```
+
 ## 16.6 收尾檢查
 
 @role 小安 | ops02 | root
@@ -3811,7 +3836,7 @@ for line in sys.stdin:
     tot += 1
     p = e.get("authenticationInfo", {}).get("principal", "?"); m = e.get("methodName", "?").split(".")[-1]
     a = e.get("authorizationInfo", {}); g = a.get("granted"); r = a.get("resourceName", "")
-    if p in ("User:alice", "User:app-orders", "User:bob", "User:carol"): c[(p, m, r[:28], "ALLOWED" if g else "DENIED")] += 1
+    if p in ("User:alice", "User:app-orders-a", "User:bob", "User:carol"): c[(p, m, r[:28], "ALLOWED" if g else "DENIED")] += 1
 print("  total events:", tot)
 for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1], k[2], k[3], v))
 '; done
@@ -3821,7 +3846,7 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
 == confluent-audit-log-events_sensitive
   total events: 2
   User:alice       Produce    payments.events              ALLOWED  x1
-  User:app-orders  Metadata   payments.events              DENIED   x1
+  User:app-orders-a Metadata   payments.events              DENIED   x1
 == confluent-audit-log-events
   total events: 247
   User:alice       Authorize  kafka-cluster                ALLOWED  x1
@@ -4010,7 +4035,7 @@ kc01: /tmp 殘留 0 個；sudoers cpuser,cpuser-ops,
 | Secret Protection 的 master key（與 passphrase） | 操作機 `~/secrets`、各主機 `service.env` | 每年；保管人異動 | 平台工程師 | 20.3 |
 | AD 查詢帳號 `svc-mds-bind` 的密碼 | AD；密文在各主機 `security.properties` | 依銀行 AD 規範；換前一定要通知平台 | AD 團隊換、平台更新密文 | 20.4 |
 | 操作機到各主機的 SSH 金鑰 | 操作機 `/secure/ssh` | 依銀行規範（待確認）；操作機重建 | 平台工程師＋OS 團隊 | 20.5 |
-| 應用程式的 SCRAM 密碼 | 操作機產生、交應用程式團隊 | 依應用程式團隊 | 維運選單 34／35（A／B 兩組不中斷） | 第 16 章 |
+| 應用程式的 SCRAM 密碼 | 操作機產生、交應用程式團隊 | 依應用程式團隊 | 維運選單 35（A／B 兩個帳號，換閒置的那個） | 20.6 |
 | 服務憑證（kafka-internal、cp-server…）與 client 憑證 | 操作機 `~/pki` | 一年（CA 簽發效期） | 平台工程師＋CA | 第 21 章 |
 | MDS token 金鑰對 | 各主機 `mds-token-keypair.pem` | 不排輪替，只在外洩時換 | 平台工程師 | 不在本手冊（見設計紀錄） |
 
@@ -4303,6 +4328,53 @@ touch /tmp/probe.stop; sleep 3; read n f < /tmp/probe.result; echo "探針：換
 > 這是「換金鑰」，不是「操作機重建」。操作機重建時舊私鑰不在（沒有備份），要重做 4.2–4.3：產生新金鑰對、OS 團隊重新佈署公鑰。
 >
 > 待銀行確認：換金鑰的週期（例如每年）與由誰執行（問題清單 4.6）。
+
+## 20.6 應用程式的 SCRAM 密碼：A／B 兩個帳號輪替，不中斷
+
+下面這張圖把 A／B 輪替的四個時間點畫出來：換的永遠是閒置的那一個。
+
+![scramab]
+
+**這一節在做什麼**：每個直連 Kafka 的應用程式有 `<app>-a`、`<app>-b` 兩個同權限的帳號（第 11 章建的）。換密碼時只換應用程式**沒在用**的那一個，應用程式再改設定切過去；寫入從頭到尾不中斷。前提：第 11 章的兩個帳號都在、`~/conf/app-orders.properties`（扮演應用程式）用的是 -a。完成的樣子：-b 的新密碼能登入、舊密碼被拒、-a 的背景寫入 0 錯誤、切到 -b 後能寫讀。正式環境由維運人員用 OP menu 35 做（16.5 有一次），這一節是它背後的手動步驟。
+
+@role 小安 | ops02 | root
+
+先看現況：應用程式用 -a，兩個帳號都登得進去。再讓 -a 在背景持續寫入（每秒 5 筆、600 筆，代表正在跑的應用程式）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; login() { local c; c=$(mktemp); grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $c; printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\n' "$1" "$2" >> $c; kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $c --list >/dev/null 2>&1 && echo 成功 || echo 被拒; rm -f $c; }; echo "應用程式用 $(grep -o 'username="[^"]*"' ~/conf/app-orders.properties)；-a 登入：$(login app-orders-a "$(cat ~/secrets/app-orders-a.pass)")；-b 登入：$(login app-orders-b "$(cat ~/secrets/app-orders-b.pass)")"; nohup kafka-producer-perf-test --topic orders.events --num-records 600 --throughput 5 --record-size 100 --producer.config ~/conf/app-orders.properties --producer-props bootstrap.servers=kb01.poc.lab:9095 acks=all > /tmp/ab-load.log 2>&1 & sleep 5; echo "背景寫入已開始（-a）"
+```
+
+```out
+應用程式用 username="app-orders-a"；-a 登入：成功；-b 登入：成功
+背景寫入已開始（-a）
+```
+
+換閒置的 -b：新密碼先寫暫存檔，叢集改成功才換掉 `~/secrets/app-orders-b.pass`；接著驗三件事：-b 新密碼登得進、舊密碼被拒、-a 完全不受影響：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; login() { local c; c=$(mktemp); grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $c; printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\n' "$1" "$2" >> $c; kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $c --list >/dev/null 2>&1 && echo 成功 || echo 被拒; rm -f $c; }; T=$(mktemp -d); cp -p ~/secrets/app-orders-b.pass $T/old.pass; (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > $T/new.pass); kafka-configs --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-orders-b --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat $T/new.pass)]" >/dev/null 2>&1 && install -m 0600 $T/new.pass ~/secrets/app-orders-b.pass && echo "換完 -b：新密碼 $(login app-orders-b "$(cat ~/secrets/app-orders-b.pass)")；舊密碼 $(login app-orders-b "$(cat $T/old.pass)")；-a 仍 $(login app-orders-a "$(cat ~/secrets/app-orders-a.pass)")"; rm -rf $T
+```
+
+```out
+換完 -b：新密碼 成功；舊密碼 被拒；-a 仍 成功
+```
+
+> 新密碼交給應用程式團隊的方式和 11.1 一樣（不經平台保管庫）；用 OP menu 35 做的話，新密碼寫在操作者的交接檔。
+
+應用程式切到 -b：正式環境是應用程式改設定、滾動重啟（新連線用 -b，舊連線自然收掉）。lab 等背景寫入跑完、看 -a 這段 0 錯誤，再把 `app-orders.properties` 改成 -b，寫一筆、讀回一筆：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep 5; done; echo "-a 的流量：$(tail -1 /tmp/ab-load.log | grep -o '[0-9]* records sent')，錯誤 $(grep -ciE 'error|exception' /tmp/ab-load.log) 筆"; sed -i 's/username="app-orders-a" password="[^"]*"/username="app-orders-b" password="'"$(cat ~/secrets/app-orders-b.pass)"'"/' ~/conf/app-orders.properties; M="switch-$(date +%s)"; echo "$M" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config ~/conf/app-orders.properties --topic orders.events >/dev/null 2>&1 && echo "切到 -b 後寫一筆：ok；讀回：$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events --group orders-ab-$(date +%s) --from-beginning --max-messages 5000 --timeout-ms 30000 2>/dev/null | grep -c "^$M$")"; echo "現在應用程式用 $(grep -o 'username="[^"]*"' ~/conf/app-orders.properties)；下次輪替換 -a"
+```
+
+```out
+-a 的流量：600 records sent，錯誤 0 筆
+切到 -b 後寫一筆：ok；讀回：1
+現在應用程式用 username="app-orders-b"；下次輪替換 -a
+```
+
+> 下一次輪替就是同樣三步倒過來：換 -a 的密碼 → 應用程式切回 -a。兩個帳號的權限（第 11 章的 binding、配額）一模一樣，應用程式只改帳密。只有一個帳號的舊應用程式（例如沿用單一帳號的系統）換密碼一定會中斷，要先用 OP menu 34 建一對再遷移；走 REST Proxy 的應用程式用的是憑證，不在這一節（第 21 章）。
 
 # 21. 第二十一站：憑證輪替
 

@@ -5,7 +5,7 @@
 # 做什麼：
 #   - bootstrap：唯一的 super user 是 kafka-internal（服務之間用）；用它的憑證登入 MDS 建第一條 role binding：User:svc-ops → SystemAdmin
 #   - 操作機的管理 client：svc-ops 憑證向 MDS 換 token，走 TOKEN listener（svc-ops 不是 super user，權限來自 RBAC）
-#   - conf/apps.txt 裡 scram 類的 app：建 SCRAM 帳號，密碼在 ~/secrets/<app>.pass
+#   - conf/apps.txt 裡 scram 類的 app：每個建 <app>-a、<app>-b 兩個同權限的 SCRAM 帳號（A／B 輪替），密碼在 ~/secrets/<帳號>.pass
 #   - conf/rbac.txt：role binding（人員綁 AD 群組，服務與 app 綁最小權限）
 #   - conf/apps.txt 的配額、conf/topics.txt 的範例 topic
 #   - 驗證：alice、carol 用 AD 帳密登入 MDS，看到的角色來自她們的 AD 群組
@@ -54,8 +54,9 @@ topic_list=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$
 if grep -qx '_confluent-metadata-auth' <<<"$topic_list"; then ok "憑證 → MDS token → TOKEN listener 這條路通了（$(wc -l <<<"$topic_list") 個 topic）"
 else die "kafka-topics --list 失敗：$topic_list"; fi
 
-section "應用程式的 SCRAM 帳號（密碼 ~/secrets/<app>.pass，0600；已有的沿用）"
-for app in $SCRAM_APPS; do
+section "應用程式的 SCRAM 帳號：每個應用兩個同權限的帳號 <app>-a、<app>-b（A／B 輪替用；密碼 ~/secrets/<帳號>.pass，0600；已有的沿用）"
+scram_accounts=""; for app in $SCRAM_APPS; do for suffix in $SCRAM_SUFFIXES; do scram_accounts+="$app$suffix "; done; done
+for app in $scram_accounts; do
   password_file=$SECRETS_DIR/$app.pass
   [ -s "$password_file" ] || (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$password_file")
   scram_config="SCRAM-SHA-512=[iterations=8192,password=$(cat "$password_file")]"
@@ -64,7 +65,7 @@ for app in $SCRAM_APPS; do
   else fail "$app: scram"; fi
   unset scram_config
 done
-for user in $SCRAM_APPS kafka-admin; do
+for user in $scram_accounts kafka-admin; do
   scram_info=$(kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe \
                  --entity-type users --entity-name "$user" 2>/dev/null | grep -o 'SCRAM-SHA-512=[^,]*' | head -1)
   if [ -n "$scram_info" ]; then ok "$user: $scram_info"; else fail "$user: 沒有 SCRAM 憑證"; fi
@@ -80,13 +81,16 @@ while read -r principal role resource pattern; do
   else fail "$principal $role ${resource#-} ${pattern#-}"; fi
 done < <(grep -v '^#' "$INSTALL_DIR/conf/rbac.txt")
 
-section "配額（conf/apps.txt 第三欄：produce,consume bytes/s,request %）"
+section "配額（conf/apps.txt 第三欄：produce,consume bytes/s,request %；scram 類的 -a、-b 兩個帳號各設一份）"
 while read -r app auth_type quota; do
   [ -n "$app" ] || continue
   IFS=, read -r producer_rate consumer_rate request_percent <<<"$quota"
-  if kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --alter --entity-type users --entity-name "$app" \
-       --add-config "producer_byte_rate=$producer_rate,consumer_byte_rate=$consumer_rate,request_percentage=$request_percent" >/dev/null 2>&1 </dev/null
-  then ok "$app quota $quota"; else fail "$app quota"; fi
+  accounts=$app; [ "$auth_type" = scram ] && { accounts=""; for suffix in $SCRAM_SUFFIXES; do accounts+="$app$suffix "; done; }
+  for account in $accounts; do
+    if kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --alter --entity-type users --entity-name "$account" \
+         --add-config "producer_byte_rate=$producer_rate,consumer_byte_rate=$consumer_rate,request_percentage=$request_percent" >/dev/null 2>&1 </dev/null
+    then ok "$account quota $quota"; else fail "$account quota"; fi
+  done
 done < <(grep -v '^#' "$INSTALL_DIR/conf/apps.txt")
 
 section "範例 topic（conf/topics.txt；replication 3、min.insync.replicas 2）"
