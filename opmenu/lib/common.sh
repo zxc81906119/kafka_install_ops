@@ -95,22 +95,15 @@ core_check_ssh_key() {
   echo "${CR}找不到主機用的 SSH 私鑰 ${OPMENU_SSH_KEY_FILE:-(OPMENU_SSH_KEY_FILE 未設定)}:確認放私鑰的獨立 file system(例如 /secure/ssh)已掛載,主機類動作暫時不可用${C0}"
   return 1
 }
-# 這個項目會不會碰主機：OPMENU_MENU_AUTHZ 裡標成 HOST 的（重啟、日誌、磁碟、診斷）
-core_item_touches_host() {
-  local id="$1" tok k v spec=""
-  for tok in $OPMENU_MENU_AUTHZ; do
-    k="${tok%%=*}"; v="${tok#*=}"
-    if [ "$k" = "$id" ] || { [[ "$k" == *'*' ]] && [ "${ACT_TIER[$id]}" = "${k%\*}" ]; }; then spec="$v"; fi
-  done
-  [ "$spec" = HOST ]
-}
-# ── 執行一個項目的固定流程:看得到嗎 → 時窗 → 並行鎖 → 執行 → 依輸出判斷結果 → 記錄 ──
+# 這個項目會不會碰主機（重啟、日誌、磁碟、診斷）：OPMENU_HOST_ITEMS 列出的編號
+core_item_touches_host() { _in_words "$1" "$OPMENU_HOST_ITEMS"; }
+# ── 執行一個項目的固定流程:緊急主機模式有沒有開放 → 時窗 → 並行鎖 → 主機閘門 → 管理員閘門 → 執行 → 依輸出判斷結果 → 記錄 ──
 _core_run() {
   local id="$1"; shift
   [ -n "${ACT_TITLE[$id]:-}" ] || { echo "沒有這個項目:$id"; return 1; }
-  if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then   # 選單上看不到的項目(你的權限不足)不能執行:直接輸入編號一樣擋下並記錄
-    echo "${CR}項目 $id 不在你的選單內(你的 AD 群組沒有這項權限),請依變更單申請。${C0}"
-    core_log DENIED "$id ${ACT_TITLE[$id]}" "not in menu"; return 1
+  if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then   # 只有緊急主機模式會隱藏項目(MDS 連不上,Kafka 類做不了):直接輸入編號一樣擋下並記錄
+    echo "${CR}項目 $id 在緊急主機模式不開放(只能做 OPMENU_EMERGENCY_ITEMS 列的主機類項目)。${C0}"
+    core_log DENIED "$id ${ACT_TITLE[$id]}" "not in emergency items"; return 1
   fi
   echo; echo "${CB}[$id] ${ACT_TITLE[$id]}${C0}  (${TIER_NAME[${ACT_TIER[$id]}]})"
   [ -n "${ACT_DESC[$id]}" ] && echo "  ${ACT_DESC[$id]}"
@@ -124,6 +117,10 @@ _core_run() {
   if core_item_touches_host "$id"; then
     core_host_gate || { core_log DENIED "$id ${ACT_TITLE[$id]}" "host gate"; return 1; }
     core_check_ssh_key || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "no ssh key file"; return 1; }
+  fi
+  # 用備用身分執行的項目(91):Kafka 檢查的是備用憑證、不是本人,所以本人要先過管理員閘門
+  if _in_words "$id" "$OPMENU_ADMIN_ITEMS"; then
+    core_admin_gate || { core_log DENIED "$id ${ACT_TITLE[$id]}" "admin gate"; return 1; }
   fi
   local rc shown t0; shown="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"; t0=$(date +%s)
   : > "$OP_LAST_RAW"
@@ -148,41 +145,27 @@ _core_run() {
 }
 core_run() { _core_run "$@"; local rc=$?; core_lock_release; return $rc; }
 
-# ── 動態選單:登入後用本人的 token 一次問 MDS,只顯示有權限的項目(MDS 會展開 AD 群組)。只影響「看得到什麼」,執行時照樣檢查 ──
-core_item_authz() { # core_item_authz <id> -> 這個項目需要的權限 <資源類型>:<名稱>:<操作>;空 = 不限制。設定見 OPMENU_MENU_AUTHZ(後面的覆蓋前面的)
-  local id="$1" tok k v spec=""
-  for tok in $OPMENU_MENU_AUTHZ; do
-    k="${tok%%=*}"; v="${tok#*=}"
-    if [ "$k" = "$id" ] || { [[ "$k" == *'*' ]] && [ "${ACT_TIER[$id]}" = "${k%\*}" ]; }; then spec="$v"; fi
-  done
-  case "$spec" in HOST) spec="$OPMENU_HOST_ACTION_AUTHZ";; ADMIN) spec="$OPMENU_ADMIN_AUTHZ";; AUDIT) spec="$OPMENU_AUDIT_AUTHZ";; -) spec="";; esac
-  printf '%s' "$spec"
-}
-core_menu_permissions() { # -> OP_VISIBLE[<id>] = 1 / 0;問不到或回應看不懂 = 全部顯示並提示
+# ── 選單一律全部顯示;要做什麼直接選,沒權限的由 Kafka / MDS 在執行時拒絕(Kafka 動作以本人身分執行,權限由 Kafka 端依 RBAC 強制)。
+#    唯一會隱藏項目的情況是緊急主機模式(MDS 連不上,AD 登入做不了):只開放 OPMENU_EMERGENCY_ITEMS ──
+core_menu_permissions() { # -> OP_VISIBLE[<id>] = 1 / 0
   declare -gA OP_VISIBLE=(); OP_MENU_NOTE=""
-  local id spec i rt rn op actions="" out answer
+  local id
   for id in "${ACT_IDS[@]}"; do OP_VISIBLE[$id]=1; done
-  if [ "${OP_EMERGENCY_HOST:-0}" = 1 ]; then   # 緊急主機模式：問不了 MDS，只開放 OPMENU_EMERGENCY_ITEMS
+  if [ "${OP_EMERGENCY_HOST:-0}" = 1 ]; then
     for id in "${ACT_IDS[@]}"; do _in_words "$id" "$OPMENU_EMERGENCY_ITEMS" || OP_VISIBLE[$id]=0; done
     OP_MENU_NOTE="緊急主機模式（MDS 連不上）：只能做主機類項目，每一步都記錄"
-    return 0
   fi
-  [ "${OPMENU_MENU_FILTER:-1}" = 1 ] || return 0
-  local specs=(); declare -A seen=() ok=()
-  for id in "${ACT_IDS[@]}"; do spec=$(core_item_authz "$id"); [ -n "$spec" ] && [ -z "${seen[$spec]:-}" ] && { seen[$spec]=1; specs+=("$spec"); }; done
-  [ ${#specs[@]} -gt 0 ] || return 0
-  for spec in "${specs[@]}"; do
-    IFS=: read -r rt rn op <<< "$spec"
-    actions+=$(printf '%s{"resourceType":"%s","resourceName":"%s","operation":"%s","scope":{"clusters":{"kafka-cluster":"%s"}}}' "${actions:+,}" "$rt" "$rn" "$op" "${OPMENU_KAFKA_CLUSTER_ID:-}")
-  done
-  out=$(be_mds PUT /security/1.0/authorize "$(printf '{"userPrincipal":"User:%s","actions":[%s]}' "$OP_USER" "$actions")" 2>/dev/null)
-  answer=$(printf '%s\n' "$out" | grep -o '^\[.*\]' | head -1 | tr -d '[]" ')
-  local res=(); IFS=, read -ra res <<< "$answer"
-  if [[ "$out" != *'HTTP 200'* ]] || [ ${#res[@]} -ne ${#specs[@]} ]; then
-    OP_MENU_NOTE="無法取得你的權限清單,先顯示全部項目(執行時仍會檢查權限)"; core_log MENU_ALL "menu" "authorize failed"; return 0
-  fi
-  for i in "${!specs[@]}"; do [ "${res[$i]}" = ALLOWED ] && ok[${specs[$i]}]=1; done
-  for id in "${ACT_IDS[@]}"; do spec=$(core_item_authz "$id"); [ -z "$spec" ] || [ -n "${ok[$spec]:-}" ] || OP_VISIBLE[$id]=0; done
+}
+# ── 管理員閘門:用備用身分執行的項目(91 緊急模式)前,用本人的 token 問 MDS 本人有沒有 OPMENU_ADMIN_AUTHZ;任何錯誤一律視為拒絕 ──
+core_admin_gate() {
+  [ -n "${OPMENU_ADMIN_AUTHZ:-}" ] || return 0
+  local rt rn op body out
+  IFS=: read -r rt rn op <<< "$OPMENU_ADMIN_AUTHZ"
+  body=$(printf '{"userPrincipal":"User:%s","actions":[{"resourceType":"%s","resourceName":"%s","operation":"%s","scope":{"clusters":{"kafka-cluster":"%s"}}}]}' "$OP_USER" "$rt" "$rn" "$op" "${OPMENU_KAFKA_CLUSTER_ID:-}")
+  out=$(be_mds PUT /security/1.0/authorize "$body" 2>/dev/null)
+  if [[ "$out" == *'["ALLOWED"]'* && "$out" == *'HTTP 200'* ]]; then return 0; fi
+  echo "${CR}Authorization failed:這個項目以備用身分執行,需要本人有管理員權限($OPMENU_ADMIN_AUTHZ),你的群組沒有;請依變更單申請。${C0}"   # 含 "Authorization failed",會記成 DENIED
+  return 1
 }
 
 # ── 主機類動作的權限閘門:主機端的 cpuser 是共用帳號,sudo 分不出是誰,所以碰主機前用本人的 token 問 MDS;任何錯誤一律視為拒絕。

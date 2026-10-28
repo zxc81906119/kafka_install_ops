@@ -69,14 +69,10 @@ d OPMENU_HOST_ACTION_AUTHZ 'Topic:__opmenu-host-ops:Describe'   # 主機類動�
 d OPMENU_EMERGENCY_GROUP 'opmenu-emergency'   # MDS 連不上時（AD 登入做不了），這個作業系統群組的人可以進「緊急主機模式」；平常群組裡沒人，事故時由 OS 團隊臨時加入。空 = 關閉
 d OPMENU_EMERGENCY_ITEMS '16 18 21 22 23'     # 緊急主機模式只開放這些項目（磁碟、收集診斷、重啟 broker、重啟 REST／C3、看日誌）；Kafka 類項目都要 AD 身分，不開放
 d OPMENU_TOKEN_TTL       3600       # MDS token 壽命(秒,依 MDS 設定);超過後遇到 401 會提示重新登入而不是密碼錯
-# ── 動態選單:登入後用本人的 token 一次問 MDS,只顯示有權限的項目;MDS 會展開 AD 群組,所以「依 AD 群組不同」
-# 而且只有 RBAC 一份設定。只影響「看得到什麼」:執行時 Kafka / MDS / 主機閘門照樣檢查,直接輸入隱藏的編號一樣會被擋。
-d OPMENU_MENU_FILTER     1           # 1 = 依權限顯示;0 = 全部顯示
-d OPMENU_ADMIN_AUTHZ     'Cluster:kafka-cluster:Alter'               # ADMIN:變更、權限管理、緊急模式(SystemAdmin / ClusterAdmin 才有)
-d OPMENU_AUDIT_AUTHZ     'Topic:confluent-audit-log-events:Read'     # AUDIT:匯出、查詢 audit 紀錄
-# 每個項目要什麼權限:<編號或第幾層*>=<HOST | ADMIN | AUDIT | - | 資源類型:名稱:操作>;沒列到的 = 不限制(查看類,Kafka 只回你看得到的)。
-# HOST = OPMENU_HOST_ACTION_AUTHZ(碰主機:重啟、日誌、磁碟、診斷)。後面的設定覆蓋前面的(例 "3*=ADMIN 31=-")。
-d OPMENU_MENU_AUTHZ      '16=HOST 18=HOST 2*=HOST 3*=ADMIN 41=ADMIN 42=ADMIN 43=AUDIT 44=ADMIN 45=AUDIT 91=ADMIN'
+# ── 選單一律全部顯示,沒權限的項目做了會被 Kafka / MDS 拒絕(本人身分、RBAC);只有兩種項目選單自己先問 MDS ──
+d OPMENU_HOST_ITEMS      '16 18 21 22 23 27'   # 碰主機的項目(磁碟、診斷、重啟、日誌、滾動重啟):執行前過主機閘門(OPMENU_HOST_ACTION_AUTHZ)
+d OPMENU_ADMIN_ITEMS     '91'                  # 以備用身分執行的項目:Kafka 檢查的是備用憑證不是本人,所以執行前先問 MDS 本人有沒有 OPMENU_ADMIN_AUTHZ
+d OPMENU_ADMIN_AUTHZ     'Cluster:kafka-cluster:Alter'               # 管理員閘門要的權限(SystemAdmin / ClusterAdmin 才有)
 
 # ── 變更類項目的並行鎖與時窗 ──
 d OPMENU_LOCK_DIR        "$OPMENU_OUT_DIR/opmenu.lock.d"                # 並行鎖:同一時間只允許一個人做變更類項目(只在同一台操作機有效;所在目錄要讓所有操作員可寫、不能有 sticky bit)

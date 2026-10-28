@@ -105,16 +105,15 @@ EOF
 done
 ask_bank "安裝全部完成後：OS 團隊移除各主機的 /etc/sudoers.d/$SSH_USER（全權），只留 $SSH_USER-ops；之後安裝／升級依變更單臨時開。"
 
-section "16.5 試跑：三種身分看到的選單不一樣"
-declare -A visible_items
-for person in alice bob carol; do
-  visible_items[$person]=$(run_menu_as "$person" menu | grep '@@MENU@@' | cut -d' ' -f2-)
-  log "$person 看得到：${visible_items[$person]}"
-done
-alice_count=$(wc -w <<<"${visible_items[alice]}"); bob_count=$(wc -w <<<"${visible_items[bob]}"); carol_count=$(wc -w <<<"${visible_items[carol]}")
-if [ "$alice_count" -gt "$bob_count" ] && [ "$bob_count" -gt "$carol_count" ] && [ "$carol_count" -gt 0 ]; then ok "選單依 AD 群組遞減：alice $alice_count > bob $bob_count > carol $carol_count"
-else fail "選單數量不符預期：alice $alice_count、bob $bob_count、carol $carol_count"; fi
-if grep -qw 91 <<<"${visible_items[alice]}" && ! grep -qw 91 <<<"${visible_items[bob]}"; then ok "91 緊急模式只有 alice（SystemAdmin）看得到"; else fail "91 的可見性不對"; fi
+section "16.5 試跑：選單全部顯示，沒權限的做了被 Kafka 拒絕"
+menu_bob=$(run_menu_as bob menu | grep '@@MENU@@' | cut -d' ' -f2-); menu_alice=$(run_menu_as alice menu | grep '@@MENU@@' | cut -d' ' -f2-)
+if [ -n "$menu_bob" ] && [ "$menu_bob" = "$menu_alice" ]; then ok "bob 與 alice 看到同一份選單（$(wc -w <<<"$menu_bob") 項）"; else fail "選單應該全部顯示：bob「$menu_bob」alice「$menu_alice」"; fi
+bob_create=$(run_menu_as bob 31 orders.optest-bob 1 | tail -3)
+if grep -q "Kafka 拒絕" <<<"$bob_create"; then ok "bob（Operator）建 topic 被 Kafka 拒絕"; else fail "bob 建 topic 應被拒：$bob_create"; fi
+bob_91=$(run_menu_as bob 91 kafka-topics --list | tail -3)
+if grep -q "Authorization failed" <<<"$bob_91"; then ok "bob 進 91 緊急模式被管理員閘門擋下"; else fail "bob 的 91 應被擋：$bob_91"; fi
+alice_create=$(run_menu_as alice 31 orders.optest 1 | tail -1)
+if grep -q "Created topic" <<<"$alice_create"; then ok "alice（SystemAdmin）建 topic orders.optest"; else fail "alice 建 topic：$alice_create"; fi
 
 # 健康檢查、重啟、緊急模式要動主機（ssh 用 $SSH_KEY）或用緊急憑證（讀 ~/secrets/opmenu-breakglass.pem、要人填原因），非互動試跑做不了
 warn "重啟、看日誌要由維運人員互動登入試跑（手把手 16.5）；緊急模式要互動填原因"

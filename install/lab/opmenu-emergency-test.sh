@@ -43,7 +43,7 @@ visible=$(grep '@@MENU@@' "$OUT/2.txt" | cut -d' ' -f2-)
 check "進入緊急主機模式" "grep -q '已進入緊急主機模式' '$OUT/2.txt'"
 check "只看得到 16 18 21 22 23（實際：$visible）" "[ '$visible' = '16 18 21 22 23' ]"
 run_menu bob "$OUT/2b.txt" 31 orders.emergency 1
-check "Kafka 類（31 建 topic）不能做" "grep -q '不在你的選單內' '$OUT/2b.txt'"
+check "Kafka 類（31 建 topic）不能做" "grep -q '緊急主機模式不開放' '$OUT/2b.txt'"
 
 echo "== 3. 主機類項目"
 run_menu bob "$OUT/3a.txt" 23 "kb04.$DOMAIN:confluent-server" 5

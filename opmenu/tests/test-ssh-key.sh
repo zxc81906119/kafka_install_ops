@@ -52,7 +52,7 @@ check "ssh 以 cpuser 登入" 'grep -qx "cpuser@kb01" "$OP_SSH_ARGS"'
 unset -f ssh
 
 # ── 哪些項目算碰主機 ──
-declare -A ACT_TIER=([21]=2 [12]=1 [16]=1); OPMENU_MENU_AUTHZ="16=HOST 2*=HOST 3*=ADMIN"
+OPMENU_HOST_ITEMS="16 18 21 22 23 27"
 check "21(第 2 層)算碰主機" "core_item_touches_host 21"
 check "16 算碰主機" "core_item_touches_host 16"
 check "12(看 topic)不算碰主機" "! core_item_touches_host 12"

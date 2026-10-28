@@ -69,7 +69,8 @@
 ## 機制
 
 - **身分**:操作者輸入自己的 AD 帳密(`OPMENU_USER_FROM_OS=0`:操作機上人員是 root,不是個人帳號,所以一律自己輸入 AD 帳密);選單立刻向 MDS 換 token,之後 MDS 呼叫用 token、Kafka 工具用 AD 帳密走 LDAP listener。
-- **動態選單**:登入後用本人的 token 問 MDS 一次,只顯示有權限的項目;直接輸入隱藏的編號一樣被擋並記錄。
+- **選單全部顯示**:不依權限過濾;要做什麼直接選,Kafka 類動作以本人身分執行,沒權限的由 Kafka / MDS 依 RBAC 拒絕並記成 DENIED。只有緊急主機模式會隱藏項目。
+- **管理員閘門**:以備用身分執行的項目(`OPMENU_ADMIN_ITEMS`,預設 91)Kafka 檢查的是備用憑證不是本人,所以執行前先用本人的 token 問 MDS 本人有沒有 `OPMENU_ADMIN_AUTHZ`(預設叢集 Alter,即 SystemAdmin / ClusterAdmin);問不到一律拒絕。
 - **主機閘門**:碰主機的介面先向 MDS 確認本人有 `OPMENU_HOST_ACTION_AUTHZ`(預設 Operator 以上),因為主機端的 cpuser 是共用帳號。操作者是 root、讀得到金鑰,所以這是流程控管、不是硬性隔離(見上方「誠實的限制」)。
 - **緊急主機模式**:MDS 連不上時,作業系統群組 `OPMENU_EMERGENCY_GROUP`(預設 opmenu-emergency,平常空)的人可以進入(操作者都是 root,所以平常 root 不在群組、緊急模式關著;事故時 OS 團隊臨時把 root 加進群組,事後移出),只開放 `OPMENU_EMERGENCY_ITEMS`(16 18 21 22 23);必填原因,操作者標成「未經 AD 驗證」,紀錄 EMERGENCY_HOST;21 的叢集檢查做不了時改成警告＋確認。
 - **服務帳號 A／B**(`OPMENU_SVC_PAIR`,預設 `-a -b`):34 一次建兩個同權限的帳號,應用程式先用 -a;35 只換沒在用的那個,應用程式切過去後下次再換另一個,換密碼不停機;37 兩個一起下架。

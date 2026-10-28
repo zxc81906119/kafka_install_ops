@@ -130,7 +130,7 @@ main() {
   fi
   if [ "${1:-}" = --list ]; then local id; for id in "${ACT_IDS[@]}"; do printf '%s\t%s\t%s\t%s\t%s\n' "$id" "${TIER_NAME[${ACT_TIER[$id]}]}" "${ACT_CHANGE[$id]}" "${ACT_CONFIRM[$id]}" "${ACT_TITLE[$id]}"; done; exit 0; fi
   if [ "${1:-}" = --run ]; then
-    shift; login; core_menu_permissions
+    shift; login; core_menu_permissions   # 選單一律全顯示;core_menu_permissions 只處理緊急主機模式
     if [ "${1:-}" = menu ]; then local id v=""; for id in "${ACT_IDS[@]}"; do [ "${OP_VISIBLE[$id]}" = 1 ] && v+="$id "; done; printf '@@MENU@@ %s\n' "${v% }"; exit 0; fi
     core_run "$@"; exit $?
   fi

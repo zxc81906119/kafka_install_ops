@@ -126,7 +126,7 @@
 | 9 憑證 | 15 分 | — |
 | 10–13 設定、啟動、權限、REST、C3 | 40 分 | 每段啟動要等健康檢查；C3 第一次起來 1–2 分鐘 |
 | 15 Secret Protection（延伸） | 30 分 | 加密、派送、滾動重啟 |
-| 16 OP menu（延伸） | 20 分 | 準備緊急憑證檔、裝選單、改 sudoers、三種身分試跑 |
+| 16 OP menu（延伸） | 20 分 | 準備緊急憑證檔、裝選單、改 sudoers、三種身分試跑（選單全顯示，沒權限的做了被拒） |
 | 17 監控（延伸） | 40 分 | 四種程序派送、滾動重啟（controller 與 broker 的指標要等 2 分鐘）、lab 的 Prometheus／Alertmanager／Grafana、告警測試 |
 | 18 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
 | 19 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
@@ -3319,25 +3319,25 @@ LIST'
 拒絕 /usr/bin/ls /root
 ```
 
-## 16.5 試跑：三種身分看到的選單不一樣
+## 16.5 試跑：選單全部顯示，沒權限的做了被拒
 
 @role 小安（代打 bob、carol、alice） | ops02 | root
 
-**這一節在做什麼**：用三個不同權限的人試跑選單，確認「權限不同、看到的項目不同」。好結果：alice（SystemAdmin）看到最多項目，bob（Operator）只有健康檢查與重啟，carol（開發者）只有自己 prefix 的 topic 項目；沒權限的編號直接輸入會被擋。互動模式就是人員經 PVWA 與 PSMP 登入操作機（root）後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 只印這個人看得到的編號：
+**這一節在做什麼**：用三個不同權限的人試跑選單。選單**不依權限過濾**，每個人看到的項目一樣；要做什麼直接選，Kafka 類動作以本人身分執行，沒權限的由 Kafka／MDS 依 RBAC 拒絕並記成 DENIED。只有兩種項目選單自己會先問 MDS：碰主機的（16、18、21、22、23、27，要 Operator 以上）和 91 緊急模式（以備用憑證執行，Kafka 檢查的是備用身分不是本人，所以本人要先是管理員）。好結果：bob、carol、alice 看到同一份選單；bob 建 topic 被 Kafka 拒絕、進 91 被擋，alice 都能做。互動模式就是人員經 PVWA 與 PSMP 登入操作機（root）後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 印選單上的編號：
 
 ```bash
 P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; for u in bob carol alice; do printf '%-6s ' $u; op $u menu | grep '@@MENU@@' | cut -d' ' -f2-; done; unset P
 ```
 
 ```out
-bob    10 11 12 13 14 15 16 17 18 19 21 22 23 27
-carol  10 11 12 13 14 15 17 19
+bob    10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 44 45 91
+carol  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 44 45 91
 alice  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 44 45 91
 ```
 
-43、45（匯出、查詢稽核紀錄）要 audit topic 的讀取權限：alice（SystemAdmin）有，bob、carol 沒有。要給稽核單位用，就把他們的 AD 群組綁 `Topic:confluent-audit-log-events`（prefix）與 `Group:audit-`（prefix）的 DeveloperRead。
+三個人看到的一樣。43、45（匯出、查詢稽核紀錄）做了會不會成功，看那個人有沒有 audit topic 的讀取權限：alice（SystemAdmin）有，bob、carol 沒有；要給稽核單位用，就把他們的 AD 群組綁 `Topic:confluent-audit-log-events`（prefix）與 `Group:audit-`（prefix）的 DeveloperRead。
 
-bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；23 只列含 error／warn 字樣的行，INFO 裡有 errors 字眼也會被列出）、重啟 kb04；直接輸入他看不到的 31 會被擋。alice（SystemAdmin）：建 topic、91 緊急模式、刪 topic。
+bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；23 只列含 error／warn 字樣的行，INFO 裡有 errors 字眼也會被列出）、重啟 kb04；建 topic 會被 Kafka 拒絕、91 會被管理員閘門擋下。alice（SystemAdmin）：建 topic、91 緊急模式、刪 topic。
 
 @role 小安（代打 bob、carol、alice） | ops02 | root
 
@@ -3351,13 +3351,14 @@ person=$1; shift
 password=$(cat ~/secrets/ad-test-users.pass)
 env OPMENU_USER=$person OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON=第16站試跑 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -v '^SLF4J'
 EOF
-chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; } && op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 31 orders.x 1 | tail -1; op alice 31 orders.optest 1 | tail -1; unset P
+chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; } && op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 31 orders.x 1 | tail -1; op bob 91 kafka-topics --list | tail -1; op alice 31 orders.optest 1 | tail -1; unset P
 ```
 
 ```out
 -- 你的 MDS token:已用 3s,剩約 3597s
 -- broker 在線:4 / 4(設定的 broker 數)
-項目 31 不在你的選單內(你的 AD 群組沒有這項權限),請依變更單申請。
+Kafka 拒絕:你的群組沒有這項權限,請依變更單申請。
+Authorization failed:這個項目以備用身分執行,需要本人有管理員權限(Cluster:kafka-cluster:Alter),你的群組沒有;請依變更單申請。
 Created topic orders.optest.
 ```
 

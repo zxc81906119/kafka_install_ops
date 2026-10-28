@@ -45,7 +45,7 @@ check "私鑰檔已放回（root:root 400）" "[ \"\$(stat -c '%U:%G %a' '$SSH_K
 
 echo "== C. carol（沒有主機權限）看日誌"
 run_menu carol "$OUT/c.txt" 23 "kb04.$DOMAIN:confluent-server" 5
-check "權限閘門先擋（或選單上看不到）" "grep -q 'Authorization failed\|不在你的選單內' '$OUT/c.txt'"
+check "權限閘門先擋" "grep -q 'Authorization failed' '$OUT/c.txt'"
 
 echo "== D. sudoers 窄規則（臨時帳號 sudotest 套同一份規則）"
 for host in kb04 kc01 rest02 "$C3_HOST"; do
