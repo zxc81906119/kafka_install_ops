@@ -38,7 +38,7 @@ EOF
 done
 
 # 設定檔或 drop-in 有變的主機：服務已經在跑的話，10.4 要重啟它才會讀到新設定（enable --now 不會重啟在跑的服務）。
-# 憑證（10.1）不算：p12 每次重新產生內容都不同，算進來會每次都重啟；換憑證走第 20 站。
+# 憑證（10.1）不算：p12 每次重新產生內容都不同，算進來會每次都重啟；換憑證走第 21 站。
 RESTART_NEEDED_HOSTS=""
 mark_restart_needed() { RESTART_NEEDED_HOSTS="$RESTART_NEEDED_HOSTS $1"; }
 restart_needed() { [[ " $RESTART_NEEDED_HOSTS " == *" $1 "* ]]; }

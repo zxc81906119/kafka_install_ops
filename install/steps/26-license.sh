@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 第 22 站：License 到期監控 —— 讀生效中的 license（JWT）到期日；每天排程檢查、寫 syslog（手把手第 22 章）
+# 第 26 站：License 到期監控 —— 讀生效中的 license（JWT）到期日；每天排程檢查、寫 syslog（手把手第 26 章）
 # where: ops02 （root）
 # run: on-demand（不在安裝順序裡；裝好之後跑一次 schedule，之後由 timer 每天跑 check）
 #
 # 用法：
-#   bash steps/22-license.sh status      印出類型、到期日、剩幾天（不寫 syslog）
-#   bash steps/22-license.sh check       同上，另寫 syslog（tag confluent-license）；timer 跑的就是這個
-#   bash steps/22-license.sh schedule    裝操作機的 systemd timer（每天 08:00 跑 check，以 root 身分）
+#   bash steps/26-license.sh status      印出類型、到期日、剩幾天（不寫 syslog）
+#   bash steps/26-license.sh check       同上，另寫 syslog（tag confluent-license）；timer 跑的就是這個
+#   bash steps/26-license.sh schedule    裝操作機的 systemd timer（每天 08:00 跑 check，以 root 身分）
 # 結束碼：0 正常、2 剩不到 LICENSE_WARN_DAYS 天（預設 90，和 C3 開始提示的天數相同）、1 已過期或讀不到
 #
 # 原廠沒有到期日的 JMX 指標，所以自己讀：broker 把生效中的 license 存在 _confluent-command topic，
@@ -35,7 +35,7 @@ read_license_claims() {
 # license_status <要不要寫 syslog：0|1>
 license_status() {
   local to_syslog=$1 claims expires_at license_type days_left message
-  section "22.1 生效中的 license"
+  section "26.1 生效中的 license"
   if ! claims=$(read_license_claims) || ! expires_at=$(grep -o '"exp":[0-9]*' <<<"$claims" | cut -d: -f2) || [ -z "$expires_at" ]; then
     [ "$to_syslog" = 1 ] && logger -t confluent-license -p user.err "license 讀不到（_confluent-command 沒有 JWT 或連不上 broker）"
     fail "license 讀不到（_confluent-command 沒有 JWT 或連不上 broker）"
@@ -56,11 +56,11 @@ license_status() {
   ok "$message"
 }
 
-# 22.2 排程：操作機的 systemd timer；「快到期」(rc 2) 不算服務失敗，告警看 syslog
+# 26.2 排程：操作機的 systemd timer；「快到期」(rc 2) 不算服務失敗，告警看 syslog
 schedule() {
-  section "22.2 每天 08:00 檢查（systemd timer：$TIMER_NAME）"
+  section "26.2 每天 08:00 檢查（systemd timer：$TIMER_NAME）"
   printf '[Unit]\nDescription=Confluent license expiry check\n\n[Service]\nType=oneshot\nUser=%s\nExecStart=/bin/bash %s check\nSuccessExitStatus=2\n' \
-    "$(id -un)" "$INSTALL_DIR/steps/22-license.sh" | tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
+    "$(id -un)" "$INSTALL_DIR/steps/26-license.sh" | tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
   printf '[Unit]\nDescription=Daily Confluent license expiry check\n\n[Timer]\nOnCalendar=*-*-* 08:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' |
     tee "/etc/systemd/system/$TIMER_NAME.timer" >/dev/null
   systemctl daemon-reload

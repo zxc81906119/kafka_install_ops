@@ -9,7 +9,7 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 function svg(w, h, body) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="${FONT}">
-<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M2 1L8 5L2 9" fill="none" stroke="#444441" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M2 1L8 5L2 9" fill="none" stroke="#444441" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
 <rect width="${w}" height="${h}" fill="#FFFFFF"/>${body}</svg>`;
 }
 // box with title (+ up to 2 subtitle lines)
@@ -28,7 +28,7 @@ function box(x, y, w, h, title, subs = [], color = 'teal', opts = {}) {
 }
 function arrow(x1, y1, x2, y2, label, opts = {}) {
   const pts = opts.via ? `M${x1} ${y1} ${opts.via.map(([x, y]) => `L${x} ${y}`).join(' ')} L${x2} ${y2}` : `M${x1} ${y1} L${x2} ${y2}`;
-  let out = `<path d="${pts}" fill="none" stroke="${opts.color || '#444441'}" stroke-width="1.5" ${opts.dash ? 'stroke-dasharray="5 4"' : ''} marker-end="url(#a)"/>`;
+  let out = `<path d="${pts}" fill="none" stroke="${opts.color || '#444441'}" stroke-width="2.5" ${opts.dash ? 'stroke-dasharray="5 4"' : ''} marker-end="url(#a)"/>`;
   if (label) {
     const lx = opts.lx ?? (x1 + x2) / 2, ly = opts.ly ?? (y1 + y2) / 2 - 8;
     out += `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="11" fill="#5F5E5A">${esc(label)}</text>`;
@@ -102,18 +102,18 @@ D.map = () => svg(760, 400, [
 
 // 3. journey overview (5 stages)
 D.journey = () => svg(760, 310, [
-  box(20, 40, 130, 70, '1 下載', ['下載機', 'RPM、jar、公鑰'], 'teal'),
-  box(175, 40, 130, 70, '2 驗證', ['雜湊、簽章', '產生 SHA256SUMS'], 'teal'),
-  box(330, 40, 130, 70, '3 引進內網', ['掃描、開單', '搬到操作機'], 'amber'),
-  box(485, 40, 130, 70, '4 行內準備', ['套件庫、AD、CA', 'JDK、帳號'], 'amber'),
-  box(640, 40, 100, 70, '5 安裝', ['操作機出發', '11 台'], 'blue'),
+  box(20, 40, 130, 70, '2 下載與驗證', ['下載機', 'RPM、jar、公鑰、雜湊'], 'teal'),
+  box(175, 40, 130, 70, '3 引進內網', ['掃描、開單', '搬到操作機'], 'amber'),
+  box(330, 40, 130, 70, '4 主機存取', ['cpuser、一把金鑰', 'from=、sudoers'], 'amber'),
+  box(485, 40, 130, 70, '5–6 行內準備、上架', ['套件庫、AD、CA、JDK', 'RPM 上架'], 'amber'),
+  box(640, 40, 100, 70, '7–13 安裝', ['操作機出發', '11 台'], 'blue'),
   arrow(150, 75, 173, 75), arrow(305, 75, 328, 75), arrow(460, 75, 483, 75), arrow(615, 75, 638, 75),
-  box(20, 140, 230, 56, '5a 主機就緒', ['檢查、OS 調校、裝套件'], 'blue'),
-  box(265, 140, 230, 56, '5b 憑證與設定', ['CSR → 銀行簽 → 設定檔'], 'blue'),
-  box(510, 140, 230, 56, '5c 啟動與驗證', ['controller → broker → REST → C3'], 'blue'),
+  box(20, 140, 230, 56, '7–8 主機就緒', ['JDK、檢查、OS 調校、裝套件'], 'blue'),
+  box(265, 140, 230, 56, '9–10 憑證與設定', ['CSR → 銀行簽 → 設定檔'], 'blue'),
+  box(510, 140, 230, 56, '10–14 啟動與驗證', ['controller → broker → REST → C3'], 'blue'),
   arrow(250, 168, 263, 168), arrow(495, 168, 508, 168),
-  box(20, 222, 400, 56, '15–19 延伸與交付', ['密碼交保管庫、維運選單、監控、稽核日誌、驗收'], 'purple'),
-  box(440, 222, 300, 56, '20–27 上線之後', ['憑證、升級、修補、license、換機、增減、備份'], 'gray'),
+  box(20, 222, 400, 56, '15–19 延伸與交付', ['加密設定檔密碼、維運選單、監控、稽核日誌、驗收'], 'purple'),
+  box(440, 222, 300, 56, '20–31 上線之後', ['輪替、憑證、備份、換機、license、遷移、修補'], 'gray'),
   arrow(625, 196, 215, 220, null, { via: [[625, 208], [215, 208]] }), arrow(420, 250, 438, 250),
   legend(20, 298, [['teal', '我方'], ['amber', '銀行'], ['blue', '我方，在行內主機上'], ['purple', '延伸'], ['gray', '上線後']]),
 ].join(''));
@@ -329,7 +329,7 @@ D.upgrade = () => svg(800, 300, [
 
 // ===== concept diagrams (batch 1: access, keys, landing, versions) =====
 
-// 3.1 how a person reaches the hosts: PVWA -> PSMP -> ops02 (root) -> one key -> cpuser everywhere
+// 第 4 章 how a person reaches the hosts: PVWA -> PSMP -> ops02 (root) -> one key -> cpuser everywhere
 D.access = () => svg(800, 370, [
   box(20, 48, 130, 62, '維運人員', ['瀏覽器', '自己的 AD 帳號'], 'gray'),
   region(180, 14, 372, 124, '銀行 CyberArk（PAM）', 'amber'),
@@ -347,7 +347,7 @@ D.access = () => svg(800, 370, [
   arrow(676, 218, 676, 250), note(690, 238, 'ssh cpuser@主機', 11),
 ].join(''));
 
-// 3.1 where the key material and the sudo/ssh files live
+// 第 4 章 where the key material and the sudo/ssh files live
 D.keyfiles = () => svg(800, 390, [
   region(20, 14, 310, 332, '操作機 ops02（root）', 'teal'),
   box(34, 46, 282, 60, '/secure/ssh/', ['獨立 file system，root 0700，不備份'], 'gray'),
@@ -375,35 +375,35 @@ D.landing = () => svg(800, 436, [
   box(36, 254, 298, 44, 'monitoring/', ['Confluent 官方規則與 32 個 dashboard'], 'teal'),
   box(36, 306, 298, 44, 'bank/', ['JDK 21、JDK 25 的 tar + sha256'], 'amber'),
   box(36, 358, 298, 36, 'SHA256SUMS（72 個檔）', [], 'gray'),
-  box(440, 46, 340, 96, '套件庫 repo01 /confluent/', ['操作機 createrepo_c 建索引後 ssh + tar 上架', '（第 4 章；遷移用的 rpm-target 在 21.1 才上架）'], 'amber'),
-  box(440, 150, 340, 44, 'rpm --import', ['進內網後再驗一次簽章（2.3）'], 'gray'),
+  box(440, 46, 340, 96, '套件庫 repo01 /confluent/', ['操作機 createrepo_c 建索引後 ssh + tar 上架', '（第 6 章；遷移用的 rpm-target 在 29.1 才上架）'], 'amber'),
+  box(440, 150, 340, 44, 'rpm --import', ['進內網後再驗一次簽章（3.3）'], 'gray'),
   box(440, 202, 340, 44, '各主機的 javaagent；操作機 /opt/opmenu', ['jar 派送到各 Java 主機（17.3）；選單在 16.3'], 'blue'),
   box(440, 254, 340, 44, '操作機 ~/monitoring/to-bank/', ['整理後交銀行監控團隊（17.5）'], 'teal'),
-  box(440, 306, 340, 44, '各主機 /opt/java/<目錄>', ['解開後切 /opt/java/current（第 5、21.7）'], 'blue'),
-  box(440, 358, 340, 36, 'sha256sum -c：進內網後驗一次（2.3）', [], 'gray'),
+  box(440, 306, 340, 44, '各主機 /opt/java/<目錄>', ['解開後切 /opt/java/current（第 5、29.7）'], 'blue'),
+  box(440, 358, 340, 36, 'sha256sum -c：進內網後驗一次（3.3）', [], 'gray'),
   arrow(334, 68, 438, 68), arrow(334, 120, 438, 120), arrow(334, 172, 438, 172), arrow(334, 224, 438, 224),
   arrow(334, 276, 438, 276), arrow(334, 328, 438, 328), arrow(334, 376, 438, 376),
   ctext(185, 422, '綠＝我方從外網帶來的；橘＝銀行提供的檔案', { size: 11 }),
   ctext(610, 422, 'repo01 /os/ 是銀行自己維護的 OS 套件，不在落地區', { size: 11 }),
 ].join(''));
 
-// 0.4 version path: base vs target per layer, with the chapter that moves it
+// 1.4 version path: base vs target per layer, with the chapter that moves it
 D.versionpath = () => svg(800, 330, [
   ctext(95, 24, '層', { bold: true, fill: '#444441', size: 13 }), ctext(240, 24, '安裝基底（第 1–20 章）', { bold: true, fill: '#444441', size: 13 }),
   ctext(405, 24, '誰、哪一節動它', { bold: true, fill: '#444441', size: 13 }), ctext(560, 24, '遷移目標', { bold: true, fill: '#444441', size: 13 }),
   box(20, 42, 150, 54, 'Control Center', ['最先升'], 'gray'),
-  box(180, 42, 120, 54, '2.5.1', [], 'blue'), arrow(300, 69, 510, 69), ctext(405, 56, '① 21.3 節　原廠要求 C3 先升', { size: 12 }), box(510, 42, 100, 54, '2.6.1', [], 'teal'),
+  box(180, 42, 120, 54, '2.5.1', [], 'blue'), arrow(300, 69, 510, 69), ctext(405, 56, '① 29.3 節　原廠要求 C3 先升', { size: 12 }), box(510, 42, 100, 54, '2.6.1', [], 'teal'),
   note(626, 62, '2.5 只支援到 CP 8.2', 11), note(626, 80, '2.6 才支援到 8.3', 11),
   box(20, 112, 150, 54, 'Confluent Platform', ['broker、controller、REST'], 'gray'),
-  box(180, 112, 120, 54, '8.2.4', [], 'blue'), arrow(300, 139, 510, 139), ctext(405, 126, '② 21.4–21.6 節　套件滾動升級', { size: 12 }), box(510, 112, 100, 54, '8.3.2', [], 'teal'),
+  box(180, 112, 120, 54, '8.2.4', [], 'blue'), arrow(300, 139, 510, 139), ctext(405, 126, '② 29.4–29.6 節　套件滾動升級', { size: 12 }), box(510, 112, 100, 54, '8.3.2', [], 'teal'),
   note(626, 132, '逐台；controller', 11), note(626, 150, 'leader 最後', 11),
   box(20, 182, 150, 54, 'JDK', ['銀行交付的 tar'], 'gray'),
-  box(180, 182, 120, 54, '21', [], 'blue'), arrow(300, 209, 510, 209), ctext(405, 196, '③ 21.7 節　CP 升完才換', { size: 12 }), box(510, 182, 100, 54, '25', [], 'teal'),
+  box(180, 182, 120, 54, '21', [], 'blue'), arrow(300, 209, 510, 209), ctext(405, 196, '③ 29.7 節　CP 升完才換', { size: 12 }), box(510, 182, 100, 54, '25', [], 'teal'),
   note(626, 202, '8.2 不支援 25', 11), note(626, 220, 'C3 留在 21', 11),
   box(20, 252, 150, 54, 'OS（RHEL 9）', ['銀行的套件庫'], 'gray'),
-  box(180, 252, 120, 54, '9.6', [], 'blue'), arrow(300, 279, 510, 279), ctext(405, 266, '⑤ 26.5 節　小版本更新', { size: 12 }), box(510, 252, 100, 54, '9.8', [], 'teal'),
+  box(180, 252, 120, 54, '9.6', [], 'blue'), arrow(300, 279, 510, 279), ctext(405, 266, '⑤ 30.5 節　小版本更新', { size: 12 }), box(510, 252, 100, 54, '9.8', [], 'teal'),
   note(626, 272, 'versionlock 鎖住 Confluent', 11), note(626, 290, 'JDK 是 tar，不受影響', 11),
-  ctext(400, 322, '④ 21.9 節 finalize 排在 ③ 之後、⑤ 之前：metadata 版本升到 8.3，之後不能退回 8.2', { size: 12, fill: '#712B13' }),
+  ctext(400, 322, '④ 29.9 節 finalize 排在 ③ 之後、⑤ 之前：metadata 版本升到 8.3，之後不能退回 8.2', { size: 12, fill: '#712B13' }),
 ].join(''));
 
 // ===== concept diagrams (batch 2: trust, listeners, kraft, token, rbac) =====
@@ -552,7 +552,7 @@ D.keyhier = () => svg(800, 320, [
   box(650, 30, 130, 80, '密文', ['security.properties', '所有主機同一份'], 'gray'),
   arrow(170, 70, 248, 70), ctext(209, 58, '＋隨機 salt', { size: 11 }),
   arrow(400, 70, 468, 70), arrow(600, 70, 648, 70),
-  box(20, 140, 345, 150, '為什麼兩樣都要存', ['salt 每次產生都不同', '只有 passphrase 算不回原本的 master key', '再跑一次 generate 也拿不回同一把', '輪替（15.6）要目前的 master key＋舊 passphrase', '分開存是為了分開授權：', '主機讀得到 master key，讀不到 passphrase'], 'teal'),
+  box(20, 140, 345, 150, '為什麼兩樣都要存', ['salt 每次產生都不同', '只有 passphrase 算不回原本的 master key', '再跑一次 generate 也拿不回同一把', '輪替（20.3）要目前的 master key＋舊 passphrase', '分開存是為了分開授權：', '主機讀得到 master key，讀不到 passphrase'], 'teal'),
   box(385, 140, 185, 60, 'service.env', ['MASTER_KEY=… 一行', '0600 root'], 'coral'),
   arrow(325, 110, 440, 138, '派送', { via: [[325, 126], [440, 126]], lx: 382, ly: 119 }),
   box(600, 140, 180, 60, '服務啟動', ['環境變數 → 解 data key', '→ 解出密碼'], 'gray'),
@@ -596,7 +596,7 @@ D.alertpath = () => svg(800, 340, [
 
 // ===== concept diagrams (batch 4: keyrotate, migrationflow, controllerswap, brokerscale, backup, ospatch) =====
 
-// 19.6 SSH key rotation: old and new coexist, there is always a working key
+// 20.5 SSH key rotation: old and new coexist, there is always a working key
 D.keyrotate = () => {
   const steps = [
     ['1', '產生新金鑰', ['.new，註解帶時間'], ['gray', '舊'], ['gray', '舊'], '用舊 ✓'],
@@ -623,36 +623,36 @@ D.keyrotate = () => {
 // 21 the whole migration in order, with the point of no return
 D.migrationflow = () => svg(800, 460, [
   region(10, 8, 780, 258, 'finalize 之前：每一段都能退（先把 JDK 切回 21，再 dnf downgrade 回 8.2.4）', 'teal'),
-  box(20, 44, 140, 58, '21.1 上架＋檢查', ['rpm-target 進套件庫', '看 under-replicated'], 'blue'),
-  box(172, 44, 140, 58, '21.2 備份', ['/etc/confluent、', 'drop-in、features'], 'blue'),
-  box(324, 44, 140, 58, '21.3 C3 先升', ['2.5.1 → 2.6.1', '畫面約 1–2 分鐘'], 'blue'),
-  box(476, 44, 140, 58, '21.4 broker', ['逐台，等 MDS 200', 'under-replicated 0'], 'blue'),
-  box(628, 44, 152, 58, '21.5 controller', ['逐台，leader 最後', '等 Lag 0'], 'blue'),
+  box(20, 44, 140, 58, '29.1 上架＋檢查', ['rpm-target 進套件庫', '看 under-replicated'], 'blue'),
+  box(172, 44, 140, 58, '29.2 備份', ['/etc/confluent、', 'drop-in、features'], 'blue'),
+  box(324, 44, 140, 58, '29.3 C3 先升', ['2.5.1 → 2.6.1', '畫面約 1–2 分鐘'], 'blue'),
+  box(476, 44, 140, 58, '29.4 broker', ['逐台，等 MDS 200', 'under-replicated 0'], 'blue'),
+  box(628, 44, 152, 58, '29.5 controller', ['逐台，leader 最後', '等 Lag 0'], 'blue'),
   arrow(160, 73, 170, 73), arrow(312, 73, 322, 73), arrow(464, 73, 474, 73), arrow(616, 73, 626, 73),
-  box(20, 164, 140, 58, '21.6 REST＋操作機', ['REST 照 12.1 五步', '先補 svc-rest 權限'], 'blue'),
+  box(20, 164, 140, 58, '29.6 REST＋操作機', ['REST 照 12.1 五步', '先補 svc-rest 權限'], 'blue'),
   box(172, 164, 140, 58, '驗收 第 19 章', ['第一段結束'], 'gray'),
-  box(324, 164, 140, 58, '21.7 JDK 21 → 25', ['其餘逐台切換', 'C3 留在 21'], 'teal'),
+  box(324, 164, 140, 58, '29.7 JDK 21 → 25', ['其餘逐台切換', 'C3 留在 21'], 'teal'),
   box(476, 164, 140, 58, '驗收 第 19 章', ['第二段結束'], 'gray'),
-  box(628, 164, 152, 58, '21.8 回滾演練', ['kb04 退回 8.2.4', '再升回去'], 'amber'),
+  box(628, 164, 152, 58, '29.8 回滾演練', ['kb04 退回 8.2.4', '再升回去'], 'amber'),
   arrow(704, 102, 90, 162, null, { via: [[704, 134], [90, 134]] }),
   arrow(160, 193, 170, 193), arrow(312, 193, 322, 193), arrow(464, 193, 474, 193), arrow(616, 193, 626, 193),
   region(10, 286, 780, 164, '不可逆的一步', 'coral'),
   box(20, 326, 220, 100, '觀察一段時間', ['前兩段都驗收過', '確定不退了才做下一步'], 'gray'),
-  box(290, 326, 230, 100, '21.9 finalize', ['kafka-features upgrade', '--release-version 4.3', 'metadata 升到 8.3'], 'coral'),
-  box(570, 326, 210, 100, '21.10 記下新基準', ['確認每台版本', '之後新增主機裝現行版本', '（8.3.2、2.6.1、JDK 25）'], 'gray'),
+  box(290, 326, 230, 100, '29.9 finalize', ['kafka-features upgrade', '--release-version 4.3', 'metadata 升到 8.3'], 'coral'),
+  box(570, 326, 210, 100, '29.10 記下新基準', ['確認每台版本', '之後新增主機裝現行版本', '（8.3.2、2.6.1、JDK 25）'], 'gray'),
   arrow(240, 376, 288, 376), arrow(520, 376, 568, 376),
   arrow(704, 222, 130, 324, null, { via: [[704, 250], [130, 250], [130, 280]] }),
-  ctext(250, 303, '之後不能退回 8.2（要退得用 21.2 的備份）', { size: 12, fill: '#712B13', anchor: 'start' }),
+  ctext(250, 303, '之後不能退回 8.2（要退得用 29.2 的備份）', { size: 12, fill: '#712B13', anchor: 'start' }),
 ].join(''));
 
 // 23 replacing a controller: the quorum membership at each step
 D.controllerswap = () => {
   const cols = [
-    ['23.1', '換之前', ['看 quorum'], [['blue', 'kc01', 'Leader'], ['blue', 'kc02', 'Follower'], ['blue', 'kc03', 'Follower']], 'voter 3 台，Lag 都是 0'],
-    ['23.2', 'kc03 碟壞了', ['停服務、清空資料'], [['blue', 'kc01', 'Leader'], ['blue', 'kc02', 'Follower'], ['coral', 'kc03', '停了，Lag 變大']], '叢集照常（還有 2 台）'],
-    ['23.3', '移出舊成員', ['remove-controller', '3＋舊 directory id'], [['blue', 'kc01', 'voter'], ['blue', 'kc02', 'voter'], ['gray', 'kc03', '不是成員']], 'voter 只剩 2 台'],
-    ['23.4', '格式化、啟動', ['--no-initial-', 'controllers'], [['blue', 'kc01', 'voter'], ['blue', 'kc02', 'voter'], ['purple', 'kc03', 'Observer，追上到 Lag 0']], '新 directory id'],
-    ['23.5', '加回成員', ['add-controller', '在 kc03 上跑'], [['blue', 'kc01', 'voter'], ['blue', 'kc02', 'voter'], ['blue', 'kc03', 'voter']], 'voter 3 台，完成'],
+    ['25.1.1', '換之前', ['看 quorum'], [['blue', 'kc01', 'Leader'], ['blue', 'kc02', 'Follower'], ['blue', 'kc03', 'Follower']], 'voter 3 台，Lag 都是 0'],
+    ['25.1.2', 'kc03 碟壞了', ['停服務、清空資料'], [['blue', 'kc01', 'Leader'], ['blue', 'kc02', 'Follower'], ['coral', 'kc03', '停了，Lag 變大']], '叢集照常（還有 2 台）'],
+    ['25.1.3', '移出舊成員', ['remove-controller', '3＋舊 directory id'], [['blue', 'kc01', 'voter'], ['blue', 'kc02', 'voter'], ['gray', 'kc03', '不是成員']], 'voter 只剩 2 台'],
+    ['25.1.4', '格式化、啟動', ['--no-initial-', 'controllers'], [['blue', 'kc01', 'voter'], ['blue', 'kc02', 'voter'], ['purple', 'kc03', 'Observer，追上到 Lag 0']], '新 directory id'],
+    ['25.1.5', '加回成員', ['add-controller', '在 kc03 上跑'], [['blue', 'kc01', 'voter'], ['blue', 'kc02', 'voter'], ['blue', 'kc03', 'voter']], 'voter 3 台，完成'],
   ];
   let out = '';
   cols.forEach(([sec, t, subs, nodes, foot], i) => {
@@ -670,9 +670,9 @@ D.controllerswap = () => {
 D.brokerscale = () => {
   const colX = [20, 285, 550];
   const cols = [
-    ['縮減前', ['4 台都有資料'], ['blue', 'kb04（104）', '80 個 replica'], '前置檢查（24.1）', ['Self-Balancing ENABLED', '沒有 under-replicated', '縮減後至少還有 3 台'], 'gray'],
-    ['縮減（24.2）', ['kafka-remove-brokers', '--delete --broker-id 104'], ['gray', 'kb04（104）', '0 個 replica，服務停用'], '要等到 SUCCESS', ['Replica Exclusion', '→ Partition Reassignment', '→ Broker Shutdown'], 'amber'],
-    ['擴充（24.3）', ['清空資料、format、啟動', '--no-initial-controllers'], ['purple', 'kb04（104）', '空的，Self-Balancing 來搬'], '不是馬上搬', ['lab 等十幾分鐘才開始', '之後分批搬，要再一段時間', '等到 104 上有 replica'], 'gray'],
+    ['縮減前', ['4 台都有資料'], ['blue', 'kb04（104）', '80 個 replica'], '前置檢查（25.2.1）', ['Self-Balancing ENABLED', '沒有 under-replicated', '縮減後至少還有 3 台'], 'gray'],
+    ['縮減（25.2.2）', ['kafka-remove-brokers', '--delete --broker-id 104'], ['gray', 'kb04（104）', '0 個 replica，服務停用'], '要等到 SUCCESS', ['Replica Exclusion', '→ Partition Reassignment', '→ Broker Shutdown'], 'amber'],
+    ['擴充（25.2.3）', ['清空資料、format、啟動', '--no-initial-controllers'], ['purple', 'kb04（104）', '空的，Self-Balancing 來搬'], '不是馬上搬', ['lab 等十幾分鐘才開始', '之後分批搬，要再一段時間', '等到 104 上有 replica'], 'gray'],
   ];
   let out = '';
   cols.forEach(([t, subs, kb4, bt, bsubs, bc], i) => {
@@ -704,23 +704,23 @@ D.backup = () => svg(800, 420, [
 
 // 26 OS patching / minor-version update: order, and the loop on each host
 D.ospatch = () => svg(800, 400, [
-  box(20, 20, 230, 62, '26.0 銀行同步套件庫', ['repo01 /os/ 放進 9.8 的內容', '（每月修補就是例行同步）'], 'amber'),
+  box(20, 20, 230, 62, '30.0 銀行同步套件庫', ['repo01 /os/ 放進 9.8 的內容', '（每月修補就是例行同步）'], 'amber'),
   box(285, 20, 200, 62, '更新前先做快照', ['每台，回滾靠它', '不要靠 dnf history undo'], 'amber'),
-  box(520, 20, 260, 62, '26.1 檢查', ['套件庫有 9.8 的 release 套件', '更新清單裡 confluent-* 是 0 個'], 'teal'),
+  box(520, 20, 260, 62, '30.1 檢查', ['套件庫有 9.8 的 release 套件', '更新清單裡 confluent-* 是 0 個'], 'teal'),
   arrow(250, 51, 283, 51), arrow(485, 51, 518, 51),
-  box(20, 118, 170, 62, '26.2 broker', ['逐台', 'MDS 200、無 under-rep.'], 'blue'),
-  box(217, 118, 170, 62, '26.3 controller', ['逐台，leader 最後', '等 Lag 0'], 'blue'),
-  box(414, 118, 190, 62, '26.4 REST、C3、操作機', ['REST 照 12.1 五步', '操作機最後，自己修自己'], 'blue'),
+  box(20, 118, 170, 62, '30.2 broker', ['逐台', 'MDS 200、無 under-rep.'], 'blue'),
+  box(217, 118, 170, 62, '30.3 controller', ['逐台，leader 最後', '等 Lag 0'], 'blue'),
+  box(414, 118, 190, 62, '30.4 REST、C3、操作機', ['REST 照 12.1 五步', '操作機最後，自己修自己'], 'blue'),
   box(631, 118, 149, 62, '驗收 第 19 章', ['19.1–19.3'], 'gray'),
   arrow(190, 149, 215, 149), arrow(387, 149, 412, 149), arrow(604, 149, 629, 149),
   arrow(650, 82, 105, 116, null, { via: [[650, 100], [105, 100]] }),
-  region(20, 206, 760, 124, '每一台的迴圈（26.2–26.4 都一樣）', 'blue'),
+  region(20, 206, 760, 124, '每一台的迴圈（30.2–30.4 都一樣）', 'blue'),
   box(36, 238, 160, 78, 'dnf update', ['--refresh', 'Confluent 被 versionlock', '鎖住，不會動'], 'blue'),
   box(226, 238, 160, 78, 'needs-restarting', ['-r：要不要重開機', '-s：哪些服務要重啟'], 'blue'),
   box(416, 238, 160, 78, '重開機或重啟服務', ['正式：systemctl reboot', 'lab 容器：重啟平台服務'], 'blue'),
   box(606, 238, 158, 78, '等健康才下一台', ['broker：MDS 200', '且 under-replicated 0', 'controller：Lag 0'], 'blue'),
   arrow(196, 277, 224, 277), arrow(386, 277, 414, 277), arrow(576, 277, 604, 277),
-  box(20, 346, 760, 44, 'JDK 是 tar，Confluent 被鎖版本：dnf update 只動 OS 套件', ['Confluent 的版本只走第 21 章；小版本更新（9.6 → 9.8）一定要重開機'], 'gray'),
+  box(20, 346, 760, 44, 'JDK 是 tar，Confluent 被鎖版本：dnf update 只動 OS 套件', ['Confluent 的版本只走第 29 章；小版本更新（9.6 → 9.8）一定要重開機'], 'gray'),
 ].join(''));
 
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)

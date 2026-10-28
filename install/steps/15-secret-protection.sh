@@ -6,7 +6,7 @@
 # master key 落地在每台的 /etc/confluent/service.env（0600 root；開機不依賴任何外部系統）。
 # 2026-10-28 定案：平台的密碼與金鑰不放 CyberArk（PVWA），都在操作機 root 才讀得到的位置（0600）：
 #   master key   服務解密用；操作機這份（~/secrets/master.key）與各主機 service.env 各一份。只有 passphrase 算不回來（每次 generate 都換新的 salt）
-#   passphrase   輪替 master key（15.6 rotate）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給；由工程師在操作機產生，存 ~/secrets/sp-passphrase.txt
+#   passphrase   輪替 master key（20.3 rotate）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給；由工程師在操作機產生，存 ~/secrets/sp-passphrase.txt
 # ~/secrets 與 ~/pki 的備份交給銀行自己的備份機制（操作機掉了，passphrase 就沒了；master key 還在各主機的 service.env）。
 # 做什麼（一次把 15.1–15.5 做完，只滾動重啟一次）：
 #   15.1 確認 passphrase 檔（還沒有 master key 又沒有 passphrase 檔時，由工程師在操作機產生：openssl rand，0600）
@@ -15,7 +15,7 @@
 #   15.4 派送 properties、security.properties、service.env
 #   15.5 滾動重啟、驗證
 # 產出：~/secrets/sp-passphrase.txt、~/secrets/master.key、~/secrets/security.properties、~/conf/sp/<主機>.properties、~/conf/secrets.mode=sp
-# 之後：換我們管的密碼（keystore 等）→ 重跑這一站；master key 輪替見手把手 15.6。
+# 之後：換我們管的密碼（keystore 等）→ 重跑這一站；master key 輪替見手把手 20.3。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"

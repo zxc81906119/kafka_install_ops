@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# 第 26 站：OS 修補與小版本更新 —— 一台一台 dnf update（Confluent 由 versionlock 擋住），該重開就重開、健康了才做下一台（手把手第 26 章）
+# 第 30 站：OS 修補與小版本更新 —— 一台一台 dnf update（Confluent 由 versionlock 擋住），該重開就重開、健康了才做下一台（手把手第 30 章）
 # where: ops02 （root）
 # run: on-demand（遷移主線的最後一段，不在 install.sh 的安裝順序裡；直接執行這支）；之後銀行每月發布 OS 修補時也是這支
 #
 # 用法：
-#   bash steps/26-os-patch.sh plan          每台可更新幾個套件、目前與套件庫裡的 OS 版本、有沒有 confluent-*（有就是 versionlock 沒鎖好，停下來）
-#   bash steps/26-os-patch.sh apply         broker 逐台 → controller（leader 最後）→ REST → C3 → 操作機；9.6 → 9.8 這種小版本更新也是這一個動作
-#   bash steps/26-os-patch.sh verify [版本]  26.5 驗證：每台的 OS 版本（給了版本就必須相同）、versionlock 沒變、服務 active、under-replicated、REST 經 LB、C3
-#   ONLY_HOSTS="kb01" bash steps/26-os-patch.sh apply   只做列出的主機
+#   bash steps/30-os-patch.sh plan          每台可更新幾個套件、目前與套件庫裡的 OS 版本、有沒有 confluent-*（有就是 versionlock 沒鎖好，停下來）
+#   bash steps/30-os-patch.sh apply         broker 逐台 → controller（leader 最後）→ REST → C3 → 操作機；9.6 → 9.8 這種小版本更新也是這一個動作
+#   bash steps/30-os-patch.sh verify [版本]  30.5 驗證：每台的 OS 版本（給了版本就必須相同）、versionlock 沒變、服務 active、under-replicated、REST 經 LB、C3
+#   ONLY_HOSTS="kb01" bash steps/30-os-patch.sh apply   只做列出的主機
 #   OS_REBOOT=auto|reboot|restart-services  「要重開機」時怎麼做：預設 auto——主機是容器（systemd-detect-virt -c）就改重啟平台服務
 #                                           （lab 的容器共用 WSL2 的核心，不能真的重開機），否則 sudo systemctl reboot
 #
@@ -103,7 +103,7 @@ patch_one() {
 
 plan() {
   local host counts
-  section "26.1 修補前：under-replicated、每台可更新的套件、versionlock"
+  section "30.1 修補前：under-replicated、每台可更新的套件、versionlock"
   # 剛做完 24 站（kb04 的 replica 還在追上）之類的操作，叢集要幾十秒才穩：最多等 5 分鐘，還不是 0 才算不健康
   wait_no_under_replicated() { local i; for i in $(seq 1 30); do [ "$(under_replicated_count)" = 0 ] && return 0; sleep 10; done; return 1; }
   if wait_no_under_replicated; then ok "沒有 under-replicated"; else fail "有 under-replicated（等了 5 分鐘還是有）：叢集不健康時不修補"; fi
@@ -119,21 +119,21 @@ apply() {
   local host leader
   plan
   [ "$FAIL_COUNT" = 0 ] || die "修補前檢查沒過"
-  section "26.2 broker 逐台"
+  section "30.2 broker 逐台"
   for host in $BROKERS; do selected "$host" && { patch_one "$host" || die "停在 $host"; }; done
-  section "26.3 controller 逐台，leader 最後"
+  section "30.3 controller 逐台，leader 最後"
   leader=$(current_leader)
   for host in $(for h in $CONTROLLERS; do [ "$h" != "$leader" ] && echo "$h"; done) $leader; do
     selected "$host" && { patch_one "$host" || die "停在 $host"; }
   done
-  section "26.4 REST Proxy、C3、操作機"
+  section "30.4 REST Proxy、C3、操作機"
   for host in $RESTS $C3_HOST $OPS_HOST; do selected "$host" && { patch_one "$host" || die "停在 $host"; }; done
 }
 
-# verify [版本]：26.5 驗證。給了版本（例如 9.8）每台的 OS 版本都要相同；versionlock 數量等於已裝的 confluent 套件數；服務 active；叢集與入口都健康
+# verify [版本]：30.5 驗證。給了版本（例如 9.8）每台的 OS 版本都要相同；versionlock 數量等於已裝的 confluent 套件數；服務 active；叢集與入口都健康
 verify() {
   local expected_os=${1:-} host result unit locked installed active os_version rest_code c3_code
-  section "26.5 驗證：OS 版本、versionlock、服務、叢集"
+  section "30.5 驗證：OS 版本、versionlock、服務、叢集"
   for host in $CONTROLLERS $BROKERS $RESTS $C3_HOST $OPS_HOST; do
     unit=$(unit_of "$host"); [ "$host" = "$OPS_HOST" ] && unit=""
     if [ "$host" = "$OPS_HOST" ]; then result=$(UNIT="" bash -s <<<"$VERIFY_HOST"); else result=$(ssh_script "$host" UNIT="$unit" <<<"$VERIFY_HOST"); fi

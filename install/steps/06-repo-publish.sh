@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 第 4 站：上架到內部套件庫 —— 操作機建索引，用 tar 經 ssh 推給銀行 web server 的部署帳號
+# 第 6 站：上架到內部套件庫 —— 操作機建索引，用 tar 經 ssh 推給銀行 web server 的部署帳號
 # where: ops02 （root）
 #
 # 做什麼：從銀行套件庫裝 createrepo_c、gettext → 組 ~/repo（RPM、公鑰、jar、SHA256SUMS）→ 建 repodata

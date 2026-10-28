@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# 第 25 站：日常備份 —— 叢集中繼資料每天匯出（RBAC、ACL、topic 與設定、SCRAM 帳號清單與配額、features、broker 動態設定）（手把手第 25 章）
+# 第 23 站：日常備份 —— 叢集中繼資料每天匯出（RBAC、ACL、topic 與設定、SCRAM 帳號清單與配額、features、broker 動態設定）（手把手第 23 章）
 # where: ops02 （root）
 # run: on-demand（不在安裝順序裡；裝好之後跑 grant、schedule 各一次，之後由 timer 每天跑 run）
 #
 # 用法：
-#   bash steps/25-metadata-backup.sh grant      svc-backup 的最小權限：RBAC SecurityAdmin＋ACL（Topic * 與 Cluster 的 Describe、DescribeConfigs）
-#                                               並產生 client-backup.properties；svc-backup 憑證要先有（conf/certs.txt，第 9 站或手把手 25.1）
-#   bash steps/25-metadata-backup.sh run        匯出一次到 ~/backup/metadata/<時間>/（變更前手動跑一次當快照）
-#   bash steps/25-metadata-backup.sh schedule   操作機的 systemd timer：每天 02:00 跑 run（以 root 身分）
-#   bash steps/25-metadata-backup.sh compare    比對最近兩次的備份，哪些檔有變
+#   bash steps/23-metadata-backup.sh grant      svc-backup 的最小權限：RBAC SecurityAdmin＋ACL（Topic * 與 Cluster 的 Describe、DescribeConfigs）
+#                                               並產生 client-backup.properties；svc-backup 憑證要先有（conf/certs.txt，第 9 站或手把手 23.1）
+#   bash steps/23-metadata-backup.sh run        匯出一次到 ~/backup/metadata/<時間>/（變更前手動跑一次當快照）
+#   bash steps/23-metadata-backup.sh schedule   操作機的 systemd timer：每天 02:00 跑 run（以 root 身分）
+#   bash steps/23-metadata-backup.sh compare    比對最近兩次的備份，哪些檔有變
 #
 # 各台的 /etc/confluent 由銀行的主機備份系統備；私鑰、密碼、master key 在事件發生時交 CyberArk，不在這支。
 set -uo pipefail
@@ -36,17 +36,17 @@ cli_as() {
 
 grant() {
   local admin=(--bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF")
-  section "25.1 svc-backup 憑證與 client 設定"
-  [ -s "$CERTS_DIR/svc-backup.p12" ] || die "沒有 $CERTS_DIR/svc-backup.p12：conf/certs.txt 要有 svc-backup，重跑第 9 站（或照手把手 25.1）"
+  section "23.1 svc-backup 憑證與 client 設定"
+  [ -s "$CERTS_DIR/svc-backup.p12" ] || die "沒有 $CERTS_DIR/svc-backup.p12：conf/certs.txt 要有 svc-backup，重跑第 9 站（或照手把手 23.1）"
   (umask 077; sed "s#/svc-ops.p12#/svc-backup.p12#" "$ADMIN_CLIENT_CONF" > "$BACKUP_CLIENT_CONF")
   grep -q svc-backup.p12 "$BACKUP_CLIENT_CONF" && ok "client-backup.properties 指向 svc-backup.p12" || die "client-backup.properties 產生失敗"
-  section "25.2 最小權限：SecurityAdmin＋兩條 ACL"
+  section "23.2 最小權限：SecurityAdmin＋兩條 ACL"
   if retry 3 5 cli_as svc-ops iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster "$(cluster_id)" >/dev/null; then ok "SecurityAdmin"
   else fail "SecurityAdmin role binding"; fi
   kafka-acls "${admin[@]}" --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --topic '*' >/dev/null 2>&1 &&
     kafka-acls "${admin[@]}" --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --cluster >/dev/null 2>&1 &&
     ok "ACL：$(kafka-acls "${admin[@]}" --list --principal User:svc-backup 2>/dev/null | grep -c 'operation=') 條" || fail "ACL"
-  section "25.2 反向：讀不到訊息、建不了 topic、改不了 role binding"
+  section "23.2 反向：讀不到訊息、建不了 topic、改不了 role binding"
   grep -q AuthorizationException <<<"$(kafka-console-consumer --bootstrap-server "$BROKER_TOKEN" --consumer.config "$BACKUP_CLIENT_CONF" --topic "$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk 'NF{print $1; exit}')" --from-beginning --max-messages 1 --timeout-ms 10000 2>&1)" && ok "讀訊息被拒" || fail "svc-backup 讀得到訊息"
   grep -q AuthorizationException <<<"$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$BACKUP_CLIENT_CONF" --create --topic backup-sneak --partitions 1 --replication-factor 3 2>&1)" && ok "建 topic 被拒" || fail "svc-backup 建得了 topic"
   grep -q 403 <<<"$(cli_as svc-backup iam rbac role-binding create --principal User:svc-backup --role SystemAdmin --kafka-cluster "$(cluster_id)" 2>&1)" && ok "改 role binding 被拒（403）" || fail "svc-backup 改得了 role binding"
@@ -57,7 +57,7 @@ run_backup() {
   local backup=(--bootstrap-server "$BROKER_TOKEN" --command-config "$BACKUP_CLIENT_CONF")
   [ -s "$BACKUP_CLIENT_CONF" ] || die "沒有 $BACKUP_CLIENT_CONF：先跑 bash $0 grant"
   out=$BACKUP_ROOT/$(date +%Y%m%d-%H%M); install -d -m 0700 "$out"
-  section "25.3 匯出到 $out"
+  section "23.3 匯出到 $out"
   # save <檔名> <指令…>：輸出存檔；失敗或空的就記下來，錯誤訊息留在 <檔名>.err
   save() { file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
   # 比對兩天的備份靠 sha256：features 的 Epoch 每次不同、ACL 與帳號清單的順序不固定，所以拿掉與排序
@@ -87,9 +87,9 @@ run_backup() {
 }
 
 schedule() {
-  section "25.4 每天 02:00 匯出（systemd timer：$TIMER_NAME）"
+  section "23.4 每天 02:00 匯出（systemd timer：$TIMER_NAME）"
   printf '[Unit]\nDescription=Confluent cluster metadata export\n\n[Service]\nType=oneshot\nUser=%s\nExecStart=/bin/bash %s run\n' \
-    "$(id -un)" "$INSTALL_DIR/steps/25-metadata-backup.sh" | tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
+    "$(id -un)" "$INSTALL_DIR/steps/23-metadata-backup.sh" | tee "/etc/systemd/system/$TIMER_NAME.service" >/dev/null
   printf '[Unit]\nDescription=Daily Confluent cluster metadata export\n\n[Timer]\nOnCalendar=*-*-* 02:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' |
     tee "/etc/systemd/system/$TIMER_NAME.timer" >/dev/null
   systemctl daemon-reload
@@ -103,7 +103,7 @@ compare() {
   local older newer
   read -r older newer <<<"$(cd "$BACKUP_ROOT" && ls -d 20* 2>/dev/null | tail -2 | paste -sd' ')"
   [ -n "${newer:-}" ] || die "$BACKUP_ROOT 裡不到兩次備份"
-  section "25.5 比對 $older → $newer"
+  section "23.5 比對 $older → $newer"
   join -1 2 -2 2 <(sort -k2 "$BACKUP_ROOT/$older/SHA256SUMS") <(sort -k2 "$BACKUP_ROOT/$newer/SHA256SUMS") |
     awk '{printf "%-18s %s\n", $1, ($2 == $3 ? "相同" : "有變")}' | while read -r line; do log "$line"; done
 }

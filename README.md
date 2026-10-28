@@ -2,7 +2,7 @@
 
 在完全離線的銀行環境安裝 Confluent Platform 企業版、再遷移到新版的**手動程序**，以及照同一條路寫成的安裝腳本。主線是「先裝**安裝基底**，再**遷移**到目標版本」：lab 在 Windows 11 的 Docker Desktop 上以容器模擬 RHEL 9 主機與銀行各團隊（AD、CA、套件庫、CyberArk PVWA），從零自建、照手冊逐章實跑驗證。
 
-| 元件 | 安裝基底（第 1–20 章） | 遷移目標（第 21、26、27 章） | 數量 |
+| 元件 | 安裝基底（第 2–19 章） | 遷移目標（第 29、30、31 章） | 數量 |
 |---|---|---|---|
 | Confluent Platform（Confluent Server，KRaft） | 8.2.4 | 8.3.2 | controller ×3、broker ×4 |
 | REST Proxy | 8.2.4 | 8.3.2 | ×2，前置 L4 負載平衡 |
@@ -17,7 +17,7 @@ C3 的版本由原廠相容表決定：2.5.x 支援 CP 到 8.2.x，2.6.x 支援�
 
 | 文件 | 給誰 | 來源 |
 |---|---|---|
-| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0–27 章；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
+| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 1–31 章＋附錄 A 建 lab、附錄 B 監控覆蓋率；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
 | `docs/Confluent-請銀行確認的事項.docx` | 銀行各團隊：待確認事項與我方預設 | `docs/questions-src/questions.md`（`node build.js`） |
 | `docs/Confluent-RPM安裝流程.pptx` | 銀行主管：RPM 安裝流程 14 頁 | `docs/deck-src/install.js`、`install-steps.js` |
 | `redesign/README.md` | 設計決策、教訓、待確認事項的紀錄 | 手寫 |
@@ -56,7 +56,7 @@ docs/journey-src/   手把手來源 journey.md、圖 diagrams.js、build.js；to
                     tools/run-full.sh（在 lab 照文件實跑）、tools/scan-log.sh（找 rc=0 但其實失敗的輸出）
 docs/questions-src/ 請銀行確認的事項（questions.md → build.js）
 docs/deck-src/      RPM 安裝流程簡報
-install/            照手冊一章一支的安裝腳本（install.sh、steps/01–26、conf/site.env），說明見 install/README.md
+install/            照手冊一章一支的安裝腳本（install.sh、steps/02–30（檔名照章號；第 7、25 章各拆成 07-1/2/3、25-1/2）、conf/site.env），說明見 install/README.md
                     install/lab/：lab 專用（bank-sim.sh 扮演銀行、run-customer.sh 從零跑整條主線＝基底＋遷移）
 opmenu/             維運選單（OP menu）原始碼；經離線引進流程送進操作機（手把手第 16 章）
 redesign/           設計討論紀錄
@@ -64,8 +64,8 @@ redesign/           設計討論紀錄
 
 ## lab
 
-- 照手把手第 0 章在 `~/kafka-lab/` 自建（compose 專案 `lab`，14 台容器 + 下載機 `dl01`）。不依賴本 repo 的任何檔案。
-- 照文件實跑：`bash docs/journey-src/tools/run-full.sh customer [起始章] [結束章]`（從第 0 章開始會先拆掉整個 lab，只留落地區 `~/kafka-lab/landing`〔`rpm/` = 基底、`rpm-target/` = 目標、`bank/` = 兩個 JDK〕和 OS 內容的下載快取 `bank-os/`）。
+- 照手把手附錄 A 在 `~/kafka-lab/` 自建（compose 專案 `lab`，14 台容器 + 下載機 `dl01`）。不依賴本 repo 的任何檔案。
+- 照文件實跑：`bash docs/journey-src/tools/run-full.sh customer [起始章] [結束章]`（從附錄 A 開始會先拆掉整個 lab，只留落地區 `~/kafka-lab/landing`〔`rpm/` = 基底、`rpm-target/` = 目標、`bank/` = 兩個 JDK〕和 OS 內容的下載快取 `bank-os/`）。
 - 照腳本實跑：`bash install/lab/run-customer.sh`（從零跑整條主線：裝 8.2.4／9.6、驗收、遷移到 8.3.2／JDK 25、OS 更新到 9.8、再驗收；升級不再是另一個演練）。
 
 ## 日常維運：操作機上的 OP menu
@@ -84,6 +84,6 @@ redesign/           設計討論紀錄
 
 ## 已知限制
 
-- 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。Confluent Server 的 raft 指標（`kafka_server_raft_metrics_*`）只有單台 controller 的環境抓得到；三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）一條都沒有，所以不能用來告警，quorum 健康改用 `ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount`；官方 `kraft.json` dashboard 在三台 controller 叢集只有 10／18 個 panel 有值（靠 raft 指標的是空的）。另外官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 17.9 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章尚未在完整 lab 從零跑過（見 .claude/state/status-redesign.md）。
+- 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。Confluent Server 的 raft 指標（`kafka_server_raft_metrics_*`）只有單台 controller 的環境抓得到；三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）一條都沒有，所以不能用來告警，quorum 健康改用 `ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount`；官方 `kraft.json` dashboard 在三台 controller 叢集只有 10／18 個 panel 有值（靠 raft 指標的是空的）。另外官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 B.1 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章尚未在完整 lab 從零跑過（見 .claude/state/status-redesign.md）。
 - CyberArk PAM 本身（PVWA 登入、PSMP 代登與錄影）與放私鑰的加密 file system（LUKS）無法在 lab 模擬：lab 直接以 root 進操作機，`/secure/ssh` 用獨立的 docker volume 代替（獨立掛載點，沒有加密）；只驗證我方拿到值之後的程序。
 - MDS token 金鑰不排輪替（公鑰檔放兩把沒有用，無法零中斷切換）；只在私鑰外洩時用 `install/lab/mds-token-key-rotate.sh` 驗過的程序換。

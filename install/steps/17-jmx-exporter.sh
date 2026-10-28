@@ -3,7 +3,7 @@
 #           並產出給銀行監控團隊（行內 Prometheus／Alertmanager／Grafana）的設定、告警規則、官方 dashboard
 # where: ops02 （root）
 #
-# 何時用：JMX_EXPORTER=1。jar 與 Confluent 官方的規則檔（jmx-monitoring-stacks）在第 1.4 站已帶進 ~/landing。
+# 何時用：JMX_EXPORTER=1。jar 與 Confluent 官方的規則檔（jmx-monitoring-stacks）在第 2.4 站已帶進 ~/landing。
 # 做什麼：
 #   17.1 抓取密碼（設定檔只存加鹽 SHA-256）、exporter 設定的標頭（HTTPS、帳密）
 #   17.2 每台的 exporter 設定 = 標頭 + Confluent 官方規則（controller／broker／REST）或我們的小規則（C3）
@@ -20,10 +20,10 @@ source "$INSTALL_DIR/lib/ssh.sh"
 source "$INSTALL_DIR/lib/render.sh"
 if [ "$JMX_EXPORTER" != 1 ]; then log "JMX_EXPORTER=$JMX_EXPORTER：略過第 17 站"; exit 0; fi
 EXPORTER_JAR=$(ls "$LANDING"/tools/jmx_prometheus_javaagent-*.jar 2>/dev/null | head -1)
-[ -n "$EXPORTER_JAR" ] || die "$LANDING/tools 沒有 jmx_prometheus_javaagent jar（第 1.4 站）"
+[ -n "$EXPORTER_JAR" ] || die "$LANDING/tools 沒有 jmx_prometheus_javaagent jar（第 2.4 站）"
 EXPORTER_JAR_NAME=$(basename "$EXPORTER_JAR")
-OFFICIAL=$LANDING/monitoring/jmx-monitoring-stacks     # Confluent 官方 jmx-monitoring-stacks（第 1.4 站，固定在一個 commit）
-[ -s "$OFFICIAL/COMMIT" ] || die "$OFFICIAL 不存在：官方規則檔還沒帶進來（第 1.4 站）"
+OFFICIAL=$LANDING/monitoring/jmx-monitoring-stacks     # Confluent 官方 jmx-monitoring-stacks（第 2.4 站，固定在一個 commit）
+[ -s "$OFFICIAL/COMMIT" ] || die "$OFFICIAL 不存在：官方規則檔還沒帶進來（第 2.4 站）"
 SCRAPE_PASSWORD_FILE=$SECRETS_DIR/jmx-scrape.pass   # Prometheus 抓取用的密碼（給銀行一份）
 SCRAPE_SALT_FILE=$SECRETS_DIR/jmx-scrape.salt       # 整個叢集共用一個鹽
 
@@ -60,7 +60,7 @@ cp "$TEMPLATE_DIR/jmx-rules-c3.yml" "$MONITORING_DIR/rules-c3.yml"
 log "c3：標頭 cp-server + 我們的 rules-c3.yml → $(wc -l < "$MONITORING_DIR/jmx-c3.yml") 行"
 ok "4 份設定：jmx-controller.yml、jmx-broker.yml、jmx-rest.yml、jmx-c3.yml"
 
-section "17.3 派送 jar 與設定、drop-in 掛上 javaagent（7071 在第 7 站已開）"
+section "17.3 派送 jar 與設定、drop-in 掛上 javaagent（7071 在7.3 節已開）"
 for host in $KAFKA_HOSTS $RESTS $C3_HOST; do
   case $host in
     kc*)   role=controller; config_path=/etc/confluent/kafka/jmx-exporter.yml;          opts_var=KAFKA_OPTS;;

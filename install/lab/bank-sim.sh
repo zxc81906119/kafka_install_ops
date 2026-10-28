@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # install/lab/bank-sim.sh — lab 專用：在 Windows Git Bash 扮演「銀行」，做手把手文件裡橘色標籤的事。
-# 正式環境沒有這支；安裝腳本只會印「請銀行做」。lab 依 docs/journey-src/journey.md 第 0 章建好（~/kafka-lab）。
+# 正式環境沒有這支；安裝腳本只會印「請銀行做」。lab 依 docs/journey-src/journey.md 附錄 A 建好（~/kafka-lab）。
 #   bash bank-sim.sh landing-layout 把舊的落地區版面（8.3.2 在 rpm/、8.2.4 在 landing-extra/）整理成 rpm/ = 基底、rpm-target/ = 目標
 #   bash bank-sim.sh push      把 install/ 送到 ops02（root，/root/install）與 dl01（root）
-#   bash bank-sim.sh os-content 3.2 銀行 OS 團隊備 OS 內容（拋棄式容器）：~/kafka-lab/bank-os/9.6（安裝基底的完整套件庫）、9.8-updates（9.6 主機升 9.8 需要的更新）、9.8（兩者合併的套件庫）
-#   bash bank-sim.sh intake    2.2 檔案交換：落地區 → ops02 ~/landing（唯讀）
-#   bash bank-sim.sh prepare   3.1 各主機建 cpuser＋sshd 設定＋公鑰（from=）＋安裝期 sudo、3.2 OS 套件庫＋根憑證信任、3.4 AD、3.5 NTP 與 LB
+#   bash bank-sim.sh os-content 5.1 銀行 OS 團隊備 OS 內容（拋棄式容器）：~/kafka-lab/bank-os/9.6（安裝基底的完整套件庫）、9.8-updates（9.6 主機升 9.8 需要的更新）、9.8（兩者合併的套件庫）
+#   bash bank-sim.sh intake    3.2 檔案交換：落地區 → ops02 ~/landing（唯讀）
+#   bash bank-sim.sh prepare   第 4 章 各主機建 cpuser＋sshd 設定＋公鑰（from=）＋安裝期 sudo、5.1 OS 套件庫＋根憑證信任、5.3 AD、5.4 NTP 與 LB
 #   bash bank-sim.sh sign      9.2 銀行 CA 簽 ops02 ~/pki/requests/*.csr → ~/pki/incoming/
-#   bash bank-sim.sh os-sync   26.5 銀行把套件庫同步到 OS_TARGET_VERSION（9.8）：把 os/9.8 換上 repo01 的 /os/
+#   bash bank-sim.sh os-sync   30.5 銀行把套件庫同步到 OS_TARGET_VERSION（9.8）：把 os/9.8 換上 repo01 的 /os/
 #   bash bank-sim.sh reset     down -v 後重新 up（從零）；dl01 保留
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
@@ -19,10 +19,10 @@ as_root_on() { docker exec "$(container_of "$1")" bash -c "$2"; }   # 在某台�
 as_root_on_ops() {   # 在操作機以 root 跑一段指令（人員經 PSMP 登入操作機就是 root；lab 直接 docker exec 進去）
   docker exec -w /root "$(container_of "$OPS_HOST")" bash -c "$1"; }
 announce() { printf '\n[bank] %s\n' "$*"; }
-NODE_IMAGE=${NODE_IMAGE:-lab-node:96}   # 主機映像（手把手 0.5.1）；9.6 的 tag 和舊的 9.8 映像分開，才不會誤用舊映像
+NODE_IMAGE=${NODE_IMAGE:-lab-node:96}   # 主機映像（手把手 A.1）；9.6 的 tag 和舊的 9.8 映像分開，才不會誤用舊映像
 OS_DIR=$LAB/bank-os                     # 銀行套件庫的內容（不是我們交付的檔案，所以不在落地區）：9.6（基底）、9.8-updates（更新集合）、9.8（合併後的完整套件庫）
 
-# 落地區版面（遷移主線）：rpm/ = 安裝基底、rpm-target/ = 遷移目標、bank/ = 兩個 JDK、c3/ = 第 27 章帶進來的單一 C3 版本、os/ = 銀行套件庫的內容（lab 才有）。
+# 落地區版面（遷移主線）：rpm/ = 安裝基底、rpm-target/ = 遷移目標、bank/ = 兩個 JDK、c3/ = 第 31 章帶進來的單一 C3 版本、os/ = 銀行套件庫的內容（lab 才有）。
 # 舊版面（8.3.2 在 rpm/、8.2.4 在 ~/kafka-lab/landing-extra/）整理成新版面；已經是新版面就什麼都不做。只搬檔案，不下載、不刪下載好的東西
 landing_layout() {
   local landing=$LAB/landing extra=$LAB/landing-extra file
@@ -49,13 +49,13 @@ push() {
 }
 
 intake() {
-  announce "2.2 檔案交換：$LAB/landing → $OPS_HOST:~/landing（唯讀）"
+  announce "3.2 檔案交換：$LAB/landing → $OPS_HOST:~/landing（唯讀）"
   as_root_on "$OPS_HOST" 'install -d /root/landing'
   docker cp "$(windows_path "$LAB/landing")/." "$(container_of "$OPS_HOST"):/root/landing/"
   as_root_on "$OPS_HOST" 'chmod -R a-w /root/landing && echo "$(find /root/landing -type f | wc -l) files, $(du -sh /root/landing | cut -f1)"'
 }
 
-# 3.1 OS 團隊在一台主機上做的事（以 root）：建 cpuser、sshd 設定、公鑰行、安裝期 sudo。參數：主機短名、authorized_keys 的整行
+# 第 4 章 OS 團隊在一台主機上做的事（以 root）：建 cpuser、sshd 設定、公鑰行、安裝期 sudo。參數：主機短名、authorized_keys 的整行
 os_team_cpuser() {
   local host=$1 line=$2
   docker exec -i -e LINE="$line" -e CPID="$SSH_USER_ID" -e CPUSER="$SSH_USER" "$(container_of "$host")" bash -s <<'BANK'
@@ -71,7 +71,7 @@ printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$CPUSER" > "/etc/sudoers.d/$CPUSER"; chmo
 BANK
 }
 
-# 3.2 / 26.5：銀行 OS 團隊備 OS 內容。全部在拋棄式容器（$NODE_IMAGE，乾淨的 9.6）裡做，結果放 ~/kafka-lab/bank-os/（銀行的東西，不經檔案交換進操作機）：
+# 5.1 / 30.5：銀行 OS 團隊備 OS 內容。全部在拋棄式容器（$NODE_IMAGE，乾淨的 9.6）裡做，結果放 ~/kafka-lab/bank-os/（銀行的東西，不經檔案交換進操作機）：
 #   os/9.6          平台要用的 OS 套件（chrony、firewalld、cyrus-sasl…加相依）＋索引；用 Rocky vault 的 9.6 內容（預設的 repo 會跟著最新小版本走，不能用）
 #   os/9.8-updates  「9.6 主機（裝了上面那些套件）升到 9.8 要的更新」：在容器裡把 9.6 套件裝起來，再對 pub/rocky/9.8 做 dnf update --downloadonly
 #   os/9.8          上面兩者合併＋索引 = 銀行把套件庫同步到 9.8 之後的樣子（os-sync 用）
@@ -104,49 +104,49 @@ mkdir -p /out/$TARGET/Packages && cp -a /out/$BASE/Packages/. /out/$TARGET/Packa
 echo "$TARGET（合併）：$(ls /out/$TARGET/Packages | wc -l) 個 RPM"'
 }
 
-# 26.5（lab）：銀行把套件庫同步到 OS_TARGET_VERSION：os/9.8 換上 repo01 的 /os/（正式環境是 Satellite／Nexus 同步，或 reposync 後 createrepo）
+# 30.5（lab）：銀行把套件庫同步到 OS_TARGET_VERSION：os/9.8 換上 repo01 的 /os/（正式環境是 Satellite／Nexus 同步，或 reposync 後 createrepo）
 os_sync() {
   [ -f "$OS_DIR/$OS_TARGET_VERSION/repodata/repomd.xml" ] || { echo "$OS_DIR/$OS_TARGET_VERSION 沒有：先 bash bank-sim.sh os-content"; return 1; }
-  announce "26.5 銀行套件庫同步到 $OS_TARGET_VERSION：$(ls "$OS_DIR/$OS_TARGET_VERSION/Packages" | wc -l) 個 RPM"
+  announce "30.5 銀行套件庫同步到 $OS_TARGET_VERSION：$(ls "$OS_DIR/$OS_TARGET_VERSION/Packages" | wc -l) 個 RPM"
   as_root_on "$REPO_HOST" 'rm -rf /var/www/repo/os/*'
   docker cp "$(windows_path "$OS_DIR/$OS_TARGET_VERSION")/." "$(container_of "$REPO_HOST"):/var/www/repo/os/"
   as_root_on "$REPO_HOST" 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os/Packages | wc -l'
 }
 
 prepare() {
-  # 3.1：操作機（root）已在 /secure/ssh 產生金鑰對（第 3 站）。公鑰行 = from="<操作機 IP>,127.0.0.1,::1" + 公鑰；
+  # 第 4 章：操作機（root）已在 /secure/ssh 產生金鑰對（第 4 站）。公鑰行 = from="<操作機 IP>,127.0.0.1,::1" + 公鑰；
   # OS 團隊在每台主機（含操作機自己）建 cpuser 並放這一行；repo01 的 repodeploy 放同一行
   local ops_ip public_key from_addrs line host
-  public_key=$(docker exec "$(container_of "$OPS_HOST")" cat "$SSH_KEY.pub" 2>/dev/null) || { echo "操作機上沒有 $SSH_KEY.pub：先跑第 3 站（bash install/install.sh --to 03）讓它產生金鑰"; return 1; }
+  public_key=$(docker exec "$(container_of "$OPS_HOST")" cat "$SSH_KEY.pub" 2>/dev/null) || { echo "操作機上沒有 $SSH_KEY.pub：先跑第 4 站（bash install/install.sh --to 03）讓它產生金鑰"; return 1; }
   ops_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$OPS_HOST")")
   from_addrs=${SSH_FROM_ADDRS:-$ops_ip,127.0.0.1,::1}
   line="from=\"$from_addrs\" $public_key"
-  announce "3.1 OS 團隊：每台主機（含 $OPS_HOST）建 $SSH_USER（UID $SSH_USER_ID）、sshd 只收金鑰、公鑰行 from=\"$from_addrs\"、安裝期 sudo"
+  announce "第 4 章 OS 團隊：每台主機（含 $OPS_HOST）建 $SSH_USER（UID $SSH_USER_ID）、sshd 只收金鑰、公鑰行 from=\"$from_addrs\"、安裝期 sudo"
   for host in $ALL_HOSTS; do os_team_cpuser "$host" "$line" && printf '%s ' "$host"; done; echo
-  announce "3.1 套件庫 $REPO_HOST：$REPO_DEPLOY_USER 放同一行公鑰"
+  announce "第 4 章 套件庫 $REPO_HOST：$REPO_DEPLOY_USER 放同一行公鑰"
   docker exec -i -e LINE="$line" "$(container_of "$REPO_HOST")" bash -c 'install -d -m 0700 -o repodeploy -g repodeploy /home/repodeploy/.ssh && printf "%s\n" "$LINE" > /home/repodeploy/.ssh/authorized_keys && chown repodeploy:repodeploy /home/repodeploy/.ssh/authorized_keys && chmod 0600 /home/repodeploy/.ssh/authorized_keys && ls -l /home/repodeploy/.ssh/authorized_keys'
 
-  # repo01 的 HTTPS 憑證要驗得過 ca/root.crt：手把手第 20 章演練過換 CA 的 lab，repo.crt 會是 G2／G3 簽的，用現在的 CA 重簽
+  # repo01 的 HTTPS 憑證要驗得過 ca/root.crt：手把手第 21 章演練過換 CA 的 lab，repo.crt 會是 G2／G3 簽的，用現在的 CA 重簽
   local repo_tls=$LAB/images/web/tls
   if ! openssl verify -CAfile "$(windows_path "$LAB/ca/root.crt")" -untrusted "$(windows_path "$repo_tls/repo.crt")" "$(windows_path "$repo_tls/repo.crt")" >/dev/null 2>&1; then
-    announce "3.2 套件庫管理員：repo01 的 HTTPS 憑證驗不過目前的根（之前換過 CA），用現在的 CA 重簽"
+    announce "5.1 套件庫管理員：repo01 的 HTTPS 憑證驗不過目前的根（之前換過 CA），用現在的 CA 重簽"
     openssl req -new -key "$(windows_path "$repo_tls/repo.key")" -out "$(windows_path "$repo_tls/repo.csr")" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null
     bash "$LAB/ca/sign.sh" "$repo_tls/repo.csr" "$repo_tls/repo.crt" && rm -f "$repo_tls/repo.csr"
     docker exec "$(container_of repo01)" systemctl restart httpd
   fi
 
-  announce "3.2 OS 套件庫（repo01 /os/）：$OS_BASE_VERSION 的完整內容（$OS_DIR/$OS_BASE_VERSION；沒有就先備）"
+  announce "5.1 OS 套件庫（repo01 /os/）：$OS_BASE_VERSION 的完整內容（$OS_DIR/$OS_BASE_VERSION；沒有就先備）"
   [ -f "$OS_DIR/$OS_BASE_VERSION/repodata/repomd.xml" ] || os_content
   as_root_on "$REPO_HOST" 'rm -rf /var/www/repo/os/*'
   docker cp "$(windows_path "$OS_DIR/$OS_BASE_VERSION")/." "$(container_of "$REPO_HOST"):/var/www/repo/os/"
   as_root_on "$REPO_HOST" 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os; ls /var/www/repo/os/Packages | wc -l'
-  announce "3.2 根憑證進每台主機的信任清單 + bank-os.repo"
+  announce "5.1 根憑證進每台主機的信任清單 + bank-os.repo"
   for h in $ALL_HOSTS; do
     docker cp "$(windows_path "$LAB/ca/root.crt")" "$(container_of "$h"):/etc/pki/ca-trust/source/anchors/bank-root.pem"
     as_root_on "$h" 'update-ca-trust && printf "[bank-os]\nname=Bank OS packages\nbaseurl='"$REPO_URL"'/os/\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\n" > /etc/yum.repos.d/bank-os.repo && rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9' && printf '%s ' "$h"
   done; echo
 
-  announce "3.4 AD 團隊：OU、群組、svc-mds-bind、alice/bob/carol；LDAPS 憑證；密碼交付"
+  announce "5.3 AD 團隊：OU、群組、svc-mds-bind、alice/bob/carol；LDAPS 憑證；密碼交付"
   for i in $(seq 1 30); do as_root_on "$AD_HOST" 'samba-tool user list >/dev/null 2>&1' && break; sleep 5; done
   if as_root_on "$AD_HOST" 'samba-tool ou list 2>/dev/null | grep -qE "^OU=Confluent(,|$)"'; then echo "AD 物件已存在，略過建立"; else
     as_root_on "$AD_HOST" 'install -d -m 0700 /root/secrets && for k in bind users; do [ -s /root/secrets/$k.pass ] && continue; until p=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $p =~ [A-Z] && $p =~ [a-z] && $p =~ [0-9] ]]; do :; done; (umask 077; printf "%s" "$p" > /root/secrets/$k.pass); done; B=DC=corp,DC=poc,DC=lab; samba-tool ou create "OU=Confluent,$B" && for ou in Users Groups Service; do samba-tool ou create "OU=$ou,OU=Confluent,$B"; done && samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" --userou="OU=Service,OU=Confluent" --description="read-only LDAP bind for Confluent MDS" && for g in kafka-admins kafka-operators kafka-devs; do samba-tool group add "$g" --groupou="OU=Groups,OU=Confluent"; done && for p in alice:kafka-admins bob:kafka-operators carol:kafka-devs; do u=${p%%:*}; g=${p#*:}; samba-tool user create "$u" "$(cat /root/secrets/users.pass)" --userou="OU=Users,OU=Confluent" && samba-tool group addmembers "$g" "$u" || exit 1; done; samba-tool group listmembers kafka-admins' | grep -v '^User\|^Added\|^$' || { echo "AD 測試帳號建立失敗（看上面的 samba-tool 訊息）"; exit 1; }
@@ -166,8 +166,8 @@ prepare() {
   done
   as_root_on "$OPS_HOST" 'ls -la /root/secrets | tail -n +4'
 
-  announce "3.5 NTP（repo01 兼任）與負載平衡（lb01 nginx L4）"
-  install -m 0755 "$INSTALL/lab/lb-member.sh" "$LAB/lb-member.sh"   # 3.5：LB 團隊停用／恢復 REST 成員（手把手 12.1 的五步）
+  announce "5.4 NTP（repo01 兼任）與負載平衡（lb01 nginx L4）"
+  install -m 0755 "$INSTALL/lab/lb-member.sh" "$LAB/lb-member.sh"   # 5.4：LB 團隊停用／恢復 REST 成員（手把手 12.1 的五步）
   as_root_on "$REPO_HOST" 'printf "[bank-os]\nname=Bank OS packages\nbaseurl=file:///var/www/repo/os/\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\n" > /etc/yum.repos.d/bank-os.repo; rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9; dnf -q -y --disablerepo="*" --enablerepo=bank-os install chrony >/dev/null && printf "local stratum 10\nallow 172.35.0.0/24\ndriftfile /var/lib/chrony/drift\n" > /etc/chrony.conf && systemctl enable --now chronyd >/dev/null 2>&1; systemctl restart chronyd; sleep 2; echo "chronyd $(systemctl is-active chronyd)"'
   as_root_on "$LB_HOST" 'mkdir -p /etc/nginx/stream.d && printf "upstream cp_rest {\n    hash \$remote_addr consistent;\n    server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s;\n    server rest02.poc.lab:8082 max_fails=2 fail_timeout=10s;\n}\nserver { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }\nupstream cp_c3 { server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s; }\nserver { listen 9021; proxy_pass cp_c3; proxy_connect_timeout 3s; proxy_timeout 1h; }\n" > /etc/nginx/stream.d/cp.conf && nginx -t 2>&1 | tail -1 && nginx -s reload'
 }
@@ -239,8 +239,8 @@ coldboot() {   # 19.4：機房停電：全部主機同時關、同時開
   docker exec "$(container_of "${BROKERS%% *}")" bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
 }
 
-ad_drill() {   # 11.3：AD 不通時，人員登不進 MDS、緊急帳號 kafka-admin（SCRAM，SystemAdmin）照樣能用；驗完把 AD 開回來
-  announce "11.3 AD 斷線演練：停 ad01 → alice 登不進、kafka-admin 仍可用 → 開回 ad01"
+ad_drill() {   # 11.2：AD 不通時，人員登不進 MDS、緊急帳號 kafka-admin（SCRAM，SystemAdmin）照樣能用；驗完把 AD 開回來
+  announce "11.2 AD 斷線演練：停 ad01 → alice 登不進、kafka-admin 仍可用 → 開回 ad01"
   local ops; ops=$(container_of "$OPS_HOST")
   docker stop "$(container_of "$AD_HOST")" >/dev/null && echo "ad01 已停"
   docker exec "$ops" bash -c 'export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-users.pass); code=$(curl -s -m 20 --cacert $CA -u "alice:$P" -o /dev/null -w "%{http_code}" https://kb01.poc.lab:8090/security/1.0/authenticate); unset P; echo "alice 登入 MDS：HTTP $code（不是 200 才對）"; T=$(mktemp -d); grep -v "^sasl.jaas.config" ~/conf/app-orders.properties > $T/c.properties; printf "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-admin\" password=\"%s\";\n" "$(cat ~/secrets/kafka-admin.pass)" >> $T/c.properties; n=$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list 2>/dev/null | grep -c .); echo "kafka-admin 從 9095 列 topic：$n 個"; rm -rf $T; [ "$code" != 200 ] && [ "$n" -gt 0 ]' </dev/null; local rc=$?
@@ -250,9 +250,9 @@ ad_drill() {   # 11.3：AD 不通時，人員登不進 MDS、緊急帳號 kafka-
   return $rc
 }
 
-sign_next() {   # 20.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
+sign_next() {   # 21.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
   local ca_dir=${1:-ca} csr cert_name
-  announce "20.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
+  announce "21.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
   rm -rf "$LAB/ca/exchange/next"; mkdir -p "$LAB/ca/exchange/next/signed"
   docker cp "$(container_of "$OPS_HOST"):/root/pki/next/requests" "$(windows_path "$LAB/ca/exchange/next/")"
   for csr in "$LAB"/ca/exchange/next/requests/*.csr; do cert_name=$(basename "$csr" .csr); bash "$LAB/$ca_dir/sign.sh" "$csr" "$LAB/ca/exchange/next/signed/$cert_name.crt"; done

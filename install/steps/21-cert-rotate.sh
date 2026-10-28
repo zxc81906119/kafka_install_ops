@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# 第 20 站：憑證輪替 —— leaf 換發（同一個 CA 或新 CA 簽），以及換 CA 時同步信任清單
+# 第 21 站：憑證輪替 —— leaf 換發（同一個 CA 或新 CA 簽），以及換 CA 時同步信任清單
 # where: ops02 （root）
 # run: on-demand（不在安裝順序裡；install.sh 照順序跑時略過，要換時直接執行這支）
 #
 # 用法：
-#   bash steps/20-cert-rotate.sh status       每張憑證的序號與剩幾天、各端點實際出示的是哪一張
-#   bash steps/20-cert-rotate.sh leaf         換發 conf/certs.txt 的全部 leaf：
+#   bash steps/21-cert-rotate.sh status       每張憑證的序號與剩幾天、各端點實際出示的是哪一張
+#   bash steps/21-cert-rotate.sh leaf         換發 conf/certs.txt 的全部 leaf：
 #                                             第一次：新私鑰＋CSR 放 ~/pki/next/，印「請銀行簽」，停下（rc 2）
 #                                             銀行放回 ~/pki/next/incoming/ 後再跑一次：檢查 → 做 keystore → 派送 → 滾動重啟 → 換成正本
-#   bash steps/20-cert-rotate.sh trust-sync   銀行換好各主機 OS 的 bank-root.pem 之後，把我方的信任清單同步成一樣、滾動重啟：
+#   bash steps/21-cert-rotate.sh trust-sync   銀行換好各主機 OS 的 bank-root.pem 之後，把我方的信任清單同步成一樣、滾動重啟：
 #                                             換 CA 階段一（bank-root.pem 是新舊兩張根）、階段三（只剩新根）都是這個動作
-#   bash steps/20-cert-rotate.sh chain <新中繼.pem>   leaf 不動，只把銀行給的新中繼重包進每個 p12（不用 CSR）→ 派送 → 滾動重啟 → 換成正本
-#                                             用在：中繼同私鑰續簽；根換私鑰但中繼沿用私鑰、由新根重簽（手把手 20.0 判斷表的第 3、5、7 列）
-# 換 CA 的三階段 = trust-sync（加新根）→ leaf（銀行用新 CA 簽）或 chain（中繼沿用私鑰時）→ trust-sync（退舊根）；手把手 20.3、20.4。
+#   bash steps/21-cert-rotate.sh chain <新中繼.pem>   leaf 不動，只把銀行給的新中繼重包進每個 p12（不用 CSR）→ 派送 → 滾動重啟 → 換成正本
+#                                             用在：中繼同私鑰續簽；根換私鑰但中繼沿用私鑰、由新根重簽（手把手 21.0 判斷表的第 3、5、7 列）
+# 換 CA 的三階段 = trust-sync（加新根）→ leaf（銀行用新 CA 簽）或 chain（中繼沿用私鑰時）→ trust-sync（退舊根）；手把手 21.3、21.4。
 #
 # 不變的東西：檔名、路徑、keystore 密碼。所以 properties 一個字都不用改，Secret Protection 的密文也不用重算。
 # 舊的正本留在 ~/pki/old-<日期時間>/。
@@ -72,7 +72,7 @@ show_status() {
 # ---- leaf 第一段：新私鑰與 CSR ----
 create_requests() {
   local cert_name eku san_names extensions
-  section "20.2.1 新私鑰與 CSR（照 requests.txt：CN、SAN、EKU 不變）"
+  section "21.2.1 新私鑰與 CSR（照 requests.txt：CN、SAN、EKU 不變）"
   install -d -m 0700 "$NEXT_DIR" "$NEXT_DIR/keys" "$NEXT_DIR/requests" "$NEXT_DIR/incoming" "$NEXT_DIR/certs"
   while read -r cert_name eku san_names; do
     (umask 077; openssl genrsa -out "$NEXT_DIR/keys/$cert_name.key" 2048 2>/dev/null)
@@ -88,7 +88,7 @@ prepare_chain() {
   local new_chain_file=$1 cert_name
   [ -s "$new_chain_file" ] || die "找不到新中繼的 PEM：$new_chain_file（銀行給的中繼憑證；若有多層中繼依序放在同一個檔）"
   [ -e "$NEXT_DIR" ] && die "$NEXT_DIR 已經存在（上一輪還沒做完？）：確認後刪掉再跑"
-  section "20.4 換鏈：leaf 不動，配上新中繼 $(openssl x509 -in "$new_chain_file" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')（簽發者 $(openssl x509 -in "$new_chain_file" -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')）"
+  section "21.4 換鏈：leaf 不動，配上新中繼 $(openssl x509 -in "$new_chain_file" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')（簽發者 $(openssl x509 -in "$new_chain_file" -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')）"
   install -d -m 0700 "$NEXT_DIR" "$NEXT_DIR/keys" "$NEXT_DIR/requests" "$NEXT_DIR/incoming" "$NEXT_DIR/certs"
   for cert_name in $(awk '{print $1}' "$REQUESTS_FILE"); do
     install -m 0600 "$KEYS_DIR/$cert_name.key" "$NEXT_DIR/keys/"
@@ -102,7 +102,7 @@ prepare_chain() {
 # ---- leaf 第二段：銀行回覆檢查、做 keystore ----
 check_and_build() {
   local cert_name eku san_names leaf problems cert_pubkey key_pubkey common_name actual_san expected_san days_left chain_ok issuer
-  section "20.2.3 拆開回覆、五項檢查＋憑證鏈（對 OS 的 bank-root.pem 驗；換 CA 階段二時它是新舊兩張根）"
+  section "21.2.3 拆開回覆、五項檢查＋憑證鏈（對 OS 的 bank-root.pem 驗；換 CA 階段二時它是新舊兩張根）"
   for cert_name in $(awk '{print $1}' "$REQUESTS_FILE"); do
     awk -v out="$NEXT_DIR/incoming/$cert_name.part" 'BEGIN{n=0} /BEGIN CERT/{n++} {print > (out n)}' "$NEXT_DIR/incoming/$cert_name.crt"
     mv "$NEXT_DIR/incoming/$cert_name.part1" "$NEXT_DIR/incoming/$cert_name.leaf.pem"
@@ -142,7 +142,7 @@ check_and_build() {
 # ---- leaf 第三段：派送、滾動重啟、確認出示新序號 ----
 deploy_and_restart() {
   local host file_list endpoint expected served attempt
-  section "20.2.4 派送（全部主機先放好；服務只在啟動時讀檔）→ 滾動重啟 → 確認每個端點出示新的"
+  section "21.2.4 派送（全部主機先放好；服務只在啟動時讀檔）→ 滾動重啟 → 確認每個端點出示新的"
   for host in $CLUSTER_HOSTS; do
     file_list=$(files_for_host "$host")
     # shellcheck disable=SC2086
@@ -170,7 +170,7 @@ EOF
 promote() {
   local old_dir cert_name
   old_dir=$PKI_DIR/old-$(date +%Y%m%d-%H%M%S)
-  section "20.2.5 換成正本（舊的移到 $old_dir）"
+  section "21.2.5 換成正本（舊的移到 $old_dir）"
   install -d -m 0700 "$old_dir/keys" "$old_dir/certs" "$old_dir/requests" "$old_dir/incoming"
   for cert_name in $(awk '{print $1}' "$REQUESTS_FILE"); do
     mv "$KEYS_DIR/$cert_name.key" "$old_dir/keys/"; mv "$CERTS_DIR/$cert_name.crt" "$CERTS_DIR/$cert_name.p12" "$old_dir/certs/"
@@ -269,7 +269,7 @@ case $ACTION in
       promote
     else
       create_requests
-      ask_bank "20.2.2 CA 窗口：簽 $NEXT_DIR/requests/*.csr（照 CSR 的 CN、SAN、EKU，一年；換 CA 階段二時用新 CA 簽），" \
+      ask_bank "21.2.2 CA 窗口：簽 $NEXT_DIR/requests/*.csr（照 CSR 的 CN、SAN、EKU，一年；換 CA 階段二時用新 CA 簽），" \
                "    回覆（憑證＋簽發 CA，PEM）放到 $NEXT_DIR/incoming/<名稱>.crt。放好後再跑一次：bash $0 leaf"
       wait_for_bank
     fi;;

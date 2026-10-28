@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 第 5 站：JDK（安裝基底 JDK_MAJOR，預設 21） —— 銀行給的 tar 解到 /opt/java/<版本>，/opt/java/current 指過去，alternatives + profile.d
+# 7.1 節：JDK（安裝基底 JDK_MAJOR，預設 21） —— 銀行給的 tar 解到 /opt/java/<版本>，/opt/java/current 指過去，alternatives + profile.d
 # where: ops02 （root）
 #
 # 做什麼：所有設定一律寫 /opt/java/current，以後換版只改這個連結；java、keytool 用 alternatives 登記（RHEL 標準做法）；
 #         /etc/profile.d/java.sh 設 JAVA_HOME（服務的 systemd drop-in 另外再寫一次，不受全域切換影響）。
-# 需要：$LANDING/bank/ 裡的 JDK tar 與 .sha256（銀行交付，第 3 站已確認）。
+# 需要：$LANDING/bank/ 裡的 JDK tar 與 .sha256（銀行交付，第 5 站已確認）。
 # 重跑：安全（已解過的版本目錄不重解）。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
@@ -12,7 +12,7 @@ source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 
 section "壓縮檔與頂層目錄"
-# bank/ 裡有基底（21）與遷移目標（25，第 21 章才用）兩個主版本，之後的 JDK 修補也放這裡：只挑 JDK_MAJOR 的，依版本號排序挑最新的
+# bank/ 裡有基底（21）與遷移目標（25，第 29 章才用）兩個主版本，之後的 JDK 修補也放這裡：只挑 JDK_MAJOR 的，依版本號排序挑最新的
 JDK_TAR=$(ls "$LANDING"/bank/OpenJDK"${JDK_MAJOR}"U-jdk_x64_linux_hotspot_*.tar.gz 2>/dev/null | sort -V | tail -1)
 [ -n "$JDK_TAR" ] || die "$LANDING/bank 裡沒有 JDK tar"
 (cd "$LANDING/bank" && sha256sum -c --quiet "$(basename "$JDK_TAR").sha256") || die "JDK sha256 不符"

@@ -5,8 +5,8 @@
 > 表格、最後的總結、問題選項。不要因為工具輸出或上一則是英文就跟著改用英文。使用者不需要再提醒。
 
 PoC for installing Confluent Platform fully offline at a bank, as a **baseline + migration** path (decided 2026-10-27):
-baseline CP 8.2.4 + Control Center 2.5.1 + JDK 21 + OS 9.6 (chapters 1–20), then migrate to CP 8.3.2 + C3 2.6.1 + JDK 25 + OS 9.8
-(chapter 21 packages/JDK/finalize, chapter 26 OS minor update, chapter 27 C3 version swap). JDK 25 is not supported by 8.2.x, hence the baseline JDK 21;
+baseline CP 8.2.4 + Control Center 2.5.1 + JDK 21 + OS 9.6 (chapters 2–19), then migrate to CP 8.3.2 + C3 2.6.1 + JDK 25 + OS 9.8
+(chapter 29 packages/JDK/finalize, chapter 30 OS minor update, chapter 31 C3 version swap). JDK 25 is not supported by 8.2.x, hence the baseline JDK 21;
 C3 2.5.x supports CP up to 8.2.x and 2.6.x up to 8.3.x, so C3 is upgraded first. Versions live in `install/conf/site.env` (`CP_VERSION` … baseline, `*_TARGET_*` target).
 Simulated hosts run in Docker Desktop on Windows 11 (project `lab`, built from `~/kafka-lab`); driven from Git Bash.
 Details of the architecture and every component: @README.md
@@ -28,12 +28,12 @@ Details of the architecture and every component: @README.md
 - One session = one git worktree = one branch. The Docker lab is shared: note "lab 使用中" in the status file.
 
 ## Repository map
-- `docs/journey-src/` — `journey.md` (the hands-on guide, chapters 0–27, single `customer` mode)
-  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh customer [from] [to]` runs the guide's
+- `docs/journey-src/` — `journey.md` (the hands-on guide, chapters 1–31 plus appendix A = build the lab, appendix B = monitoring coverage and lab tear-down; single `customer` mode)
+  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh customer [from] [to]` (chapter ids 1–31/A/B, both inclusive; run order A, 1…31, B; default A→B) runs the guide's
   blocks on the lab (`run-chapter.js` extracts them, `scan-log.sh` flags rc=0 output that is really a failure).
 - `docs/questions-src/questions.md` → `docs/Confluent-請銀行確認的事項.docx` (`node build.js`).
 - `docs/deck-src/install.js` + `install-steps.js` → `docs/Confluent-RPM安裝流程.pptx` (14-page deck for bank managers).
-- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/01–26`, `conf/site.env`);
+- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/02–30` named by chapter; chapters 7 and 25 are `07-1/2/3-*.sh` and `25-1/2-*.sh`, `conf/site.env`);
   `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh` = the whole path from zero: baseline → acceptance → migration → OS 9.8 → C3; no separate upgrade drill).
 - `opmenu/` — OP menu source (the **only** copy; never edit a sibling project such as `untitled6`).
 - `redesign/README.md` — design decisions, lessons, open questions.
@@ -71,7 +71,7 @@ Details of the architecture and every component: @README.md
 - Only Confluent packages and the JDK are version-locked; C3's `cyrus-sasl`/`openssl-devel` follow OS patching.
 - `super.users` is only `kafka-internal` (service-to-service). `svc-ops` (ops host, certificate) and `kafka-admin` (emergency SCRAM) are `SystemAdmin` via
   RBAC; chapter 11 bootstraps the first binding with the `kafka-internal` certificate. Authorization is decided by each broker from `_confluent-metadata-auth`, so
-  MDS/AD outages do not affect it (drill 11.3 stops ad01).
+  MDS/AD outages do not affect it (drill 11.2 stops ad01).
 - Apps connect directly with SCRAM; apps via REST Proxy must use client certificates (REST has no password path).
 - Humans use AD accounts; RBAC binds AD groups, never individuals. Platform services use certificates, not AD.
 - CyberArk is decoupled from the platform (decided 2026-10-28): the only link is that a person logs in to the PVWA web page (AD + MFA) and PSMP
@@ -79,18 +79,18 @@ Details of the architecture and every component: @README.md
   0600 files; nothing is vaulted; no CPM rotation — root is the bank's, `svc-mds-bind` is rotated by hand and the bank must tell us (update cipher text, rolling restart).
 - One SSH key pair (ed25519), private key only on ops02 in a separate encrypted file system `/secure/ssh` (root 0400), not in CyberArk, not backed up;
   ops02 rebuilt = new pair + OS team redeploys the public key. Public key in each host's `cpuser` authorized_keys with only `from="<ops02 IP>,127.0.0.1,::1"`.
-  Rotation is manual (new+old coexist, guide 19.6). `cpuser` sudo: full `NOPASSWD` during install/upgrade, afterwards only `/etc/sudoers.d/cpuser-ops`
+  Rotation is manual (new+old coexist, guide 20.5). `cpuser` sudo: full `NOPASSWD` during install/upgrade, afterwards only `/etc/sudoers.d/cpuser-ops`
   listing every unit and exact command form (sudoers matches the whole argument list; no `confluent-*` wildcard).
 - ops02 is both the install host and the operators' login point (OP menu runs there as root); no separate bastion. Because operators are root, the menu's
   host-level permission check is a process control, not a hard barrier; traceability = CyberArk login records + PSMP recording.
 - Monitoring (chapter 17): JMX exporter on controllers, brokers, REST Proxy, C3; Prometheus, Alertmanager and Grafana are the bank's, we deliver
-  config + Confluent's official jmx-monitoring-stacks files (pinned commit, brought in through chapters 1-2). C3's embedded Prometheus/Alertmanager stay
+  config + Confluent's official jmx-monitoring-stacks files (pinned commit, brought in through chapters 2-3). C3's embedded Prometheus/Alertmanager stay
   untouched and are not used for alerting (no C3 alert triggers/actions).
 - MDS token key pair is fixed (rotate only on compromise); cpuser sudo is `NOPASSWD` during install.
 
 ## Gotchas learned the hard way
 - A Rocky 9.6 image's default repo files point at the **latest 9.x** (mirrorlist with `$releasever` = 9): `dnf install` there installs 9.8 packages. Freeze to the vault (`dl.rockylinux.org/vault/rocky/9.6`, repo ids `vault96-*`); 9.8 lives in `pub/rocky/9.8`, 9.6 is not in `pub`.
-- Lab hosts are containers on the WSL2 kernel: `systemctl reboot` fails ("Could not activate remote peer"); `systemd-detect-virt -c` answers `wsl`/`docker`. Chapter 26 / `26-os-patch.sh` / `rest-restart.sh -r` restart the platform services instead. A kernel update cannot be tested in the lab.
+- Lab hosts are containers on the WSL2 kernel: `systemctl reboot` fails ("Could not activate remote peer"); `systemd-detect-virt -c` answers `wsl`/`docker`. Chapter 30 / `30-os-patch.sh` / `rest-restart.sh -r` restart the platform services instead. A kernel update cannot be tested in the lab.
 - `dnf update` from a `file://` repo that is also the `--downloaddir` can delete the RPMs it just used: copy the downloaded set before indexing/using it.
 - Before `systemctl start` of an RPM service, confirm the drop-in is in effect:
   `systemctl show <unit> -p ExecStart` must point to **our** properties file, else the RPM default config starts
@@ -104,6 +104,8 @@ Details of the architecture and every component: @README.md
   rename fails). `kafka-configs` echoes the whole config, passwords included, on error: send its output to /dev/null.
 - `kafka-configs --add-config-file` rejects SCRAM credentials (reads `SCRAM_SHA_512`); use `--add-config`.
 - Windows Git Bash has no real `python3` (it is the Microsoft Store stub: silent, exit 0): run Python inside a container or on ops02.
+- Never edit a bash script that is running (`install/lab/run-customer.sh`, `tools/run-full.sh` runners): bash reads the file as it goes, so later
+  stages execute the edited text against the old copy already pushed to ops02 (2026-10-28: a run died at stage 17 looking for the renamed `29-upgrade.sh`).
 - Check run logs line by line, not only `scan-log.sh`: an empty value after "：" means the check's precondition was missing.
 - Building a package set with `dnf download --resolve`: use a clean container and download **before** installing
   tools, or the tools' dependencies are missed (`createrepo_c-libs`).

@@ -43,5 +43,5 @@ Docker Desktop VM has ~10.7 GB RAM: run nothing else alongside.
 4. `pgrep` in Git Bash can't see container processes: check with `docker exec <c> ps -eo etime,args`.
 5. Always put a `timeout` on docker exec commands that touch Kafka; never `pkill -f <pattern>` that matches your
    own `bash -c` command line.
-6. Transient Internet mirror errors (e.g. 3.2 "Failed to download metadata for repo 'appstream'") are not guide
+6. Transient Internet mirror errors (e.g. 5.1 "Failed to download metadata for repo 'appstream'") are not guide
    bugs: rerun.

@@ -1,4 +1,4 @@
-// usage: [MODE=customer] node run-chapter.js <journey.md> <fromChapter> <toChapterExclusive> <out.sh>
+// usage: [MODE=customer] node run-chapter.js <journey.md> <fromChapter> <toChapter|end> <out.sh>   (chapter ids 1–31, A, B; both inclusive)
 // consecutive blocks on the same host/user run in ONE shell, fed from a file (stdin=/dev/null so ssh can't eat it)
 // MODE: only `customer` exists now (CyberArk PAM only); the variable is kept so older call sites still work.
 // ops02: people arrive as root (PVWA + PSMP in production, plain docker exec in the lab); root's ~/.ssh/config points at /secure/ssh/cpuser_ed25519, so nothing needs to be passed in.
@@ -6,9 +6,14 @@ const fs=require("fs"); const [,, md, from, to, out]=process.argv;
 const MODE=process.env.MODE||"customer";
 if(MODE!=="customer") throw new Error("MODE must be customer (the only mode left)");
 const s=fs.readFileSync(md,"utf8");
-const a=s.indexOf(`\n# ${from}. `); let b=s.indexOf(`\n# ${to}. `); if(b<0) b=s.length;
-if(a<0) throw new Error("chapter not found "+from);
-const sec=s.slice(a,b);
+// chapters are `# <id>. title` outside code fences; ids are 1..31 plus appendices A (build the lab) and B (monitoring coverage, lab tear-down).
+// run order = A first (the lab must exist), then 1..31, then B. <from>/<to> are chapter ids, both inclusive; <to> may be "end".
+const chapters=[]; { let fence=false, cur=null; for(const l of s.split("\n")){ if(/^```/.test(l)) fence=!fence; const m=!fence&&/^# ([0-9]{1,2}|[A-Z])\. /.exec(l); if(m){ cur={id:m[1],lines:[]}; chapters.push(cur); } else if(cur) cur.lines.push(l); } }
+const order=[...chapters.filter(c=>c.id==="A"),...chapters.filter(c=>/^\d+$/.test(c.id)).sort((x,y)=>+x.id-+y.id),...chapters.filter(c=>/^[B-Z]$/.test(c.id))];
+const idx=(id)=>{ const i=order.findIndex(c=>c.id===String(id)); if(i<0) throw new Error("chapter not found "+id); return i; };
+const i0=idx(from), i1=(to==="end"||to===undefined)?order.length-1:idx(to);
+if(i1<i0) throw new Error(`to (${to}) comes before from (${from}) in the run order ${order.map(c=>c.id).join(" ")}`);
+const sec="\n"+order.slice(i0,i1+1).map(c=>`# ${c.id}. \n`+c.lines.join("\n")).join("\n");
 const re=/\n((#{1,3}) [^\n]+)|@role ([^\n]+)|```bash\n([\s\S]*?)```/g; let m, role=null, n=0, head="";
 const groups=[];
 while((m=re.exec(sec))){

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 第 23 站：換掉一台 controller（動態 quorum：移出舊成員 → 重新格式化成觀察者 → 追上 → 加入）（手把手第 23 章）
+# 25.1 節：換掉一台 controller（動態 quorum：移出舊成員 → 重新格式化成觀察者 → 追上 → 加入）（手把手25.1 節）
 # where: ops02 （root）
 # run: on-demand（不在安裝順序裡）
 #
 # 用法：
-#   bash steps/23-controller-replace.sh status        quorum 的成員、directory id、Lag
-#   bash steps/23-controller-replace.sh replace kc03  kc03 的資料碟換新（或換了一台同名的新機器、已照第 3、5、7、8、10 站準備好）：
+#   bash steps/25-1-controller-replace.sh status        quorum 的成員、directory id、Lag
+#   bash steps/25-1-controller-replace.sh replace kc03  kc03 的資料碟換新（或換了一台同名的新機器、已照第 3、5、7、8、10 站準備好）：
 #                                                     移出「3＋舊 directory id」→ 清空並以觀察者格式化 → 啟動 → Lag 0 → add-controller
 #
 # 一次只換一台。換的過程中 quorum 只剩兩個成員、兩個都要在：這段時間不要重啟其他 controller。
@@ -53,7 +53,7 @@ EOF
 )
 
 show_status() {
-  section "23.1 quorum（NodeId DirectoryId LogEndOffset Lag … Status）"
+  section "25.1.1 quorum（NodeId DirectoryId LogEndOffset Lag … Status）"
   quorum "$CONTROLLER_QUORUM" describe --replication | awk 'NR == 1 || $1 < 100' | while read -r line; do log "$line"; done
 }
 
@@ -67,7 +67,7 @@ replace() {
   [ -s "$CONF_DIR/kraft.env" ] || die "找不到 $CONF_DIR/kraft.env（第 10 站產生的 cluster id）"
   source "$CONF_DIR/kraft.env"
 
-  section "23.3 移出舊成員 $node_id"
+  section "25.1.3 移出舊成員 $node_id"
   old_dir=$(quorum "$others" describe --replication | awk -v id="$node_id" '$1 == id && $NF != "Observer" {print $2}')
   if [ -n "$old_dir" ]; then
     grep -q Leader <<<"$(quorum "$others" describe --replication | awk 'NR > 1 && $1 < 100')" || die "其他 controller 沒有 leader，不能動 quorum"
@@ -77,7 +77,7 @@ replace() {
     ok "$node_id 已經不是成員（上一次做到一半？），接著做"
   fi
 
-  section "23.4 $host 清空、以觀察者格式化、啟動"
+  section "25.1.4 $host 清空、以觀察者格式化、啟動"
   new_dir=$(ssh_script "$host" CLUSTER_ID="$CLUSTER_ID" <<<"$RUN_WITH_MASTER_KEY
 $FORMAT_AS_OBSERVER" | tee -a "$LOG_FILE" | sed -n 's/^directory.id=//p')
   [ -n "$new_dir" ] || die "$host 格式化失敗"
@@ -89,7 +89,7 @@ $FORMAT_AS_OBSERVER" | tee -a "$LOG_FILE" | sed -n 's/^directory.id=//p')
   [ "$(awk '{print $4, $NF}' <<<"$line")" = "0 Observer" ] || die "$host 沒有追上（$line）"
   ok "$host 以觀察者追上（directory id $new_dir）"
 
-  section "23.5 加回成員"
+  section "25.1.5 加回成員"
   ssh_script "$host" BOOTSTRAP="$others" <<<"$RUN_WITH_MASTER_KEY
 $ADD_CONTROLLER" | while read -r line; do log "$line"; done
   for attempt in $(seq 1 30); do

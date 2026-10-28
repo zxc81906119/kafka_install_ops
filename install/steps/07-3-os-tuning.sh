@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 第 7 站：OS 調校 —— sysctl、limits、THP、時區/journald、chrony、firewalld
+# 7.3 節：OS 調校 —— sysctl、limits、THP、時區/journald、chrony、firewalld
 # where: ops02 （root）
 #
 # 做什麼：叢集 10 台做全部；操作機只做時區、journald、時間同步。

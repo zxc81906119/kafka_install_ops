@@ -1,9 +1,9 @@
 # install/ — 照手把手文件一章一支的安裝腳本
 
-`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 1–27 章的每一章，對應一支 `steps/NN-*.sh`（手把手只教手打指令，兩者的對照在下面「每一站」）。
+`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 2–31 章的每一章，對應一支 `steps/NN-*.sh`（檔名照章號；第 7 章三支 07-1/2/3、第 25 章兩支 25-1/2；第 1 章與兩個附錄沒有腳本）（手把手只教手打指令，兩者的對照在下面「每一站」）。
 腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
 
-**版本路徑**：主線是「先裝安裝基底、再遷移」——基底 Confluent Platform 8.2.4＋Control Center 2.5.1＋JDK 21＋RHEL 9.6（第 1–20 站），遷移到 8.3.2＋2.6.1＋JDK 25＋RHEL 9.8（第 21、26 站，第 27 站單獨換 C3 版本）。版本都在 `conf/site.env`：基底 `CP_VERSION`／`C3_VERSION`／`JDK_MAJOR`／`OS_BASE_VERSION`，目標 `*_TARGET_*`。
+**版本路徑**：主線是「先裝安裝基底、再遷移」——基底 Confluent Platform 8.2.4＋Control Center 2.5.1＋JDK 21＋RHEL 9.6（第 1–20 站），遷移到 8.3.2＋2.6.1＋JDK 25＋RHEL 9.8（第 21、26 站，第 31 站單獨換 C3 版本）。版本都在 `conf/site.env`：基底 `CP_VERSION`／`C3_VERSION`／`JDK_MAJOR`／`OS_BASE_VERSION`，目標 `*_TARGET_*`。
 
 **作業系統**：以 RHEL 9 為準（lab 用 Rocky Linux 9.6 → 9.8 從零跑完整條路；容器不能真的重開機，26 站遇到「要重開機」改重啟平台服務）。RHEL 10 是 Confluent Platform 8.2 起官方支援的，但這些腳本**沒有在 RHEL 10 實測過**；要上 RHEL 10 之前至少先驗 versionlock 外掛、原廠公鑰匯入與驗章、C3 前置套件，以及 CPU 是否支援 x86-64-v3。
 
@@ -19,28 +19,24 @@ install/
   lib/render.sh       render_template / render_templates / encrypt_passwords / ldap_password_from_env / count_plaintext_passwords
   lib/log.sh          section / log / ok / warn / fail / die / ask_bank / wait_for_bank / finish_step —— 畫面 + ~/install-logs/
   templates/          *.tpl（properties 範本，取自文件第 10、12、13 章）、*.dropin（systemd）、監控設定（exporter 規則、Prometheus scrape、告警規則、Alertmanager、Grafana datasource）
-  steps/01–14         核心：下載到 C3、總檢查
+  steps/02–14         核心：02 下載、03 引進、04 主機存取（ssh 金鑰、cpuser）、05 銀行準備、06 上架、07-1 JDK／07-2 檢查／07-3 OS 調校、08 套件、09 憑證、10–13 服務、14 總檢查
   steps/15–19         延伸：15 Secret Protection、16 OP menu、17 監控（JMX exporter＋行內 Prometheus／Alertmanager／Grafana 的設定）、18 稽核日誌、19 驗收
-  steps/20–26         隨時／遷移：20 憑證輪替（status｜leaf｜chain｜trust-sync）、21 遷移到新版（publish｜plan｜backup｜packages｜jdk｜finalize｜rollback｜adopt｜c3）、
-                      22 license 監控（status｜check｜schedule）、23 換 controller（status｜replace）、24 broker 增減（status｜remove｜add）、
-                      25 日常備份（grant｜run｜schedule｜compare）、26 OS 修補與小版本更新（plan｜apply｜verify）；照順序安裝時略過（21、26 是遷移主線，由人或 lab/run-customer.sh 依序呼叫）
-  tools/load.sh       演練用持續流量：start／stop／report（直連遺失幾筆、REST 失敗幾次）
-  lab/bank-sim.sh     lab 專用：Windows 端扮演銀行（每台建 cpuser＋sshd 設定＋公鑰行＋安裝期 sudo、OS 套件庫（9.6）、AD、NTP/LB、CA 簽發、檔案交換；os-content 備 9.6／9.8 的 OS 內容、os-sync 把套件庫同步到 9.8、landing-layout 整理落地區版面；延伸：monitoring / monitoring-stop / coldboot）
-  lab/run-customer.sh lab 專用：從零跑整條主線（基底 → 第 19 站驗收 → 第 21 站遷移 → 第 26 站 OS 9.8 → 第 27 站），每段後驗收，遷移期間持續流量
-  tools/lint.sh       靜態檢查：shellcheck（含送到遠端的 heredoc）＋「pipefail 下不准 | grep -q」；沒有 shellcheck 時用 docker image koalaman/shellcheck 跑
-```
+  steps/21–30         隨時／維運／遷移：21 憑證輪替（status｜leaf｜chain｜trust-sync）、23 日常備份（grant｜run｜schedule｜compare）、
+                      25-1 換 controller（status｜replace）、25-2 broker 增減（status｜remove｜add）、26 license 監控（status｜check｜schedule）、
+                      29 遷移到新版（publish｜plan｜backup｜packages｜jdk｜finalize｜rollback｜adopt｜c3）、30 OS 修補與小版本更新（plan｜apply｜verify）；
+                      照順序安裝時略過（29、30 是遷移主線，由人或 lab/run-customer.sh 依序呼叫）。第 20 章（密碼與金鑰輪替）的演練分散在 11／15／19 站的既有程式與 OP menu，沒有獨立一支
 
 ## 怎麼跑
 
 | 在哪 | 誰 | 指令 | 說明 |
 |---|---|---|---|
-| 下載機 | root | `bash install/steps/01-download.sh` | 第 1 站。落地區掛在 `/out`（可用 `OUT=` 改） |
-| 操作機 | root | `bash install/install.sh` | 第 2 站起依序跑；第 1 站只提示「請在 dl01 執行」 |
+| 下載機 | root | `bash install/steps/02-download.sh` | 第 2 站。落地區掛在 `/out`（可用 `OUT=` 改） |
+| 操作機 | root | `bash install/install.sh` | 第 3 站起依序跑；第 2 站只提示「請在 dl01 執行」 |
 | 操作機 | root | `bash install/install.sh --from 09` | 銀行做完後從某一站續跑 |
 | 操作機 | root | `bash install/install.sh --list` | 看每站是否 done（`~/install-logs/<step>.done`） |
 
 - 每一步 rc 0 成功、rc 2 **等銀行**（印出「請銀行做」清單；銀行做完後 `--from` 同一站重跑）、其他 rc 失敗（看 `~/install-logs/` 最新的 log）。
-- 銀行的事腳本**不代做**，只印清單並驗證結果：第 2 站的掃描與交換、第 3 站的公鑰／套件庫／根憑證／JDK／AD／NTP／LB、第 9 站的簽發。
+- 銀行的事腳本**不代做**，只印清單並驗證結果：第 3 站的掃描與交換、第 4、5 站的公鑰／套件庫／根憑證／JDK／AD／NTP／LB、第 9 站的簽發。
 - 重跑是安全的：dnf、install、tee 都是覆蓋成一樣的內容；格式化看到 `meta.properties` 就略過；密碼檔、cluster id、MDS token 金鑰只在不存在時產生；topic 用 `--if-not-exists`。
 - 密碼不進畫面、不進 log：`~/pki/store.pass`、`~/secrets/*.pass`（0600）讀進變數後交給 envsubst 或指令。
 
@@ -50,26 +46,27 @@ install/
 
 | 站 | 指令 | 會停下等銀行（rc 2）／注意 |
 |---|---|---|
-| 1 | 下載機（root）`bash install/steps/01-download.sh` | 落地區預設 `/out`（`OUT=` 可改）；一次抓兩套：`rpm/` = 安裝基底（CP_VERSION＋C3_VERSION）、`rpm-target/` = 遷移目標，加兩個 JDK（`bank/`）；已下載的檔案 `dnf download` 會 SKIPPED。OS 套件本身不在這裡（銀行套件庫的事；`os-packages.txt` 只是清單） |
-| 2 | `bash install/install.sh --only 02` | 掃描、開單、檔案交換是銀行的事：印清單（兩套 RPM 合計約 6 GB，一次送）；送到後核對 SHA256SUMS 與兩套 RPM 的原廠簽章 |
-| 3 | `--only 03` | 我方只在獨立 file system（`/secure/ssh`，沒掛載就停）產生 ssh 金鑰對並印出公鑰行；各主機的 cpuser＋sshd 設定＋公鑰＋安裝期 sudo 是 OS 團隊的事；cpuser 金鑰登入（含 sudo、密碼鎖定、sshd 只收金鑰）、根憑證、OS 套件庫、JDK、LDAPS、負載平衡任一項沒好就停 |
-| 4–8 | `--only 04` … `--only 08` | 6 只讀；8 裝套件並 versionlock |
+| 2 | 下載機（root）`bash install/steps/02-download.sh` | 落地區預設 `/out`（`OUT=` 可改）；一次抓兩套：`rpm/` = 安裝基底（CP_VERSION＋C3_VERSION）、`rpm-target/` = 遷移目標，加兩個 JDK（`bank/`）；已下載的檔案 `dnf download` 會 SKIPPED。OS 套件本身不在這裡（銀行套件庫的事；`os-packages.txt` 只是清單） |
+| 3 | `bash install/install.sh --only 03` | 掃描、開單、檔案交換是銀行的事：印清單（兩套 RPM 合計約 6 GB，一次送）；送到後核對 SHA256SUMS 與兩套 RPM 的原廠簽章 |
+| 4 | `--only 04` | 我方只在獨立 file system（`/secure/ssh`，沒掛載就停）產生 ssh 金鑰對並印出公鑰行；各主機的 cpuser＋sshd 設定＋公鑰＋安裝期 sudo 是 OS 團隊的事；cpuser 金鑰登入（含 sudo、密碼鎖定、sshd 只收金鑰）、根憑證、OS 套件庫、JDK、LDAPS、負載平衡任一項沒好就停 |
+| 5 | `--only 05` | 只確認銀行的事：每台的根憑證信任與 OS 套件庫、JDK tar 與 sha256、LDAPS 憑證鏈與密碼檔、負載平衡在聽；沒好就停（rc 2） |
+| 6–8 | `--only 06` … `--only 08` | 7 是三支（07-1 JDK、07-2 檢查只讀、07-3 OS 調校）；8 裝套件並 versionlock |
 | 9 | `--only 09` | 第一次產生私鑰與 CSR 後停在「請銀行簽」；回覆放進 `~/pki/incoming/` 再跑一次 |
 | 10 | `--only 10` | 重跑時設定或 drop-in 有變、服務在跑的主機一台一台重啟；15 做過會照樣加密，18 做過會帶上稽核設定 |
 | 11–13 | `--only 11` … `--only 13` | 12、13 重跑時 15 做過會照樣加密 |
-| 14 | `--only 14` | 只讀的總檢查。2–14 可一次跑：`bash install/install.sh --to 14` |
-| 15 | `--only 15` | `SECRETS_MODE=sp` 才用；沒有 passphrase 檔且沒有 master key 時，由工程師在操作機自己產生（`~/secrets/sp-passphrase.txt`，0600），接著產生 master key（`~/secrets/master.key`），不用等任何人；15.6 輪替不在腳本裡 |
+| 14 | `--only 14` | 只讀的總檢查。3–14 可一次跑：`bash install/install.sh --to 14` |
+| 15 | `--only 15` | `SECRETS_MODE=sp` 才用；沒有 passphrase 檔且沒有 master key 時，由工程師在操作機自己產生（`~/secrets/sp-passphrase.txt`，0600），接著產生 master key（`~/secrets/master.key`），不用等任何人；20.3 輪替不在腳本裡 |
 | 16 | `--only 16` | `OPMENU=1`；選單以 root 跑；16.4 寫每台的 `/etc/sudoers.d/cpuser-ops`（逐一列出服務與寫法）；重啟、看日誌要維運人員互動登入選單試跑（`lab/opmenu-hostkey-test.sh` 驗 sudoers 與私鑰檔） |
-| 17 | `--only 17` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/to-bank/`（prometheus／alertmanager／grafana）；官方規則與 dashboard 取自 `~/landing/monitoring/`（第 1 站帶進來）；C3 內建 Prometheus／Alertmanager 不動 |
+| 17 | `--only 17` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/to-bank/`（prometheus／alertmanager／grafana）；官方規則與 dashboard 取自 `~/landing/monitoring/`（第 2 站帶進來）；C3 內建 Prometheus／Alertmanager 不動 |
 | 18 | `--only 18` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15 留下的）處理 |
 | 19 | `--only 19` | 印「驗收：N / N 項通過」；冷開機（19.4）交給機房演練 |
-| 20 | `bash install/steps/20-cert-rotate.sh status｜leaf｜chain 新中繼.pem｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；`chain` 用在中繼沒換私鑰（leaf 不重簽、只把新中繼重包進 p12）；換 CA 三階段 = `trust-sync` → `leaf`（或 `chain`）→ `trust-sync`。先看手把手 20.0 判斷是哪一種 |
-| 21 | `bash install/steps/21-upgrade.sh publish｜plan｜backup｜packages｜jdk｜finalize 4.3｜rollback 主機｜adopt`（`c3 <版本>`、`publish c3` 見右） | 遷移主線，不在 install.sh 的順序裡。版本取自 `site.env` 的 `*_TARGET_*`；`publish` 把 `rpm-target/` 上架（基底留著）；`packages` 先換 C3（2.5.1 → 2.6.1，因為 2.5.x 不支援 8.3）再 broker → controller（leader 最後）→ REST → 操作機；每段結束跑第 19 站；`jdk` 預設換成 `JDK_TARGET_MAJOR`；finalize 要帶 `CONFIRM_CLUSTER_ID`（不能退）；rollback 只在 finalize 之前（預設退回 `CP_VERSION`）；`adopt` 把 `site.env` 的基底版本改成目標值。`c3 <版本>` 只換 Control Center（手把手第 27 章），比現在新就升、舊就退，Prometheus、Alertmanager 一起重啟，C3 自己寫的 generated 檔擁有者會改回 `cp-control-center`；`publish c3` 上架 `landing/c3/` 的單一 C3 RPM |
-| 22 | `bash install/steps/22-license.sh status｜check｜schedule` | 不在安裝順序裡。`schedule` 裝操作機的 systemd timer（每天 08:00 跑 `check`，寫 syslog tag `confluent-license`）；rc 0 正常、2 剩不到 `LICENSE_WARN_DAYS`（預設 90）天、1 過期或讀不到 |
-| 23 | `bash install/steps/23-controller-replace.sh status｜replace kc03` | 不在安裝順序裡。同名主機（換碟或換機器且已照 3、5、7、8、10 站準備好）：移出舊成員 → 清空並以觀察者格式化 → 追上 → `add-controller`；一次一台 |
-| 24 | `bash install/steps/24-broker-scale.sh status｜remove kb04｜add kb04` | 不在安裝順序裡。`remove` 由 Self-Balancing 搬走 replica、停用服務；`add` 清空並以觀察者格式化、啟動，Self-Balancing 自動搬回；永久縮減後改 `BROKERS`、重跑 12、13、16 站 |
-| 25 | `bash install/steps/25-metadata-backup.sh grant｜run｜schedule｜compare` | 不在安裝順序裡。`svc-backup` 憑證由第 9 站一起發（`conf/certs.txt`）；`grant` 給最小權限（SecurityAdmin＋Topic／Cluster 的 Describe、DescribeConfigs ACL）並做反向檢查；`schedule` 裝每天 02:00 的 timer（和手把手 25.4 同名，裝哪一個都是同一個 timer）；備份在 `~/backup/metadata/`，保留 `KEEP_DAYS`（預設 30）天 |
-| 26 | `bash install/steps/26-os-patch.sh plan｜apply｜verify [版本]` | 不在安裝順序裡。每月修補與小版本更新（9.6 → 9.8）同一套：broker 逐台 → controller（leader 最後）→ REST → C3 → 操作機；每台 `dnf update` 後用 `dnf needs-restarting` 判斷重開機或重啟平台服務（主機是容器時自動改重啟平台服務），健康了才下一台；`plan` 印目前與套件庫裡的 OS 版本，看到 `confluent-*` 在更新清單就停（versionlock 沒鎖好）；`verify 9.8` 檢查每台的 OS 版本、versionlock、服務、under-replicated、REST 經 LB、C3；`ONLY_HOSTS` 只做列出的主機。銀行把套件庫同步到新的小版本是銀行的事（lab：`bank-sim.sh os-sync`） |
+| 21 | `bash install/steps/21-cert-rotate.sh status｜leaf｜chain 新中繼.pem｜trust-sync` | 不在安裝順序裡。`leaf` 第一次停在「請銀行簽」，回覆放進 `~/pki/next/incoming/` 再跑；`chain` 用在中繼沒換私鑰（leaf 不重簽、只把新中繼重包進 p12）；換 CA 三階段 = `trust-sync` → `leaf`（或 `chain`）→ `trust-sync`。先看手把手 21.0 判斷是哪一種 |
+| 23 | `bash install/steps/23-metadata-backup.sh grant｜run｜schedule｜compare` | 不在安裝順序裡。`svc-backup` 憑證由第 9 站一起發（`conf/certs.txt`）；`grant` 給最小權限（SecurityAdmin＋Topic／Cluster 的 Describe、DescribeConfigs ACL）並做反向檢查；`schedule` 裝每天 02:00 的 timer（和手把手 23.4 同名，裝哪一個都是同一個 timer）；備份在 `~/backup/metadata/`，保留 `KEEP_DAYS`（預設 30）天 |
+| 25.1 | `bash install/steps/25-1-controller-replace.sh status｜replace kc03` | 不在安裝順序裡。同名主機（換碟或換機器且已照 3、5、7、8、10 站準備好）：移出舊成員 → 清空並以觀察者格式化 → 追上 → `add-controller`；一次一台 |
+| 25.2 | `bash install/steps/25-2-broker-scale.sh status｜remove kb04｜add kb04` | 不在安裝順序裡。`remove` 由 Self-Balancing 搬走 replica、停用服務；`add` 清空並以觀察者格式化、啟動，Self-Balancing 自動搬回；永久縮減後改 `BROKERS`、重跑 12、13、16 站 |
+| 26 | `bash install/steps/26-license.sh status｜check｜schedule` | 不在安裝順序裡。`schedule` 裝操作機的 systemd timer（每天 08:00 跑 `check`，寫 syslog tag `confluent-license`）；rc 0 正常、2 剩不到 `LICENSE_WARN_DAYS`（預設 90）天、1 過期或讀不到 |
+| 29 | `bash install/steps/29-upgrade.sh publish｜plan｜backup｜packages｜jdk｜finalize 4.3｜rollback 主機｜adopt`（`c3 <版本>`、`publish c3` 見右） | 遷移主線，不在 install.sh 的順序裡。版本取自 `site.env` 的 `*_TARGET_*`；`publish` 把 `rpm-target/` 上架（基底留著）；`packages` 先換 C3（2.5.1 → 2.6.1，因為 2.5.x 不支援 8.3）再 broker → controller（leader 最後）→ REST → 操作機；每段結束跑第 19 站；`jdk` 預設換成 `JDK_TARGET_MAJOR`；finalize 要帶 `CONFIRM_CLUSTER_ID`（不能退）；rollback 只在 finalize 之前（預設退回 `CP_VERSION`）；`adopt` 把 `site.env` 的基底版本改成目標值。`c3 <版本>` 只換 Control Center（手把手第 31 章），比現在新就升、舊就退，Prometheus、Alertmanager 一起重啟，C3 自己寫的 generated 檔擁有者會改回 `cp-control-center`；`publish c3` 上架 `landing/c3/` 的單一 C3 RPM |
+| 30 | `bash install/steps/30-os-patch.sh plan｜apply｜verify [版本]` | 不在安裝順序裡。每月修補與小版本更新（9.6 → 9.8）同一套：broker 逐台 → controller（leader 最後）→ REST → C3 → 操作機；每台 `dnf update` 後用 `dnf needs-restarting` 判斷重開機或重啟平台服務（主機是容器時自動改重啟平台服務），健康了才下一台；`plan` 印目前與套件庫裡的 OS 版本，看到 `confluent-*` 在更新清單就停（versionlock 沒鎖好）；`verify 9.8` 檢查每台的 OS 版本、versionlock、服務、under-replicated、REST 經 LB、C3；`ONLY_HOSTS` 只做列出的主機。銀行把套件庫同步到新的小版本是銀行的事（lab：`bank-sim.sh os-sync`） |
 
 ## lab 與客戶環境的設定差異（conf/site.env）
 
@@ -92,7 +89,7 @@ install/
 - **改了設定**（範本、`site.env` 的 heap 等）：重跑對應的站（10／12／13）。10 只重啟設定有變的主機；做過 16 會照樣加密，不會把明文寫回主機。
 - **換我方管的密碼**（keystore 密碼、AD 查詢密碼）：改 0600 密碼檔後重跑第 15 站（重新加密、滾動重啟）。
 - **改稽核規則**：改 `templates/audit.tpl` 後重跑第 18 站。
-- **換憑證**：第 20 站（見上表）。
+- **換憑證**：第 21 站（見上表）。
 
 ## 寫法約定（改腳本前先看）
 
@@ -125,7 +122,7 @@ install/
 
 - 主機清單、版本、AD DN、heap 在 `conf/site.env`，範本裡用 `${CONTROLLER_QUORUM}` 這類變數；文件裡是寫死的 lab 名稱。
 - REST Proxy 的 principal 對應規則由 `conf/apps.txt` 裡 `cert` 類的 app 產生（文件只有 app-legacy-billing 一個）。
-- 第 6 站「主機是乾淨的」在已安裝過的主機只警告，讓整套可以重跑。
+- 7.2 節「主機是乾淨的」在已安裝過的主機只警告，讓整套可以重跑。
 - 第 14 站的總檢查多了逐項 ok／FAIL，而不是一段輸出讓人自己對。
 
 ## lab 驗證
