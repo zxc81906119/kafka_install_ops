@@ -118,7 +118,7 @@ master_key_into_pvwa() {
 
 # 第 27 章 27.1–27.2：dl01 下載單一 C3 版本（演練用的 2.6.0）、驗章、送進操作機的落地區
 bring_in_c3_drill_version() {
-  docker exec dl01 bash -c 'V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && dnf -q download --destdir /out/c3 confluent-control-center-next-gen-$V && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls' </dev/null || return 1
+  docker exec dl01 bash -c 'V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)" && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls' </dev/null || return 1
   docker exec "$OPS_CONTAINER" bash -c 'rm -rf /root/landing/c3; mkdir -p /root/landing'
   docker cp "$(cygpath -m "$LAB/landing/c3")" "$OPS_CONTAINER:/root/landing/" && docker exec "$OPS_CONTAINER" bash -c "chmod -R a-w /root/landing/c3 && cd /root/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
 }

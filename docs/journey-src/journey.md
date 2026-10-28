@@ -7197,10 +7197,10 @@ lab 裡：已經是原廠最新的 2.6.1（21.3 升好的），所以演練是�
 
 @role 小安 | dl01 | root
 
-和第 1 章一樣指定精確版本；C3 的相依（`cyrus-sasl`、`openssl-devel`）來自銀行的 OS 套件庫，已經裝過，不用 `--resolve`：
+和第 1 章一樣指定精確版本；C3 的相依（`cyrus-sasl`、`openssl-devel`）來自銀行的 OS 套件庫，已經裝過，不用 `--resolve`。下載改成「`dnf` 只印出網址、`curl` 下載」：實測 `dnf download` 把這個約 1 GB 的 RPM 下載完整之後，行程常常不會結束（連線卡住）；`curl` 沒有這個問題。下載完用 `rpm -K` 驗簽章：
 
 ```bash
-V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && dnf -q download --destdir /out/c3 confluent-control-center-next-gen-$V && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls
+V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)" && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls
 ```
 
 ```out
