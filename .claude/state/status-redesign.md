@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-28 23:50（**lab 使用中**：腳本版從零重跑開始，紀錄 ~/kafka-lab-runs/script-final3-*.log）
+Updated: 2026-10-29 02:20（lab 使用中：補章 23.6 還原演練的手動驗證進行中；叢集在最終狀態 8.3.2／9.8／JDK 25）
 
 ## 現在在做什麼
 `bash docs/journey-src/tools/run-full.sh customer` 從零跑（開始 10:46，紀錄 `~/kafka-lab-runs/run-customer-0-99-20261028-1046.log`，路徑也在 `~/kafka-lab-runs/current-log.txt`）。
@@ -10,6 +10,10 @@ Updated: 2026-10-28 23:50（**lab 使用中**：腳本版從零重跑開始，�
 - 手把手 0–27 章（38 圖）＋ install 01–26 站；基底 OS 9.6／CP 8.2.4／C3 2.5.1／JDK 21 → 遷移 OS 9.8／CP 8.3.2／C3 2.6.1／JDK 25。
 - 腳本版從零跑完（舊文字），結束碼 0，各段驗收 39/39。
 - 2026-10-28：cp-server 改純 server（certs.txt、09／13／14／19／20 站、control-center.tpl、prometheus-generated.yml、手冊第 9／13／20 章、問題清單 6.2、圖）；19 站新增驗收「cp-server 只有 serverAuth 且連 9090 被拒」；第 17 章 raft 指標說明更正、兩條 raft 告警刪除。docx 已重建。
+
+## 進行中（2026-10-29 凌晨）
+- **腳本版從零重跑完成（02:02）**：全過、八次驗收 40/40、C3 JDK 25 驗證通過（細節 log/2026-10-28-script-run-and-next.md 最後一節）。第 4 項（從零重跑）**完成**；手冊修正（21.3 換 ca.pem、operators DeveloperRead、11.2／16.5／18.3 數值）由下一輪手冊實跑驗。
+- 開始補章：23.6 還原演練（草稿 scratchpad/draft-23.6-restore.md；圖 D.restore 已畫）→ 20.6 SCRAM A/B（草稿、圖 D.scramab 已畫）→ 24 → 28 → 27 → 22 → 30 保險。每章手動 → 文件 → 腳本。
 
 ## 進行中（2026-10-28 夜）
 - **手冊 A→B 從零實跑完成**（三段，346 塊全過；細節與發現見 log/2026-10-28-script-run-and-next.md 最後一節）。修了 20.3、29.1、21.3／21.4 加銀行 Prometheus 換 ca.pem、operators 改 DeveloperRead Topic:*、11.2／16.5／18.3 實測值；C3 改 JDK 25 已驗。這些修正**還沒再實跑**：由接著的腳本版從零重跑（含 11 段 AD 斷線、expect_versions C3 JDK 25）與下一輪手冊實跑驗。

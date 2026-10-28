@@ -12,3 +12,7 @@
 - **真實缺口**：附錄 B 覆蓋率 0／816——21.3 換 CA 後銀行 Prometheus 的 ca.pem 沒換，抓 7071 全部 TLS 失敗。手冊 21.3.2／21.3.4／21.4.2／21.4.5 各加「銀行監控團隊換 ca.pem、重啟 Prometheus、10 個 target up」區塊（lab：bank-monitoring/prometheus/confluent/ca.pem）。
 - **設計修正**：維運群組原本綁 DeveloperManage Topic:*（為了 DescribeConfigs），實測 bob 能建 topic；使用者決定收回，改 DeveloperRead Topic:*（rbac-opmenu.txt、16.2、opmenu README）。下一輪要驗 bob 的 11 健康檢查、21 重啟前檢查仍能跑。
 - 18.3 稽核事件數改成實測（alice x1、bob host-ops x2、bob kafka-cluster DENIED x1）。
+
+## 2026-10-29 02:02：腳本版從零重跑（重構後、脫鉤後、super user 改後）完成
+- 29 段全過、結束碼 0、0 FAIL；八次驗收全 40/40（基底、憑證換發、遷移三段、回滾、finalize、OS 9.8、C3）；版本檢查三次「10 台都符合」（最後 OS 9.8／8.3.2／2.6.1／JDK 25，**含 c3-01 JDK 25**）；遷移段直連 8,310 筆 0 遺失、REST 1,572 次 0 失敗；OS 段 2,921 筆 0 遺失、REST 556 次 0 失敗。第 11 段 AD 斷線演練（腳本版新增）通過。紀錄 ~/kafka-lab-runs/script-final3-1028-2350.log。
+- 14 個 WARN 都是預期的（16 站互動項目、license 試用版 29 天、縮減後提醒、容器不能重開機）。
