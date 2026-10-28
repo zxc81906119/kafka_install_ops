@@ -7221,7 +7221,7 @@ zookeeper-cluster.json                 11      0
 
 | dashboard（檔名） | 有資料／總數 | 判讀 |
 |---|---|---|
-| `kraft.json` | 10／18 | **部分**。有值的 panel 用的是不靠 raft 的指標；靠 `kafka_server_raft_metrics_*` 的那些 panel（leader、epoch、voter、commit／election latency 等；這輪沒有逐一對過是哪 8 個）是空的，因為三台 controller 的叢集 Prometheus 裡沒有任何 raft 指標（見 B.2 的備註）。看 quorum 用 `kafka-metadata-quorum describe --status` |
+| `kraft.json` | 10／18 | **部分**。有值的 panel 用的是不靠 raft 的指標；空的 8 個全靠 `kafka_server_raft_metrics_*`：Health、Current Leader、Current Epoch、Maximum time spent on electing a new leader、Append Records Rate、Average time spent to commit an entry in the raft log、Fetch Record Rate（兩個），因為三台 controller 的叢集 Prometheus 裡沒有任何 raft 指標（見 B.2 的備註）。看 quorum 用 `kafka-metadata-quorum describe --status` |
 | `kafka-cluster-kraft.json` | 67／80 | **可用**（主力）。這輪缺 13 個，其中能確定原因的有：「Offline Partitions Count」——官方 query 寫 `job="kafka-broker"`，但專用 controller 的叢集裡這個指標只在 `kafka-controller` 上，所以空（告警 `KafkaOfflinePartitions` 有涵蓋）；另 4 個是 Tiered Storage（我們沒開） |
 | `kafka-topics-kraft.json` | 13／13 | **可用**。topic 大小、流量、partition |
 | `kafka-transaction-coordinator.json` | 0／10 | **空**。這輪沒有應用程式使用交易（transaction），coordinator 沒有活動；有交易型應用之後再看 |
