@@ -731,7 +731,7 @@ D.restore = () => svg(800, 420, [
   box(24, 100, 172, 44, 'topic-configs.txt', ['retention 等動態設定'], 'teal'),
   box(24, 152, 172, 44, 'rbac.txt', ['每個 principal 的 binding'], 'purple'),
   box(24, 204, 172, 44, 'users.txt', ['SCRAM 帳號清單、配額'], 'amber'),
-  box(24, 256, 172, 44, 'acls.txt、broker-configs、features', ['演練不含；照樣可重建'], 'gray', { dash: true }),
+  box(24, 256, 172, 44, 'acls、broker-configs…', ['演練不含；照樣可重建'], 'gray', { dash: true }),
   box(270, 48, 230, 96, '重建 topic', ['kafka-topics --create', '--partitions／--replication-factor', 'kafka-configs --alter --add-config'], 'teal'),
   box(270, 152, 230, 44, '重建 role binding', ['confluent iam rbac role-binding create'], 'purple'),
   box(270, 204, 230, 96, '重建 SCRAM 帳號', ['kafka-configs --alter --add-config', 'SCRAM-SHA-512=[password=…]＋配額', '密碼來自操作機 ~/secrets（備份沒有）'], 'amber'),
@@ -745,7 +745,7 @@ D.restore = () => svg(800, 420, [
 // 22 application SCRAM rotation with an A/B pair (20.6)
 D.scramab = () => svg(800, 360, [
   box(20, 30, 170, 90, '① 平常', ['應用程式用 app-x-a', 'app-x-b 閒置（同樣權限）'], 'teal'), num(20, 30, '1'),
-  box(220, 30, 170, 90, '② 換 -b 的密碼', ['kafka-configs --alter', 'SCRAM-SHA-512=[password=新]', '應用程式完全不受影響'], 'amber'), num(220, 30, '2'),
+  box(220, 30, 170, 90, '② 換 -b 的密碼', ['kafka-configs --alter', 'SCRAM-SHA-512=[password=…]', '應用程式完全不受影響'], 'amber'), num(220, 30, '2'),
   box(420, 30, 170, 90, '③ 應用程式切到 -b', ['改設定、滾動重啟應用', '新連線用 -b，舊連線自然收掉', '流量不中斷'], 'blue'), num(420, 30, '3'),
   box(620, 30, 160, 90, '④ 下次換 -a', ['-a 現在閒置', '同樣的步驟倒過來'], 'gray'), num(620, 30, '4'),
   arrow(190, 75, 218, 75), arrow(390, 75, 418, 75), arrow(590, 75, 618, 75),
