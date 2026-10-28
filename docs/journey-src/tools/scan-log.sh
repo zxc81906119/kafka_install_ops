@@ -12,7 +12,7 @@ SUSPICIOUS='a password is required|Permission denied|FAIL |FAIL$|MDS=000|REST=00
 # 檢查的標籤後面沒有值（「alice 建 topic：」後面空白＝指令沒有輸出，多半是前提不成立）：不受下面的排除影響
 EMPTY_VALUE='：[[:space:]]*$'
 # 反向測試與已知無害的訊息（新增排除前先確認那行在文件裡就是預期輸出）
-EXPECTED='anon=401|→ 401|other-cert=401|no-cert=000|TLS 直接拒絕|（應被拒）|被拒|AuthorizationException|DENIED +x[0-9]|ignore[.]partial[.]result|LDAP_BIND_PASSWORD|讀訊息：|建 topic：|改 role binding：|^ok   |Permission denied (publickey)|ProblemSeverity'
+EXPECTED='anon=401|→ 401|other-cert=401|no-cert=000|TLS 直接拒絕|（應被拒）|被拒|AuthorizationException|DENIED +x[0-9]|ignore[.]partial[.]result|LDAP_BIND_PASSWORD|讀訊息：|建 topic：|改 role binding：|^ok   |Permission denied [(]publickey[)]|"severity": "ERROR"|ProblemSeverity'
 
 status=0
 for log in "$@"; do

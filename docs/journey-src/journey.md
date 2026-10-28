@@ -4380,17 +4380,17 @@ docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD"):/w:ro" lab-node:96
 dashboard                          panels    有資料  沒資料的 panel
 OTel_kafkametrics.json                  5      0  
 cluster-linking.json                   19     12  
-confluent-audit.json                    6      5  
+confluent-audit.json                    6      0  
 confluent-oracle-cdc.json              15      0  
 confluent-platform-kraft.json          23      8  
 confluent-platform.json                26      4  
-confluent-rbac.json                    10      0  
+confluent-rbac.json                    10      7  
 debezium-connectors.json               34      0  
 flink-jobmanager.json                  27      0  
 flink-taskmanager.json                 52      0  
 globalktable.json                      24      4  
-kafka-cluster-kraft.json               80     75  
-kafka-cluster.json                     87     72  
+kafka-cluster-kraft.json               80     67  
+kafka-cluster.json                     87     64  
 kafka-connect-cluster.json             54      0  
 kafka-consumer.json                    25      3  
 kafka-lag-exporter.json                 9      3  
@@ -4400,8 +4400,8 @@ kafka-stream.json                      27      0
 kafka-streams-rocksdb.json             40      0  
 kafka-topics-kraft.json                13     13  
 kafka-topics.json                      12     10  
-kafka-transaction-coordinator.json     10     10  
-kraft.json                             18     18  
+kafka-transaction-coordinator.json     10      0  
+kraft.json                             18     10  
 ksqldb-cluster.json                    38      0  
 librdkafka-application.json            52      0  
 mongo.json                             25      0  
@@ -4410,25 +4410,25 @@ rest-proxy.json                        10     10
 schema-registry-cluster.json           12      0  
 tiered-storage.json                     8      3  
 zookeeper-cluster.json                 11      0  
-合計 32 個 dashboard、816 個 panel、253 個有資料
+合計 32 個 dashboard、816 個 panel、221 個有資料
 ```
 
-怎麼讀這張表（Confluent Server 8.3.2 與 C3 2.6.1，也就是**遷移目標**的版本；lab 單 controller、單 broker、單 REST、單 C3 的實測。**安裝基底（8.2.4／2.5.1）的指標覆蓋沒有逐一重驗**：exporter 規則是版本無關的，但哪些 MBean 有資料以 8.2.4 實際為準，遷移完成後（21.10）再跑一次 17.7、17.9 對照；**RBAC、稽核、Tiered Storage 沒開，要在正式叢集上補驗**）：
+怎麼讀這張表（這是**安裝基底**——Confluent Server 8.2.4、C3 2.5.1——在 3 台 controller、4 台 broker、2 台 REST Proxy、1 台 C3 的完整 lab 上實測的結果，當時第 18 章的稽核還沒開。exporter 規則版本無關，但哪些 MBean 有資料以實際為準，遷移完成後（21.10）再跑一次 17.7、17.9 對照；**Tiered Storage 沒開，要在正式叢集上補驗**）：
 
 | dashboard（檔名） | 有資料／總數 | 判讀 |
 |---|---|---|
-| `kraft.json` | 在三台 controller 的叢集是空的 | **不可用**。這張全靠 `kafka_server_raft_metrics_*`，而三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）Prometheus 裡一條 raft 指標都沒有（見 17.10 的備註）；上面表格的 18／18 是單台 controller 的拋棄式環境量到的，不適用 |
-| `kafka-cluster-kraft.json` | 75／80 | **可用**（主力）。缺的 5 個：「Offline Partitions Count」——官方 query 寫 `job="kafka-broker"`，但專用 controller 的叢集裡這個指標只在 `kafka-controller` 上，所以空（告警 `KafkaOfflinePartitions` 有涵蓋）；另 4 個是 Tiered Storage（我們沒開） |
+| `kraft.json` | 10／18 | **部分**。有值的 panel 用的是不靠 raft 的指標；靠 `kafka_server_raft_metrics_*` 的那些 panel（leader、epoch、voter、commit／election latency 等；這輪沒有逐一對過是哪 8 個）是空的，因為三台 controller 的叢集 Prometheus 裡沒有任何 raft 指標（見 17.10 的備註）。看 quorum 用 `kafka-metadata-quorum describe --status` |
+| `kafka-cluster-kraft.json` | 67／80 | **可用**（主力）。這輪缺 13 個，其中能確定原因的有：「Offline Partitions Count」——官方 query 寫 `job="kafka-broker"`，但專用 controller 的叢集裡這個指標只在 `kafka-controller` 上，所以空（告警 `KafkaOfflinePartitions` 有涵蓋）；另 4 個是 Tiered Storage（我們沒開） |
 | `kafka-topics-kraft.json` | 13／13 | **可用**。topic 大小、流量、partition |
-| `kafka-transaction-coordinator.json` | 10／10 | **可用** |
+| `kafka-transaction-coordinator.json` | 0／10 | **空**。這輪沒有應用程式使用交易（transaction），coordinator 沒有活動；有交易型應用之後再看 |
 | `rest-proxy.json` | 10／10 | **可用**。每個 REST endpoint 的請求率、錯誤、延遲 |
-| `confluent-audit.json` | 5／6 | **可用**（第 18 章稽核啟用後）；缺的是「Fallback entries」，稽核寫不進 topic 才會有值 |
+| `confluent-audit.json` | 0／6（第 18 章稽核啟用之前） | **稽核啟用後才有值**；上一輪啟用後量到 5／6，缺的是「Fallback entries」，稽核寫不進 topic 才會有值 |
 | `confluent-platform-kraft.json` | 8／23 | **部分**。總覽裡 broker、controller 的部分有值；Schema Registry、Connect、ksqlDB 區塊是空的（我們沒有這些元件） |
-| `kafka-topics.json`、`kafka-cluster.json`、`confluent-platform.json` | 10／12、72／87、4／26 | **用 KRaft 版就好**。這三張是 ZooKeeper 時代的版本；「Total # of Topics」「Active Controllers」「Offline Partitions」等 panel 同樣寫 `job="kafka-broker"`，在專用 controller 的 KRaft 叢集裡是空的 |
+| `kafka-topics.json`、`kafka-cluster.json`、`confluent-platform.json` | 10／12、64／87、4／26 | **用 KRaft 版就好**。這三張是 ZooKeeper 時代的版本；「Total # of Topics」「Active Controllers」「Offline Partitions」等 panel 同樣寫 `job="kafka-broker"`，在專用 controller 的 KRaft 叢集裡是空的 |
 | `kafka-consumer.json`、`kafka-producer.json`、`kafka-lag-exporter.json` | 3／25、3／32、3／9 | **部分／要另外接**。這幾張要應用程式（或 lag exporter）自己掛 exporter；只有 broker 端看得到的少數 panel 有值。consumer lag 請看 C3 畫面 |
 | `cluster-linking.json`、`tiered-storage.json` | 12／19、3／8 | 沒開這兩個功能，有值的是不分功能的計數（多數是 0） |
 | `kafka-quotas.json` | 0／6 | **未驗證**。要有 quota 設定才有 `kafka_server_produce_byte_rate`；lab 這次的測試叢集沒設 quota（正式叢集依 `conf/apps.txt` 設了，應該有值） |
-| `confluent-rbac.json` | 0／10 | **未驗證**。要有 RBAC／MDS；測試叢集沒開（正式叢集有 MDS，應該有值，要在 3 台 controller 的完整 lab 上補驗） |
+| `confluent-rbac.json` | 7／10 | **大部分可用**。MDS 與 RBAC 開著，授權相關的計數有值；其餘 3 個沒有查明原因 |
 | `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 0／27、4／24、0／40 | **空**。這幾張看應用程式的 Kafka Streams。C3 本身是 Streams 應用，但我們只放行它的 `client_state` 與執行緒數，沒有放 RocksDB／處理率，所以這幾張對 C3 也是空的（想看 C3 的 RocksDB 要改 `rules-c3.yml`，序列數會到好幾千） |
 | `kafka-connect-cluster.json`、`confluent-oracle-cdc.json`、`mongo.json`、`debezium-connectors.json`、`replicator.json` | 全 0 | **空**。沒有 Connect |
 | `ksqldb-cluster.json`、`schema-registry-cluster.json` | 0／38、0／12 | **空**。沒有 ksqlDB、Schema Registry |
@@ -4452,7 +4452,7 @@ lab-mon-* 已收掉：0 個剩下
 >
 > 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用 22 章的 syslog 告警；稽核事件看第 18 章。
 >
-> KRaft 指標：Confluent Server 的 `kafka_server_raft_metrics_*`（current_leader、number_of_voters、commit／election latency 等）**只有單台 controller（`--standalone`）的環境抓得到**。三台 controller 的叢集，不論 8.2.4 或遷移後的 8.3.2，實測 controller job 有三千多條序列，raft 指標卻是 0 條。所以 quorum 健康靠 controller 自己的四個指標：`ActiveControllerCount`（全叢集剛好 1）、`LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`（leader 更換次數）；quorum 內容用 `kafka-metadata-quorum describe --status` 看。官方 `kraft.json` 這張 dashboard 因此是空的，不引入也沒關係。
+> KRaft 指標：Confluent Server 的 `kafka_server_raft_metrics_*`（current_leader、number_of_voters、commit／election latency 等）**只有單台 controller（`--standalone`）的環境抓得到**。三台 controller 的叢集，不論 8.2.4 或遷移後的 8.3.2，實測 controller job 有三千多條序列，raft 指標卻是 0 條。所以 quorum 健康靠 controller 自己的四個指標：`ActiveControllerCount`（全叢集剛好 1）、`LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`（leader 更換次數）；quorum 內容用 `kafka-metadata-quorum describe --status` 看。官方 `kraft.json` 這張 dashboard 因此只有一部分有值（實測 10／18），其餘靠 raft 指標的 panel 是空的。
 
 # 18. 第十八站：稽核日誌（audit log）
 
@@ -7183,7 +7183,7 @@ lab 裡：已經是原廠最新的 2.6.1（21.3 升好的），所以演練是�
 
 @role 小安 | dl01 | root
 
-和第 1 章一樣指定精確版本；C3 的相依（`cyrus-sasl`、`openssl-devel`）來自銀行的 OS 套件庫，已經裝過，不用 `--resolve`。下載改成「`dnf` 只印出網址、`curl` 下載」：實測 `dnf download` 把這個約 1 GB 的 RPM 下載完整之後，行程常常不會結束（連線卡住）；`curl` 沒有這個問題。下載完用 `rpm -K` 驗簽章：
+和第 1 章一樣指定精確版本；C3 的 RPM **沒有宣告任何真實的相依**（實測 `rpm -qpR` 只有 `/bin/sh`、`bash` 和自己的設定），所以 `dnf` 不會替它檢查或帶入什麼，`--resolve` 也沒有東西可解。原廠文件要求的前置套件 `cyrus-sasl`、`openssl-devel` 來自銀行的 OS 套件庫、在第 7 章已經裝好，是否還在要自己檢查（27.2 最後一步）。下載改成「`dnf` 只印出網址、`curl` 下載」：實測 `dnf download` 把這個約 1 GB 的 RPM 下載完整之後，行程常常不會結束（連線卡住）；`curl` 沒有這個問題。下載完用 `rpm -K` 驗簽章：
 
 ```bash
 V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)" && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls
@@ -7208,6 +7208,22 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing/c3")" lab-ops02-1:/root/landing
 ```out
 sha256-ok
 ```
+
+@role 小安 | ops02 | root
+
+先確認新版 RPM 有沒有新增相依，以及 c3-01 上原廠要求的前置套件都在（RPM 不宣告相依，`dnf` 不會替你查）：
+
+```bash
+cd ~/landing/c3 && echo "RPM 宣告的相依：$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE '^(rpmlib|/)' | sort -u | paste -sd';' -)" && ssh c3-01.poc.lab 'rpm -q cyrus-sasl openssl-devel'
+```
+
+```out
+RPM 宣告的相依：config(confluent-control-center-next-gen) = 2.6.0-1
+cyrus-sasl-2.1.27-22.el9_7.x86_64
+openssl-devel-3.5.8-2.el9_8.x86_64
+```
+
+> 如果「RPM 宣告的相依」多出別的套件，或兩個前置套件有一個顯示 `is not installed`，先請銀行 OS 團隊把它放進套件庫並安裝，再往下做。
 
 @role 小安 | ops02 | root
 

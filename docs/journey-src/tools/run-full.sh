@@ -21,6 +21,7 @@ runner="$OUT_DIR/run-$MODE-$FROM-$TO-$stamp.sh"; log="${runner%.sh}.log"
 
 # Node 是 Windows 程式：路徑先轉成 C:/… 再給它（MSYS_NO_PATHCONV=1 時 Git Bash 不會自動轉）
 MODE=$MODE node "$(cygpath -m "$TOOLS_DIR/run-chapter.js")" "$(cygpath -m "$REPO_DIR/docs/journey-src/journey.md")" "$FROM" "$TO" "$(cygpath -m "$runner")" || exit 1
+grep -q "BLOCK" "$runner" || { echo "第 $FROM 章到第 $((TO - 1)) 章沒有任何指令塊（結束章不含）：範圍寫錯了？" >&2; exit 1; }
 # 16.3 打包選單：文件寫的是佔位的原始碼目錄
 sed -i "s#<放 opmenu/ 原始碼的目錄>#$REPO_DIR#" "$runner"
 

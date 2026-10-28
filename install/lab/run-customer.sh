@@ -120,7 +120,8 @@ master_key_into_pvwa() {
 bring_in_c3_drill_version() {
   docker exec dl01 bash -c 'V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)" && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls' </dev/null || return 1
   docker exec "$OPS_CONTAINER" bash -c 'rm -rf /root/landing/c3; mkdir -p /root/landing'
-  docker cp "$(cygpath -m "$LAB/landing/c3")" "$OPS_CONTAINER:/root/landing/" && docker exec "$OPS_CONTAINER" bash -c "chmod -R a-w /root/landing/c3 && cd /root/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+  docker cp "$(cygpath -m "$LAB/landing/c3")" "$OPS_CONTAINER:/root/landing/" && docker exec "$OPS_CONTAINER" bash -c "chmod -R a-w /root/landing/c3 && cd /root/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok" &&
+  docker exec "$OPS_CONTAINER" bash -c 'cd ~/landing/c3 && echo "RPM 宣告的相依：$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE "^(rpmlib|/)" | sort -u | paste -sd";" -)" && ssh c3-01.poc.lab "rpm -q cyrus-sasl openssl-devel"'
 }
 
 stage 1 "reset" && { $BANK reset; }
