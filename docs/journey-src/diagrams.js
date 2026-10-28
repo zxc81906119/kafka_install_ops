@@ -723,6 +723,37 @@ D.ospatch = () => svg(800, 400, [
   box(20, 346, 760, 44, 'JDK 是 tar，Confluent 被鎖版本：dnf update 只動 OS 套件', ['Confluent 的版本只走第 29 章；小版本更新（9.6 → 9.8）一定要重開機'], 'gray'),
 ].join(''));
 
+
+// 21 restore drill (23.6): which backup file rebuilds what, and what a backup cannot give back
+D.restore = () => svg(800, 420, [
+  region(10, 14, 200, 300, '最近一份備份 ~/backup/metadata/<時間>/', 'gray'),
+  box(24, 48, 172, 44, 'topics.txt', ['partition 數、RF'], 'teal'),
+  box(24, 100, 172, 44, 'topic-configs.txt', ['retention 等動態設定'], 'teal'),
+  box(24, 152, 172, 44, 'rbac.txt', ['每個 principal 的 binding'], 'purple'),
+  box(24, 204, 172, 44, 'users.txt', ['SCRAM 帳號清單、配額'], 'amber'),
+  box(24, 256, 172, 44, 'acls.txt、broker-configs、features', ['演練不含；照樣可重建'], 'gray', { dash: true }),
+  box(270, 48, 230, 96, '重建 topic', ['kafka-topics --create', '--partitions／--replication-factor', 'kafka-configs --alter --add-config'], 'teal'),
+  box(270, 152, 230, 44, '重建 role binding', ['confluent iam rbac role-binding create'], 'purple'),
+  box(270, 204, 230, 96, '重建 SCRAM 帳號', ['kafka-configs --alter --add-config', 'SCRAM-SHA-512=[password=…]＋配額', '密碼來自操作機 ~/secrets（備份沒有）'], 'amber'),
+  arrow(196, 70, 268, 80), arrow(196, 122, 268, 110), arrow(196, 174, 268, 174), arrow(196, 226, 268, 236),
+  box(560, 48, 220, 96, '驗證', ['describe：partition、RF、設定一致', 'role-binding list：條數一致', '帳號從 9095 寫一筆、讀回一筆'], 'blue'),
+  arrow(500, 96, 558, 96), arrow(500, 174, 558, 110), arrow(500, 252, 558, 130),
+  box(560, 204, 220, 96, '整個叢集沒了？', ['第 8–13 章重裝', '再照這三條路把中繼資料倒回去', '訊息內容靠 RF 3，不在備份裡'], 'coral', { dash: true }),
+  box(10, 334, 770, 70, '備份裡沒有的東西', ['訊息內容（靠 replication factor 3）、SCRAM 密碼（操作機 ~/secrets，銀行備份機制）、各主機的設定檔與憑證（29.2 的備份、銀行主機備份）', '所以還原演練的範圍是「中繼資料」：topic、權限、帳號'], 'gray'),
+].join(''));
+
+// 22 application SCRAM rotation with an A/B pair (20.6)
+D.scramab = () => svg(800, 360, [
+  box(20, 30, 170, 90, '① 平常', ['應用程式用 app-x-a', 'app-x-b 閒置（同樣權限）'], 'teal'), num(20, 30, '1'),
+  box(220, 30, 170, 90, '② 換 -b 的密碼', ['kafka-configs --alter', 'SCRAM-SHA-512=[password=新]', '應用程式完全不受影響'], 'amber'), num(220, 30, '2'),
+  box(420, 30, 170, 90, '③ 應用程式切到 -b', ['改設定、滾動重啟應用', '新連線用 -b，舊連線自然收掉', '流量不中斷'], 'blue'), num(420, 30, '3'),
+  box(620, 30, 160, 90, '④ 下次換 -a', ['-a 現在閒置', '同樣的步驟倒過來'], 'gray'), num(620, 30, '4'),
+  arrow(190, 75, 218, 75), arrow(390, 75, 418, 75), arrow(590, 75, 618, 75),
+  box(20, 160, 370, 80, '密碼怎麼交付', ['新密碼寫進操作者的交接檔（0600，只有本人讀得到）', '交應用程式團隊，交接後刪；不顯示在畫面、不進紀錄'], 'purple'),
+  box(410, 160, 370, 80, '驗證', ['-b 新密碼登入成功、-b 舊密碼被拒', '-a 的流量期間 0 錯誤；切換後 -b 寫一筆讀回一筆'], 'blue'),
+  box(20, 262, 760, 76, '誰做', ['維運選單 34 建 A／B 一對、35 換「現在沒在用的那個」（kafka-admins）；手動步驟＝選單背後做的事', '單一帳號的舊應用（例如 app-legacy-billing 走憑證、不是 SCRAM）不適用；先用 34 建一對再遷移'], 'gray'),
+].join(''));
+
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;
