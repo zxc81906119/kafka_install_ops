@@ -1557,15 +1557,16 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 
 ## 9.1 產生私鑰與 CSR
 
-先決定要幾張憑證、各自給誰用（下表），再一次把 8 組私鑰與 CSR 產生出來。私鑰留在操作機，只有 CSR 交給銀行。EKU（憑證用途）決定憑證能當伺服器、客戶端或兩者；SAN 是憑證適用的主機名稱，連線時名稱對不上會被拒。
+先決定要幾張憑證、各自給誰用（下表），再一次把 9 組私鑰與 CSR 產生出來。私鑰留在操作機，只有 CSR 交給銀行。EKU（憑證用途）決定憑證能當伺服器、客戶端或兩者；SAN 是憑證適用的主機名稱，連線時名稱對不上會被拒。
 
 @role 小安 | ops02 | root
 
 | 名稱 | 用途 | EKU | SAN |
 |---|---|---|---|
 | kafka-internal | controller、broker 之間的 mTLS | serverAuth, clientAuth | kc01–03、kb01–04 |
-| cp-server | 所有對外服務：client listener、MDS、REST、C3、Prometheus | serverAuth, clientAuth | 全部主機、rest.poc.lab、c3.poc.lab、localhost |
+| cp-server | 所有對外服務的**伺服器端**：client listener、MDS、REST、C3、Prometheus。只當 server 憑證，不拿去當 client 出示 | serverAuth | 全部主機、rest.poc.lab、c3.poc.lab、localhost |
 | svc-rest、svc-c3、svc-ops | REST Proxy、C3、操作機向 MDS 換 token 的身分 | clientAuth | 無 |
+| c3-monitoring | C3 向自己內建的 Prometheus、Alertmanager 出示的 client 身分（第 13 章）。只做這件事，**不綁任何 Kafka 角色** | clientAuth | 無 |
 | app-legacy-billing | 走 REST Proxy 的應用程式 | clientAuth | 無 |
 | opmenu-breakglass | 維運選單（第 16 章）緊急模式用的身分 | clientAuth | 無 |
 | svc-backup | 每日備份（第 25 章）匯出叢集中繼資料的唯讀身分 | clientAuth | 無 |
@@ -1573,9 +1574,10 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 ```bash
 install -d -m 0700 ~/pki ~/pki/keys ~/pki/requests ~/pki/incoming ~/pki/certs && (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/pki/store.pass) && cat > ~/pki/requests.txt <<'EOF'
 kafka-internal     serverAuth,clientAuth  kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
-cp-server          serverAuth,clientAuth  kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,ops02.poc.lab,ops02,lb01.poc.lab,lb01,rest.poc.lab,c3.poc.lab,localhost
+cp-server          serverAuth             kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,ops02.poc.lab,ops02,lb01.poc.lab,lb01,rest.poc.lab,c3.poc.lab,localhost
 svc-rest           clientAuth             -
 svc-c3             clientAuth             -
+c3-monitoring      clientAuth             -
 svc-ops            clientAuth             -
 app-legacy-billing clientAuth             -
 opmenu-breakglass  clientAuth             -
@@ -1586,7 +1588,7 @@ while read -r name eku san; do (umask 077; openssl genrsa -out ~/pki/keys/$name.
 
 ```out
 kafka-internal: csr ok
-（8 行）
+（9 行）
 ```
 
 送出前自己看一次 CN、SAN、EKU 是否和上表一致（銀行 CA 的政策會檢查 EKU，漏了會被退件）：
@@ -1599,7 +1601,7 @@ for f in ~/pki/requests/*.csr; do echo "== $(basename $f)"; openssl req -in $f -
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5.5 建好的 `sign.sh`，8 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和第 3 章簽給 ad01 的那張混在一起）：
+正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5.5 建好的 `sign.sh`，9 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和第 3 章簽給 ad01 的那張混在一起）：
 
 ```bash
 cd ~/kafka-lab && mkdir -p ca/exchange/signed && docker cp lab-ops02-1:/root/pki/requests "$(cygpath -m "$PWD/ca/exchange/")" && for f in ca/exchange/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/signed/$n.crt"; done && for f in ca/exchange/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/incoming/; done && docker exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
@@ -1607,8 +1609,8 @@ cd ~/kafka-lab && mkdir -p ca/exchange/signed && docker cp lab-ops02-1:/root/pki
 
 ```out
 signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
-（8 行）
-8
+（9 行）
+9
 ```
 
 ## 9.3 匯入前檢查、做成 keystore
@@ -1629,7 +1631,7 @@ cd ~/pki && for n in $(awk '{print $1}' requests.txt); do awk -v n=$n 'BEGIN{c=0
 
 ```out
 kafka-internal: 1 issuer(s)
-（8 行）
+（9 行）
 ```
 
 五項檢查：私鑰相符、CN、SAN、EKU、效期，再驗整條鏈到銀行根憑證。好結果是每一行的 key、cn、san、eku、chain 都是 `ok`，days 約 364（憑證效期一年）：
@@ -1640,7 +1642,7 @@ cd ~/pki && while read -r name eku san; do leaf=incoming/$name.leaf.pem; k1=$(op
 
 ```out
 kafka-internal      key=ok cn=ok san=ok eku=TLSWebServerAuthentication,TLSWebClientAuthentication days=364 chain=ok
-（8 行，全部 ok）
+（9 行，全部 ok）
 ```
 
 > 任何一項不是 ok 就退回銀行重簽，不往下做。
@@ -1653,7 +1655,7 @@ cd ~/pki && for n in $(awk '{print $1}' requests.txt); do cat incoming/$n.leaf.p
 
 ```out
 Certificate was added to keystore
-19
+21
 ```
 
 | 檔案 | 用途 |
@@ -2458,14 +2460,14 @@ kill $(cat /tmp/lbprobe.pid); sleep 1; echo "經 LB 打了 $(wc -l < /tmp/lbprob
 C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。內建的 Prometheus、Alertmanager 是給 C3 自己的畫面用的；**監控與告警不走它們**（第 17 章用行內的 Prometheus、Alertmanager、Grafana），所以這一章只把它們設到 C3 畫面能用，不要在 C3 畫面建 alert trigger 或 action。
 
 ```bash
-scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-server.crt ~/pki/keys/cp-server.key ~/pki/certs/bank-root.pem ~/pki/certs/svc-c3.p12 ~/pki/certs/mds-token-public.pem c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center && for f in truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem; rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/bank-root.pem /tmp/mds-token-public.pem; echo "c3-01: $(sudo ls /etc/confluent/ssl | wc -l) files"'
+scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-server.crt ~/pki/keys/cp-server.key ~/pki/certs/c3-monitoring.p12 ~/pki/certs/c3-monitoring.crt ~/pki/keys/c3-monitoring.key ~/pki/certs/bank-root.pem ~/pki/certs/svc-c3.p12 ~/pki/certs/mds-token-public.pem c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center && for f in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem; rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/mds-token-public.pem; echo "c3-01: $(sudo ls /etc/confluent/ssl | wc -l) files"'
 ```
 
 ```out
-c3-01: 7 files
+c3-01: 10 files
 ```
 
-Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
+Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。兩個角色用兩張憑證：它們自己對外出示的是 `cp-server`（只有 serverAuth，純 server 憑證）；C3 去連它們、Prometheus 去連 Alertmanager 時出示的是 `c3-monitoring`（只有 clientAuth，不綁任何 Kafka 角色）。這樣 `cp-server` 即使外洩，也不能拿去當 client 登入任何需要 client 憑證的服務；Prometheus／Alertmanager 的 `client_auth_type` 只驗憑證鏈與用途，不看 CN，所以不用另外設定誰能連。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
 
 ```bash
 ssh c3-01.poc.lab 'sudo tee /etc/confluent-control-center/web-config-prom.yml >/dev/null <<EOF
@@ -2485,8 +2487,8 @@ alerting:
     - scheme: https
       tls_config:
         ca_file: /etc/confluent/ssl/ca.pem
-        cert_file: /etc/confluent/ssl/cp-server.crt
-        key_file: /etc/confluent/ssl/cp-server.key
+        cert_file: /etc/confluent/ssl/c3-monitoring.crt
+        key_file: /etc/confluent/ssl/c3-monitoring.key
       static_configs:
         - targets:
             - c3-01.poc.lab:9093
@@ -2573,18 +2575,18 @@ confluent.controlcenter.prometheus.url=https://c3-01.poc.lab:9090
 confluent.controlcenter.prometheus.rules.file=/etc/confluent-control-center/trigger_rules-generated.yml
 confluent.controlcenter.prometheus.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.controlcenter.prometheus.ssl.truststore.password=${STORE_PASSWORD}
-confluent.controlcenter.prometheus.ssl.keystore.location=/etc/confluent/ssl/cp-server.p12
+confluent.controlcenter.prometheus.ssl.keystore.location=/etc/confluent/ssl/c3-monitoring.p12
 confluent.controlcenter.prometheus.ssl.keystore.password=${STORE_PASSWORD}
 confluent.controlcenter.prometheus.ssl.key.password=${STORE_PASSWORD}
-confluent.controlcenter.prometheus.alias.name=cp-server
+confluent.controlcenter.prometheus.alias.name=c3-monitoring
 confluent.controlcenter.alertmanager.url=https://c3-01.poc.lab:9093
 confluent.controlcenter.alertmanager.config.file=/etc/confluent-control-center/alertmanager-generated.yml
 confluent.controlcenter.alertmanager.ssl.truststore.location=/etc/confluent/ssl/truststore.p12
 confluent.controlcenter.alertmanager.ssl.truststore.password=${STORE_PASSWORD}
-confluent.controlcenter.alertmanager.ssl.keystore.location=/etc/confluent/ssl/cp-server.p12
+confluent.controlcenter.alertmanager.ssl.keystore.location=/etc/confluent/ssl/c3-monitoring.p12
 confluent.controlcenter.alertmanager.ssl.keystore.password=${STORE_PASSWORD}
 confluent.controlcenter.alertmanager.ssl.key.password=${STORE_PASSWORD}
-confluent.controlcenter.alertmanager.alias.name=cp-server
+confluent.controlcenter.alertmanager.alias.name=c3-monitoring
 EOF
 cd ~/conf && export STORE_PASSWORD=$(cat ~/pki/store.pass) && (umask 077; envsubst '${STORE_PASSWORD}' < control-center.tpl > c3-01.control-center.properties) && unset STORE_PASSWORD && scp -q c3-01.control-center.properties c3-01.poc.lab:/tmp/control-center.properties && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/control-center.properties /etc/confluent/control-center/control-center.properties && rm -f /tmp/control-center.properties && sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/confluent/control-center && sudo install -d -m 0755 /etc/systemd/system/confluent-control-center.service.d && sudo tee /etc/systemd/system/confluent-control-center.service.d/10-override.conf >/dev/null <<EOF
 [Service]
@@ -2608,7 +2610,7 @@ c3-01: config 64 lines, unresolved=0, exec=/etc/confluent/control-center/control
 依序啟動，等 UI：
 
 ```bash
-ssh c3-01.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl enable --now $u >/dev/null 2>&1; sudo systemctl restart $u; sleep 3; printf "%-26s %s\n" $u "$(systemctl is-active $u)"; done'; echo "prometheus=$(curl -s -o /dev/null -w '%{http_code}' --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/-/ready)"; for i in $(seq 1 24); do c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://c3-01.poc.lab:9021/); [ "$c" = 200 ] && break; sleep 10; done; echo "c3 ui=$c after ~$((i*10))s"
+ssh c3-01.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl enable --now $u >/dev/null 2>&1; sudo systemctl restart $u; sleep 3; printf "%-26s %s\n" $u "$(systemctl is-active $u)"; done'; echo "prometheus=$(curl -s -o /dev/null -w '%{http_code}' --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/-/ready)"; for i in $(seq 1 24); do c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://c3-01.poc.lab:9021/); [ "$c" = 200 ] && break; sleep 10; done; echo "c3 ui=$c after ~$((i*10))s"
 ```
 
 ```out
@@ -2626,7 +2628,7 @@ c3 ui=200 after ~30s
 ssh c3-01.poc.lab bash -s <<'REMOTE'
 Q='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
 for i in $(seq 1 18); do
-  n=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/cp-server.crt --key /etc/confluent/ssl/cp-server.key --data-urlencode "query=$Q" https://c3-01.poc.lab:9090/api/v1/query | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
+  n=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/c3-monitoring.crt --key /etc/confluent/ssl/c3-monitoring.key --data-urlencode "query=$Q" https://c3-01.poc.lab:9090/api/v1/query | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
   [ -n "$n" ] && [ "$n" -gt 0 ] && break; sleep 10
 done
 echo "指標帶 kafka_broker_id 標籤的節點數：${n:-0}（等了約 $((i*10)) 秒）"
@@ -2656,7 +2658,7 @@ lab 裡：Windows 瀏覽器開 `https://localhost:19021`（正式環境是維運
 全部做完，用這幾條確認整套是健康的：
 
 ```bash
-export JAVA_HOME=/opt/java/current; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'printf "%-5s %s\n" "$(hostname)" "$(systemctl is-active confluent-server)"'; done; kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep LeaderId; for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo; echo "topics: $(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list | grep -v '^_' | paste -sd' ')"; echo "rest via LB: $(curl -s -o /dev/null -m 30 -w %{http_code} --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)"; echo "c3 ui: $(curl -s -o /dev/null -m 10 -w %{http_code} https://c3-01.poc.lab:9021/)"; echo "metrics in prometheus: $(curl -s -m 10 --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) kinds"
+export JAVA_HOME=/opt/java/current; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'printf "%-5s %s\n" "$(hostname)" "$(systemctl is-active confluent-server)"'; done; kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep LeaderId; for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo; echo "topics: $(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list | grep -v '^_' | paste -sd' ')"; echo "rest via LB: $(curl -s -o /dev/null -m 30 -w %{http_code} --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)"; echo "c3 ui: $(curl -s -o /dev/null -m 10 -w %{http_code} https://c3-01.poc.lab:9021/)"; echo "metrics in prometheus: $(curl -s -m 10 --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) kinds"
 ```
 
 ```out
@@ -2674,7 +2676,7 @@ metrics in prometheus: 111 kinds
 | 已完成 | 還沒做（之後的旅程） |
 |---|---|
 | 11 台主機就緒、套件裝好並鎖版本 | 設定檔密碼加密、master key 交 CyberArk（第 15 章） |
-| 8 張銀行憑證、truststore、MDS token 金鑰 | 維運選單（OP menu）；稽核日誌分流與專用寫入帳號 |
+| 9 張銀行憑證、truststore、MDS token 金鑰 | 維運選單（OP menu）；稽核日誌分流與專用寫入帳號 |
 | controller、broker、MDS、RBAC（人員綁 AD 群組） | 外部監控：JMX exporter（7071）與行內 Prometheus、Alertmanager、Grafana 的設定（第 17 章） |
 | 應用程式 SCRAM 帳號、配額、範例 topic | 正式的端對端驗收清單 |
 | REST Proxy（憑證認證，經負載平衡）、C3（含 Prometheus） | 收回安裝帳號的 sudo、移交文件；之後的憑證輪替（第 20 章）、升級（第 21 章） |
@@ -4655,7 +4657,7 @@ Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.repl
 @role 小安 | ops02 | root
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; chk "controller quorum 有 leader" bash -c 'kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep -q "LeaderId: *[0-9]"'; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do chk "$h confluent-server active" ssh $h.poc.lab 'systemctl is-active -q confluent-server'; done; for h in kb01 kb02 kb03 kb04; do chk "$h MDS 8090 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) = 200 ]"; done; chk "沒有 under-replicated partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions | grep -c Partition:)" = 0 ]'; chk "沒有 offline partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --unavailable-partitions | grep -c Partition:)" = 0 ]'; chk "Self-Balancing 啟用" bash -c 'kafka-rebalance-cluster --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --status 2>/dev/null | grep -q "Balancer status: ENABLED"'; chk "REST Proxy 經 LB 回 200（mTLS）" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 200 ]"; chk "Control Center 9021 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) = 200 ]"; chk "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $CA --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"; for h in kc01 kb01 rest01 c3-01; do chk "$h JMX exporter 7071 要帳密" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:7071/metrics) = 401 ]"; done; echo "健康：$ok / $all 項通過"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; chk "controller quorum 有 leader" bash -c 'kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep -q "LeaderId: *[0-9]"'; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do chk "$h confluent-server active" ssh $h.poc.lab 'systemctl is-active -q confluent-server'; done; for h in kb01 kb02 kb03 kb04; do chk "$h MDS 8090 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) = 200 ]"; done; chk "沒有 under-replicated partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions | grep -c Partition:)" = 0 ]'; chk "沒有 offline partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --unavailable-partitions | grep -c Partition:)" = 0 ]'; chk "Self-Balancing 啟用" bash -c 'kafka-rebalance-cluster --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --status 2>/dev/null | grep -q "Balancer status: ENABLED"'; chk "REST Proxy 經 LB 回 200（mTLS）" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 200 ]"; chk "Control Center 9021 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) = 200 ]"; chk "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $CA --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"; for h in kc01 kb01 rest01 c3-01; do chk "$h JMX exporter 7071 要帳密" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:7071/metrics) = 401 ]"; done; echo "健康：$ok / $all 項通過"
 ```
 
 ```out
@@ -4951,7 +4953,7 @@ install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/inc
 
 ```out
 kafka-internal: csr ok
-（7 行）
+（9 行）
 ```
 
 ### 20.2.2 銀行 CA 簽發
@@ -4966,8 +4968,8 @@ cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed &&
 
 ```out
 signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
-（7 行）
-7
+（9 行）
+9
 ```
 
 ### 20.2.3 檢查、做成 keystore
@@ -4982,7 +4984,7 @@ cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do awk -v n=$n 'B
 
 ```out
 kafka-internal      key=ok cn=ok san=ok days=364 chain=ok issuer=PoC Bank Issuing CA 01
-（7 行，全部 ok）
+（9 行，全部 ok）
 ```
 
 做成 p12（**同一個 keystore 密碼**，所以 properties 不用改）：
@@ -5006,7 +5008,7 @@ cp-server: old=F343BC54 new=F343BC5C
 | controller | kafka-internal.p12 | confluent-server |
 | broker | kafka-internal.p12、cp-server.p12 | confluent-server（JMX exporter 一起） |
 | REST Proxy | cp-server.p12、svc-rest.p12 | confluent-kafka-rest |
-| C3 | cp-server.p12、cp-server.crt／.key、svc-c3.p12 | prometheus、alertmanager、confluent-control-center |
+| C3 | cp-server.p12、cp-server.crt／.key、c3-monitoring.p12、c3-monitoring.crt／.key、svc-c3.p12 | prometheus、alertmanager、confluent-control-center |
 
 一台一台：放檔 → 重啟 → 等健康 → 確認那台出示的是新序號，才做下一台：
 
@@ -5026,7 +5028,7 @@ kb01 MDS=200 9092=new 9095=new
 REST Proxy 與 C3（REST 的健康檢查用應用程式的**舊**憑證，證明舊 leaf 在換發期間仍然有效）：
 
 ```bash
-cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.p12 certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
 ```
 
 ```out
@@ -5309,7 +5311,7 @@ install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/inc
 
 ```out
 kafka-internal: csr ok
-（7 行）
+（9 行）
 ```
 
 **20.2.2 銀行改用 G2 簽**
@@ -5322,8 +5324,8 @@ cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed &&
 
 ```out
 signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
-（7 行）
-7
+（9 行）
+9
 ```
 
 **20.2.3 檢查（issuer 要是 G2）**
@@ -5336,7 +5338,7 @@ cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do awk -v n=$n 'B
 
 ```out
 kafka-internal      key=ok cn=ok san=ok days=364 chain=ok issuer=PoC Bank Issuing CA G2
-（7 行，全部 ok）
+（9 行，全部 ok）
 ```
 
 **20.2.3 做成 keystore**
@@ -5367,7 +5369,7 @@ kb01 MDS=200 9092=new 9095=new
 **20.2.4 REST Proxy 與 C3**
 
 ```bash
-cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
+cd ~/pki/next && NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.p12 certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(served c3-01.poc.lab:9021)" = $NEW_SRV ] && echo new || echo OLD) 9090=$([ "$(served c3-01.poc.lab:9090)" = $NEW_SRV ] && echo new || echo OLD)"
 ```
 
 ```out
@@ -5733,7 +5735,7 @@ cd ~/pki && NEW=bank-issuing-new.pem && CUR=$(awk '/BEGIN CERT/{n++} n==2' certs
 現在的中繼：PoC Bank Issuing CA G2（簽發者 PoC Bank Root CA G2）key=…
 新的中繼：  PoC Bank Issuing CA G2（簽發者 PoC Bank Root CA G3）key=…（和上一行相同）
 kafka-internal: leaf=7E8C05F2（不變） chain=ok
-（7 行，全部 ok）
+（9 行，全部 ok）
 ```
 
 > 名稱或 key 不一樣，就不是換鏈：中繼換了私鑰，leaf 要重簽（走 20.2）。
@@ -5751,10 +5753,10 @@ kb01 MDS=200 9092=new 9095=new
 （4 行）
 ```
 
-REST Proxy 與 C3（C3 的 `cp-server.key` 沒變，照樣一起放，指令和 20.2.4 一致）：
+REST Proxy 與 C3（C3 的 `cp-server.key`、`c3-monitoring.key` 沒變，照樣一起放，指令和 20.2.4 一致）：
 
 ```bash
-cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(via c3-01.poc.lab:9021)" = "$G3" ] && echo new || echo OLD) 9090=$([ "$(via c3-01.poc.lab:9090)" = "$G3" ] && echo new || echo OLD)"
+cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/c3-monitoring.p12 certs/c3-monitoring.crt ../keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/ && ssh c3-01.poc.lab 'for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) 9021=$([ "$(via c3-01.poc.lab:9021)" = "$G3" ] && echo new || echo OLD) 9090=$([ "$(via c3-01.poc.lab:9090)" = "$G3" ] && echo new || echo OLD)"
 ```
 
 ```out
@@ -6066,7 +6068,7 @@ cat > ~/conf/c3-change.sh <<'EOF'
 V=$1 A=$2
 ssh c3-01.poc.lab "p=/etc/confluent/control-center/control-center.properties; before=\$(sudo sha256sum \$p | cut -c1-12); sudo dnf -q versionlock delete confluent-control-center-next-gen >/dev/null; sudo dnf -q -y --refresh $A confluent-control-center-next-gen-$V >/dev/null && sudo dnf -q versionlock add confluent-control-center-next-gen-$V >/dev/null; sudo systemctl daemon-reload; cd /etc/confluent-control-center && for f in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do sudo chown cp-control-center:confluent \$f && sudo chmod 0640 \$f; done; echo \"\$(rpm -q confluent-control-center-next-gen) config=\$([ \"\$before\" = \"\$(sudo sha256sum \$p | cut -c1-12)\" ] && echo same || echo CHANGED) exec=\$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties' | head -1) lock=\$(sudo dnf -q versionlock list | grep control-center)\"; for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart \$u; done"
 for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done
-echo "UI=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)（約 $((i*5)) 秒）；Prometheus 指標 $(curl -s -m 10 --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) 種"
+echo "UI=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)（約 $((i*5)) 秒）；Prometheus 指標 $(curl -s -m 10 --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) 種"
 EOF
 chmod 0700 ~/conf/c3-change.sh && echo "C3 現在：$(ssh c3-01.poc.lab 'rpm -q confluent-control-center-next-gen')" && bash ~/conf/c3-change.sh 2.6.1 install && ssh c3-01.poc.lab 'cd /etc/confluent-control-center && echo "C3 自己寫的 4 個檔：$(sudo stat -c %U alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml | sort -u | paste -sd, -)"' && echo "alice 登入 MDS（C3 用同一套）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
 ```

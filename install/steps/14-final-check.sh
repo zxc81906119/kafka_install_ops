@@ -39,7 +39,7 @@ via_lb=$(rest_app_curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$REST_VI
 if [ "$via_lb" = 200 ]; then ok "REST 經負載平衡: 200"; else fail "REST 經負載平衡: $via_lb"; fi
 c3_ui=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$C3_FQDN:9021/")
 if [ "$c3_ui" = 200 ]; then ok "C3 UI: 200"; else fail "C3 UI: $c3_ui"; fi
-metric_kinds=$(curl -s -m 10 --cert "$CERTS_DIR/cp-server.crt" --key "$KEYS_DIR/cp-server.key" "https://$C3_FQDN:9090/api/v1/label/__name__/values" \
+metric_kinds=$(curl -s -m 10 --cert "$CERTS_DIR/c3-monitoring.crt" --key "$KEYS_DIR/c3-monitoring.key" "https://$C3_FQDN:9090/api/v1/label/__name__/values" \
   | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l)
 if [ "$metric_kinds" -gt 50 ]; then ok "C3 的 Prometheus 有 $metric_kinds 種 broker 指標"
 else fail "C3 的 Prometheus 只有 $metric_kinds 種指標（剛啟動的話等一兩分鐘再跑）"; fi

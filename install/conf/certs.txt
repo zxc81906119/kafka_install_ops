@@ -1,8 +1,9 @@
 # 要請銀行 CA 簽的憑證：名稱  EKU  SAN 種類（kafka＝controller+broker、all＝所有主機+LB+VIP+localhost、-＝無 SAN 的 client 憑證）
 kafka-internal     serverAuth,clientAuth  kafka
-cp-server          serverAuth,clientAuth  all
+cp-server          serverAuth             all
 svc-rest           clientAuth             -
 svc-c3             clientAuth             -
+c3-monitoring      clientAuth             -
 svc-ops            clientAuth             -
 app-legacy-billing clientAuth             -
 opmenu-breakglass  clientAuth             -

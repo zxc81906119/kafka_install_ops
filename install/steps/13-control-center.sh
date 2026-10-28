@@ -12,21 +12,22 @@ source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 source "$INSTALL_DIR/lib/render.sh"
 
-section "派送憑證（Prometheus／Alertmanager 是 Go 程式，吃 PEM：cp-server.crt／.key、ca.pem）"
+section "派送憑證（Prometheus／Alertmanager 是 Go 程式，吃 PEM：cp-server.crt／.key 當 server、c3-monitoring.crt／.key 當 client、ca.pem）"
 copy_to_tmp "$C3_HOST" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/cp-server.p12" "$CERTS_DIR/cp-server.crt" "$KEYS_DIR/cp-server.key" \
+  "$CERTS_DIR/c3-monitoring.p12" "$CERTS_DIR/c3-monitoring.crt" "$KEYS_DIR/c3-monitoring.key" \
   "$CERTS_DIR/bank-root.pem" "$CERTS_DIR/svc-c3.p12" "$CERTS_DIR/mds-token-public.pem" || die "scp 失敗"
 file_count=$(ssh_script "$C3_HOST" <<'EOF'
 sudo install -d -o root -g root -m 0755 /etc/confluent
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center
-for file in truststore.p12 cp-server.p12 cp-server.crt cp-server.key svc-c3.p12 mds-token-public.pem; do
+for file in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.p12 c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do
   sudo install -o root -g confluent -m 0640 /tmp/$file /etc/confluent/ssl/
 done
 sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem
-rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/bank-root.pem /tmp/mds-token-public.pem
+rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/mds-token-public.pem
 sudo ls /etc/confluent/ssl | wc -l
 EOF
 )
-if [ "$file_count" = 7 ]; then ok "$C3_HOST: 7 files"; else die "$C3_HOST: $file_count files（預期 7）"; fi
+if [ "$file_count" = 10 ]; then ok "$C3_HOST: 10 files"; else die "$C3_HOST: $file_count files（預期 10）"; fi
 
 section "Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定"
 export C3_FQDN
@@ -94,7 +95,7 @@ done
 EOF
 )
 log "$states"
-prometheus_ready=$(curl -s -o /dev/null -m 10 -w '%{http_code}' --cert "$CERTS_DIR/cp-server.crt" --key "$KEYS_DIR/cp-server.key" "https://$C3_FQDN:9090/-/ready")
+prometheus_ready=$(curl -s -o /dev/null -m 10 -w '%{http_code}' --cert "$CERTS_DIR/c3-monitoring.crt" --key "$KEYS_DIR/c3-monitoring.key" "https://$C3_FQDN:9090/-/ready")
 if [ "$prometheus_ready" = 200 ]; then ok "prometheus=$prometheus_ready"; else fail "prometheus=$prometheus_ready"; fi
 for attempt in $(seq 1 30); do
   c3_ui=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$C3_FQDN:9021/")
@@ -108,7 +109,7 @@ if [ "$c3_ui" = 200 ]; then ok "c3 ui=200，約 $((attempt * 10)) 秒"; else fai
 labelled_nodes=$(ssh_script "$C3_HOST" C3_FQDN="$C3_FQDN" <<'EOF'
 query='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
 for attempt in $(seq 1 18); do
-  count=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/cp-server.crt --key /etc/confluent/ssl/cp-server.key \
+  count=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/c3-monitoring.crt --key /etc/confluent/ssl/c3-monitoring.key \
     --data-urlencode "query=$query" "https://$C3_FQDN:9090/api/v1/query" | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
   [ -n "$count" ] && [ "$count" -gt 0 ] && break
   sleep 10

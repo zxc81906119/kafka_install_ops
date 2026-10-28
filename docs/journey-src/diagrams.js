@@ -163,7 +163,7 @@ D.certs = () => svg(760, 240, [
   box(420, 40, 160, 60, '匯入前檢查', ['私鑰相符、CN、SAN', 'EKU、效期、鏈'], 'teal'),
   box(620, 40, 120, 60, 'PKCS12', ['.p12 keystore', 'truststore'], 'teal'),
   arrow(190, 70, 228, 70), arrow(380, 70, 418, 70), arrow(580, 70, 618, 70),
-  box(20, 140, 340, 60, '8 張：kafka-internal、cp-server', ['svc-rest、svc-c3、svc-ops、svc-backup', 'app-legacy-billing、opmenu-breakglass'], 'gray'),
+  box(20, 140, 340, 60, '9 張：kafka-internal、cp-server', ['svc-rest、svc-c3、c3-monitoring、svc-ops、svc-backup', 'app-legacy-billing、opmenu-breakglass'], 'gray'),
   box(400, 140, 340, 60, '另外一組 MDS token 金鑰對', ['RSA 2048，不經銀行', '私鑰給 broker，公鑰給驗 token 的人'], 'gray'),
   note(20, 225, '任何一項檢查不過就退回銀行重簽，不往下做'),
 ].join(''));

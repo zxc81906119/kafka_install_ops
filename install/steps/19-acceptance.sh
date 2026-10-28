@@ -54,7 +54,8 @@ check "沒有 offline partition" bash -c "[ \"\$(kafka-topics --bootstrap-server
 check "Self-Balancing 啟用" bash -c "kafka-rebalance-cluster --bootstrap-server $BROKER_TOKEN --command-config $ADMIN_CLIENT_CONF --status 2>/dev/null | grep -q 'Balancer status: ENABLED'"
 check "REST Proxy 經負載平衡回 200（mTLS）" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA $(rest_app_curl_options) https://$REST_VIP:8082/v3/clusters)\" = 200 ]"
 check "Control Center 9021 回 200" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$C3_FQDN:9021/)\" = 200 ]"
-check "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $BANK_ROOT_CA --cert $CERTS_DIR/cp-server.crt --key $KEYS_DIR/cp-server.key https://$C3_FQDN:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"
+check "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $BANK_ROOT_CA --cert $CERTS_DIR/c3-monitoring.crt --key $KEYS_DIR/c3-monitoring.key https://$C3_FQDN:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"
+check "cp-server 只有 serverAuth，拿來當 client 憑證連 C3 的 Prometheus 被拒" bash -c "[ \"\$(openssl x509 -in $CERTS_DIR/cp-server.crt -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' ')\" = TLSWebServerAuthentication ] && ! curl -sf -m 15 --cacert $BANK_ROOT_CA --cert $CERTS_DIR/cp-server.crt --key $KEYS_DIR/cp-server.key https://$C3_FQDN:9090/-/ready"
 if [ "$JMX_EXPORTER" = 1 ]; then
   for host in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
     check "$host JMX exporter 7071 要帳密" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$(fqdn "$host"):7071/metrics)\" = 401 ]"

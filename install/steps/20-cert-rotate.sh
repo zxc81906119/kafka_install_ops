@@ -40,7 +40,7 @@ files_for_host() {
     kc*)   echo "certs/kafka-internal.p12";;
     kb*)   echo "certs/kafka-internal.p12 certs/cp-server.p12";;
     rest*) echo "certs/cp-server.p12 certs/svc-rest.p12";;
-    c3*)   echo "certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/svc-c3.p12";;
+    c3*)   echo "certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.p12 certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12";;
   esac
 }
 
