@@ -1832,11 +1832,11 @@ AD 開回後 alice 登入 MDS：HTTP 200
 
 ![edge]
 
-**這一章在做什麼**：安裝 REST Proxy（讓不方便直連 Kafka 的應用程式用 HTTP 存取 Kafka）在 rest01、rest02 兩台，前面由銀行的負載平衡（LB）分流。REST Proxy 沒有密碼登入，應用程式一律用 client 憑證，憑證的 CN 對應到 Kafka 的身分（principal）。前提：第 10、11 章的 broker 與 MDS 已正常、第 9 章的 `svc-rest` 與 `app-legacy-billing` 憑證已做好。
+**這一章在做什麼**：在 rest01、rest02 兩台安裝 REST Proxy（讓不方便直連 Kafka 的應用程式用 HTTP 存取 Kafka），前面由銀行網路團隊的負載平衡（LB）分流。前提：第 10、11 章的 broker 與 MDS 已正常、第 9 章的 `svc-rest` 與 `app-legacy-billing` 憑證已做好。完成的樣子：帶 legacy app 憑證經 LB 打 `/v3/clusters` 回 200，其他憑證 401，不帶憑證被 TLS 直接拒絕。
 
 @role 小安 | ops02 | root
 
-REST Proxy 只接受 client 憑證，憑證的 CN 對應到 principal 的規則只列出走 REST 的 app，故意不加 DEFAULT，其他憑證一律對不上。
+REST Proxy 沒有密碼登入，應用程式一律用 client 憑證；憑證的 CN 對應到 Kafka 身分（principal）的規則只列出走 REST 的 app，故意不加 DEFAULT，其他憑證一律對不上。先派送憑證，兩台各要看到 4 個檔：
 
 ```bash
 for h in rest01 rest02; do scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/svc-rest.p12 ~/pki/certs/mds-token-public.pem $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -d -o root -g root -m 0755 /etc/confluent && sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/kafka-rest && for f in truststore.p12 cp-server.p12 svc-rest.p12 mds-token-public.pem; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12 /tmp/mds-token-public.pem; printf "%-7s %s files\n" "$(hostname)" "$(sudo ls /etc/confluent/ssl | wc -l)"'; done
@@ -1846,6 +1846,8 @@ for h in rest01 rest02; do scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-serv
 rest01  4 files
 rest02  4 files
 ```
+
+設定檔用範本產生（兩台只差 `id` 與主機名），連同 systemd drop-in 一起派送。看最後一行：`unresolved=0` 代表範本變數都換好了，`exec=` 要指向我們的設定檔：
 
 ```bash
 cat > ~/conf/kafka-rest.tpl <<'EOF'
@@ -2081,7 +2083,15 @@ scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-serve
 c3-01: 9 files
 ```
 
-Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。三種身分各用各的憑證：Prometheus、Alertmanager 自己對外出示的是 `cp-server`（只有 serverAuth，純 server 憑證）；C3（Java）去連它們時出示 C3 自己的 client 憑證 `svc-c3`（keystore 就是 C3 已經在用的 `svc-c3.p12`，不用新檔）；Prometheus（Go）去連 Alertmanager 時出示 `c3-monitoring`（只有 clientAuth、不綁任何 Kafka 角色，用 PEM 檔，所以沒有 `SystemAdmin` 的私鑰以 PEM 留在磁碟上）。這樣 `cp-server` 即使外洩，也不能拿去當 client 登入任何需要 client 憑證的服務；Prometheus／Alertmanager 的 `client_auth_type` 只驗憑證鏈與用途，不看 CN，所以不用另外設定誰能連。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
+接著是內建 Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。三種身分各用各的憑證：
+
+| 誰、對誰 | 出示的憑證 | 說明 |
+|---|---|---|
+| Prometheus、Alertmanager 對外（當 server） | `cp-server` | 只有 serverAuth 的純 server 憑證 |
+| C3（Java）連 Prometheus、Alertmanager | `svc-c3` | keystore 就是 C3 已經在用的 `svc-c3.p12`，不用新檔 |
+| Prometheus（Go）連 Alertmanager | `c3-monitoring` | 只有 clientAuth、不綁任何 Kafka 角色，用 PEM 檔，所以沒有 `SystemAdmin` 的私鑰以 PEM 留在磁碟上 |
+
+這樣 `cp-server` 即使外洩，也不能拿去當 client 登入任何需要 client 憑證的服務；Prometheus／Alertmanager 的 `client_auth_type` 只驗憑證鏈與用途，不看 CN，所以不用另外設定誰能連。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
 
 ```bash
 ssh c3-01.poc.lab 'sudo tee /etc/confluent-control-center/web-config-prom.yml >/dev/null <<EOF
@@ -2127,9 +2137,11 @@ c3-01: prometheus config ok
 >
 > 陷阱：上面最後兩段（`otlp`、`storage`）是從 C3 套件預設的 `prometheus-generated-local.yml` 抄來的，**不能省**。broker 用 OTLP 把指標送進 Prometheus，`promote_resource_attributes` 才會把資源屬性 `kafka.cluster.id`、`kafka.broker.id` 變成指標標籤。沒有它，指標沒有叢集標籤，C3 畫面上依叢集、broker 篩選的圖表都比對不到資料，而畫面看起來一切正常（2026-10-26 lab 實測：補上之後 40 秒內帶標籤的資料點從 0 變成 7 萬多筆）。
 
-> 這一章裝的 C3 是**基底的 2.5.1**。2.5.1 套件預設的 `prometheus-generated-local.yml` 就有同樣的 `otlp`、`storage` 兩段，和 2.6.1 逐字相同（2026-10-28 把兩個 RPM 的 `/etc/confluent-control-center/` 逐檔比對，唯一差別是 `control-center-dev.properties` 多一行 `confluent.controlcenter.docs.host`；`control-center.properties` 與 systemd 的三個 unit 檔相同）。所以這一章的設定在 2.5.1 與遷移後的 2.6.1 都適用，29.3 換 C3 版本時不用改設定，只要把 C3 自己寫的 4 個 generated 檔擁有者改回來。
+> 這一章裝的 C3 是**基底的 2.5.1**。2.5.1 套件預設的 `prometheus-generated-local.yml` 就有同樣的 `otlp`、`storage` 兩段，和 2.6.1 逐字相同（2026-10-28 把兩個 RPM 的 `/etc/confluent-control-center/` 逐檔比對，唯一差別是 `control-center-dev.properties` 多一行 `confluent.controlcenter.docs.host`；`control-center.properties` 與 systemd 的三個 unit 檔相同）。
+>
+> 所以這一章的設定在 2.5.1 與遷移後的 2.6.1 都適用：29.3 換 C3 版本時不用改設定，只要把 C3 自己寫的 4 個 generated 檔擁有者改回來。
 
-C3 設定檔（整段貼到 EOF）：
+C3 設定檔（整段貼到 EOF）。一樣看最後一行的 `unresolved=0` 與 `exec=`：
 
 ```bash
 cat > ~/conf/control-center.tpl <<'EOF'
@@ -2236,7 +2248,7 @@ c3 ui=200 after ~30s
 （第一次啟動 30–120 秒都正常）
 ```
 
-確認指標真的帶有叢集標籤（上面那個陷阱的檢查）。ops02 連不到 c3-01 的 9090（防火牆只對外開 9021），所以在 c3-01 上用它自己的憑證查：
+確認指標真的帶有叢集標籤（上面那個陷阱的檢查）。操作機連不到 c3-01 的 9090（防火牆只對外開 9021），所以在 c3-01 上用它自己的憑證查：
 
 ```bash
 ssh c3-01.poc.lab bash -s <<'REMOTE'
@@ -2259,7 +2271,7 @@ lab 裡：Windows 瀏覽器開 `https://localhost:19021`（正式環境是維運
 
 # 14. 第十四站：基本功能驗收（小安的檢查清單）
 
-**這一章在做什麼**：基本安裝（第 2–13 章）到此告一段落。這一章先用幾個檢查確認整套健康，再給出「出問題先看哪裡」、「做錯了怎麼重來」、「常見的坑」三張查詢表，最後交代後面章節的走法。
+**這一章在做什麼**：基本安裝（第 2–13 章）到此告一段落。前提：第 13 章的 C3 已經能登入。這一章先用一條指令確認整套健康，再給出「出問題先看哪裡」、「做錯了怎麼重來」、「常見的坑」三張查詢表，最後交代後面章節的走法。完成的樣子：7 台 `confluent-server` 都 `active`、quorum 有 leader、4 台 MDS 回 200、REST Proxy 經 LB 與 C3 畫面都回 200。
 
 到這裡平台已經能用，但還不能交付。後面分兩段：
 
@@ -2269,7 +2281,7 @@ lab 裡：Windows 瀏覽器開 `https://localhost:19021`（正式環境是維運
 
 @role 小安 | ops02 | root
 
-全部做完，用這幾條確認整套是健康的：
+一條指令跑完所有檢查；看每行最後的狀態：服務要 `active`、HTTP 要 200、`LeaderId` 要有數字、`topics` 要列得出第 11 章建的 topic：
 
 ```bash
 export JAVA_HOME=/opt/java/current; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'printf "%-5s %s\n" "$(hostname)" "$(systemctl is-active confluent-server)"'; done; kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep LeaderId; for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo; echo "topics: $(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list | grep -v '^_' | paste -sd' ')"; echo "rest via LB: $(curl -s -o /dev/null -m 30 -w %{http_code} --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)"; echo "c3 ui: $(curl -s -o /dev/null -m 10 -w %{http_code} https://c3-01.poc.lab:9021/)"; echo "metrics in prometheus: $(curl -s -m 10 --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) kinds"
@@ -2849,7 +2861,7 @@ kb04: full sudo back (change window)
 
 ![jmx]
 
-**這一章在做什麼**：讓銀行的監控系統看得到 Confluent 各程序的狀況，並在出事時發告警。前提：第 10–13 章的服務已經起來（第 15 章是否已做不影響步驟）；這一章會**滾動重啟**所有 Java 程序（17.4），請在變更時段一台一台做。名詞：JMX 是 Java 程序對外提供指標的介面，JMX exporter 把它轉成 Prometheus 讀得懂的 HTTPS 網頁。
+**這一章在做什麼**：讓銀行的監控系統看得到 Confluent 各程序的狀況，並在出事時發告警。前提：第 10–13 章的服務已經起來（第 15 章是否已做不影響步驟）；這一章會**滾動重啟**所有 Java 程序（17.4），請在變更時段一台一台做。完成的樣子：10 台的 7071 匿名回 401、帶帳密有指標（17.4）；銀行的 Prometheus 上 10 個 target 都 up、告警規則載入、Grafana 有 32 個 dashboard（17.7）。名詞：JMX 是 Java 程序對外提供指標的介面，JMX exporter 把它轉成 Prometheus 讀得懂的 HTTPS 網頁。
 
 監控與告警的做法已定案：**每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），由銀行的 Prometheus 抓、銀行的 Alertmanager 發告警、銀行的 Grafana 看圖**。Prometheus、Alertmanager、Grafana 是銀行提供的；我方交付的是設定：exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方的 32 個 dashboard。
 
@@ -2873,7 +2885,9 @@ kb04: full sudo back (change window)
 
 @role 小安 | ops02 | root
 
-exporter 的設定檔只存密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼則只能明文寫在這個 YAML 裡（exporter 不支援 Secret Protection），所以檔案一律 root:confluent 0640。controller 沒有 cp-server.p12，用 kafka-internal.p12；broker、REST Proxy、C3 用 cp-server.p12。這一步只產生**標頭**（HTTPS 與帳密），規則在 17.2 接上去：
+exporter 的設定檔只存抓取密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼則只能明文寫在這個 YAML 裡（exporter 不支援 Secret Protection），所以檔案一律 root:confluent 0640。
+
+keystore 依角色不同：controller 沒有 `cp-server.p12`，用 `kafka-internal.p12`；broker、REST Proxy、C3 用 `cp-server.p12`。這一步只產生兩份**標頭**（HTTPS 與帳密），規則在 17.2 接上去：
 
 ```bash
 install -d -m 0700 ~/monitoring && (umask 077; [ -s ~/secrets/jmx-scrape.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/jmx-scrape.pass; [ -s ~/secrets/jmx-scrape.salt ] || openssl rand -hex 16 > ~/secrets/jmx-scrape.salt) && SALT=$(cat ~/secrets/jmx-scrape.salt) && HASH=$(printf '%s:%s' "$SALT" "$(cat ~/secrets/jmx-scrape.pass)" | sha256sum | cut -d' ' -f1 | sed 's/^0*//') && for ks in cp-server kafka-internal; do (umask 077; cat > ~/monitoring/jmx-header-$ks.yml <<EOF
@@ -2907,9 +2921,11 @@ headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml
 
 @role 小安 | ops02 | root
 
-Dashboard 是照 Confluent 官方 exporter 規則產生的指標名稱寫的，所以規則**直接用官方的檔，不自己改**（第 2.4 站帶進來，固定在 jmx-monitoring-stacks 的一個 commit，在 `~/landing/monitoring/` 下）。每台的設定 = 17.1 的標頭 + 官方規則。官方檔第一行是 YAML 文件分隔線 `---`，接在標頭後面會變成第二份文件，所以拿掉。官方檔自己帶 `startDelaySeconds: 120`（controller、broker：重啟後前兩分鐘 7071 回 200 但沒有指標）。
+Dashboard 是照 Confluent 官方 exporter 規則產生的指標名稱寫的，所以規則**直接用官方的檔，不自己改**（2.4 節帶進來，固定在 jmx-monitoring-stacks 的一個 commit，在 `~/landing/monitoring/` 下）。每台的設定 = 17.1 的標頭 + 官方規則。
 
-C3 沒有官方規則，我們寫一份小的（`rules-c3.yml`）。整段貼到 EOF：
+兩個細節：官方檔第一行是 YAML 文件分隔線 `---`，接在標頭後面會變成第二份文件，所以拿掉；官方檔自己帶 `startDelaySeconds: 120`（controller、broker 重啟後前兩分鐘 7071 回 200 但沒有指標）。
+
+C3 沒有官方規則，我們寫一份小的（`rules-c3.yml`）。整段貼到 EOF；最後每個角色一行，`httpServer=1`、`lowercaseOutputName=1` 代表標頭和規則都接上了：
 
 ```bash
 cd ~/monitoring && rm -f alert-rules.yml ca.pem prometheus-scrape.yml rules-kafka.yml rules-rest.yml rules-jvm.yml scrape.pass
@@ -2958,7 +2974,9 @@ c3            36 行  httpServer=1 lowercaseOutputName=1
 
 @role 小安 | ops02 | root
 
-每台：jar 到 `/opt/jmx-exporter/`、設定檔到各元件的目錄、第四個 drop-in 把 `-javaagent` 放進環境變數：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在7.3 節的防火牆已經開了（C3 的 7071 也在）：
+每台放三樣東西：jar 到 `/opt/jmx-exporter/`、設定檔到各元件的目錄、第四個 drop-in 把 `-javaagent` 放進環境變數。環境變數依角色不同：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在 7.3 節的防火牆已經開了（C3 的 7071 也在）。
+
+一條指令對 10 台做完；每行要看到 `javaagent:` 的 jar 路徑，行數要和 17.2 產生的設定檔相同：
 
 ```bash
 JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in kc*) role=controller; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; kb*) role=broker; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; rest*) role=rest; cfg=/etc/confluent/kafka-rest/jmx-exporter.yml; u=confluent-kafka-rest; var=KAFKAREST_OPTS;; c3*) role=c3; cfg=/etc/confluent/control-center/jmx-exporter.yml; u=confluent-control-center; var=CONTROL_CENTER_OPTS;; esac; cp ~/monitoring/jmx-$role.yml /tmp/jmx-$h.yml && scp -q ~/landing/tools/$JAR /tmp/jmx-$h.yml $h.poc.lab:/tmp/ && rm -f /tmp/jmx-$h.yml && ssh $h.poc.lab "sudo install -d -m 0755 /opt/jmx-exporter && sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-$h.yml $cfg && rm -f /tmp/$JAR /tmp/jmx-$h.yml && printf '[Service]\nEnvironment=\"$var=-javaagent:/opt/jmx-exporter/$JAR=7071:$cfg\"\n' | sudo tee /etc/systemd/system/$u.service.d/40-jmx.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1) \$(sudo wc -l $cfg | cut -d' ' -f1) lines\""; done
@@ -3333,9 +3351,20 @@ confluent-alerts.yml: 19 條規則
 **Alertmanager 設定**：兩個 webhook receiver 示範兩種格式，銀行留一種、刪另一種。
 
 - `webhook-default`：Alertmanager 預設的 JSON（version 4），一次 POST 帶一個通知群組裡所有告警。
-- `webhook-omnibus`：用 Alertmanager 的範本在 `payload` 組自訂 JSON，欄位照銀行 omnibus 的接收規格：`source`、`ClassName`、`origin`、`hostname`、`sub_source` 是固定值（照銀行給的規格填，範本裡的是範例值，上線前請銀行確認），`msg_catalog` 放規則的 `impact`、`msg` 放 `description`、`state` 是 OPEN／RESOLVED、`severity` 是 ERROR／PERFORMANCE（critical 對應 ERROR）、`sub_origin` 放「規則名稱：摘要」。`group_by: ['...']` 讓每筆告警自己一組，所以自訂格式永遠是一筆告警一個 POST。
+- `webhook-omnibus`：用 Alertmanager 的範本在 `payload` 組自訂 JSON，欄位照銀行 omnibus 的接收規格（對應見下表）。`group_by: ['...']` 讓每筆告警自己一組，所以自訂格式永遠是一筆告警一個 POST。
 
-自訂 JSON 的寫法有兩個陷阱（2026-10-26 實測）：`payload` 用**字串寫法**，每個值都經 `toJson`，值裡有雙引號或冒號才不會弄壞 JSON；用 map 寫法時，含 `: ` 的值會被當成 YAML 物件、像數字的字串（`"007"`）會變成數字 7。範本裡拿不到 `.GroupKey`，要編號就用告警的 `Fingerprint`。webhook 網址 `WEBHOOK-RECEIVER:8080` 換成行內的；需要認證就在 receiver 加 `http_config`。
+| omnibus 欄位 | 放什麼 |
+|---|---|
+| `source`、`ClassName`、`origin`、`hostname`、`sub_source` | 固定值；範本裡的是範例值，照銀行給的規格填，上線前請銀行監控團隊確認 |
+| `msg_catalog` | 規則的 `impact` |
+| `msg` | 規則的 `description` |
+| `state` | OPEN／RESOLVED |
+| `severity` | ERROR／PERFORMANCE（critical 對應 ERROR） |
+| `sub_origin` | 「規則名稱：摘要」 |
+
+自訂 JSON 的寫法有兩個陷阱（2026-10-26 實測）：`payload` 用**字串寫法**，每個值都經 `toJson`，值裡有雙引號或冒號才不會弄壞 JSON；用 map 寫法時，含 `: ` 的值會被當成 YAML 物件、像數字的字串（`"007"`）會變成數字 7。範本裡拿不到 `.GroupKey`，要編號就用告警的 `Fingerprint`。
+
+webhook 網址 `WEBHOOK-RECEIVER:8080` 由銀行監控團隊換成行內的；需要認證就在 receiver 加 `http_config`。整段貼到 EOF：
 
 ```bash
 cat > ~/monitoring/to-bank/alertmanager/alertmanager.yml <<'EOF'
@@ -3433,7 +3462,7 @@ EOF
 dashboards: 32, placeholder datasource fixed, uid shared with another file (renamed): 4
 ```
 
-根憑證與抓取密碼，然後看整個資料夾。抓取密碼另外交給銀行監控團隊（交付方式由銀行決定，不放 CyberArk；lab 直接給檔）。**待銀行確認**（請銀行確認的事項 11.2、11.4）：行內 Prometheus 抓其他系統用哪種認證；7071 能否只放行行內 Prometheus 的來源位址（7.3 節的 firewalld 目前對所有來源開放）：
+根憑證與抓取密碼，然後看整個資料夾。抓取密碼另外交給銀行監控團隊（交付方式由銀行決定，不放 CyberArk；lab 直接給檔）。**待銀行確認**（請銀行確認的事項 11.3、11.4）：行內 Prometheus 抓其他系統用哪種認證；7071 能否只放行行內 Prometheus 的來源位址（7.3 節的 firewalld 目前對所有來源開放）：
 
 ```bash
 cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && (umask 077; cp ~/secrets/jmx-scrape.pass ~/monitoring/to-bank/prometheus/scrape.pass) && cd ~/monitoring/to-bank && find . -type f ! -name '*.json' | sort && echo "dashboards: $(ls grafana/dashboards/*.json | wc -l) 個 JSON"
@@ -3454,7 +3483,9 @@ dashboards: 32 個 JSON
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-正式環境是銀行自己的三套系統，照 17.5 的表格放設定。lab 用四個容器扮演：Prometheus、Alertmanager、Grafana，加一個「webhook 接收端」（一支十行的 Python，收到什麼就印什麼，後面測告警用）。容器名稱都叫 `lab-mon-*`，接在 labnet，不在 compose 裡，所以主機名要用 `--add-host` 給 Prometheus。記憶體上限加起來約 1.2 GB。
+正式環境是銀行監控團隊把 17.5 的 `to-bank/` 放進自己的三套系統（放哪裡見 17.5 的表格）；這一節其餘都是 lab 專用。
+
+（lab 專用）lab 用四個容器扮演：Prometheus、Alertmanager、Grafana，加一個「webhook 接收端」（一支十行的 Python，收到什麼就印什麼，17.8 測告警用）。容器名稱都叫 `lab-mon-*`，接在 labnet，不在 compose 裡，所以主機名要用 `--add-host` 給 Prometheus。記憶體上限加起來約 1.2 GB。
 
 先把 `to-bank/` 取出來，放成各容器要的樣子（webhook 網址換成接收端容器；Alertmanager 的 `--cluster.listen-address=` 留空是因為 lab 的 172.35.x.x 不是私有位址，gossip 會起不來）：
 
@@ -3466,7 +3497,7 @@ cd ~/kafka-lab && rm -rf bank-monitoring && mkdir -p bank-monitoring/prometheus/
 prometheus: ca.pem confluent-alerts.yml scrape-confluent.yml scrape.pass / dashboards: 33 個檔
 ```
 
-行內 Prometheus 自己的 `prometheus.yml`（銀行原本就有，這裡只示範要加的三行：引用 scrape 設定、載入告警規則、指向 Alertmanager），以及 webhook 接收端：
+（lab 專用）行內 Prometheus 自己的 `prometheus.yml` 銀行原本就有，這裡只示範要加的三行：引用 scrape 設定、載入告警規則、指向 Alertmanager。一起寫出 webhook 接收端：
 
 ```bash
 cd ~/kafka-lab/bank-monitoring && cat > prometheus/prometheus.yml <<'EOF'
@@ -3492,7 +3523,7 @@ echo "prometheus.yml $(wc -l < prometheus/prometheus.yml) 行、receiver.py $(wc
 prometheus.yml 4 行、receiver.py 8 行
 ```
 
-起四個容器。映像檔 `prom/prometheus`、`prom/alertmanager`、`grafana/grafana` 是銀行自己的事（正式環境不是我們帶進去的），lab 從 Docker Hub 拉；webhook 接收端用 lab 的 `lab-node:96`。Grafana 開匿名 Admin 只為了 lab 好操作，並發佈到 Windows 的 13000：
+（lab 專用）起四個容器。映像檔 `prom/prometheus`、`prom/alertmanager`、`grafana/grafana` 是銀行自己的事（正式環境不是我們帶進去的），lab 從 Docker Hub 拉；webhook 接收端用 lab 的 `lab-node:96`。Grafana 開匿名 Admin 只為了 lab 好操作，並發佈到 Windows 的 13000。最後要看到 4 個 `lab-mon-*` 容器都是 `Up`：
 
 ```bash
 cd ~/kafka-lab/bank-monitoring && W() { cygpath -m "$PWD/$1"; } && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(W webhook):/w:ro" lab-node:96 python3 -u /w/receiver.py >/dev/null && docker run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(W alertmanager/alertmanager.yml):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null && docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $HOSTS -v "$(W prometheus/prometheus.yml):/etc/prometheus/prometheus.yml:ro" -v "$(W prometheus/confluent):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null && docker run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(W grafana/provisioning):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null && sleep 60 && docker ps --format '{{.Names}} {{.Status}}' | grep -E 'lab-mon-(prometheus|alertmanager|grafana|webhook)' | sort
@@ -3509,7 +3540,7 @@ lab-mon-webhook Up About a minute
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-四件事：每個 job 有幾個 target 是 up；告警規則載入且沒有錯；Alertmanager 認得 Prometheus；Grafana 有 32 個 dashboard、datasource 連得到 Prometheus。從 lab 的容器裡用 `curl` 查（容器內有 Python 可以整理輸出）：
+正式環境由銀行監控團隊在自己的三套系統上看同樣四件事：每個 job 有幾個 target 是 up（10 個都要 up）；告警規則載入且沒有錯；Alertmanager 認得 Prometheus；Grafana 有 32 個 dashboard、datasource 連得到 Prometheus。lab 裡：從監控容器裡用 `curl` 查（容器內有 Python 可以整理輸出）：
 
 ```bash
 docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
@@ -3548,7 +3579,7 @@ docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s -X POST http:/
 status 200 active controller 數 = 1
 ```
 
-Windows 瀏覽器開 `http://localhost:13000` 就是 Grafana，左邊 Dashboards 底下有 32 個。
+lab 裡：Windows 瀏覽器開 `http://localhost:13000` 就是 Grafana，左邊 Dashboards 底下有 32 個。
 
 ## 17.8 測告警：兩種 webhook 格式與解除
 
@@ -3558,7 +3589,7 @@ Windows 瀏覽器開 `http://localhost:13000` 就是 Grafana，左邊 Dashboards
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-不用弄壞叢集：在 Prometheus 多放一條永遠成立的測試規則（`vector(1)`），帶著和正式規則一樣的標籤與註解（`description` 裡故意放了雙引號和冒號，看自訂 JSON 會不會被弄壞）。Prometheus 重新載入規則後，告警送到 Alertmanager，約 1 分鐘內（規則每 30 秒算一次，再加 Alertmanager 的 group_wait 10 秒）兩個 receiver 都會收到：
+不用弄壞叢集：在 Prometheus 多放一條永遠成立的測試規則（`vector(1)`），帶著和正式規則一樣的標籤與註解（`description` 裡故意放了雙引號和冒號，看自訂 JSON 會不會被弄壞）。Prometheus 重新載入規則後，告警送到 Alertmanager，約 1 分鐘內（規則每 30 秒算一次，再加 Alertmanager 的 group_wait 10 秒）兩個 receiver 都會收到。這裡的 Prometheus 與接收端是 lab 的容器；正式環境由銀行監控團隊在自己的 Prometheus 上做同樣的事：
 
 ```bash
 cd ~/kafka-lab/bank-monitoring && cat > prometheus/confluent/confluent-alerts-test.yml <<'EOF'
@@ -4539,7 +4570,7 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 
 ## 21.3 換 CA（三階段）
 
-**這一節在做什麼**：銀行換了根憑證（新私鑰）、或換了簽發 CA 時的做法。名詞：根憑證（root）是信任的起點，簽發 CA（中繼）用它簽 leaf；lab 裡原本的根是 A.5 建的，21.3 換成的新 CA 叫 G2，21.4 再換成的叫 G3。
+**這一節在做什麼**：銀行換了根憑證（新私鑰）、或換了簽發 CA 時的做法。前提：21.2 的換發已經做過一次（這一節會把它整個再做一次），第 17 章的監控已接上（銀行 Prometheus 的 `ca.pem` 也要跟著換）。完成的樣子：每個端點出示的憑證 issuer 都是新 CA，舊 CA 簽的憑證連 REST Proxy 被拒。名詞：根憑證（root）是信任的起點，簽發 CA（中繼）用它簽 leaf；lab 裡原本的根是 A.5 建的，21.3 換成的新 CA 叫 G2，21.4 再換成的叫 G3。
 
 **不可逆的點**：階段三「拿掉舊根」之後，凡是還出示舊 CA 簽的憑證的，一律被拒，要退回只能重新加回舊根。所以階段二的每個端點（含銀行的 AD、套件庫，以及應用程式的憑證）都確認換好之後，才進階段三。
 
@@ -4555,7 +4586,7 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-和 A.5 一樣的做法，名字換成 G2，放在 `ca/g2/`；簽發腳本複製一份（它用自己所在目錄的簽發 CA）：
+（lab 專用）正式環境是銀行 CA 窗口建好新 CA、公布新根的指紋。lab 裡：和 A.5 一樣的做法，名字換成 G2，放在 `ca/g2/`；簽發腳本複製一份（它用自己所在目錄的簽發 CA）：
 
 ```bash
 cd ~/kafka-lab/ca && mkdir -p g2 && cd g2 && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA G2/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA G2/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && cp ../sign.sh sign.sh && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -subject -fingerprint -sha256
@@ -4583,7 +4614,7 @@ ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01
 
 @role 小安 | ops02 | root
 
-先寫一支滾動重啟的小腳本，三個階段都會用（controller → broker → REST → C3，一台健康了才做下一台）：
+先寫一支滾動重啟的小腳本 `rolling-restart.sh`，三個階段都會用（controller → broker → C3，一台健康了才做下一台；REST Proxy 不在裡面，照 12.1 另外做）：
 
 ```bash
 cat > ~/conf/rolling-restart.sh <<'EOF'
@@ -4685,7 +4716,7 @@ LB：rest01 rest02
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-銀行先用 G2 重簽自己的伺服器：AD 的 LDAPS、套件庫。私鑰沿用（銀行的事，lab 簡化），重啟讓它們出示新憑證：
+銀行 CA 窗口先用 G2 重簽銀行自己的伺服器：AD 的 LDAPS、套件庫。私鑰要不要換是銀行的事（lab 裡簡化成沿用），重啟讓它們出示新憑證：
 
 ```bash
 cd ~/kafka-lab && docker cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01-g2.csr")" && bash ca/g2/sign.sh ca/exchange/ad01-g2.csr ca/exchange/ad01-g2.crt && docker cp "$(cygpath -m "$PWD/ca/exchange/ad01-g2.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && docker cp "$(cygpath -m "$PWD/ca/bundle-g1-g2.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem; pkill -x samba; sleep 8' && O="$(cygpath -m "$PWD/images/web/tls")" && openssl req -new -key "$O/repo.key" -out "$O/repo-g2.csr" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/g2/sign.sh images/web/tls/repo-g2.csr images/web/tls/repo.crt && rm -f images/web/tls/repo-g2.csr && docker exec lab-repo01-1 systemctl restart httpd && for ep in ad01.poc.lab:636 repo01.poc.lab:443; do echo "$ep $(docker exec lab-ops02-1 bash -c "openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
@@ -4700,7 +4731,7 @@ repo01.poc.lab:443 PoC Bank Issuing CA G2
 
 @role 小安 | ops02 | root
 
-接著我方的每一張憑證都要改由 G2 簽：**把 21.2.1 到 21.2.5 整個再做一次**，唯一的差別是銀行改用 `ca/g2/sign.sh`。下面照順序列出同一組指令（`chain=ok` 是對 bundle 驗的，新根在裡面）：
+接著我方的每一張憑證都要改由 G2 簽：**把 21.2.1 到 21.2.5 整個再做一次**，唯一的差別是銀行 CA 窗口改用 `ca/g2/sign.sh`。下面照順序列出同一組指令，不再逐段解釋（`chain=ok` 是對 bundle 驗的，新根在裡面）：
 
 **21.2.1 新私鑰與 CSR**
 
@@ -4980,7 +5011,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 ## 21.4 換鏈：中繼沒換私鑰，只換憑證鏈
 
-**這一節在做什麼**：處理 21.0 表裡「中繼沿用私鑰」的情況，只換 p12 裡夾帶的憑證鏈，不重簽 leaf。這一節是最複雜的一種，只有銀行明確說是這種情況才需要。21.0 表裡「中繼沿用私鑰」的那幾列：leaf 不用重簽（簽它的私鑰沒變），但每個 p12 裡夾帶的中繼要換成銀行給的新那張。不用 CSR、不用銀行簽任何東西，只是把「現在的 leaf＋新中繼」重新包成 p12、派送、滾動重啟。
+**這一節在做什麼**：處理 21.0 表裡「中繼沿用私鑰」的那幾列：leaf 不用重簽（簽它的私鑰沒變），只把每個 p12 裡夾帶的中繼換成銀行給的新那張。不用 CSR、不用銀行簽任何東西，只是把「現在的 leaf＋新中繼」重新包成 p12、派送、滾動重啟。前提：21.3 做過（這一節接在 G2 之後），且已照 21.0 的表判斷出是哪一列。完成的樣子：每個端點出示的第二張（中繼）都是 G3 簽的；同一張 leaf 配舊鏈連 REST Proxy 被拒、配新鏈通過。這是最複雜的一種，只有銀行明確說是這種情況才需要。
 
 這一節演練最麻煩的那一列：**銀行換根（G3，新私鑰），中繼 G2 沿用私鑰、由 G3 重簽**。信任清單一樣走三階段，階段二從「重簽 leaf」換成「換鏈」。只有中繼續簽、根不動的情況（表的第 3 列），跳過 21.4.2 和 21.4.5，只做 21.4.3、21.4.4。
 
@@ -4996,7 +5027,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-新根 G3 用新私鑰；中繼沿用 G2 中繼的私鑰與名稱，改由 G3 簽。新的中繼先放 `g2/issuing-g3.crt`，階段二才換成簽發腳本用的那張：
+（lab 專用）正式環境這是銀行 CA 窗口的事，交給小安的只有新根與新的中繼憑證。lab 裡：新根 G3 用新私鑰；中繼沿用 G2 中繼的私鑰與名稱，改由 G3 簽。新的中繼先放 `g2/issuing-g3.crt`，階段二才換成簽發腳本用的那張：
 
 ```bash
 cd ~/kafka-lab/ca && mkdir -p g3 && cd g3 && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA G3/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && cd ../g2 && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA G2/O=PoC Bank/C=TW" -out issuing-g3.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing-g3.csr -CA ../g3/root.crt -CAkey ../g3/root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing-g3.crt 2>/dev/null && rm -f issuing-g3.csr issuing.ext && openssl verify -CAfile ../g3/root.crt issuing-g3.crt && for f in issuing.crt issuing-g3.crt; do echo "$f: $(openssl x509 -in $f -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')（簽發者 $(openssl x509 -in $f -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')）key=$(openssl x509 -in $f -noout -pubkey | sha256sum | cut -c1-12)"; done
@@ -5100,7 +5131,7 @@ LB：rest01 rest02
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-簽發腳本改用新的中繼（之後簽的 leaf 都附新鏈）；AD、套件庫的憑證檔換成「原本的 leaf＋新中繼」，重啟；新中繼交給小安（放 `~/pki/bank-issuing-new.pem`）：
+銀行 CA 窗口把簽發腳本改用新的中繼（之後簽的 leaf 都附新鏈）；AD、套件庫的憑證檔換成「原本的 leaf＋新中繼」，重啟；新中繼交給小安（放 `~/pki/bank-issuing-new.pem`）：
 
 ```bash
 cd ~/kafka-lab && mv ca/g2/issuing.crt ca/g2/issuing-under-g2.crt && cp ca/g2/issuing-g3.crt ca/g2/issuing.crt && rechain() { awk '/BEGIN CERT/{n++} n==1' "$1" > "$1.new" && cat ca/g2/issuing.crt >> "$1.new" && mv "$1.new" "$1"; } && docker cp lab-ad01-1:/var/lib/samba/private/tls/cert.pem "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")" && rechain ca/exchange/ad01-cert.pem && docker cp "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && docker exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem; pkill -x samba; sleep 8' && rechain images/web/tls/repo.crt && docker exec lab-repo01-1 systemctl restart httpd && docker cp "$(cygpath -m "$PWD/ca/g2/issuing.crt")" lab-ops02-1:/root/pki/bank-issuing-new.pem && for ep in ad01.poc.lab:636 repo01.poc.lab:443; do echo "$ep 中繼的簽發者：$(docker exec lab-ops02-1 bash -c "openssl s_client -connect $ep -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
@@ -5362,7 +5393,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 ![backup]
 
-**這一章在做什麼**：每天自動把叢集的「設定類」中繼資料（誰有什麼權限、有哪些 topic 與設定）匯出成文字檔，遇到誤刪時能照著重建。訊息本身不備份。順序：建專用的唯讀身分（23.1、23.2）→ 匯出腳本（23.3）→ 排程（23.4）→ 怎麼比對與還原（23.5）。
+**這一章在做什麼**：每天自動把叢集的「設定類」中繼資料（誰有什麼權限、有哪些 topic 與設定）匯出成文字檔，遇到誤刪時能照著重建。訊息本身不備份。前提：第 9 章已發 `svc-backup` 憑證、第 10 章的 `access.rule.providers` 有開 `KRAFT_ACL`。順序：建專用的唯讀身分（23.1、23.2）→ 匯出腳本（23.3）→ 排程（23.4）→ 怎麼比對與還原（23.5）。完成的樣子：`~/backup/metadata/<時間>/` 每天多一份、每個檔都有內容，syslog 有 tag `confluent-backup` 的成功紀錄。
 
 要備份的東西分成三類，各走各的路：
 
@@ -5370,7 +5401,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 |---|---|---|---|
 | 叢集中繼資料 | RBAC、ACL、topic 與設定、SCRAM 帳號清單與配額、features、broker 動態設定 | 操作機每天排程匯出（本章），保留 30 天；變更前另外手動跑一次當快照 | 小安裝好之後自動跑 |
 | 各台的設定 | `/etc/confluent`、systemd drop-in、`/etc/kafka` 的 log4j2 | 銀行既有的主機備份系統（操作機的排程只匯出 Kafka 的中繼資料，不 ssh 進各台） | 銀行主機團隊 |
-| 機敏資料 | `~/pki` 的私鑰、`~/secrets`、master key | **不在這支排程裡**：由銀行的備份機制備份操作機的 `~/pki`、`~/secrets`（要加密）；`/secure/ssh` 的私鑰依 第 4 章 不備份 | 銀行備份團隊 |
+| 機敏資料 | `~/pki` 的私鑰、`~/secrets`、master key | **不在這支排程裡**：由銀行的備份機制備份操作機的 `~/pki`、`~/secrets`（要加密）；`/secure/ssh` 的私鑰依第 4 章不備份 | 銀行備份團隊 |
 
 訊息本身不做檔案備份：叢集內靠 replication factor 3、`min.insync.replicas=2`；異地備援（Cluster Linking）依銀行的 RPO／RTO 另議。
 
@@ -5394,7 +5425,7 @@ client-backup.properties：1 處指向 svc-backup；憑證 svc-backup，剩 364 
 
 @role 小安 | ops02 | root
 
-lab 逐項試過（2026-10-25）：
+每一項要什麼權限、怎麼給（lab 逐項試過，2026-10-25）：
 
 | 要匯出的 | 需要的操作 | 給法 |
 |---|---|---|
@@ -5491,7 +5522,7 @@ RBAC 的 principal：11 個；SHA256SUMS：7 個檔
 密碼字樣：0
 ```
 
-> `users.txt` 的 SCRAM 那幾行只有機制與迭代次數（`SCRAM-SHA-512=iterations=8192`），沒有密碼也沒有雜湊。帳號被刪掉時，這份清單告訴你要重建哪些帳號，密碼在操作機的 `~/secrets`（11.1）。
+> `users.txt` 的 SCRAM 那幾行只有機制與迭代次數（`SCRAM-SHA-512=iterations=8192`），沒有密碼也沒有雜湊。帳號被刪掉時，這份清單只說要重建哪些帳號，密碼在操作機的 `~/secrets`（11.1）。
 
 ## 23.4 每天凌晨 2 點自動跑
 
@@ -5516,7 +5547,7 @@ syslog：中繼資料已匯出：/root/backup/metadata/20261025-0103
 
 比對最近兩次的備份，哪些檔有變一眼看出來（精簡的 OS 沒有 `diff`，用 sha256 與 `join`）；以 topic 為例列出多出來的。
 
-正式環境比的是「昨天」和「今天」。lab 沒有隔天，所以先造一個變化：新建 `orders.backup-demo`，等到下一分鐘再匯出一次（備份目錄以分鐘命名，同一分鐘再匯出會蓋掉前一份）：
+正式環境比的是「昨天」和「今天」。（lab 專用）lab 沒有隔天，所以先造一個變化：新建 `orders.backup-demo`，等到下一分鐘再匯出一次（備份目錄以分鐘命名，同一分鐘再匯出會蓋掉前一份）：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --create --if-not-exists --topic orders.backup-demo --partitions 1 --replication-factor 3 >/dev/null && last=$(ls -d ~/backup/metadata/20* | tail -1) && while [ "$(date +%Y%m%d-%H%M)" = "$(basename $last)" ]; do sleep 5; done && ~/conf/metadata-backup.sh >/dev/null && echo "新建 orders.backup-demo 後再匯出：$(basename $(ls -d ~/backup/metadata/20* | tail -1))（上一份 $(basename $last)）"
@@ -5568,7 +5599,7 @@ orders.backup-demo 還在嗎：0
 
 # 25. 第二十五站：節點更換與增減
 
-**這一章在做什麼**：兩種會動到叢集成員的作業：換掉一台 controller（25.1）、縮減與擴充 broker（25.2）。兩者都在服務不中斷的前提下做，應用程式不用改設定。
+**這一章在做什麼**：兩種會動到叢集成員的作業：換掉一台 controller（25.1）、縮減與擴充 broker（25.2）。兩者都在服務不中斷的前提下做，應用程式不用改設定。前提：第 14 章的檢查全部正常、第 15 章已做（格式化新節點時要讀 master key）。完成的樣子：quorum 三個成員都在、沒有 under-replicated partition、第 14 章的檢查仍全部正常。
 
 ## 25.1 換掉一台 controller
 
@@ -5609,7 +5640,7 @@ NodeId  DirectoryId             LogEndOffset  Lag  LastFetchTimestamp  LastCaugh
 
 @role Lab 管理員 | Windows 終端 | 本機
 
-正式環境是「主機團隊換了碟、掛回同一個路徑」。lab 裡：用清空資料目錄模擬：
+正式環境是銀行主機團隊換了碟、掛回同一個路徑。lab 裡：用清空資料目錄模擬：
 
 ```bash
 docker exec lab-kc03-1 bash -c 'systemctl stop confluent-server && rm -rf /var/lib/kafka/data/* && echo "kc03 data: $(ls -A /var/lib/kafka/data | wc -l) files, $(stat -c %U:%G:%a /var/lib/kafka/data)"'
@@ -5779,7 +5810,7 @@ under-replicated：0
 
 @role 小安 | ops02 | root
 
-加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 3、5、7、8 章準備，憑證的 SAN 要有它的名稱（21.2）：
+加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 4、5、7、8 章準備，憑證的 SAN 要有它的名稱（21.2）：
 
 ```bash
 source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka/data/*; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
@@ -5815,7 +5846,7 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 
 # 26. 第二十六站：License 到期監控與每日檢查
 
-**這一章在做什麼**：license（授權）到期前提早知道。做法：26.1 學會讀出到期日、26.2 設每天一次的自動檢查、26.3 買到正式 license 之後怎麼換上去。前提：叢集已運作（第 10 章之後任何時間都可以做）。
+**這一章在做什麼**：license（授權）到期前提早知道。做法：26.1 學會讀出到期日、26.2 設每天一次的自動檢查、26.3 買到正式 license 之後怎麼換上去。前提：叢集已運作（第 10 章之後任何時間都可以做）。完成的樣子：26.1 印得出到期日，操作機的 syslog 每天多一行 tag `confluent-license`。
 
 平台目前用的是試用 license（第 10 章 `confluent.license` 沒有設）。試用期 30 天；正式 license 一般一年一約。到期之後 broker 仍會繼續服務、只是日誌一直報錯，但**重啟時 RBAC／MDS 等安全外掛與 Control Center 起不來**，等於下一次維運重啟就停擺。原廠只在 C3 畫面（到期前 90 天開始）與 broker 日誌提醒，**沒有提供到期日的 JMX 指標**，所以行內監控要自己讀。
 
@@ -5840,7 +5871,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 
 @role 小安 | ops02 | root
 
-把 26.1 寫成一支小腳本：剩不到 90 天（和 C3 的提示同一天開始）就以 `warning` 寫進 syslog，過期或讀不到就是 `err`；行內監控／SIEM 依 tag `confluent-license` 告警。結束碼 0／2／1 給銀行的排程系統用（要改由行內排程呼叫也是同一支）：
+把 26.1 寫成一支小腳本：剩不到 90 天（和 C3 的提示同一天開始）就以 `warning` 寫進 syslog，過期或讀不到就是 `err`；銀行監控團隊的監控／SIEM 依 tag `confluent-license` 告警。結束碼 0／2／1 給銀行的排程系統用（要改由行內排程呼叫也是同一支）。跑完看印出的到期日與結束碼：
 
 ```bash
 cat > ~/conf/license-check.sh <<'EOF'
@@ -6707,7 +6738,9 @@ export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,imag
 > `MSYS_NO_PATHCONV=1` 是讓 Git Bash 不要把 `/out`、`/etc/...` 這類容器內路徑轉成 Windows 路徑。給 Docker 的 Windows 路徑一律用 `$(cygpath -m …)` 產生。
 ## A.1 主機映像檔：模擬「裸機 RHEL 9」
 
-（lab 專用）這一節建出所有主機共用的映像檔。每台主機都是同一個映像：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。安裝與維運用的帳號 `cpuser` 不在映像裡，和銀行開給我們的主機一樣，是第 4 章由銀行 OS 團隊建立。沒有 JDK、沒有 Confluent、公開 repo 關閉，和銀行開給我們的主機一樣。
+**這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：附錄 A 開頭的兩個全域設定已做、目錄已建。完成的樣子：build 的最後一行是 `naming to … lab-node:96`，接著印出 `Rocky Linux release 9.6`。
+
+和銀行開給我們的主機一樣：沒有 JDK、沒有 Confluent、公開 repo 關閉；安裝與維運用的帳號 `cpuser` 也不在映像裡，第 4 章才由銀行 OS 團隊建立。
 
 > 重點：**Rocky 的 9.6 映像裡預設的 repo 設定指向「最新的 9.x」**（mirrorlist 用 `$releasever` = 9），不動它的話 `dnf install` 裝到的是 9.8 的套件。所以先換成 vault 的 9.6 倉庫（`dl.rockylinux.org/vault/rocky/9.6`），再 `dnf update` 到 9.6 的最新修補，主機才是乾淨的 9.6。映像、下載機、後面 5.1 銀行套件庫的內容都用同一份 vault 設定。映像的 tag 用 `lab-node:96`：舊的 9.8 映像（`lab-node:1`）不會被誤用。
 
@@ -6760,7 +6793,9 @@ Rocky Linux release 9.6 (Blue Onyx)
 
 ## A.2 銀行的套件庫 web server（repo01）
 
-（lab 專用）這一節建出模擬銀行套件庫的網站，5.1 節與第 6 章把 OS 套件與 Confluent RPM 放上去。銀行自己管的 httpd，只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
+**這一節在做什麼**（lab 專用）：建出模擬銀行套件庫的 web server 映像 `lab-web:96`，5.1 節與第 6 章把 OS 套件與 Confluent RPM 放上去。前提：A.1 的 `lab-node:96`（這個映像以它為底）。完成的樣子：build 的最後一行是 `naming to … lab-web:96`。
+
+模擬的是銀行自己管的 httpd：只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
 
 ```bash
 cat > images/web/Dockerfile <<'EOF'
@@ -6804,7 +6839,9 @@ docker build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | tail -1
 
 ## A.3 銀行的 AD（Samba AD DC）
 
-（lab 專用）這一節建出模擬銀行 AD 的主機，5.3 節在裡面建群組與帳號。RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
+**這一節在做什麼**（lab 專用）：建出模擬銀行 AD 的映像 `lab-ad:1`，5.3 節在裡面建群組與帳號。前提：無（只要 Docker）。完成的樣子：build 的最後一行是 `naming to … lab-ad:1`。
+
+RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
 
 ```bash
 cat > images/ad/Dockerfile <<'EOF'
@@ -6847,7 +6884,7 @@ docker build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | tail -1
 
 ## A.4 銀行的負載平衡（nginx L4）
 
-（lab 專用）這一節建出模擬銀行負載平衡的 nginx，5.4 節設定轉發到兩台 REST Proxy。
+**這一節在做什麼**（lab 專用）：建出模擬銀行負載平衡的 nginx 映像 `lab-lb:1`，5.4 節設定轉發到兩台 REST Proxy。前提：無。完成的樣子：build 的最後一行是 `naming to … lab-lb:1`，接著印出 `4`（A.1–A.4 的四個映像都在）。
 
 ```bash
 cat > images/lb/Dockerfile <<'EOF'
@@ -6871,7 +6908,9 @@ docker build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | tail -1 && dock
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-（lab 專用）這一節建出模擬銀行 CA 的簽發工具，5.3 與 9.2 節用它簽憑證。正式環境這是行內 PKI；lab 裡：用 openssl 建一個兩層 CA（根 CA 離線保存，簽發 CA 簽日常憑證）：
+**這一節在做什麼**（lab 專用）：建出模擬銀行 CA 的兩層 CA 與簽發腳本 `sign.sh`，5.3 與 9.2 節用它簽憑證。前提：Git Bash 有 `openssl`。完成的樣子：`issuing.crt: OK`、印出根憑證的指紋，之後 `sign.sh` 幫 repo01 簽出 `repo.crt`。
+
+正式環境這是銀行 CA 窗口的行內 PKI。lab 裡：用 openssl 建一個兩層 CA（根 CA 離線保存，簽發 CA 簽日常憑證）：
 
 ```bash
 cd ~/kafka-lab/ca && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA 01/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -fingerprint -sha256
@@ -6926,7 +6965,9 @@ signed repo.csr -> repo.crt  (CN = repo01.poc.lab, O = PoC Bank, C = TW; EKU ser
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-（lab 專用）這一節用 docker compose 一次定義所有主機與網路，並產生共用的密碼檔。14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
+**這一節在做什麼**（lab 專用）：用 docker compose 一次定義所有主機與網路，並產生共用的密碼檔。前提：A.1–A.5 的四個映像與 CA 都建好。完成的樣子：`docker ps` 數出 `14` 台容器。
+
+14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
 
 ```bash
 cd ~/kafka-lab && [ -f secrets.env ] || { until p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20); [[ $p =~ [A-Z] && $p =~ [a-z] && $p =~ [0-9] ]]; do :; done; (umask 077; printf 'AD_ADMIN_PASSWORD=%s\n' "$p" > secrets.env); unset p; }; cat > compose.yml <<'EOF'
@@ -7055,11 +7096,15 @@ docker compose -f compose.yml up -d 2>&1 | grep -c Started
 
 > 陷阱：數字若是 13，通常是 lb01 第一次沒起來（它要同時接兩個網路），再下一次同樣的 `up -d` 就會補起來。
 
-> 陷阱：若出現 `Pool overlaps with other one on this address space`，表示這台電腦已有其他 Docker 網路用了 172.35 或 172.36 網段（`docker network ls` 逐一 `docker network inspect` 看 Subnet）。把 compose.yml 裡 `subnet:` 和所有 `extra_hosts` 的 IP 一起換成沒人用的網段（例如 172.37.0.0/24）再 `up -d`。lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓你的瀏覽器連得到 C3。
+> 陷阱：若出現 `Pool overlaps with other one on this address space`，表示這台電腦已有其他 Docker 網路用了 172.35 或 172.36 網段（`docker network ls` 逐一 `docker network inspect` 看 Subnet）。把 compose.yml 裡 `subnet:` 和所有 `extra_hosts` 的 IP 一起換成沒人用的網段（例如 172.37.0.0/24）再 `up -d`。
+
+lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓 Windows 的瀏覽器連得到 REST Proxy 與 C3。
 
 ## A.7 下載機
 
-（lab 專用）這一節建出第 2 章用的外網下載機 dl01。下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 2 章列給銀行的 OS 套件版本才是 9.6 的：
+**這一節在做什麼**（lab 專用）：建出第 2 章用的外網下載機 dl01。前提：A.1 的映像。完成的樣子：`internet: 200`（容器裡連得到外網）。
+
+下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 2 章列給銀行的 OS 套件版本才是 9.6 的：
 
 ```bash
 docker run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && docker exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
@@ -7071,7 +7116,7 @@ internet: 200
 
 ## A.8 進入各台機器
 
-（lab 專用）整本手冊切換主機都用 `docker exec`；正式環境則是從操作機 ssh 到各台。之後會一直用到的三條（換主機名稱即可）：
+**這一節在做什麼**（lab 專用）：整本手冊在 lab 切換主機都用 `docker exec`；正式環境則是人員經 PVWA＋PSMP 進操作機，再從操作機 ssh 到各台。前提：A.6、A.7 的容器都在跑。完成的樣子：三條指令各進得到一台機器的 shell。之後會一直用到的三條（換主機名稱即可）：
 
 ```bash
 docker exec -it dl01 bash
@@ -7091,7 +7136,15 @@ docker exec -it lab-repo01-1 bash
 
 ## A.9 收工與重開
 
-（lab 專用）暫停、繼續與重建 lab 的方法。想暫停：`cd ~/kafka-lab && docker compose -f compose.yml stop`，資料都在 volume 裡；繼續：`docker compose -f compose.yml start`。Windows 重開機後容器會自己起來（`restart: unless-stopped`），Kafka 服務設了 enable 也會自己起來；只有下載機 dl01 要手動 `docker start dl01`。操作機重開後 `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見 第 4 章）。全部清掉重來：`docker compose -f compose.yml down -v && docker rm -f dl01`（落地區 `~/kafka-lab/landing` 不會被刪）。
+**這一節在做什麼**（lab 專用）：暫停、繼續與重建 lab 的方法。前提：無。完成的樣子：`stop` 之後 `docker ps` 沒有 lab 容器，`start` 之後 14 台回來、Kafka 服務自己起來。
+
+| 要做什麼 | 指令 | 說明 |
+|---|---|---|
+| 暫停 | `cd ~/kafka-lab && docker compose -f compose.yml stop` | 資料都在 volume 裡 |
+| 繼續 | `docker compose -f compose.yml start` | — |
+| Windows 重開機後 | 不用做（`restart: unless-stopped`）；只有下載機要手動 `docker start dl01` | Kafka 服務設了 enable 也會自己起來 |
+| 操作機重開後 | 不用做 | `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見第 4 章） |
+| 全部清掉重來 | `docker compose -f compose.yml down -v && docker rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
 
 > 陷阱：要重跑附錄 A（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：操作機的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 5、9 章會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
