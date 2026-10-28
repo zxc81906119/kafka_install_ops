@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-28 19:40（**lab 使用中**：手冊 A→B 從零實跑開始，紀錄 ~/kafka-lab-runs/manual-final2-*.log）
+Updated: 2026-10-28 23:50（**lab 使用中**：腳本版從零重跑開始，紀錄 ~/kafka-lab-runs/script-final3-*.log）
 
 ## 現在在做什麼
 `bash docs/journey-src/tools/run-full.sh customer` 從零跑（開始 10:46，紀錄 `~/kafka-lab-runs/run-customer-0-99-20261028-1046.log`，路徑也在 `~/kafka-lab-runs/current-log.txt`）。
@@ -10,6 +10,9 @@ Updated: 2026-10-28 19:40（**lab 使用中**：手冊 A→B 從零實跑開始�
 - 手把手 0–27 章（38 圖）＋ install 01–26 站；基底 OS 9.6／CP 8.2.4／C3 2.5.1／JDK 21 → 遷移 OS 9.8／CP 8.3.2／C3 2.6.1／JDK 25。
 - 腳本版從零跑完（舊文字），結束碼 0，各段驗收 39/39。
 - 2026-10-28：cp-server 改純 server（certs.txt、09／13／14／19／20 站、control-center.tpl、prometheus-generated.yml、手冊第 9／13／20 章、問題清單 6.2、圖）；19 站新增驗收「cp-server 只有 serverAuth 且連 9090 被拒」；第 17 章 raft 指標說明更正、兩條 raft 告警刪除。docx 已重建。
+
+## 進行中（2026-10-28 夜）
+- **手冊 A→B 從零實跑完成**（三段，346 塊全過；細節與發現見 log/2026-10-28-script-run-and-next.md 最後一節）。修了 20.3、29.1、21.3／21.4 加銀行 Prometheus 換 ca.pem、operators 改 DeveloperRead Topic:*、11.2／16.5／18.3 實測值；C3 改 JDK 25 已驗。這些修正**還沒再實跑**：由接著的腳本版從零重跑（含 11 段 AD 斷線、expect_versions C3 JDK 25）與下一輪手冊實跑驗。
 
 ## 進行中（2026-10-28 傍晚）
 - **章節重構已做完、commit（b333c51）**：手冊 31 章＋附錄 A（建 lab）、B（監控覆蓋率）；install/steps 改名（04/05 拆、07-1/2/3、25-1/2、21/23/25/26/29/30）；run-full/run-chapter 改成章 id（A 先、B 最後、兩端含）；工具 `docs/journey-src/tools/restructure.js`（一次性，留作對照）。新章 22/24/27/28 與 23.6 是「待補」佈位。**尚未實跑**。
