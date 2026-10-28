@@ -1,0 +1,11 @@
+# blackbox_exporter modules for the bank's Prometheus (guide, chapter 22.2). One module: open a TCP connection, do a TLS handshake,
+# verify the chain against the bank root CA and report the certificate's expiry (probe_ssl_earliest_cert_expiry).
+# The exporter needs no client certificate: every listener (even the mTLS ones) presents its server certificate during the handshake.
+modules:
+  tls:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      tls: true
+      tls_config:
+        ca_file: /etc/prometheus/confluent/ca.pem

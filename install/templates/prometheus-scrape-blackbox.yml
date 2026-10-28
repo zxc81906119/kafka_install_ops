@@ -1,0 +1,14 @@
+# Certificate-expiry probes through the bank's blackbox_exporter (guide, chapter 22.2); referenced from prometheus.yml with scrape_config_files.
+# BLACKBOX_ADDRESS is the bank's exporter (host:port); each target is one TLS endpoint the platform presents a certificate on.
+# Labels: job="cert-expiry" (the rules in confluent-alerts-cert.yml use it), instance = the endpoint, env as in scrape-confluent.yml.
+scrape_configs:
+  - job_name: cert-expiry
+    metrics_path: /probe
+    params: { module: [ tls ] }
+    scrape_interval: 5m
+    scrape_timeout: 30s
+    static_configs: [ { targets: [ ${CERT_TARGETS} ], labels: { env: ${ENV_LABEL} } } ]
+    relabel_configs:
+      - { source_labels: [__address__], target_label: __param_target }
+      - { source_labels: [__param_target], target_label: instance }
+      - { target_label: __address__, replacement: ${BLACKBOX_ADDRESS} }

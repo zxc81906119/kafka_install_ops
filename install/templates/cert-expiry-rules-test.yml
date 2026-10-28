@@ -1,0 +1,35 @@
+# promtool unit test for confluent-alerts-cert.yml (guide, chapter 22.4): no need to wait for a real certificate to get close to expiry.
+# Run inside the bank's Prometheus: promtool test rules cert-expiry-rules-test.yml
+rule_files:
+  - confluent-alerts-cert.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      # endpoint A: 400 days left (no alert); B: 30 days (warning); C: 5 days (warning + critical); D: probe failed
+      - series: 'probe_ssl_earliest_cert_expiry{job="cert-expiry", instance="a.poc.lab:9094", env="lab"}'
+        values: '34560000x90'
+      - series: 'probe_ssl_earliest_cert_expiry{job="cert-expiry", instance="b.poc.lab:9094", env="lab"}'
+        values: '2592000x90'
+      - series: 'probe_ssl_earliest_cert_expiry{job="cert-expiry", instance="c.poc.lab:9094", env="lab"}'
+        values: '432000x90'
+      - series: 'probe_success{job="cert-expiry", instance="d.poc.lab:9094", env="lab"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: CertificateExpiringSoon
+        exp_alerts:
+          - exp_labels: { severity: warning, impact: INFRASTRUCTURE, job: cert-expiry, instance: "b.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "b.poc.lab:9094: certificate expires in 30 days", description: "The certificate presented by b.poc.lab:9094 expires in 30 days. Plan the renewal now (guide chapter 21: leaf 21.2, CA 21.3, chain 21.4); the whole cluster shares cp-server / kafka-internal, so one alert usually means all endpoints." }
+          - exp_labels: { severity: warning, impact: INFRASTRUCTURE, job: cert-expiry, instance: "c.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "c.poc.lab:9094: certificate expires in 5 days", description: "The certificate presented by c.poc.lab:9094 expires in 5 days. Plan the renewal now (guide chapter 21: leaf 21.2, CA 21.3, chain 21.4); the whole cluster shares cp-server / kafka-internal, so one alert usually means all endpoints." }
+      - eval_time: 11m
+        alertname: CertificateExpiringCritical
+        exp_alerts:
+          - exp_labels: { severity: critical, impact: SERVICE, job: cert-expiry, instance: "c.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "c.poc.lab:9094: certificate expires in 5 days", description: "Less than 14 days left on the certificate presented by c.poc.lab:9094. When it expires every TLS client (brokers between themselves, REST Proxy, C3, applications) stops connecting. Renew immediately (guide chapter 21)." }
+      - eval_time: 11m
+        alertname: CertificateProbeFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, impact: INFRASTRUCTURE, job: cert-expiry, instance: "d.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "d.poc.lab:9094: TLS probe failed", description: "blackbox_exporter could not complete a TLS handshake with d.poc.lab:9094 for 10 minutes: the service is down (see ConfluentTargetDown) or its certificate is no longer valid for the bank root CA the exporter trusts (expired, or the CA changed: guide 21.3)." }

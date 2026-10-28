@@ -120,6 +120,7 @@
 | 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |
 | 11.8 | 確認：告警與 dashboard 只用行內這一套，不在 Control Center 建 alert trigger／action（C3 內建的 Prometheus、Alertmanager 只給 C3 畫面用） | C3 內建 Alertmanager 的設定會被 C3 重寫、webhook 內容不能自訂 | 如此設計；請銀行確認沒有別的流程依賴 C3 的告警功能 |
 | 11.9 | broker 主機有沒有 node_exporter（或其他主機監控）？資料盤用量超過 80% 的告警由誰設？ | Kafka 的 JMX 沒有「磁碟剩多少」的指標，用量告警只能靠主機層；我們給一條範例規則（`KafkaDataDiskFillingUp`，手把手 24.2），mountpoint、job 要照行內 node_exporter 改 | 銀行主機監控負責；log dir 離線（`KafkaLogDirOffline`）由我方規則負責 |
+| 11.10 | 行內 Prometheus 有沒有 blackbox_exporter（或同類的 TLS 探測）？能不能用它探平台的每個 TLS 端點看憑證到期日？ | 憑證到期會讓整個平台連不上；我們給 blackbox 的模組設定、每個端點一個 target 的 scrape 檔、三條規則與 promtool 測試（手把手 22.2）；沒有的話只靠操作機每天的檢查腳本（22.3）與選單 17 | 建議有；沒有也能上線，到期提醒靠操作機 syslog（tag `confluent-cert`） |
 
 # 12. 範圍確認（專案窗口）
 

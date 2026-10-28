@@ -191,7 +191,7 @@ reset() {
 }
 
 monitoring_stop() {   # 17.6（lab）：收掉銀行端的監控容器（Prometheus、Alertmanager、Grafana、webhook 接收端）；設定目錄留著
-  docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook 2>/dev/null | tr '\n' ' '; echo "（已收掉）"
+  docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook lab-mon-blackbox 2>/dev/null | tr '\n' ' '; echo "（已收掉）"
 }
 
 monitoring() {   # 17.6（lab）：銀行監控團隊用小安給的 to-bank/ 起 Prometheus、Alertmanager、Grafana，再加一個印出收到什麼的 webhook 接收端
@@ -308,6 +308,38 @@ sign_app() {   # 27.3（lab）：CA 窗口只簽一張新應用程式的 CSR（~
   docker cp "$(windows_path "$LAB/ca/exchange/signed/$n.crt")" "$(container_of "$OPS_HOST"):/root/pki/incoming/"
 }
 
+monitoring_blackbox() {   # 22.2（lab）：監控團隊起 blackbox_exporter（lab-mon-blackbox），把 to-bank/prometheus 的 blackbox 設定、scrape-blackbox.yml、confluent-alerts-cert.yml 放進 Prometheus
+  announce "22.2 監控團隊：起 lab-mon-blackbox，Prometheus 加 cert-expiry job 與憑證規則"
+  local dir=$LAB/bank-monitoring hosts="" h tmp
+  [ -d "$dir/prometheus/confluent" ] || { echo "沒有 $dir：先跑 monitoring"; return 1; }
+  tmp=$(mktemp -d); docker cp "$(container_of "$OPS_HOST"):/root/monitoring/to-bank/prometheus" "$(windows_path "$tmp")" || return 1
+  for f in scrape-blackbox.yml confluent-alerts-cert.yml cert-expiry-rules-test.yml; do [ -s "$tmp/prometheus/$f" ] || { echo "to-bank/prometheus/$f 不存在：先跑第 22 站 files"; return 1; }; done
+  mkdir -p "$dir/blackbox"; cp "$tmp/prometheus/blackbox.yml" "$dir/blackbox/blackbox.yml"
+  cp "$tmp/prometheus/scrape-blackbox.yml" "$tmp/prometheus/confluent-alerts-cert.yml" "$tmp/prometheus/cert-expiry-rules-test.yml" "$dir/prometheus/confluent/"; rm -rf "$tmp"
+  # lab 的 scrape-blackbox.yml 指到容器名稱；正式環境是銀行自己的 exporter 位址
+  sed -i 's/BLACKBOX-EXPORTER:9115/lab-mon-blackbox:9115/' "$dir/prometheus/confluent/scrape-blackbox.yml"
+  # lb01 接兩個網段：只取 labnet 的 IP
+  labnet_ip() { docker inspect -f '{{(index .NetworkSettings.Networks "lab_labnet").IPAddress}}' "$(container_of "$1")"; }
+  for h in $KAFKA_HOSTS $RESTS $C3_HOST $AD_HOST $LB_HOST; do hosts="$hosts --add-host $(fqdn "$h"):$(labnet_ip "$h")"; done
+  hosts="$hosts --add-host $REST_VIP:$(labnet_ip "$LB_HOST")"
+  docker rm -f lab-mon-blackbox >/dev/null 2>&1
+  # shellcheck disable=SC2086
+  docker run -d --name lab-mon-blackbox --network lab_labnet --memory 64m $hosts -v "$(windows_path "$dir/blackbox/blackbox.yml"):/etc/blackbox_exporter/config.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml >/dev/null
+  # prometheus.yml：scrape_config_files 與 rule_files 都改成萬用字元（單檔 bind mount，改了要 restart）
+  sed -i 's#scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]#scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]#; s#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' "$dir/prometheus/prometheus.yml"
+  docker restart lab-mon-prometheus >/dev/null
+  for i in $(seq 1 12); do docker exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done
+  # 第一次抓要等一個 scrape_interval（5 分鐘）：等到 cert-expiry 的 target 全 up、規則都 ok（最多 7 分鐘）
+  local r; for i in $(seq 1 42); do r=$(docker run --rm --network lab_labnet "$NODE_IMAGE" bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
+import json, sys
+t = [x for x in json.load(sys.stdin)[\"data\"][\"activeTargets\"] if x[\"labels\"][\"job\"] == \"cert-expiry\"]
+print(\"cert-expiry target up %d / %d\" % (sum(x[\"health\"] == \"up\" for x in t), len(t)))"; curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
+import json, sys
+g = json.load(sys.stdin)[\"data\"][\"groups\"]
+r = [x for y in g for x in y[\"rules\"]]
+print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".join(y[\"name\"] for y in g), sum(x[\"health\"] != \"ok\" for x in r)))"'); grep -q '載入有錯 0 條' <<<"$r" && grep -qE 'target up ([0-9]+) / \1$' <<<"$r" && break; sleep 10; done; echo "$r"
+}
+
 sign_next() {   # 21.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
   local ca_dir=${1:-ca} csr cert_name
   announce "21.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
@@ -336,10 +368,11 @@ case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboo
   landing-layout) landing_layout;;
   monitoring-stop) monitoring_stop;;
   monitoring-reload) monitoring_reload;;
+  monitoring-blackbox) monitoring_blackbox;;
   lb-watch) lb_watch "${2:-}";;
   sign-next) sign_next "${2:-ca}";;
   sign-app) sign_app "${2:-}";;
   ad-drill) ad_drill;;
   broker-stop) broker_stop "${2:-}";;
   alerts-wait) alerts_wait "${2:-}";;
-  alerts-clear) alerts_clear;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop monitoring-reload（24.2）broker-stop alerts-wait alerts-clear（28.3）sign-app（27.3）coldboot（19.4）sign-next lb-watch"; exit 1;; esac
+  alerts-clear) alerts_clear;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop monitoring-reload（24.2）monitoring-blackbox（22.2）broker-stop alerts-wait alerts-clear（28.3）sign-app（27.3）coldboot（19.4）sign-next lb-watch"; exit 1;; esac

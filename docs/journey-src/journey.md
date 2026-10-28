@@ -5501,7 +5501,274 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 # 22. 第二十二站：憑證到期監控（選配）
 
-**這一章在做什麼**（待補）：用銀行 Prometheus 的 blackbox_exporter 探每個 TLS 端點實際出示的憑證，剩 60 天告警、剩 30 天升級；操作機每天另跑一支小腳本讀 `~/pki/certs/*.crt` 的到期日（涵蓋我方持有、不對外的 client 憑證）。客戶目前沒有這段，列為建議；寫法、lab 驗證與腳本見 `redesign/README.md`「憑證到期監控」。
+下面這張圖是兩層監控加上選單：銀行 Prometheus 用 blackbox_exporter 探每個端點「實際出示」的憑證；操作機每天讀我方持有的每一張；OP menu 17 隨時看。
+
+![certexpiry]
+
+**這一章在做什麼**：第 9 章的憑證一年到期（9.3 看到 `days=364`），到期那一刻 broker 之間、REST Proxy、C3、應用程式全部連不上；第 21 章是怎麼換，這一章是**怎麼提前知道**。做兩層：22.2 銀行 Prometheus 的 blackbox_exporter 探平台的每個 TLS 端點，剩 60 天 warning、14 天 critical；22.3 操作機每天一次讀 `~/pki/certs` 全部憑證（含 blackbox 看不到、不對外的 client 憑證與信任的根），寫 syslog。客戶目前沒有 blackbox_exporter，22.2 列為建議（問題清單 11.10）；22.3 與選單 17 沒有前提。lab 兩層都建、都驗。前提：第 17 章接上了、第 9 章的憑證在 `~/pki/certs`。完成的樣子：Prometheus 的 `cert-expiry` job 10 個以上 target 全 up、規則 24 條、`promtool test rules` 通過；操作機腳本列出每張憑證剩幾天、timer 裝好。
+
+## 22.1 要看哪些憑證
+
+@role 小安 | ops02 | root
+
+| 憑證 | 誰出示 | blackbox 探得到？ | 操作機腳本 |
+|---|---|---|---|
+| `kafka-internal` | controller 9093、broker 9092 | 探得到（mTLS 的 listener 也會先出示自己的憑證） | 有 |
+| `cp-server` | broker 9094／9095／9096／8090、REST 8082（兩台＋LB）、C3 9021 | 探得到 | 有 |
+| `svc-rest`、`svc-c3`、`c3-monitoring`、`svc-ops`、`svc-backup`、`opmenu-breakglass`、app 憑證 | client 憑證，不對外 | 探不到 | 有（`~/pki/certs/*.crt`） |
+| 銀行根、中繼（truststore；`bank-root.pem`） | — | 探到的是鏈裡最早到期的那一張（`probe_ssl_earliest_cert_expiry`） | 有（`bank-root.pem`） |
+| AD 的 LDAPS 憑證 | ad01 636 | 探得到（銀行的，順便看；它到期 MDS 就查不到 AD） | 無 |
+
+## 22.2 銀行 Prometheus：blackbox_exporter 探端點
+
+@role 小安 | ops02 | root
+
+給銀行監控團隊四個檔，放到 17.5 的 `to-bank/prometheus/`：blackbox 的模組設定（TCP＋TLS 握手、用銀行根驗鏈）、Prometheus 的 scrape 檔（每個端點一個 target，經 exporter 的 `/probe`）、規則（三條）、規則的單元測試。exporter 的位址 `BLACKBOX-EXPORTER:9115` 由銀行換成自己的；lab 之後換成容器名稱：
+
+```bash
+cd ~/monitoring/to-bank/prometheus && cat > blackbox.yml <<'EOF'
+modules:
+  tls:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      tls: true
+      tls_config:
+        ca_file: /etc/prometheus/confluent/ca.pem
+EOF
+T=""; for h in kc01 kc02 kc03; do T="$T\"$h.poc.lab:9093\", "; done; for h in kb01 kb02 kb03 kb04; do T="$T\"$h.poc.lab:9092\", \"$h.poc.lab:9094\", \"$h.poc.lab:9095\", \"$h.poc.lab:8090\", "; done; T="$T\"rest01.poc.lab:8082\", \"rest02.poc.lab:8082\", \"rest.poc.lab:8082\", \"c3-01.poc.lab:9021\", \"ad01.poc.lab:636\""; cat > scrape-blackbox.yml <<EOF
+scrape_configs:
+  - job_name: cert-expiry
+    metrics_path: /probe
+    params: { module: [ tls ] }
+    scrape_interval: 5m
+    scrape_timeout: 30s
+    static_configs: [ { targets: [ $T ], labels: { env: lab } } ]
+    relabel_configs:
+      - { source_labels: [__address__], target_label: __param_target }
+      - { source_labels: [__param_target], target_label: instance }
+      - { target_label: __address__, replacement: BLACKBOX-EXPORTER:9115 }
+EOF
+echo "scrape-blackbox.yml：$(grep -o '"[^"]*:[0-9]*"' scrape-blackbox.yml | wc -l) 個端點；blackbox.yml：$(grep -c prober blackbox.yml) 個模組"
+```
+
+```out
+scrape-blackbox.yml：24 個端點；blackbox.yml：1 個模組
+```
+
+規則：`probe_ssl_earliest_cert_expiry` 是端點出示的鏈裡最早到期那張的 unix 時間；剩不到 60 天 warning（`for: 1h`，避免 exporter 抖一下就叫人）、不到 14 天 critical；`probe_success` 0 是探不到（服務掛了、或憑證已經不被信任）。整段貼到 EOF：
+
+```bash
+cat > ~/monitoring/to-bank/prometheus/confluent-alerts-cert.yml <<'EOF'
+# Certificate expiry rules for the bank's Prometheus (guide, chapter 22.2). Needs the blackbox_exporter job in scrape-blackbox.yml
+# (job="cert-expiry", one target per TLS endpoint). Loaded next to confluent-alerts.yml (rule_files: confluent-alerts*.yml).
+groups:
+  - name: cert-expiry
+    rules:
+      # source: ours. probe_ssl_earliest_cert_expiry = expiry (unix time) of the earliest-expiring certificate in the chain the endpoint presented.
+      - alert: CertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="cert-expiry"} - time()) / 86400 < 60
+        for: 1h
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.instance }}: certificate expires in {{ $value | printf \"%.0f\" }} days"
+          description: "The certificate presented by {{ $labels.instance }} expires in {{ $value | printf \"%.0f\" }} days. Plan the renewal now (guide chapter 21: leaf 21.2, CA 21.3, chain 21.4); the whole cluster shares cp-server / kafka-internal, so one alert usually means all endpoints."
+      - alert: CertificateExpiringCritical
+        expr: (probe_ssl_earliest_cert_expiry{job="cert-expiry"} - time()) / 86400 < 14
+        for: 10m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.instance }}: certificate expires in {{ $value | printf \"%.0f\" }} days"
+          description: "Less than 14 days left on the certificate presented by {{ $labels.instance }}. When it expires every TLS client (brokers between themselves, REST Proxy, C3, applications) stops connecting. Renew immediately (guide chapter 21)."
+      # source: ours. The probe itself failed: endpoint down, TLS handshake broken (expired / untrusted certificate), or the exporter cannot reach it.
+      - alert: CertificateProbeFailed
+        expr: probe_success{job="cert-expiry"} == 0
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.instance }}: TLS probe failed"
+          description: "blackbox_exporter could not complete a TLS handshake with {{ $labels.instance }} for 10 minutes: the service is down (see ConfluentTargetDown) or its certificate is no longer valid for the bank root CA the exporter trusts (expired, or the CA changed: guide 21.3)."
+EOF
+echo "confluent-alerts-cert.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/prometheus/confluent-alerts-cert.yml) 條規則"
+```
+
+```out
+confluent-alerts-cert.yml: 3 條規則
+```
+
+規則不用等一年才知道對不對：Prometheus 自帶的 `promtool test rules` 餵假的時間序列（400 天、30 天、5 天、探不到）看三條規則各自要不要響。這個檔也交給銀行，他們改閾值後自己重測：
+
+```bash
+cat > ~/monitoring/to-bank/prometheus/cert-expiry-rules-test.yml <<'EOF'
+rule_files:
+  - confluent-alerts-cert.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{job="cert-expiry", instance="a.poc.lab:9094", env="lab"}'
+        values: '34560000x90'
+      - series: 'probe_ssl_earliest_cert_expiry{job="cert-expiry", instance="b.poc.lab:9094", env="lab"}'
+        values: '2592000x90'
+      - series: 'probe_ssl_earliest_cert_expiry{job="cert-expiry", instance="c.poc.lab:9094", env="lab"}'
+        values: '432000x90'
+      - series: 'probe_success{job="cert-expiry", instance="d.poc.lab:9094", env="lab"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: CertificateExpiringSoon
+        exp_alerts:
+          - exp_labels: { severity: warning, impact: INFRASTRUCTURE, job: cert-expiry, instance: "b.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "b.poc.lab:9094: certificate expires in 30 days", description: "The certificate presented by b.poc.lab:9094 expires in 30 days. Plan the renewal now (guide chapter 21: leaf 21.2, CA 21.3, chain 21.4); the whole cluster shares cp-server / kafka-internal, so one alert usually means all endpoints." }
+          - exp_labels: { severity: warning, impact: INFRASTRUCTURE, job: cert-expiry, instance: "c.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "c.poc.lab:9094: certificate expires in 5 days", description: "The certificate presented by c.poc.lab:9094 expires in 5 days. Plan the renewal now (guide chapter 21: leaf 21.2, CA 21.3, chain 21.4); the whole cluster shares cp-server / kafka-internal, so one alert usually means all endpoints." }
+      - eval_time: 11m
+        alertname: CertificateExpiringCritical
+        exp_alerts:
+          - exp_labels: { severity: critical, impact: SERVICE, job: cert-expiry, instance: "c.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "c.poc.lab:9094: certificate expires in 5 days", description: "Less than 14 days left on the certificate presented by c.poc.lab:9094. When it expires every TLS client (brokers between themselves, REST Proxy, C3, applications) stops connecting. Renew immediately (guide chapter 21)." }
+      - eval_time: 11m
+        alertname: CertificateProbeFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, impact: INFRASTRUCTURE, job: cert-expiry, instance: "d.poc.lab:9094", env: lab }
+            exp_annotations: { summary: "d.poc.lab:9094: TLS probe failed", description: "blackbox_exporter could not complete a TLS handshake with d.poc.lab:9094 for 10 minutes: the service is down (see ConfluentTargetDown) or its certificate is no longer valid for the bank root CA the exporter trusts (expired, or the CA changed: guide 21.3)." }
+EOF
+ls ~/monitoring/to-bank/prometheus/
+```
+
+```out
+blackbox.yml  ca.pem  cert-expiry-rules-test.yml  confluent-alerts-cert.yml  confluent-alerts-disk.yml  confluent-alerts.yml  scrape-blackbox.yml  scrape-confluent.yml  scrape.pass
+```
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+正式環境：銀行起自己的 blackbox_exporter（映像檔 `prom/blackbox-exporter`，和 Prometheus 一樣是銀行的），`scrape-blackbox.yml` 放進 `scrape_config_files`、規則放進 `rule_files`，先 `promtool test rules`。lab：exporter 用容器 `lab-mon-blackbox`（主機名稱要 `--add-host`，和 17.6 的 Prometheus 一樣），`prometheus.yml` 的 `scrape_config_files` 改成 `scrape-*.yml`（單檔 bind mount，改了要 restart）：
+
+```bash
+cd ~/kafka-lab/bank-monitoring && mkdir -p blackbox && docker cp lab-ops02-1:/root/monitoring/to-bank/prometheus "$(cygpath -m "$PWD/to-bank-prom")" && cp to-bank-prom/blackbox.yml blackbox/ && cp to-bank-prom/scrape-blackbox.yml to-bank-prom/confluent-alerts-cert.yml to-bank-prom/cert-expiry-rules-test.yml prometheus/confluent/ && rm -rf to-bank-prom && sed -i 's/BLACKBOX-EXPORTER:9115/lab-mon-blackbox:9115/' prometheus/confluent/scrape-blackbox.yml && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51 ad01:11 lb01:12 rest:12; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && docker rm -f lab-mon-blackbox >/dev/null 2>&1; MSYS_NO_PATHCONV=1 docker run -d --name lab-mon-blackbox --network lab_labnet --memory 64m $HOSTS -v "$(cygpath -m "$PWD/blackbox/blackbox.yml"):/etc/blackbox_exporter/config.yml:ro" -v "$(cygpath -m "$PWD/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml >/dev/null && sed -i 's#scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]#scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]#; s#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do docker exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done; echo "lab-mon-blackbox：$(docker inspect -f '{{.State.Status}}' lab-mon-blackbox)；prometheus.yml：$(grep -c 'scrape-\*.yml' prometheus/prometheus.yml) 行用萬用字元"
+```
+
+```out
+lab-mon-blackbox：running；prometheus.yml：1 行用萬用字元
+```
+
+驗三件事：`promtool test rules` 通過（在 Prometheus 容器裡跑，它自帶 promtool）、`cert-expiry` 的 target 全 up（第一次抓要等一個 `scrape_interval`，最多 5 分鐘）、規則 24 條載入沒錯：
+
+```bash
+docker exec lab-mon-prometheus sh -c 'cd /etc/prometheus/confluent && promtool test rules cert-expiry-rules-test.yml 2>&1 | grep -oE "SUCCESS|FAIL" | head -1'; for i in $(seq 1 36); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
+import json, sys
+t = [x for x in json.load(sys.stdin)[\"data\"][\"activeTargets\"] if x[\"labels\"][\"job\"] == \"cert-expiry\"]
+print(\"cert-expiry target up %d / %d\" % (sum(x[\"health\"] == \"up\" for x in t), len(t)))"; curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
+import json, sys
+g = json.load(sys.stdin)[\"data\"][\"groups\"]
+r = [x for y in g for x in y[\"rules\"]]
+print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".join(y[\"name\"] for y in g), sum(x[\"health\"] != \"ok\" for x in r)))"'); grep -q "target up 24 / 24" <<<"$r" && grep -q "載入有錯 0 條" <<<"$r" && break; sleep 10; done; echo "$r"
+```
+
+```out
+SUCCESS
+cert-expiry target up 24 / 24
+告警規則 24 條（cert-expiry、kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+```
+
+每個端點真的探到了什麼：剩幾天、哪一張（Grafana 做一張表就是同一個查詢）：
+
+```bash
+docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s --data-urlencode "query=(probe_ssl_earliest_cert_expiry{job=\"cert-expiry\"} - time()) / 86400" http://lab-mon-prometheus:9090/api/v1/query | python3 -c "
+import json, sys
+rs = sorted(json.load(sys.stdin)[\"data\"][\"result\"], key=lambda r: r[\"metric\"][\"instance\"])
+for r in rs: print(\"%-24s 剩 %3d 天\" % (r[\"metric\"][\"instance\"], float(r[\"value\"][1])))
+print(\"合計 %d 個端點\" % len(rs))"'
+```
+
+```out
+ad01.poc.lab:636         剩 364 天
+c3-01.poc.lab:9021       剩 364 天
+（…）
+rest.poc.lab:8082        剩 364 天
+合計 24 個端點
+```
+
+> 第 21 章換發之後，這張表就是「每一台都換到了嗎」的證據（21.2.5 用 `openssl s_client` 逐台看的是同一件事）。換 CA（21.3）時 exporter 用的 `ca.pem` 要跟著換，否則 `CertificateProbeFailed` 會全部響——21.3／21.4 已經有換 Prometheus `ca.pem` 的步驟，blackbox 讀同一個檔。
+
+## 22.3 操作機每天讀一次我方持有的憑證
+
+@role 小安 | ops02 | root
+
+blackbox 看不到 client 憑證（svc-ops、svc-backup、app 的），它們到期一樣會出事（備份停、選單登不進、REST 應用程式被拒）。操作機上這支小腳本和 26.2 的 license 檢查同一個樣子：每張憑證剩幾天，剩不到 60 天 `warning` 寫 syslog（tag `confluent-cert`），過期或讀不到 `err`；結束碼 0／2／1：
+
+```bash
+cat > ~/conf/cert-expiry.sh <<'EOF'
+#!/usr/bin/env bash
+# cert-expiry.sh [目錄…]：操作機每天跑一次，讀我方持有的每一張憑證（預設 ~/pki/certs/*.crt，含不對外、blackbox 探不到的 client 憑證）與信任的根，
+# 剩不到 WARN_DAYS 天以 warning 寫 syslog（tag confluent-cert），過期或讀不到是 err。結束碼：0 正常、2 有快到期、1 有過期或讀不到。
+WARN_DAYS=${WARN_DAYS:-60}
+dirs=${*:-/root/pki/certs}
+now=$(date +%s); rc=0; n=0
+for f in $(ls $(for d in $dirs; do echo "$d"/*.crt "$d"/*.pem; done) 2>/dev/null | sort -u); do
+  case $f in *mds-token-public.pem) continue;; esac       # 不是 CA 簽的憑證，沒有到期日
+  end=$(openssl x509 -in "$f" -noout -enddate 2>/dev/null | cut -d= -f2) || true
+  if [ -z "$end" ]; then logger -t confluent-cert -p user.err "讀不到憑證：$f"; echo "讀不到：$f"; rc=1; continue; fi
+  n=$((n+1)); days=$(( ($(date -d "$end" +%s) - now) / 86400 )); cn=$(openssl x509 -in "$f" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
+  msg="$(basename "$f")（CN=$cn）到期 $(date -d "$end" +%F)，剩 $days 天"
+  if [ "$days" -lt 0 ]; then logger -t confluent-cert -p user.err "已過期：$msg"; echo "已過期：$msg"; rc=1
+  elif [ "$days" -lt "$WARN_DAYS" ]; then logger -t confluent-cert -p user.warning "快到期：$msg"; echo "快到期：$msg"; [ $rc = 0 ] && rc=2
+  else echo "$msg"; fi
+done
+logger -t confluent-cert -p user.info "檢查了 $n 張憑證，結束碼 $rc"
+echo "檢查了 $n 張憑證，結束碼 $rc"; exit $rc
+EOF
+chmod 0700 ~/conf/cert-expiry.sh && bash ~/conf/cert-expiry.sh; echo "rc=$?"
+```
+
+```out
+app-legacy-billing.crt（CN=app-legacy-billing）到期 2027-10-28，剩 364 天
+（…每張一行）
+檢查了 10 張憑證，結束碼 0
+rc=0
+```
+
+閾值和過期的分支也要試過才算：拿一個暫存目錄放一張 5 天到期的自簽憑證和一張已過期的（`-not_after` 要 OpenSSL 3.4 以上；RHEL 9 現行版本有），跑同一支腳本，看 rc 與 syslog：
+
+```bash
+T=$(mktemp -d) && openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k.key -subj "/CN=soon-test" -days 5 -out $T/soon.crt 2>/dev/null && openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k2.key -subj "/CN=expired-test" -not_before 20260101000000Z -not_after 20260110000000Z -out $T/expired.crt 2>/dev/null; bash ~/conf/cert-expiry.sh $T; echo "rc=$?"; rm -rf $T; echo "syslog 最近三筆如下"; journalctl -t confluent-cert -n 3 --no-pager -o cat
+```
+
+```out
+已過期：expired.crt（CN=expired-test）到期 2026-01-10，剩 -291 天
+快到期：soon.crt（CN=soon-test）到期 2026-11-03，剩 5 天
+檢查了 2 張憑證，結束碼 1
+rc=1
+syslog 最近三筆如下
+已過期：expired.crt（CN=expired-test）到期 2026-01-10，剩 -291 天
+快到期：soon.crt（CN=soon-test）到期 2026-11-03，剩 5 天
+檢查了 2 張憑證，結束碼 1
+```
+
+排程：和 26.2 一樣的 systemd timer，每天 08:10（license 是 08:00）。行內有排程系統就改由它呼叫 `~/conf/cert-expiry.sh`，看結束碼與 syslog：
+
+```bash
+printf '[Unit]\nDescription=Confluent certificate expiry check\n\n[Service]\nType=oneshot\nEnvironment=HOME=/root\nExecStart=/root/conf/cert-expiry.sh\nSuccessExitStatus=2\n' | tee /etc/systemd/system/confluent-cert-expiry.service >/dev/null && printf '[Unit]\nDescription=Daily Confluent certificate expiry check\n\n[Timer]\nOnCalendar=*-*-* 08:10:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' | tee /etc/systemd/system/confluent-cert-expiry.timer >/dev/null && systemctl daemon-reload && systemctl enable --now confluent-cert-expiry.timer >/dev/null 2>&1 && systemctl start confluent-cert-expiry.service && echo "下次執行：$(systemctl show confluent-cert-expiry.timer -p NextElapseUSecRealtime --value)" && echo "syslog：$(journalctl -t confluent-cert -n 1 --no-pager -o cat)"
+```
+
+```out
+下次執行：Thu 2026-10-30 08:10:00 CST
+syslog：檢查了 10 張憑證，結束碼 0
+```
+
+## 22.4 告警響了做什麼
+
+@role 維運人員 | ops02 | root
+
+| 訊號 | 意思 | 做什麼 |
+|---|---|---|
+| `CertificateExpiringSoon`（剩 < 60 天）或 syslog `快到期` | 該排換發了 | 第 21 章：同一個 CA 換 leaf（21.2）；銀行說要換根或中繼才是 21.3／21.4。整個平台共用 `cp-server`、`kafka-internal`，一條告警通常代表全部 |
+| `CertificateExpiringCritical`（< 14 天） | 來不及走正常變更流程就要出事 | 立刻換；換不及就先和銀行 CA 要一張短效的 |
+| `CertificateProbeFailed` | 探不到：服務掛了（看 `ConfluentTargetDown`）或憑證已經不被 exporter 信任（過期、換了 CA 沒更新 `ca.pem`） | 先 28.2 快照分辨是服務還是憑證 |
+| 選單 17 顯示「剩不到 30 天」 | 同上，維運人員隨時能看 | — |
+
+> 誰負責看：規則與 syslog 都進銀行的監控／SIEM，告警到平台維運；換發是平台的變更單，CA 窗口要先排。不要把「到期日」只記在某個人的行事曆。
+
 
 # 23. 第二十三站：日常備份與還原
 

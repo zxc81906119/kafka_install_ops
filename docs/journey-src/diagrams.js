@@ -808,6 +808,21 @@ D.onboard = () => svg(800, 470, [
   box(20, 388, 760, 66, "⑦ 下線（選單 37）", ["解除 binding → SCRAM 密碼覆寫成隨機值（帳號留著，稽核還查得到）／憑證到期不續 → topic 等保留期過了再刪（選單 33）", "正式環境由申請單驅動，每一步都是選單；本章是選單背後的手動指令"], "gray"),
 ].join(""));
 
+// 26 certificate expiry monitoring (chapter 22): two layers plus the menu, and what happens when an alert fires
+D.certexpiry = () => svg(800, 430, [
+  region(10, 12, 780, 150, "① 銀行 Prometheus：blackbox_exporter 探每個 TLS 端點「實際出示」的憑證", "teal"),
+  box(26, 44, 230, 100, "端點清單（scrape-blackbox.yml）", ["controller 9093、broker 9092/9094/9095/8090", "REST 8082（兩台＋LB）、C3 9021", "AD 636（銀行的，順便看）"], "teal"),
+  box(286, 44, 230, 100, "blackbox tls 模組", ["TCP＋TLS 握手，用銀行根驗鏈", "不用 client 憑證：mTLS 的 listener", "也會先出示自己的憑證"], "teal"),
+  box(546, 44, 230, 100, "規則 confluent-alerts-cert.yml", ["剩 < 60 天 warning（for 1h）", "剩 < 14 天 critical", "探不到 → CertificateProbeFailed"], "amber"),
+  arrow(256, 94, 284, 94), arrow(516, 94, 544, 94),
+  region(10, 178, 780, 108, "② 操作機每天一次：cert-expiry.sh 讀 ~/pki/certs/*.crt（我方持有的每一張，含不對外的 client 憑證）", "purple"),
+  box(26, 210, 360, 60, "systemd timer 08:10（或行內排程呼叫）", ["結束碼 0／2 快到期／1 過期或讀不到", "syslog tag confluent-cert → 銀行 SIEM 收"], "purple"),
+  box(416, 210, 360, 60, "涵蓋 blackbox 看不到的", ["svc-ops、svc-backup、svc-c3、c3-monitoring、app 憑證", "truststore 裡的銀行根／中繼（也會到期）"], "purple"),
+  box(10, 302, 240, 60, "③ 隨時看：OP menu 17", ["各端點實際出示的憑證與剩餘天數", "換發後確認每一台都換到了"], "blue"),
+  box(270, 302, 510, 60, "告警響了做什麼", ["< 60 天：排變更單，照第 21 章換發（leaf 21.2／CA 21.3／鏈 21.4）；< 14 天：立刻", "過期的後果：broker 之間、REST、C3、應用程式全部連不上"], "coral"),
+  box(10, 378, 770, 40, "客戶沒有 blackbox_exporter 時：只做 ②（操作機腳本）＋ ③（選單）；①是建議，lab 兩層都建、都驗", [], "gray"),
+].join(""));
+
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;

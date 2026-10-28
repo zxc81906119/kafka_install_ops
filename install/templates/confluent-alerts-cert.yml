@@ -1,0 +1,28 @@
+# Certificate expiry rules for the bank's Prometheus (guide, chapter 22.2). Needs the blackbox_exporter job in scrape-blackbox.yml
+# (job="cert-expiry", one target per TLS endpoint). Loaded next to confluent-alerts.yml (rule_files: confluent-alerts*.yml).
+groups:
+  - name: cert-expiry
+    rules:
+      # source: ours. probe_ssl_earliest_cert_expiry = expiry (unix time) of the earliest-expiring certificate in the chain the endpoint presented.
+      - alert: CertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="cert-expiry"} - time()) / 86400 < 60
+        for: 1h
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.instance }}: certificate expires in {{ $value | printf \"%.0f\" }} days"
+          description: "The certificate presented by {{ $labels.instance }} expires in {{ $value | printf \"%.0f\" }} days. Plan the renewal now (guide chapter 21: leaf 21.2, CA 21.3, chain 21.4); the whole cluster shares cp-server / kafka-internal, so one alert usually means all endpoints."
+      - alert: CertificateExpiringCritical
+        expr: (probe_ssl_earliest_cert_expiry{job="cert-expiry"} - time()) / 86400 < 14
+        for: 10m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.instance }}: certificate expires in {{ $value | printf \"%.0f\" }} days"
+          description: "Less than 14 days left on the certificate presented by {{ $labels.instance }}. When it expires every TLS client (brokers between themselves, REST Proxy, C3, applications) stops connecting. Renew immediately (guide chapter 21)."
+      # source: ours. The probe itself failed: endpoint down, TLS handshake broken (expired / untrusted certificate), or the exporter cannot reach it.
+      - alert: CertificateProbeFailed
+        expr: probe_success{job="cert-expiry"} == 0
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.instance }}: TLS probe failed"
+          description: "blackbox_exporter could not complete a TLS handshake with {{ $labels.instance }} for 10 minutes: the service is down (see ConfluentTargetDown) or its certificate is no longer valid for the bank root CA the exporter trusts (expired, or the CA changed: guide 21.3)."
