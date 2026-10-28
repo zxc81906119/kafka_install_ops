@@ -27,13 +27,13 @@ receivers:
         # String form + toJson: every value is escaped by toJson, so quotes or colons in a description cannot break the JSON.
         # (The map form would turn "007" into the number 7 and read "a: b" as an object.)
         payload: >-
-          {"eventType": "CUSTOM_ALERT",
-          "State": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
-          "ProblemID": {{ (index .Alerts 0).Fingerprint | toJson }},
-          "ProblemTitle": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
-          "ProblemSeverity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
-          "ProblemImpact": {{ .CommonLabels.impact | toJson }},
-          "ProblemDetailsText": {{ .CommonAnnotations.description | toJson }},
-          "ImpactedEntity": {{ .CommonLabels.hostname | toJson }},
-          "Tags": {{ printf "env:%s,job:%s,instance:%s" .CommonLabels.env .CommonLabels.job .CommonLabels.instance | toJson }},
-          "StartTime": {{ (index .Alerts 0).StartsAt.Format "2006-01-02T15:04:05Z07:00" | toJson }}}
+          {"source": "TCB_DYNATRACE",
+          "ClassName": "TCB_DYNATRACE_STATUS",
+          "msg_catalog": {{ .CommonLabels.impact | toJson }},
+          "msg": {{ .CommonAnnotations.description | toJson }},
+          "state": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
+          "severity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
+          "sub_origin": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
+          "origin": "dynatrace5P",
+          "hostname": "twnbap1P",
+          "sub_source": "PIB"}

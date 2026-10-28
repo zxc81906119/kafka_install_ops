@@ -104,7 +104,9 @@ patch_one() {
 plan() {
   local host counts
   section "26.1 修補前：under-replicated、每台可更新的套件、versionlock"
-  [ "$(under_replicated_count)" = 0 ] && ok "沒有 under-replicated" || fail "有 under-replicated：叢集不健康時不修補"
+  # 剛做完 24 站（kb04 的 replica 還在追上）之類的操作，叢集要幾十秒才穩：最多等 5 分鐘，還不是 0 才算不健康
+  wait_no_under_replicated() { local i; for i in $(seq 1 30); do [ "$(under_replicated_count)" = 0 ] && return 0; sleep 10; done; return 1; }
+  if wait_no_under_replicated; then ok "沒有 under-replicated"; else fail "有 under-replicated（等了 5 分鐘還是有）：叢集不健康時不修補"; fi
   for host in $CONTROLLERS $BROKERS $RESTS $C3_HOST $OPS_HOST; do
     if [ "$host" = "$OPS_HOST" ]; then counts=$(bash -s <<<"$PLAN_HOST"); else counts=$(ssh_script "$host" <<<"$PLAN_HOST"); fi
     read -r updates confluent_updates locked os_current os_available <<<"$counts"

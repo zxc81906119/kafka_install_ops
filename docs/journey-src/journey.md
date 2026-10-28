@@ -3982,7 +3982,7 @@ confluent-alerts.yml: 21 條規則
 **Alertmanager 設定**：兩個 webhook receiver 示範兩種格式，銀行留一種、刪另一種。
 
 - `webhook-default`：Alertmanager 預設的 JSON（version 4），一次 POST 帶一個通知群組裡所有告警。
-- `webhook-omnibus`：用 Alertmanager 的範本在 `payload` 組自訂 JSON，欄位照銀行 omnibus 的接收規格（`ProblemTitle`、`State` OPEN／RESOLVED、`ProblemSeverity`、`ProblemImpact`、`ProblemDetailsText`…）。`group_by: ['...']` 讓每筆告警自己一組，所以自訂格式永遠是一筆告警一個 POST。
+- `webhook-omnibus`：用 Alertmanager 的範本在 `payload` 組自訂 JSON，欄位照銀行 omnibus 的接收規格：`source`、`ClassName`、`origin`、`hostname`、`sub_source` 是固定值（照銀行給的規格填，範本裡的是範例值，上線前請銀行確認），`msg_catalog` 放規則的 `impact`、`msg` 放 `description`、`state` 是 OPEN／RESOLVED、`severity` 是 ERROR／PERFORMANCE（critical 對應 ERROR）、`sub_origin` 放「規則名稱：摘要」。`group_by: ['...']` 讓每筆告警自己一組，所以自訂格式永遠是一筆告警一個 POST。
 
 自訂 JSON 的寫法有兩個陷阱（2026-10-26 實測）：`payload` 用**字串寫法**，每個值都經 `toJson`，值裡有雙引號或冒號才不會弄壞 JSON；用 map 寫法時，含 `: ` 的值會被當成 YAML 物件、像數字的字串（`"007"`）會變成數字 7。範本裡拿不到 `.GroupKey`，要編號就用告警的 `Fingerprint`。webhook 網址 `WEBHOOK-RECEIVER:8080` 換成行內的；需要認證就在 receiver 加 `http_config`。
 
@@ -4017,16 +4017,16 @@ receivers:
         # String form + toJson: every value is escaped by toJson, so quotes or colons in a description cannot break the JSON.
         # (The map form would turn "007" into the number 7 and read "a: b" as an object.)
         payload: >-
-          {"eventType": "CUSTOM_ALERT",
-          "State": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
-          "ProblemID": {{ (index .Alerts 0).Fingerprint | toJson }},
-          "ProblemTitle": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
-          "ProblemSeverity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
-          "ProblemImpact": {{ .CommonLabels.impact | toJson }},
-          "ProblemDetailsText": {{ .CommonAnnotations.description | toJson }},
-          "ImpactedEntity": {{ .CommonLabels.hostname | toJson }},
-          "Tags": {{ printf "env:%s,job:%s,instance:%s" .CommonLabels.env .CommonLabels.job .CommonLabels.instance | toJson }},
-          "StartTime": {{ (index .Alerts 0).StartsAt.Format "2006-01-02T15:04:05Z07:00" | toJson }}}
+          {"source": "TCB_DYNATRACE",
+          "ClassName": "TCB_DYNATRACE_STATUS",
+          "msg_catalog": {{ .CommonLabels.impact | toJson }},
+          "msg": {{ .CommonAnnotations.description | toJson }},
+          "state": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
+          "severity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
+          "sub_origin": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
+          "origin": "dynatrace5P",
+          "hostname": "twnbap1P",
+          "sub_source": "PIB"}
 EOF
 cat > ~/monitoring/to-bank/grafana/datasource-prometheus.yml <<'EOF'
 # Grafana datasource for the Confluent dashboards. The official dashboards point at a datasource with uid "Prometheus" (the guide rewrites their ${Prometheus} placeholder to that).
@@ -4277,23 +4277,23 @@ print(json.dumps(json.loads(body), ensure_ascii=False, indent=1))"
 ```out
 /omnibus Alertmanager/0.34.1 
 {
- "ImpactedEntity": "test.poc.lab",
- "ProblemDetailsText": "Test only: a \"quoted\" word and a colon: here, 007 stays a string.",
- "ProblemID": "609b3c4e91aae071",
- "ProblemImpact": "SERVICE",
- "ProblemSeverity": "ERROR",
- "ProblemTitle": "ConfluentTestAlert: test alert from chapter 17.8",
- "StartTime": "2026-10-27T15:46:53Z",
- "State": "OPEN",
- "Tags": "env:lab,job:test,instance:test.poc.lab:7071",
- "eventType": "CUSTOM_ALERT"
+ "ClassName": "TCB_DYNATRACE_STATUS",
+ "hostname": "twnbap1P",
+ "msg": "Test only: a \"quoted\" word and a colon: here, 007 stays a string.",
+ "msg_catalog": "SERVICE",
+ "origin": "dynatrace5P",
+ "severity": "ERROR",
+ "source": "TCB_DYNATRACE",
+ "state": "OPEN",
+ "sub_origin": "ConfluentTestAlert: test alert from chapter 17.8",
+ "sub_source": "PIB"
 }
 ```
 
-解除：把測試規則拿掉、重新載入。Prometheus 對被拿掉的規則不會補送「已解除」，Alertmanager 要等告警過期（Prometheus 送的告警帶約 4 分鐘的有效期）才自己解除，再在下一輪通知送出 resolved：自訂格式的 `State` 變 `RESOLVED`，預設格式的 `status` 變 `resolved`。（真實的告警是條件消失，Prometheus 會直接送 resolved，不用等這麼久。）等 5 分鐘左右：
+解除：把測試規則拿掉、重新載入。Prometheus 對被拿掉的規則不會補送「已解除」，Alertmanager 要等告警過期（Prometheus 送的告警帶約 4 分鐘的有效期）才自己解除，再在下一輪通知送出 resolved：自訂格式的 `state` 變 `RESOLVED`，預設格式的 `status` 變 `resolved`。（真實的告警是條件消失，Prometheus 會直接送 resolved，不用等這麼久。）等 5 分鐘左右：
 
 ```bash
-cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.yml && docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 290; docker logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | docker run --rm -i lab-node:96 python3 -c "import re, sys; [print(re.match(r'POST (\S+)', l).group(1).ljust(11), re.search(r'\"(?:State|status)\":\"(\w+)\"', l).group(1)) for l in sys.stdin]"
+cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.yml && docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 290; docker logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | docker run --rm -i lab-node:96 python3 -c "import re, sys; [print(re.match(r'POST (\S+)', l).group(1).ljust(11), re.search(r'\"(?:state|status)\":\"(\w+)\"', l).group(1)) for l in sys.stdin]"
 ```
 
 ```out

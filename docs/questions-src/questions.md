@@ -113,7 +113,7 @@
 | 11.2 | 機房斷電演練時的開機順序可否配合（controller → broker → REST Proxy／Control Center）？ | 全部同時開機時 Control Center 要等權限服務起來 | 已加上等待機制；仍建議依順序開機 |
 | 11.3 | 行內 Prometheus 抓其他系統（主機、資料庫）用哪種認證：不加密、HTTPS＋帳密，還是 HTTPS＋client 憑證（mTLS）？ | 跟著行內既有慣例走，維運與稽核最省事 | HTTPS＋帳密（9 台共用一組抓取密碼，主機上只存加鹽雜湊）；要 mTLS 須另發 Prometheus 的 client 憑證 |
 | 11.4 | 每台的 7071 可否只放行行內 Prometheus 的來源位址？請提供位址（或網段） | 抓取帳密是共用的，限制來源可以縮小外洩後的影響範圍 | 主機防火牆目前對所有來源開放 7071；拿到位址後改成只放行它 |
-| 11.5 | 告警要送到哪裡？接收端是 IBM Netcool/OMNIbus（下稱 omnibus）；我們送的 JSON 欄位（附範例）符合它的接收規格嗎？要不要認證（API token）？ | 我們準備了兩種 webhook 範例：Alertmanager 預設的 JSON，和照 omnibus 規格自訂的 JSON（State、ProblemTitle、ProblemSeverity、ProblemImpact、ProblemDetailsText …） | 兩種都交付，銀行留一種；欄位對應（例如 critical → ERROR）依行內的定義改範本。token 放檔案、不寫進設定 |
+| 11.5 | 告警要送到哪裡？接收端是 IBM Netcool/OMNIbus（下稱 omnibus）；我們送的 JSON 欄位（附範例）符合它的接收規格嗎？要不要認證（API token）？ | 我們準備了兩種 webhook 範例：Alertmanager 預設的 JSON，和照 omnibus 規格自訂的 JSON（source、ClassName、msg_catalog、msg、state、severity、sub_origin、origin、hostname、sub_source）；其中 source、ClassName、origin、hostname、sub_source 先填你們提供的範例值，請確認正式值 | 兩種都交付，銀行留一種；欄位對應（例如 critical → ERROR）依行內的定義改範本。token 放檔案、不寫進設定 |
 | 11.6 | Grafana 怎麼放 dashboard 與 datasource：檔案佈建（provisioning）還是手動匯入？登入用 AD（LDAP／SSO）嗎？誰能改 dashboard？ | 32 個官方 dashboard 以檔案佈建最容易維護與重建；Grafana 的權限要和平台的 RBAC 分開想 | 檔案佈建、唯讀；datasource 名稱與 uid 固定為 Prometheus |
 | 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |
 | 11.8 | 確認：告警與 dashboard 只用行內這一套，不在 Control Center 建 alert trigger／action（C3 內建的 Prometheus、Alertmanager 只給 C3 畫面用） | C3 內建 Alertmanager 的設定會被 C3 重寫、webhook 內容不能自訂 | 如此設計；請銀行確認沒有別的流程依賴 C3 的告警功能 |

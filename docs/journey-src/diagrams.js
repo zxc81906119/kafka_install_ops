@@ -590,7 +590,7 @@ D.alertpath = () => svg(800, 340, [
   box(590, 82, 190, 54, '/omnibus', ['webhook，自訂 JSON'], 'purple'),
   arrow(550, 62, 588, 41), arrow(550, 88, 588, 109),
   box(20, 168, 380, 128, '預設格式（Alertmanager version 4）', ['整包 JSON，alerts 是陣列', '（一個通知群組可能有很多筆）', 'status：firing → resolved', 'labels、annotations、startsAt、fingerprint', '欄位是 Alertmanager 定的，不能改'], 'teal'),
-  box(420, 168, 360, 128, '自訂格式（範本組出來的）', ['一筆告警一個扁平 JSON', 'ImpactedEntity、ProblemTitle、ProblemID', 'ProblemSeverity（critical → ERROR）', 'State：OPEN → RESOLVED', '雙引號、冒號不會弄壞 JSON'], 'purple'),
+  box(420, 168, 360, 128, '自訂格式（範本組出來的）', ['一筆告警一個扁平 JSON', 'msg_catalog、msg、sub_origin', 'severity（critical → ERROR）', 'state：OPEN → RESOLVED', '雙引號、冒號不會弄壞 JSON'], 'purple'),
   ctext(400, 318, '條件消失時 Prometheus 直接送 resolved，兩種格式都會收到「已解除」；之後送進行內事件系統', { size: 12 }),
 ].join(''));
 
