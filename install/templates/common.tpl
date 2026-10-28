@@ -14,7 +14,7 @@ ssl.principal.mapping.rules=RULE:.*CN=([a-zA-Z0-9._-]+).*$/$1/,DEFAULT
 ############################# Authorization (RBAC via MDS + KRaft ACLs) #############################
 authorizer.class.name=io.confluent.kafka.security.authorizer.ConfluentServerAuthorizer
 confluent.authorizer.access.rule.providers=KRAFT_ACL,CONFLUENT
-super.users=User:kafka-internal;User:kafka-admin;User:svc-ops
+super.users=User:kafka-internal
 allow.everyone.if.no.acl.found=false
 confluent.metadata.server.token.key.path=/etc/confluent/ssl/mds-token-keypair.pem
 confluent.metadata.topic.replication.factor=3

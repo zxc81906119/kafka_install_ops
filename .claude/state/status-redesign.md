@@ -18,7 +18,7 @@ Updated: 2026-10-28 10:50（**lab 使用中**：乾淨手冊實跑從零進行�
 
 ## 下一步（使用者 2026-10-28 同意照此順序）
 1. 目前的腳本版從零重跑（16:25 起，驗 cp-server／c3-monitoring／raft／脫鉤／C3 依賴）跑完 → 逐行看紀錄＋scan-log；27 個 FAIL 是第 5 段預期的「03 等銀行」。
-2. **super user 只剩 kafka-internal**（redesign/README.md 最後一節）：common.tpl、第 10 章；第 11 章 bootstrap 用 kafka-internal 憑證建第一條 binding（svc-ops → SystemAdmin）、rbac.txt 加 svc-ops／kafka-admin SystemAdmin、11.2 說法；新增「停 ad01 → alice 401、kafka-admin 9095 仍可用 → 開回」驗證（放 11 或 19）；10／11 站；README／CLAUDE.md、第 19 章「svc-ops 是 super user」字樣。
+2. ~~super user 只剩 kafka-internal~~ **已改完 commit，未實跑**（第 11 章 bootstrap／11.3 AD 斷線演練的 out 值是推測的：role-binding list 表格格式、alice HTTP 401、14 個 topic、LDAPS 15 秒，下一輪實跑要對；run-customer 新增第 11 段 ad-drill，段號 12–29）（redesign/README.md 最後一節）：common.tpl、第 10 章；第 11 章 bootstrap 用 kafka-internal 憑證建第一條 binding（svc-ops → SystemAdmin）、rbac.txt 加 svc-ops／kafka-admin SystemAdmin、11.2 說法；新增「停 ad01 → alice 401、kafka-admin 9095 仍可用 → 開回」驗證（放 11 或 19）；10／11 站；README／CLAUDE.md、第 19 章「svc-ops 是 super user」字樣。
 3. **章節重構**（redesign/chapter-restructure.md）：對照表＋改寫工具，改手冊、install/steps 檔名、site.env、bank-sim、run-customer、run-chapter、run-full、圖、問題清單、README、CLAUDE.md、skills；grep 殘留舊編號。
 4. 從零重跑手冊（run-full）與腳本（run-customer），一輪驗 2、3 和 OP menu 全顯示（16 站要先重打包 opmenu，手冊 16.5 新輸出實測）。
 5. 補章（先手動實跑再做腳本，依新結構寫）：還原演練、磁碟告警與換碟、故障排查速查、新應用上線流程；之後憑證到期監控（選配，blackbox＋每日腳本）。

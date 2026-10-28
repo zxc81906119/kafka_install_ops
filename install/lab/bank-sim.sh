@@ -239,6 +239,17 @@ coldboot() {   # 19.4：機房停電：全部主機同時關、同時開
   docker exec "$(container_of "${BROKERS%% *}")" bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
 }
 
+ad_drill() {   # 11.3：AD 不通時，人員登不進 MDS、緊急帳號 kafka-admin（SCRAM，SystemAdmin）照樣能用；驗完把 AD 開回來
+  announce "11.3 AD 斷線演練：停 ad01 → alice 登不進、kafka-admin 仍可用 → 開回 ad01"
+  local ops; ops=$(container_of "$OPS_HOST")
+  docker stop "$(container_of "$AD_HOST")" >/dev/null && echo "ad01 已停"
+  docker exec "$ops" bash -c 'export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-users.pass); code=$(curl -s -m 20 --cacert $CA -u "alice:$P" -o /dev/null -w "%{http_code}" https://kb01.poc.lab:8090/security/1.0/authenticate); unset P; echo "alice 登入 MDS：HTTP $code（不是 200 才對）"; T=$(mktemp -d); grep -v "^sasl.jaas.config" ~/conf/app-orders.properties > $T/c.properties; printf "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-admin\" password=\"%s\";\n" "$(cat ~/secrets/kafka-admin.pass)" >> $T/c.properties; n=$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list 2>/dev/null | grep -c .); echo "kafka-admin 從 9095 列 topic：$n 個"; rm -rf $T; [ "$code" != 200 ] && [ "$n" -gt 0 ]' </dev/null; local rc=$?
+  docker start "$(container_of "$AD_HOST")" >/dev/null && echo "ad01 已開回"
+  local i; for i in $(seq 1 30); do as_root_on "$OPS_HOST" "timeout 5 openssl s_client -connect $(fqdn "$AD_HOST"):636 </dev/null 2>/dev/null | grep -q 'Verify return code: 0'" && break; sleep 5; done
+  as_root_on "$OPS_HOST" 'CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-users.pass); for i in $(seq 1 12); do code=$(curl -s -m 20 --cacert $CA -u "alice:$P" -o /dev/null -w "%{http_code}" https://kb01.poc.lab:8090/security/1.0/authenticate); [ "$code" = 200 ] && break; sleep 5; done; unset P; echo "AD 開回後 alice 登入 MDS：HTTP $code"; [ "$code" = 200 ]' || rc=1
+  return $rc
+}
+
 sign_next() {   # 20.2.2：簽 ops02 ~/pki/next/requests/*.csr（換發）；參數給 CA 目錄（預設 ca，換 CA 階段二用 ca/g2）
   local ca_dir=${1:-ca} csr cert_name
   announce "20.2.2 CA 窗口：用 $ca_dir 簽 ~/pki/next/requests/*.csr → ~/pki/next/incoming/"
@@ -267,4 +278,5 @@ case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboo
   landing-layout) landing_layout;;
   monitoring-stop) monitoring_stop;;
   lb-watch) lb_watch "${2:-}";;
-  sign-next) sign_next "${2:-ca}";; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next lb-watch"; exit 1;; esac
+  sign-next) sign_next "${2:-ca}";;
+  ad-drill) ad_drill;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next lb-watch"; exit 1;; esac

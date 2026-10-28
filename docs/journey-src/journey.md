@@ -1708,7 +1708,7 @@ ssl.principal.mapping.rules=RULE:.*CN=([a-zA-Z0-9._-]+).*$/$1/,DEFAULT
 ############################# Authorization (RBAC via MDS + KRaft ACLs) #############################
 authorizer.class.name=io.confluent.kafka.security.authorizer.ConfluentServerAuthorizer
 confluent.authorizer.access.rule.providers=KRAFT_ACL,CONFLUENT
-super.users=User:kafka-internal;User:kafka-admin;User:svc-ops
+super.users=User:kafka-internal
 allow.everyone.if.no.acl.found=false
 confluent.metadata.server.token.key.path=/etc/confluent/ssl/mds-token-keypair.pem
 confluent.metadata.topic.replication.factor=3
@@ -2035,7 +2035,21 @@ kb04 MDS=200
 
 @role 小安 | ops02 | root
 
-操作機的管理 client：用 `svc-ops` 憑證向 MDS 換 token，走 TOKEN listener。`svc-ops` 是 super user。
+**先講清楚 super user**：第 10 章的 `super.users` 只有 `kafka-internal`（controller 與 broker 彼此用的憑證），它繞過 RBAC。人用的身分都不是 super user：操作機的 `svc-ops`、緊急用的 `kafka-admin` 都靠 RBAC 綁 `SystemAdmin`，動作受 RBAC 控管、稽核記的是明確的角色。授權由每台 broker 自己的 authorizer 依 binding 判斷（binding 在內部 topic `_confluent-metadata-auth`），MDS 的 REST 或 AD 不通都不影響授權，所以把人用的帳號設成 super user 沒有必要（11.3 會驗證）。
+
+**bootstrap**：叢集剛起來時一條 binding 都沒有，只有 super user 能呼叫 MDS 建 binding。所以第一步用 `kafka-internal` 的憑證登入 MDS，建第一條：`User:svc-ops → SystemAdmin`。這是 `kafka-internal` 憑證唯一一次被人拿來用：
+
+```bash
+export JAVA_HOME=/opt/java/current && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/kafka-internal.crt --client-key-path ~/pki/keys/kafka-internal.key && confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$CLUSTER_ID" && confluent iam rbac role-binding list --principal User:svc-ops --kafka-cluster "$CLUSTER_ID"
+```
+
+```out
+  Principal    |    Role     | ResourceType | Name | PatternType  
+---------------+-------------+--------------+------+--------------
+  User:svc-ops | SystemAdmin |              |      |              
+```
+
+操作機的管理 client：用 `svc-ops` 憑證向 MDS 換 token，走 TOKEN listener；它的權限就是上面那條 binding。
 
 ```bash
 (umask 077; cat > ~/conf/client-admin.properties <<EOF
@@ -2097,6 +2111,8 @@ Group:kafka-admins      SystemAdmin    -                                        
 Group:kafka-operators   Operator       -                                            -
 Group:kafka-devs        DeveloperRead  Topic:orders.                                PREFIXED
 Group:kafka-devs        DeveloperRead  Group:dev-                                   PREFIXED
+User:svc-ops            SystemAdmin    -                                            -
+User:kafka-admin        SystemAdmin    -                                            -
 User:svc-c3             SystemAdmin    -                                            -
 User:svc-rest           DeveloperRead  Topic:_confluent-license                     LITERAL
 User:svc-rest           DeveloperRead  Topic:_confluent-command                     LITERAL
@@ -2116,7 +2132,7 @@ while read -r p role res pat; do args=(--principal "$p" --role "$role" --kafka-c
 
 ```out
 ok  Group:kafka-admins SystemAdmin
-（17 行 ok）
+（19 行 ok；svc-ops 那條 bootstrap 已經建過，重建是 no-op）
 ```
 
 配額與範例 topic：
@@ -2173,7 +2189,7 @@ stat -c '%a %U %s 位元組 %n' ~/pki/store.pass ~/secrets/kafka-admin.pass ~/se
 
 ## 11.2 演練：緊急帳號 kafka-admin 用過就換密碼
 
-這一節演練「緊急帳號被人用過之後怎麼收拾」。`kafka-admin` 是 MDS 故障時唯一進得去的管理身分（CLIENT 9095，SCRAM，super user）。平常沒人用；一旦有人在緊急時從操作機取出來用過，這個密碼就算曝光了，**用完當天就要換**。由小安直接在操作機換，換完存回 `~/secrets/kafka-admin.pass`。平常沒有程式掛在這個帳號上，所以一個帳號直接換、不需要 A／B 兩組，也不會中斷任何服務（應用程式的 SCRAM 帳號才需要 A／B，見 OP menu 35）。
+這一節演練「緊急帳號被人用過之後怎麼收拾」。`kafka-admin` 是 AD 或 MDS 不通時仍進得去的管理身分（CLIENT 9095，SCRAM；RBAC 綁 SystemAdmin，不是 super user）：SCRAM 憑據存在 KRaft 中繼資料、授權由 broker 本機的 binding 判斷，兩者都不經 MDS 的 REST 或 AD（11.3 驗證）。平常沒人用；一旦有人在緊急時從操作機取出來用過，這個密碼就算曝光了，**用完當天就要換**。由小安直接在操作機換，換完存回 `~/secrets/kafka-admin.pass`。平常沒有程式掛在這個帳號上，所以一個帳號直接換、不需要 A／B 兩組，也不會中斷任何服務（應用程式的 SCRAM 帳號才需要 A／B，見 OP menu 35）。
 
 @role 小安 | ops02 | root
 
@@ -2192,6 +2208,53 @@ kafka-admin: SCRAM-SHA-512=iterations=8192
 > 新密碼會短暫出現在操作機的行程參數裡（`--add-config` 只吃命令列；`--add-config-file` 不接受 SCRAM 這個欄位）。能登入操作機的只有經 PSMP 進來的人員（root，全程錄影），可以接受。
 
 > 誰在什麼時候用 `kafka-admin` 登入，Kafka 的稽核日誌（第 18 章）會記下 `User:kafka-admin` 做了什麼；誰在什麼時間進了操作機，看 CyberArk 的登入紀錄與 PSMP 錄影。兩邊對得上，才算這次緊急使用結案。
+
+## 11.3 演練：AD 不通時，人員登不進，緊急帳號仍可用
+
+**這一節在做什麼**：證明緊急帳號的設計成立。把 AD 停掉：alice 用 AD 帳密向 MDS 要 token 會失敗（MDS 驗不了密碼），`kafka-admin` 用 SCRAM 從 9095 進去照樣能列 topic（認證不靠 AD，授權看 broker 本機的 binding）。驗完把 AD 開回來，確認 alice 恢復。正式環境不會真的停 AD，這是 lab 的演練；正式環境的對應情境是 AD 故障或 LDAPS 憑證過期。
+
+@role 銀行 AD 團隊（lab：停掉 ad01 容器） | Windows 終端 | 本機
+
+```bash
+docker stop lab-ad01-1 >/dev/null && echo "ad01 已停"
+```
+
+```out
+ad01 已停
+```
+
+@role 小安 | ops02 | root
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-users.pass); echo "alice 登入 MDS：HTTP $(curl -s -m 20 --cacert $CA -u "alice:$P" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; unset P; T=$(mktemp -d); grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $T/c.properties; printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="%s";\n' "$(cat ~/secrets/kafka-admin.pass)" >> $T/c.properties; echo "kafka-admin 從 9095 列 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list 2>/dev/null | grep -c .) 個"; rm -rf $T
+```
+
+```out
+alice 登入 MDS：HTTP 401
+kafka-admin 從 9095 列 topic：14 個
+```
+
+> alice 拿不到 token 是因為 MDS 要向 AD 驗她的密碼；已經拿到 token 的人在 token 到期（預設 1 小時）前不受影響。`kafka-admin` 走 SCRAM，憑據在 KRaft 中繼資料裡，所以 AD 不通照樣能登入；它能做什麼由 binding 決定（SystemAdmin）。
+
+@role 銀行 AD 團隊（lab：開回 ad01） | Windows 終端 | 本機
+
+```bash
+docker start lab-ad01-1 >/dev/null && for i in $(seq 1 30); do docker exec lab-ops02-1 bash -c "timeout 5 openssl s_client -connect ad01.poc.lab:636 </dev/null 2>/dev/null | grep -q 'Verify return code: 0'" && break; sleep 5; done; echo "ad01 已開回（LDAPS 約 $((i*5)) 秒後可用）"
+```
+
+```out
+ad01 已開回（LDAPS 約 15 秒後可用）
+```
+
+@role 小安 | ops02 | root
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-users.pass); for i in $(seq 1 12); do c=$(curl -s -m 20 --cacert $CA -u "alice:$P" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate); [ "$c" = 200 ] && break; sleep 5; done; unset P; echo "AD 開回後 alice 登入 MDS：HTTP $c"
+```
+
+```out
+AD 開回後 alice 登入 MDS：HTTP 200
+```
 
 # 12. 第十二站：REST Proxy
 
@@ -4678,7 +4741,7 @@ kb01
 |---|---|
 | `~/conf/`（範本與產出的設定，之後改設定都從這裡）、`~/pki/`（憑證、CSR、keystore 密碼）、`~/secrets/`（0600）、`~/monitoring/` | `~/landing/`、`~/repo/` 可以刪（套件已上架；要回滾用套件庫裡的舊版）。例外：還要照第 21 章遷移的話，`~/landing/rpm-target/` 與 `~/landing/bank/` 的 JDK 25 要留到遷移完成 |
 | ssh 私鑰 `/secure/ssh/cpuser_ed25519`（root、0400）留在操作機的獨立 file system；不放 CyberArk、不備份，操作機重建就重新產生並重新佈署公鑰（3.1） | `/tmp/` 裡安裝期間的暫存檔 |
-| | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它是 super user）；憑證輪替（第 20 章）、升級（第 21 章）前要先取回 |
+| | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它綁 SystemAdmin）；憑證輪替（第 20 章）、升級（第 21 章）前要先取回 |
 | | 各主機 cpuser 的全權 sudo（`/etc/sudoers.d/cpuser`）：移除，只留 `cpuser-ops` 窄規則（lab 留著，後面章節還要用） |
 | | 平台的密碼與金鑰只留在操作機 root 才讀得到的位置：`~/secrets`（passphrase、master key、kafka-admin、應用程式 SCRAM、緊急憑證、confluent-audit 等，11.1、15.2、16.2、18.1）、`~/pki`、`/secure/ssh`；不放 CyberArk。操作機的備份交銀行的備份機制並加密（`/secure/ssh` 的私鑰依 3.1 不備份） |
 
@@ -6659,7 +6722,7 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 
 訊息本身不做檔案備份：叢集內靠 replication factor 3、`min.insync.replicas=2`；異地備援（Cluster Linking）依銀行的 RPO／RTO 另議。
 
-匯出用的身分是新發的 `svc-backup` 憑證，**只能看、不能改、讀不到訊息內容**。不用 super user 的 `svc-ops`：排程每天自動跑，身分越小越好。
+匯出用的身分是新發的 `svc-backup` 憑證，**只能看、不能改、讀不到訊息內容**。不用 SystemAdmin 的 `svc-ops`：排程每天自動跑，身分越小越好。
 
 ## 25.1 svc-backup 的 client 設定
 

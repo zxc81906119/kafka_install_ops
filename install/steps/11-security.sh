@@ -3,7 +3,8 @@
 # where: ops02 （root）
 #
 # 做什麼：
-#   - 操作機的管理 client：svc-ops 憑證向 MDS 換 token，走 TOKEN listener（svc-ops 是 super user）
+#   - bootstrap：唯一的 super user 是 kafka-internal（服務之間用）；用它的憑證登入 MDS 建第一條 role binding：User:svc-ops → SystemAdmin
+#   - 操作機的管理 client：svc-ops 憑證向 MDS 換 token，走 TOKEN listener（svc-ops 不是 super user，權限來自 RBAC）
 #   - conf/apps.txt 裡 scram 類的 app：建 SCRAM 帳號，密碼在 ~/secrets/<app>.pass
 #   - conf/rbac.txt：role binding（人員綁 AD 群組，服務與 app 綁最小權限）
 #   - conf/apps.txt 的配額、conf/topics.txt 的範例 topic
@@ -14,13 +15,24 @@ source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
 export JAVA_HOME=/opt/java/current
 
-# 用 svc-ops 憑證登入 MDS（confluent CLI 的 RBAC 指令要用）
+# 用憑證登入 MDS（confluent CLI 的 RBAC 指令要用）：kafka-internal 只在 bootstrap 用一次，之後都是 svc-ops
+login_with_cert() {
+  confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
+    --client-cert-path "$CERTS_DIR/$1.crt" --client-key-path "$KEYS_DIR/$1.key" >/dev/null 2>&1
+}
 login_as_svc_ops() {
   confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
     --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1
 }
 
-section "操作機的管理 client（svc-ops 憑證 → MDS token → TOKEN listener）"
+section "bootstrap：kafka-internal（唯一的 super user）登入 MDS，建第一條 role binding：User:svc-ops → SystemAdmin"
+source "$CONF_DIR/kraft.env"   # CLUSTER_ID
+login_with_cert kafka-internal || die "confluent login（kafka-internal 憑證）失敗"
+if retry 3 5 confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then ok "User:svc-ops SystemAdmin（由 kafka-internal 建立）"
+else die "建不了 svc-ops 的第一條 role binding"; fi
+login_as_svc_ops || die "confluent login（svc-ops 憑證）失敗"
+
+section "操作機的管理 client（svc-ops 憑證 → MDS token → TOKEN listener；svc-ops 的權限來自上面那條 binding）"
 store_password=$(cat "$PKI_DIR/store.pass")
 (umask 077; cat > "$ADMIN_CLIENT_CONF" <<EOF
 security.protocol=SASL_SSL
@@ -59,8 +71,6 @@ for user in $SCRAM_APPS kafka-admin; do
 done
 
 section "RBAC：conf/rbac.txt 的每一行建一個 role binding"
-login_as_svc_ops || die "confluent login（svc-ops 憑證）失敗"
-source "$CONF_DIR/kraft.env"   # CLUSTER_ID
 while read -r principal role resource pattern; do
   [ -n "$principal" ] || continue
   binding_args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID")

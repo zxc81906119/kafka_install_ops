@@ -4,7 +4,7 @@
 #   bash run-customer.sh                  從零（bank-sim reset）：先裝安裝基底（CP 8.2.4、C3 2.5.1、JDK 21、OS 9.6）到第 19 站驗收，
 #                                         再遷移到 CP 8.3.2、C3 2.6.1、JDK 25、OS 9.8（第 21、26、27 章），每段之後都驗收
 #   FROM=6 bash run-customer.sh           從第 6 段接著跑（段號在每段的 ######## 標題裡）
-#   TO=14 bash run-customer.sh            跑到第 14 段（基底的驗收）就停
+#   TO=15 bash run-customer.sh            跑到第 14 段（基底的驗收）就停
 #   IDEMPOTENCE=1 bash run-customer.sh    基底裝完（第 14 站）後再跑一次 02–14，驗證重跑是安全的（原本 run-all.sh --no-reset 的用途）
 #
 # 這支取代了舊的 run-upgrade-drill.sh（升級演練）與 run-all.sh：升級不再是另一件事，而是主線。
@@ -20,7 +20,7 @@
 #   工程師        第 15 站在操作機自己產生 passphrase 與 master key，存 ~/secrets（0600）；平台的密碼與金鑰不放 CyberArk
 #   LB 團隊       重啟 REST 前停用那一台（bank-sim lb-watch）
 #
-# 遷移期間（段 16–21 的 Confluent／JDK 遷移、段 26 的 OS 更新）各跑一段持續流量（install/tools/load.sh）：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次。
+# 遷移期間（段 17–22 的 Confluent／JDK 遷移、段 27 的 OS 更新）各跑一段持續流量（install/tools/load.sh）：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次。
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 LAB_TOOLS_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -119,10 +119,11 @@ stage 7 "銀行：cpuser＋公鑰（from=）＋安裝期 sudo、套件庫（OS 9
 stage 8 "03–09" && { install_on_ops --from 03 --to 09; expect_wait_for_bank $? 09 08; }
 stage 9 "銀行：CA 簽發" && { $BANK sign; }
 stage 10 "09–14" && { install_on_ops --from 09 --to 14 || exit 1; }
-stage 11 "15–18（15 站由工程師在操作機產生 passphrase 與 master key，不用等任何人）" && { install_on_ops --from 15 --to 18 || exit 1; }
-stage 12 "銀行：行內 Prometheus 接上（17.6）" && { $BANK monitoring; }
-stage 13 "機房：冷開機（19.4）；/secure/ssh 的 volume 還在，金鑰不用重放" && { $BANK coldboot && engineer_checks_key || exit 1; }
-stage 14 "19 驗收（安裝基底：CP 8.2.4、C3 2.5.1、JDK 21、OS 9.6）" && {
+stage 11 "11.3 AD 斷線演練：停 ad01 → alice 登不進、kafka-admin（SCRAM，SystemAdmin）仍可用 → 開回" && { $BANK ad-drill || exit 1; }
+stage 12 "15–18（15 站由工程師在操作機產生 passphrase 與 master key，不用等任何人）" && { install_on_ops --from 15 --to 18 || exit 1; }
+stage 13 "銀行：行內 Prometheus 接上（17.6）" && { $BANK monitoring; }
+stage 14 "機房：冷開機（19.4）；/secure/ssh 的 volume 還在，金鑰不用重放" && { $BANK coldboot && engineer_checks_key || exit 1; }
+stage 15 "19 驗收（安裝基底：CP 8.2.4、C3 2.5.1、JDK 21、OS 9.6）" && {
   show_versions "基底"
   expect_versions "$BASE_CP" "$BASE_C3" "$BASE_JDK" "$BASE_OS" || exit 1
   acceptance "基底"
@@ -130,24 +131,24 @@ stage 14 "19 驗收（安裝基底：CP 8.2.4、C3 2.5.1、JDK 21、OS 9.6）" &
     printf '\n-- 重跑 02–14（驗冪等）\n'; install_on_ops --from 02 --to 14 || exit 1
   fi
 }
-stage 15 "20 憑證：status、leaf 換發（第一次停在等銀行簽）" && {
+stage 16 "20 憑證：status、leaf 換發（第一次停在等銀行簽）" && {
   step_on_ops 20-cert-rotate.sh status || exit 1
   step_on_ops 20-cert-rotate.sh leaf; [ $? = 2 ] || { echo "20 leaf 第一次應停在等銀行（rc 2）"; exit 1; }
   $BANK sign-next && step_on_ops 20-cert-rotate.sh leaf || exit 1
   acceptance "憑證換發後（基底版本）"
 }
-stage 16 "遷移開始：持續流量；21 publish（目標版本上架）、plan、backup" && {
+stage 17 "遷移開始：持續流量；21 publish（目標版本上架）、plan、backup" && {
   on_ops 'bash install/tools/load.sh start' || exit 1
   step_on_ops 21-upgrade.sh publish && step_on_ops 21-upgrade.sh plan && step_on_ops 21-upgrade.sh backup || exit 1
 }
-stage 17 "21 第一段：C3 → 2.6.1、套件 → 8.3.2（JDK 仍是 21）" && { step_on_ops 21-upgrade.sh packages || exit 1; acceptance "第一段：8.3.2＋JDK 21"; }
-stage 18 "21 第二段：JDK 21 → 25" && { step_on_ops 21-upgrade.sh jdk || exit 1; acceptance "第二段：8.3.2＋JDK 25"; }
-stage 19 "21 回滾演練：kb04 回 8.2.4＋JDK 21，再升回去" && {
+stage 18 "21 第一段：C3 → 2.6.1、套件 → 8.3.2（JDK 仍是 21）" && { step_on_ops 21-upgrade.sh packages || exit 1; acceptance "第一段：8.3.2＋JDK 21"; }
+stage 19 "21 第二段：JDK 21 → 25" && { step_on_ops 21-upgrade.sh jdk || exit 1; acceptance "第二段：8.3.2＋JDK 25"; }
+stage 20 "21 回滾演練：kb04 回 8.2.4＋JDK 21，再升回去" && {
   step_on_ops 21-upgrade.sh rollback kb04 || exit 1
   docker exec -w /root -e ONLY_HOSTS=kb04 "$OPS_CONTAINER" bash install/steps/21-upgrade.sh packages </dev/null || exit 1
   docker exec -w /root -e ONLY_HOSTS=kb04 "$OPS_CONTAINER" bash install/steps/21-upgrade.sh jdk </dev/null || exit 1
 }
-stage 20 "21 第三段：finalize（不帶確認要停下，帶 cluster id 才升）、adopt" && {
+stage 21 "21 第三段：finalize（不帶確認要停下，帶 cluster id 才升）、adopt" && {
   if step_on_ops 21-upgrade.sh finalize 4.3; then echo "不帶確認竟然執行了 finalize"; exit 1; fi
   on_ops 'source ~/conf/kraft.env; CONFIRM_CLUSTER_ID=$CLUSTER_ID bash install/steps/21-upgrade.sh finalize 4.3' || exit 1
   step_on_ops 21-upgrade.sh adopt || exit 1
@@ -155,18 +156,18 @@ stage 20 "21 第三段：finalize（不帶確認要停下，帶 cluster id 才�
   show_versions "遷移後（第 21 章）"
   expect_versions "$TARGET_CP" "$TARGET_C3" "$TARGET_JDK" "$BASE_OS" || exit 1
 }
-stage 21 "持續流量結果（第 21 章這一段）" && { on_ops 'bash install/tools/load.sh stop; bash install/tools/load.sh report'; }
-stage 22 "22 license：status、schedule" && {
+stage 22 "持續流量結果（第 21 章這一段）" && { on_ops 'bash install/tools/load.sh stop; bash install/tools/load.sh report'; }
+stage 23 "22 license：status、schedule" && {
   step_on_ops 22-license.sh status; rc=$?; [ $rc = 0 ] || [ $rc = 2 ] || exit 1   # 試用版不到 90 天是 rc 2
   step_on_ops 22-license.sh schedule || exit 1
 }
-stage 23 "25 日常備份：grant、run、schedule、compare" && {
+stage 24 "25 日常備份：grant、run、schedule、compare" && {
   step_on_ops 25-metadata-backup.sh grant && step_on_ops 25-metadata-backup.sh run || exit 1
   sleep 61; step_on_ops 25-metadata-backup.sh schedule && step_on_ops 25-metadata-backup.sh compare || exit 1
 }
-stage 24 "23 換 controller（kc03 清空重建）" && { step_on_ops 23-controller-replace.sh replace kc03 || exit 1; }
-stage 25 "24 broker 縮減與擴充（kb04）" && { step_on_ops 24-broker-scale.sh remove kb04 && step_on_ops 24-broker-scale.sh add kb04 || exit 1; }
-stage 26 "26 OS 小版本更新 9.6 → 9.8：銀行套件庫同步、plan、apply、verify（lab 不能真的重開機）" && {
+stage 25 "23 換 controller（kc03 清空重建）" && { step_on_ops 23-controller-replace.sh replace kc03 || exit 1; }
+stage 26 "24 broker 縮減與擴充（kb04）" && { step_on_ops 24-broker-scale.sh remove kb04 && step_on_ops 24-broker-scale.sh add kb04 || exit 1; }
+stage 27 "26 OS 小版本更新 9.6 → 9.8：銀行套件庫同步、plan、apply、verify（lab 不能真的重開機）" && {
   on_ops 'bash install/tools/load.sh start' || exit 1
   $BANK os-sync || exit 1
   step_on_ops 26-os-patch.sh plan || exit 1
@@ -177,11 +178,11 @@ stage 26 "26 OS 小版本更新 9.6 → 9.8：銀行套件庫同步、plan、app
   show_versions "OS 更新後（第 26 章）"
   expect_versions "$TARGET_CP" "$TARGET_C3" "$TARGET_JDK" "$TARGET_OS" || exit 1
 }
-stage 27 "27 C3：帶進 2.6.0、退回、升回 2.6.1（回滾程序；2.6.x 都支援 CP 8.3）" && {
+stage 28 "27 C3：帶進 2.6.0、退回、升回 2.6.1（回滾程序；2.6.x 都支援 CP 8.3）" && {
   bring_in_c3_drill_version || exit 1
   step_on_ops 21-upgrade.sh publish c3 || exit 1
   step_on_ops 21-upgrade.sh c3 2.6.0 && step_on_ops 21-upgrade.sh c3 "$TARGET_C3" || exit 1
 }
-stage 28 "19 驗收（全部做完）" && { acceptance "全部做完"; install_on_ops --list; }
+stage 29 "19 驗收（全部做完）" && { acceptance "全部做完"; install_on_ops --list; }
 # TO= 讓最後幾段被略過時，最後一個 stage 會回 1；走到這裡就是成功
 exit 0

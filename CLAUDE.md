@@ -69,6 +69,9 @@ Details of the architecture and every component: @README.md
 - JDKs (21 for the baseline, 25 for the migration) are delivered by the bank as tars; we install to `/opt/java/<dir>` + `/opt/java/current`, register
   `java`/`keytool` with `alternatives`, set `JAVA_HOME` in `/etc/profile.d/java.sh` and in each systemd drop-in.
 - Only Confluent packages and the JDK are version-locked; C3's `cyrus-sasl`/`openssl-devel` follow OS patching.
+- `super.users` is only `kafka-internal` (service-to-service). `svc-ops` (ops host, certificate) and `kafka-admin` (emergency SCRAM) are `SystemAdmin` via
+  RBAC; chapter 11 bootstraps the first binding with the `kafka-internal` certificate. Authorization is decided by each broker from `_confluent-metadata-auth`, so
+  MDS/AD outages do not affect it (drill 11.3 stops ad01).
 - Apps connect directly with SCRAM; apps via REST Proxy must use client certificates (REST has no password path).
 - Humans use AD accounts; RBAC binds AD groups, never individuals. Platform services use certificates, not AD.
 - CyberArk is decoupled from the platform (decided 2026-10-28): the only link is that a person logs in to the PVWA web page (AD + MFA) and PSMP

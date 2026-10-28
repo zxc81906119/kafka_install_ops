@@ -1,4 +1,6 @@
 # principal  role  resource(-=叢集層級)  pattern(LITERAL|PREFIXED|-)
+User:svc-ops            SystemAdmin    -                                            -
+User:kafka-admin        SystemAdmin    -                                            -
 Group:kafka-admins      SystemAdmin    -                                            -
 Group:kafka-operators   Operator       -                                            -
 Group:kafka-devs        DeveloperRead  Topic:orders.                                PREFIXED

@@ -126,7 +126,7 @@ EOF
 done
 log "留在操作機：$CONF_DIR（範本產出的設定）、$PKI_DIR、$SECRETS_DIR（0600）、$MONITORING_DIR、~/install-logs"
 log "可以刪：$LANDING、$REPO_DIR（$(du -sh "$LANDING" "$REPO_DIR" 2>/dev/null | cut -f1 | paste -sd' ')；套件庫才是正本）"
-ask_bank "交付時：OS 團隊移除各主機 /etc/sudoers.d/$SSH_USER（全權），只留 $SSH_USER-ops；$KEYS_DIR/svc-ops.key（super user）移到離線保管；" \
+ask_bank "交付時：OS 團隊移除各主機 /etc/sudoers.d/$SSH_USER（全權），只留 $SSH_USER-ops；$KEYS_DIR/svc-ops.key（SystemAdmin）移到離線保管；" \
          "    $SSH_KEY 留在操作機的獨立 file system（root、0400；不放 CyberArk、不備份，操作機重建就重新產生並重新佈署公鑰）。"
 log "驗收：$((CHECK_COUNT - FAIL_COUNT)) / $CHECK_COUNT 項通過（健康失敗 $health_failures、安全失敗 $security_failures、應用程式失敗 $application_failures）"
 finish_step
