@@ -507,3 +507,10 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - CPM 輪替（root、`svc-mds-bind`）全部拿掉，改手動輪替（沿用同一套 A/B 兩組切換程序）。
 - 後果要在文件講清楚：①操作機掉了，passphrase 就沒了（master key 還在各主機的 service.env），所以 `~/secrets`、`~/pki` 的備份由銀行自己的備份機制處理（問題清單新增一題）；②OP menu 91 緊急憑證改成讀操作機上的檔，不再從 PVWA 貼上；操作者本來就是 root，91 的把關只剩「必填原因＋稽核記錄」，不是硬性隔離。
 - 動到：手把手第 0、3、11、15、16、17、18、19、20、25 章與 6465 行 license；install（site.env、15／16／19／20 站、lab 的 bank-sim／run-customer、opmenu 的 91 取憑證方式與提示字、README）；問題清單；README／CLAUDE.md；CyberArk 登入設計 Word（只保留登入與金鑰那段）。
+
+### super user 只剩 kafka-internal；svc-ops、kafka-admin 改綁 RBAC SystemAdmin（2026-10-28 定案）
+
+- 使用者指出：授權判斷在每台 broker 的 authorizer（binding 讀自 `_confluent-metadata-auth`），MDS 的 REST／AD 掛掉不影響授權；`kafka-admin` 走 SCRAM（憑據在 KRaft）所以認證也不靠 MDS／AD。因此人用的緊急帳號不需要 `super.users`。authorizer 本身起不來時 `super.users` 也救不了（檢查就在 authorizer 裡）。
+- 定案：`super.users=User:kafka-internal`；`svc-ops`、`kafka-admin` 都綁 `SystemAdmin`；第 11 章 bootstrap 用 `kafka-internal` 憑證登入 MDS 建第一條 binding（`User:svc-ops → SystemAdmin`），之後全部用 `svc-ops`。
+- 新增驗證（第 11 章或第 19 章）：停 ad01 → alice 向 MDS 要 token 失敗、`kafka-admin` 從 9095 仍可列／建 topic → 開回 ad01、alice 恢復。
+- 動到：第 10 章（`common.tpl` 的 super.users、說明）、第 11 章開頭與 `rbac.txt`、11.2、第 19 章「svc-ops 是 super user」的收尾說明；install 10／11 站；README／CLAUDE.md。等目前腳本重跑結束後改，再從零重跑。
