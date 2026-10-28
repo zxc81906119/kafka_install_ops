@@ -21,3 +21,8 @@
 ## 20.6 應用程式 SCRAM 密碼輪替（2026-10-28 追加，使用者排入）
 - 現況：只有 OP menu 34／35／37（A／B）；手冊沒有手動演練；lab 的 apps.txt 是單一帳號（app-orders、app-payments），和 A／B 設計不一致，35 在 lab 沒真正輪替過。
 - 要做：apps.txt／rbac.txt 改成 -a／-b 兩帳號同一組 binding（第 11 章、11 站）；新增 20.6 手動演練（流量不中斷、舊密碼被拒）；16.5 加 35 試跑；19 站驗收加一項。順序：23.6 之後、24 之前。
+
+## 第 30 章：OS 套件庫同時有多個版本時的保險（2026-10-28 追加，使用者同意）
+- 風險：dnf 只看啟用 repo 裡的最高版本；套件庫若把 9.6／9.8／10 混在同一份 repodata（Satellite／Nexus 常見），`dnf upgrade` 會越過 9.8 直升 10（大版本只能用 leapp），glibc／kernel 不在 versionlock 裡擋不住。
+- 要補：30.1（與 `30-os-patch.sh plan`）加檢查：`dnf check-update` 裡 release 套件（rocky-release／redhat-release）的目標版本必須等於預期的小版本、主版本必須仍是 9，否則 abort；手冊說明 `subscription-manager release --set=9.8`（RHEL 正規做法）與 `--releasever` 的限制。問題清單第 3 章加一題：銀行套件庫怎麼釘小版本、RHEL 10 內容會不會和 9 混在同一個 repo。
+- 時機：等目前手冊實跑結束後補，與其他補章一起驗（lab 可模擬：repo01 多放一個假的高版號 release 套件，看 plan 會不會停）。

@@ -23,7 +23,8 @@ Updated: 2026-10-28 19:40（**lab 使用中**：手冊 A→B 從零實跑開始�
 3. ~~章節重構~~ 已做完（見進行中）。
 4. 從零重跑手冊（run-full）與腳本（run-customer），一輪驗 2、3 和 OP menu 全顯示（16 站要先重打包 opmenu，手冊 16.5 新輸出實測）。
 5. 補章（先手動實跑再做腳本，依新結構寫）：23.6 還原演練 → **20.6 應用程式 SCRAM 密碼輪替（A／B）**（使用者 2026-10-28 排入：apps.txt／rbac.txt 改成每個 SCRAM 應用建 -a／-b 同權限兩帳號、第 11 章跟著改；手動演練：-a 跑流量 → 換 -b 密碼 → 應用切 -b → 0 遺失 → 舊密碼被拒；16.5 加選單 35；11／19 站同步）→ 24 磁碟告警與換碟 → 28 故障排查速查 → 27 新應用上線流程；之後第 22 章憑證到期監控（**lab 一定做、一定驗**，只是文件標「選配」＝客戶現場不一定部署；使用者 2026-10-28 說明）。
-6. 順手：問題清單加題（跨機房 DR、svc-ops 私鑰離線保管方式、UserAdmin 專門團隊、AD 636 只放行 broker）；kraft.json 哪 8 個 panel 空；第 18 章 __opmenu-host-ops authorize 次數重量；假 omnibus 接收端；可讀性未細改章節（12、13、14、17、20.3／20.4、22–25、0.5.x）與 15.3、18.3 舊稱。
+6. **第 30 章保險**（使用者 2026-10-28 同意）：30.1／`30-os-patch.sh plan` 加 release 套件目標版本與主版本檢查（混有 RHEL 10 內容時 abort）、說明 `subscription-manager release --set`；問題清單第 3 章加一題；lab 用假的高版號 release 套件驗 plan 會停。
+7. 順手：問題清單加題（跨機房 DR、svc-ops 私鑰離線保管方式、UserAdmin 專門團隊、AD 636 只放行 broker）；kraft.json 哪 8 個 panel 空；第 18 章 __opmenu-host-ops authorize 次數重量；假 omnibus 接收端；可讀性未細改章節（12、13、14、17、20.3／20.4、22–25、0.5.x）與 15.3、18.3 舊稱。
 - 待使用者決定／回覆銀行：`opmenu-emergency` 對 root 的意義；換金鑰週期；dashboard `job="kafka-broker"` 要不要 sed 修；C3 是否多放行 RocksDB／Streams；`docs/evidence/` 要不要版控；omnibus 固定值正式值。
 - 已結案（2026-10-28）：repodeploy 是 lab 模擬銀行上架的帳號，不改；cpuser 本來就不在 repo01。
 
