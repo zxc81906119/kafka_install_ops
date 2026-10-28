@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-28 10:50（**lab 使用中**：乾淨手冊實跑從零進行中，勿動 Docker）
+Updated: 2026-10-28 19:40（**lab 使用中**：手冊 A→B 從零實跑開始，紀錄 ~/kafka-lab-runs/manual-final2-*.log）
 
 ## 現在在做什麼
 `bash docs/journey-src/tools/run-full.sh customer` 從零跑（開始 10:46，紀錄 `~/kafka-lab-runs/run-customer-0-99-20261028-1046.log`，路徑也在 `~/kafka-lab-runs/current-log.txt`）。
@@ -14,7 +14,7 @@ Updated: 2026-10-28 10:50（**lab 使用中**：乾淨手冊實跑從零進行�
 ## 進行中（2026-10-28 傍晚）
 - **章節重構已做完、commit（b333c51）**：手冊 31 章＋附錄 A（建 lab）、B（監控覆蓋率）；install/steps 改名（04/05 拆、07-1/2/3、25-1/2、21/23/25/26/29/30）；run-full/run-chapter 改成章 id（A 先、B 最後、兩端含）；工具 `docs/journey-src/tools/restructure.js`（一次性，留作對照）。新章 22/24/27/28 與 23.6 是「待補」佈位。**尚未實跑**。
 - 問題清單：改寫工具曾把題號（2.x、3.x、11.x）當成手冊節號改掉，已修回並補 5.7（AD 636 只放行 broker）、7.5（UserAdmin 專責團隊）、8.8（svc-ops 私鑰離線保管）、12.1–12.2（DR、容量規劃是否在範圍），附件改第 13 章。
-- 腳本版從零重跑（16:25 起）：基底與憑證換發後驗收都 **40/40**；但在第 17 段被我改到正在跑的 run-customer.sh 害死（bash 邊讀邊跑，找 29-upgrade.sh）。已重新 push install/ 到 ops02，**FROM=17 續跑中**（紀錄 `~/kafka-lab-runs/script-resume17-*.log`），只為驗新檔名與 29/30/31 段；super user／AD 斷線演練這一輪沒驗（叢集是舊設定裝的）。
+- 腳本版從零重跑（16:25 起）：基底與憑證換發後驗收都 **40/40**；但在第 17 段被我改到正在跑的 run-customer.sh 害死（bash 邊讀邊跑，找 29-upgrade.sh）。已重新 push install/ 到 ops02，FROM=17 續跑 **19:11 完成**（`~/kafka-lab-runs/script-resume17-1028-1727.log`）：五次驗收全 40/40、0 FAIL，新檔名 21/23/25-1/25-2/26/29/30 與 run-customer 接線都對；super user／AD 斷線演練這一輪沒驗（叢集是舊設定裝的）。
 - 教訓已記 CLAUDE.md：不要改正在跑的腳本。
 
 ## 下一步（使用者 2026-10-28 同意照此順序）
