@@ -498,3 +498,12 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 **尚未驗證（要等從零重跑）**：整條路在 lab 上的實跑（手把手與腳本都是）、第 17 章在 8.2.4／2.5.1 上的指標覆蓋（表格是 8.3.2／2.6.1 的實測）、C3 2.5.1 → 2.6.1 的換版本行為（generated 檔擁有者）、小版本更新在 11 台上的時間與持續流量數字、各章 `out` 區塊的新數字（第 21 章的實測數字仍是 2026-10-26 升級演練的，標在文中）。
 
 **待問客戶**（已進問題清單）：行內套件庫現在的 RHEL 小版本、是釘版還是追最新、何時同步（3.5）；JDK 要不要換 25（3.4）；兩套 RPM 約 6 GB 能否一次送（2.5）。
+
+### 與 CyberArk 脫鉤：平台密碼與金鑰不再放 PVWA（2026-10-28 定案）
+
+使用者說明並確認：Kafka lab 與 CyberArk 已脫鉤，**只剩一件事和 CyberArk 有關**：人員登入 CyberArk（PVWA 網頁，AD＋MFA）→ PSMP 代登 → 進操作機是 root；root 才讀得到 `/secure/ssh` 的 cpuser 私鑰（0400）。
+
+- 平台的密碼與金鑰（Secret Protection 的 passphrase 與 master key、`svc-mds-bind`、測試人員密碼、應用程式 SCRAM、`store.pass`、`kafka-admin`、緊急憑證 `opmenu-breakglass`、JMX 抓取密碼、`confluent-audit`、license）**全部只留在操作機 root 才讀得到的位置（0600）**，不再交 Secrets 團隊存進 PVWA、不再「從 PVWA 取出」。
+- CPM 輪替（root、`svc-mds-bind`）全部拿掉，改手動輪替（沿用同一套 A/B 兩組切換程序）。
+- 後果要在文件講清楚：①操作機掉了，passphrase 就沒了（master key 還在各主機的 service.env），所以 `~/secrets`、`~/pki` 的備份由銀行自己的備份機制處理（問題清單新增一題）；②OP menu 91 緊急憑證改成讀操作機上的檔，不再從 PVWA 貼上；操作者本來就是 root，91 的把關只剩「必填原因＋稽核記錄」，不是硬性隔離。
+- 動到：手把手第 0、3、11、15、16、17、18、19、20、25 章與 6465 行 license；install（site.env、15／16／19／20 站、lab 的 bank-sim／run-customer、opmenu 的 91 取憑證方式與提示字、README）；問題清單；README／CLAUDE.md；CyberArk 登入設計 Word（只保留登入與金鑰那段）。
