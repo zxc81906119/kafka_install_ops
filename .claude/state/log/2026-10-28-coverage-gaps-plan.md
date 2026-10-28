@@ -11,3 +11,9 @@
 3. 故障排查速查一章（症狀 → 看哪個指標／指令 → 處理）
 4. 新應用上線流程（topic、ACL、SCRAM 或憑證申請，串第 11 章與 OP menu）
 另：Self-Balancing 觀察進度、JDK 同版本修補視情況補在 24、21.7／26。
+
+## 憑證到期監控（2026-10-28 追加，使用者同意；性質＝選配／未來推薦，客戶目前應該沒有這段）
+- 現況：19 條告警規則沒有憑證到期；第 9 章只檢查簽回來時效期 > 30 天，20.1 可手動看；第 22 章只管 license。
+- 做法（兩層）：①blackbox_exporter（銀行的監控主機）探 server 憑證，`probe_ssl_earliest_cert_expiry - time()`，60 天 warning、30 天 critical；要 mTLS 的埠（REST 8082、C3 9090、controller 9093）需另一張專用 clientAuth 探測憑證，且它自己也要被監控；②操作機每日腳本讀 `~/pki/certs/*.crt` 的 notAfter（涵蓋我方持有的 client 憑證），寫 syslog 沿用 22 章路徑。
+- 看不到的：應用程式的 client 憑證（在別人機器上，靠銀行 CA／CLM）、truststore 的根與中繼（server 不送根）。
+- 寫法：放在第 17 章補章，標明「選配、建議」；問題清單加一題：銀行 CA／資安有沒有憑證到期通知機制、通知誰、提前幾天。先手動 lab 驗證再做腳本，順序排在前面四項之後。
