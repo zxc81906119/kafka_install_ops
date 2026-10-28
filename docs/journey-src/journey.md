@@ -133,7 +133,7 @@
 | 20 密碼與金鑰輪替 | 40 分 | master key 輪替與 AD 查詢密碼各一輪滾動重啟；換 SSH 金鑰要逐台放公鑰 |
 | 21 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
 | 22 憑證到期監控（選配，待補） | — | — |
-| 23 日常備份與還原 | 10 分（還原演練待補） | — |
+| 23 日常備份與還原 | 15 分 | 還原演練：建演練物件、備份、誤刪、重建、驗證 |
 | 24 磁碟與容量（待補） | — | — |
 | 25 節點更換與增減 | 50 分 | 新 controller 要追上 metadata log；Self-Balancing 搬資料（加回後十幾分鐘才開始搬） |
 | 26 license 監控 | 5 分 | — |
@@ -5631,9 +5631,101 @@ orders.backup-demo 還在嗎：0
 
 還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。
 
-## 23.6 還原演練（待補）
+## 23.6 還原演練：誤刪的 topic、權限、帳號從備份重建
 
-**這一節在做什麼**（待補）：把 23.3 匯出的中繼資料（RBAC、ACL、topic 與設定、SCRAM 帳號清單、配額）還原到一個乾淨的叢集並驗證。先手動在 lab 走一次，再做成腳本。
+下面這張圖說明備份裡的哪個檔重建哪一樣東西，以及備份裡沒有的東西。
+
+![restore]
+
+**這一節在做什麼**：證明 23.3 的備份真的能用。情境是最常見的「誤刪」：一個 topic（含它的 retention 設定）、一個應用程式的 SCRAM 帳號（含配額）和它的 role binding 被刪掉，從最近一份備份把三樣都重建回來，再用那個帳號寫一筆、讀回一筆。前提：23.3 的備份腳本已就緒、`~/secrets/` 有該帳號的密碼檔（備份裡沒有密碼）。完成的樣子：describe 的 partition 數、RF、retention 與備份一致，role binding 條數一致，帳號能從 9095 寫讀。整個叢集沒了的情況不是這一節：那是第 8–13 章重裝，再用這一節的三條路把中繼資料倒回去（訊息內容靠 replication factor 3，不在備份裡）。
+
+@role 小安 | ops02 | root
+
+先建演練用的三樣東西（topic 帶一個動態設定、帳號帶配額、三條 binding），再備份一次：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"; kafka-topics $A --create --if-not-exists --topic orders.restore-demo --partitions 3 --replication-factor 3 --config retention.ms=3600000 2>/dev/null | grep -v WARNING; (umask 077; [ -s ~/secrets/app-restore.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/app-restore.pass) && kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/app-restore.pass)]" >/dev/null && kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && for r in DeveloperRead DeveloperWrite; do confluent iam rbac role-binding create --principal User:app-restore --role $r --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID >/dev/null; done && confluent iam rbac role-binding create --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID >/dev/null && echo "演練物件：topic、帳號（含配額）、binding $(confluent iam rbac role-binding list --principal User:app-restore --kafka-cluster $CLUSTER_ID | grep -c app-restore) 條" && d=$(bash ~/conf/metadata-backup.sh) && echo "備份：$d" && grep -c "app-restore\|orders.restore-demo" $d/topics.txt $d/rbac.txt $d/users.txt
+```
+
+```out
+演練物件：topic、帳號（含配額）、binding 3 條
+備份：/root/backup/metadata/20261029-0220
+/root/backup/metadata/20261029-0220/topics.txt:4
+/root/backup/metadata/20261029-0220/rbac.txt:4
+/root/backup/metadata/20261029-0220/users.txt:2
+```
+
+誤刪（三樣各自刪；SCRAM 憑據和配額要分開刪，合在一起 `kafka-configs` 會整句拒絕）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"; source ~/conf/kraft.env; kafka-topics $A --delete --topic orders.restore-demo && for r in DeveloperRead DeveloperWrite; do confluent iam rbac role-binding delete --principal User:app-restore --role $r --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID --force >/dev/null; done; confluent iam rbac role-binding delete --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID --force >/dev/null; kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config SCRAM-SHA-512 >/dev/null; kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null; echo "topic 還在：$(kafka-topics $A --list | grep -c '^orders.restore-demo$')；binding：$(confluent iam rbac role-binding list --principal User:app-restore --kafka-cluster $CLUSTER_ID | grep -c app-restore)；帳號設定：$(kafka-configs $A --describe --entity-type users --entity-name app-restore | grep -c .)"
+```
+
+```out
+topic 還在：0；binding：0；帳號設定：0
+```
+
+還原寫成一支小腳本 `metadata-restore.sh <備份目錄> <topic> <帳號>`：topic 的 partition 數與 RF 從 `topics.txt` 那一行讀、動態設定從 `topic-configs.txt`；role binding 照 `rbac.txt` 裡該 principal 的每一行建；SCRAM 的迭代次數與配額從 `users.txt`，密碼從 `~/secrets/<帳號>.pass`。最後自己驗證。**整段貼到 EOF**：
+
+```bash
+cat > ~/conf/metadata-restore.sh <<'EOF'
+#!/usr/bin/env bash
+# 從 23.3 的備份目錄重建一個 topic、一個 principal 的 role binding、一個 SCRAM 帳號（含配額）
+# 用法：metadata-restore.sh <備份目錄> <topic 名稱|-> <帳號|->   （- = 這一項不做）
+# 密碼不在備份裡：帳號的密碼讀 ~/secrets/<帳號>.pass（0600）
+B=$1; T=${2:--}; U=${3:--}
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"
+source ~/conf/kraft.env
+[ -d "$B" ] || { echo "沒有備份目錄 $B"; exit 1; }
+if [ "$T" != - ]; then
+  read -r P R <<<"$(grep -P "^Topic: $T\t" "$B/topics.txt" | head -1 | sed 's/.*PartitionCount: \([0-9]*\).*ReplicationFactor: \([0-9]*\).*/\1 \2/')"
+  [ -n "$P" ] || { echo "備份裡沒有 topic $T"; exit 1; }
+  cfg=(); while read -r kv; do [ -n "$kv" ] && cfg+=(--config "$kv"); done < <(awk -v t="$T" '$0 == "Dynamic configs for topic " t " are:"{p=1;next} /^Dynamic configs/{p=0} p{print $1}' "$B/topic-configs.txt")
+  kafka-topics $A --create --topic "$T" --partitions "$P" --replication-factor "$R" "${cfg[@]}" >/dev/null && echo "topic $T：partitions=$P rf=$R 動態設定 $(( ${#cfg[@]} / 2 )) 個"
+fi
+if [ "$U" != - ]; then
+  confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null
+  n=0; while IFS='|' read -r principal role rtype rname pattern; do
+    principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
+    args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID"); [ -n "$rtype" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
+    confluent iam rbac role-binding create "${args[@]}" >/dev/null && n=$((n+1))
+  done < <(awk -v u="User:$U" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$B/rbac.txt")
+  echo "role binding：$n 條"
+  iter=$(grep "SCRAM credential configs for user-principal '$U'" "$B/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
+  quota=$(grep "Quota configs for user-principal '$U'" "$B/users.txt" | sed 's/.* are //; s/\.0\b//g; s/, /,/g')
+  [ -s ~/secrets/$U.pass ] || { echo "沒有 ~/secrets/$U.pass：密碼不在備份裡，先放密碼檔"; exit 1; }
+  kafka-configs $A --alter --entity-type users --entity-name "$U" --add-config "SCRAM-SHA-512=[${iter:-iterations=8192},password=$(cat ~/secrets/$U.pass)]" >/dev/null && echo "SCRAM $U：${iter:-iterations=8192}"
+  [ -n "$quota" ] && kafka-configs $A --alter --entity-type users --entity-name "$U" --add-config "$quota" >/dev/null && echo "配額：$quota"
+fi
+# 驗證
+[ "$T" != - ] && echo "describe：$(kafka-topics $A --describe --topic $T | head -1 | grep -o 'PartitionCount: [0-9]*.ReplicationFactor: [0-9]*' | tr '\t' ' ')；$(kafka-configs $A --describe --entity-type topics --entity-name $T | grep -o '^  [a-z.]*=[^ ]*' | tr -d ' ' | paste -sd, -)"
+[ "$U" != - ] && echo "binding：$(confluent iam rbac role-binding list --principal User:$U --kafka-cluster $CLUSTER_ID | grep -c "User:$U") 條；帳號設定：$(kafka-configs $A --describe --entity-type users --entity-name $U | grep -c .) 行"
+EOF
+chmod 0700 ~/conf/metadata-restore.sh && bash ~/conf/metadata-restore.sh "$(ls -d ~/backup/metadata/20* | tail -1)" orders.restore-demo app-restore
+```
+
+```out
+topic orders.restore-demo：partitions=3 rf=3 動態設定 1 個
+role binding：3 條
+SCRAM app-restore：iterations=8192
+配額：consumer_byte_rate=2097152,request_percentage=25,producer_byte_rate=1048576
+describe：PartitionCount: 3 ReplicationFactor: 3；retention.ms=3600000
+binding：3 條；帳號設定：2 行
+```
+
+最後用重建的帳號寫一筆、讀回一筆（走 SCRAM 的 9095），證明帳號、密碼、權限、topic 四樣都回來了；看完把演練物件清掉：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"; source ~/conf/kraft.env; C=$(mktemp); grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $C; printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-restore" password="%s";\n' "$(cat ~/secrets/app-restore.pass)" >> $C; echo "restore-$(date +%s)" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config $C --topic orders.restore-demo >/dev/null 2>&1 && echo "app-restore 寫一筆：ok；讀回：$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config $C --topic orders.restore-demo --group restore-check --from-beginning --max-messages 1 --timeout-ms 20000 2>/dev/null | grep -c restore-)"; rm -f $C; kafka-topics $A --delete --topic orders.restore-demo; for r in DeveloperRead DeveloperWrite; do confluent iam rbac role-binding delete --principal User:app-restore --role $r --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID --force >/dev/null; done; confluent iam rbac role-binding delete --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID --force >/dev/null; kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config SCRAM-SHA-512 >/dev/null; kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null; rm -f ~/secrets/app-restore.pass; echo "演練物件已清掉"
+```
+
+```out
+app-restore 寫一筆：ok；讀回：1
+演練物件已清掉
+```
+
+> 正式環境誤刪時：先用 23.5 的比對找出「少了什麼」，再對每一樣跑 `metadata-restore.sh`（topic 和帳號可以分開給 `-`）。ACL 不在這支裡：照 `acls.txt` 用 `kafka-acls --add` 重建。帳號的密碼還原後和刪前相同（都來自 `~/secrets`），應用程式不用改設定。
 
 # 24. 第二十四站：磁碟與容量
 
