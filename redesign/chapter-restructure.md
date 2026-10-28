@@ -71,3 +71,5 @@
 - run-full.sh／run-chapter.js：章 id 可以是 1–31、A、B；順序 A → 1 … 31 → B；from／to 兩端都含（舊的「結束章不含」作廢）；從 A 開始才拆 lab。
 - 改寫工具 `docs/journey-src/tools/restructure.js`：內文引用（第 N 章／站、N.M（.K） 節）照舊文件實際存在的節對照改寫；「第 0 章」「第 3 章」四處人工指定；範圍式引用（第 1–20 章、第 21、26、27 章）與時間表、旅程總覽圖人工改。其他檔案（README、CLAUDE.md、問題清單、skills、install、diagrams.js）用 `refs` 模式改。
 - **尚未實跑**：下一輪 `run-full.sh customer`（A→B）與 `run-customer.sh` 從零一起驗；手冊實跑的區塊數應仍是 346。
+
+- 第 22 章「選配」的意思（2026-10-28 使用者說明）：選配是指客戶現場不一定部署；lab 一定要做出來並驗證，手冊寫完整程序。
