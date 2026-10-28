@@ -745,7 +745,7 @@ D.restore = () => svg(800, 420, [
 // 22 application SCRAM rotation with an A/B pair (20.6)
 D.scramab = () => svg(800, 360, [
   box(20, 30, 170, 90, '① 平常', ['應用程式用 app-x-a', 'app-x-b 閒置（同樣權限）'], 'teal'), num(20, 30, '1'),
-  box(220, 30, 170, 90, '② 換 -b 的密碼', ['kafka-configs --alter', 'SCRAM-SHA-512=[password=…]', '應用程式完全不受影響'], 'amber'), num(220, 30, '2'),
+  box(220, 30, 170, 90, '② 換 -b 的密碼', ['kafka-configs --alter', 'SCRAM-SHA-512 給新密碼', '應用程式完全不受影響'], 'amber'), num(220, 30, '2'),
   box(420, 30, 170, 90, '③ 應用程式切到 -b', ['改設定、滾動重啟應用', '新連線用 -b，舊連線自然收掉', '流量不中斷'], 'blue'), num(420, 30, '3'),
   box(620, 30, 160, 90, '④ 下次換 -a', ['-a 現在閒置', '同樣的步驟倒過來'], 'gray'), num(620, 30, '4'),
   arrow(190, 75, 218, 75), arrow(390, 75, 418, 75), arrow(590, 75, 618, 75),
