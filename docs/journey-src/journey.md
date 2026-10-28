@@ -7490,20 +7490,37 @@ repo01 /os/：223 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
 
 @role 小安 | ops02 | root
 
-每台印出：目前的 OS 版本、套件庫裡 release 套件的版本（小版本更新時會比目前的新）、可更新幾個、其中跟平台有關的幾個、鎖住幾個 confluent 套件，再用 `dnf upgrade --assumeno` 預覽交易（只看摘要，不執行）：
+每台印出：目前的 OS 版本、套件庫裡 release 套件的版本（小版本更新時會比目前的新）、可更新幾個、其中跟平台有關的幾個、鎖住幾個 confluent 套件；再比對**主版本**（套件庫是 10.x 就停，見下面的保險），一致才用 `dnf upgrade --assumeno` 預覽交易（只看摘要，不執行）：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" && for h in kc01 kb01 rest01 c3-01 ops02; do ssh $h.poc.lab 'u=$(sudo dnf -q check-update --refresh 2>/dev/null | awk "/^[a-zA-Z0-9]/{print \$1}" | sed "s/\.[^.]*\$//"); echo "$(hostname)：OS $(. /etc/os-release; echo $VERSION_ID)，套件庫的 release 套件 $(sudo dnf -q repoquery --latest-limit 1 --qf %{version} $(rpm -q --whatprovides system-release --qf "%{NAME}\n" | head -1) 2>/dev/null | head -1)；可更新 $(grep -c . <<<"$u") 個（平台相關：$(grep -xE "glibc|systemd|openssh-server|kernel|rocky-release|redhat-release|openssl-libs" <<<"$u" | paste -sd" ")）；其中 confluent-* $(grep -c "^confluent-" <<<"$u") 個；鎖住 $(sudo dnf -q versionlock list 2>/dev/null | grep -c confluent) 個 confluent 套件"; sudo dnf upgrade --assumeno 2>&1 | grep -E "^Upgrade +[0-9]+ Package"'; done
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" && for h in kc01 kb01 rest01 c3-01 ops02; do ssh $h.poc.lab 'u=$(sudo dnf -q check-update --refresh 2>/dev/null | awk "/^[a-zA-Z0-9]/{print \$1}" | sed "s/\.[^.]*\$//"); echo "$(hostname)：OS $(. /etc/os-release; echo $VERSION_ID)，套件庫的 release 套件 $(sudo dnf -q repoquery --latest-limit 1 --qf %{version} $(rpm -q --whatprovides system-release --qf "%{NAME}\n" | head -1) 2>/dev/null | head -1)；可更新 $(grep -c . <<<"$u") 個（平台相關：$(grep -xE "glibc|systemd|openssh-server|kernel|rocky-release|redhat-release|openssl-libs" <<<"$u" | paste -sd" ")）；其中 confluent-* $(grep -c "^confluent-" <<<"$u") 個；鎖住 $(sudo dnf -q versionlock list 2>/dev/null | grep -c confluent) 個 confluent 套件"; cur=$(. /etc/os-release; echo $VERSION_ID); avail=$(sudo dnf -q repoquery --latest-limit 1 --qf %{version} $(rpm -q --whatprovides system-release --qf "%{NAME}\n" | head -1) 2>/dev/null | head -1); if [ -n "$avail" ] && [ "${avail%%.*}" != "${cur%%.*}" ]; then echo "  停：套件庫是 ${avail%%.*}.x 的內容，不是 ${cur%%.*}.x（小版本更新只能在同一主版本內）"; else echo "  主版本一致（${cur%%.*}.x → $avail）"; sudo dnf upgrade --assumeno 2>&1 | grep -E "^Upgrade +[0-9]+ Package"; fi'; done
 ```
 
 ```out
 under-replicated：0
 kc01：OS 9.6，套件庫的 release 套件 9.8；可更新 148 個（平台相關：glibc openssh-server rocky-release systemd）；其中 confluent-* 0 個；鎖住 9 個 confluent 套件
+  主版本一致（9.x → 9.8）
 Upgrade  148 Packages
 （kb01、rest01、c3-01、ops02 同上，數字依各台裝的套件而不同；confluent-* 一律 0 個）
 ```
 
 > 清單裡出現 `confluent-*` 就停下來：代表 versionlock 沒鎖好，照第 8 章重新鎖。Confluent 的升級只走第 29 章。每月修補時「套件庫的 release 套件」和目前的 OS 版本相同，可更新的數量就小得多（原本實測：6 個，含 openssh-server，修補過程中 ssh 連線不斷）。
+
+> **主版本的保險**：上面每台都比對了「套件庫裡 release 套件的主版本」和「目前的主版本」。銀行的套件庫若同步錯了（content view 混到 RHEL 10 的內容、Nexus 指到 10 的上游），`dnf update` 會把 9.x 主機一路升到 10——那不是小版本更新，是大版本升級，Confluent 的支援矩陣、JDK、OS 調校全部要重來。看到 `停：套件庫是 10.x 的內容` 就不要動，請 OS 團隊修套件庫（問題清單 3.6）。lab 沒有 10 的內容，用唯一能連外網的 dl01 對 Rocky 10 的公開倉庫跑同一個判斷，證明它真的會停：
+
+@role 小安 | dl01 | root
+
+```bash
+cur=$(. /etc/os-release; echo $VERSION_ID); avail=$(timeout 120 dnf -q repoquery --repofrompath=r10,https://dl.rockylinux.org/pub/rocky/10/BaseOS/x86_64/os/ --repo=r10 --latest-limit 1 --qf "%{version}" rocky-release 2>/dev/null | head -1); echo "目前 $cur；那個套件庫的 release 套件 $avail"; if [ "${avail%%.*}" != "${cur%%.*}" ]; then echo "停：套件庫是 ${avail%%.*}.x 的內容，不是 ${cur%%.*}.x（小版本更新只能在同一主版本內）"; else echo "主版本一致"; fi
+```
+
+```out
+目前 9.6；那個套件庫的 release 套件 10.2
+停：套件庫是 10.x 的內容，不是 9.x（小版本更新只能在同一主版本內）
+```
+
+@role 小安 | ops02 | root
+
 
 ## 30.2 broker 逐台
 

@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-29 06:50（lab 使用中：補章進行中；叢集健康，app-orders 現在用 -b）
+Updated: 2026-10-29 07:00（lab 使用中：補章全部做完，準備從零重跑；叢集健康）
 
 ## 現在在做什麼
 `bash docs/journey-src/tools/run-full.sh customer` 從零跑（開始 10:46，紀錄 `~/kafka-lab-runs/run-customer-0-99-20261028-1046.log`，路徑也在 `~/kafka-lab-runs/current-log.txt`）。
@@ -13,6 +13,7 @@ Updated: 2026-10-29 06:50（lab 使用中：補章進行中；叢集健康，app
 
 ## 進行中（2026-10-29 凌晨）
 - **事故（04:03–05:50）**：腳本版第 28 段重啟 kb04 後 MDS 起不來，之後 kb01、kb02 也卡死。原因＝02:49 手動 20.4 用錯密文 key 名（`kb01.server.properties` vs 腳本版的 `kb01.properties`），broker 靠快取撐到重啟才爆；真相在 `/var/log/kafka/metadata-service.log`。已修 lab、手冊 20.4／28、腳本第 15 站命名、CLAUDE.md；詳見 log/2026-10-29-mds-ldap-cipher-incident.md。**第 28 章腳本版第 27 段要重跑驗證**。
+- **第 30 章保險完成**（30.1 主版本比對＋dl01 對 Rocky 10 倉庫的證明；`30-os-patch.sh plan` 主版本不一致即 FAIL；問題清單 3.6）。**補章全部做完**：23.6、20.6、24、28、27、22、30 保險。下一步：腳本版從零重跑（run-customer，34 段）→ 手冊 A→B 從零實跑 → 修 out 值 → 重建 docx。
 - **第 22 章 憑證到期監控完成**（手動 9/9：blackbox 24 端點、promtool 規則測試 SUCCESS、操作機腳本與 timer；`22-cert-expiry.sh files｜check｜schedule`、`bank-sim.sh monitoring-blackbox`、run-customer 第 27 段，共 34 段；log/2026-10-29-ch22-cert-expiry.md）。第 28 章腳本版第 28 段重跑通過。剩：30 章套件庫保險 → 從零重跑（手動 A→B、腳本）。
 - **第 27 章 新應用上線：手動 15/15 通過**（inventory SCRAM A/B、shipping 憑證＋REST 白名單＋12.1 式重啟）；`27-onboard.sh onboard｜verify｜retire`（cert：apps.txt＋重跑第 12 站）、`bank-sim.sh sign-app`、run-customer 第 28 段（共 33 段）、圖 D.onboard；腳本版驗證進行中。log/2026-10-29-ch27-onboard.md。
 - **第 28 章 故障排查速查完成**（手動實跑 7 塊；`28-triage.sh snapshot｜drill｜recover`、`bank-sim.sh broker-stop｜alerts-wait｜alerts-clear`、run-customer 第 27 段，共 32 段；log/2026-10-29-ch28-triage.md）。接著：27 新應用上線 → 22 憑證到期監控（lab 要建）→ 30 章套件庫保險。

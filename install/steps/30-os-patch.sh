@@ -111,7 +111,8 @@ plan() {
     if [ "$host" = "$OPS_HOST" ]; then counts=$(bash -s <<<"$PLAN_HOST"); else counts=$(ssh_script "$host" <<<"$PLAN_HOST"); fi
     read -r updates confluent_updates locked os_current os_available <<<"$counts"
     if [ "$confluent_updates" != 0 ]; then fail "$host：更新清單裡有 $confluent_updates 個 confluent 套件（versionlock 沒鎖好，照第 8 站重新鎖）"
-    else ok "$host：OS $os_current（套件庫的 release 套件 $os_available）、可更新 $updates 個、鎖住 $locked 個 confluent 套件"; fi
+    elif [ "$os_available" != "?" ] && [ "${os_available%%.*}" != "${os_current%%.*}" ]; then fail "$host：套件庫是 ${os_available%%.*}.x 的內容，不是 ${os_current%%.*}.x（小版本更新只能在同一主版本內；請 OS 團隊修套件庫，問題清單 3.6）"
+    else ok "$host：OS $os_current（套件庫的 release 套件 $os_available，主版本一致）、可更新 $updates 個、鎖住 $locked 個 confluent 套件"; fi
   done
 }
 
