@@ -3499,7 +3499,7 @@ kb04: full sudo back (change window)
 
 | 程序 | exporter 規則 | 抓得到什麼 |
 |---|---|---|
-| controller（kc01–03） | Confluent 官方 `kafka_controller.yml` | KRaft：controller 指標（`ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount` …）、raft 指標（leader、epoch、voter 數、commit／election latency）、JVM |
+| controller（kc01–03） | Confluent 官方 `kafka_controller.yml` | KRaft：controller 指標（`ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount` …）、JVM（raft 指標在三台 controller 的叢集裡沒有，見 17.10）|
 | broker（kb01–04） | Confluent 官方 `kafka_broker.yml` | topic／partition／replica、request 延遲、ISR、網路與 request handler 執行緒、quota、JVM（序列數隨 topic 與 partition 數成長，3 個 partition 的 lab 約 1.2 萬條） |
 | REST Proxy（rest01–02） | Confluent 官方 `confluent_rest.yml` | Jetty 與每個 REST endpoint 的請求率、錯誤率、延遲，JVM |
 | Control Center（c3-01） | **我方自己寫的小規則**（官方沒有給 C3 的 exporter 設定） | JVM、Kafka Streams 狀態（`client_state`、執行緒數）、Jetty 請求率。C3 的 JVM 另外有上萬條 MBean（每個 REST endpoint、每個 RocksDB store 一串），全是雜訊，所以只放行上面幾項 |
@@ -3773,13 +3773,13 @@ echo "scrape-confluent.yml: $(grep -c job_name ~/monitoring/to-bank/prometheus/s
 scrape-confluent.yml: 4 個 job
 ```
 
-**告警規則**：21 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，對應 omnibus 規格裡的 ProblemImpact 欄位）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
+**告警規則**：19 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，對應 omnibus 規格裡的 ProblemImpact 欄位）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
 
 - 官方 `broker-alerts.yml` 有兩條「Broker IO Activity」用的是一個永遠小於 1 的 control-plane 指標，等於測試規則，不收；改用 request handler 的一分鐘平均閒置率。
 - 官方的 `UncleanLeaderElectionsPerSec` 在 exporter 裡是累計次數，`> 0` 一旦發生過就永遠成立，改成看 10 分鐘內的增量。
 - 官方的 `high_load` 要 node exporter，我們沒有；主機層的 CPU、磁碟請用銀行既有的主機監控。
 - controller 的規則（`ActiveControllerCount`、offline partitions）限定 `job="kafka-controller"`；`for` 從 10 秒放寬到 1 分鐘，不然 controller 重啟會叫人。
-- KRaft 另加：沒有 leader、連不到 voter、metadata 落後、metadata 錯誤、leader 頻繁更換。REST Proxy、C3 各加兩條，都只用 lab 驗過存在的指標。
+- KRaft 另加：metadata 落後、metadata 錯誤、leader 頻繁更換（「沒有 leader」由 `KafkaActiveControllerCountNotOne` 涵蓋）。REST Proxy、C3 各加兩條，都只用 lab 驗過存在的指標。
 
 整段貼到 EOF：
 
@@ -3882,22 +3882,6 @@ groups:
 
   - name: kraft
     rules:
-      # source: confluent (KRaft: no leader). raft-metrics are on every controller and broker
-      - alert: KRaftNoLeader
-        expr: max by (env) (kafka_server_raft_metrics_current_leader{job=~"kafka-controller|kafka-broker"}) < 0
-        for: 1m
-        labels: { severity: critical, impact: SERVICE }
-        annotations:
-          summary: "{{ $labels.env }}: KRaft has no leader"
-          description: "No node of {{ $labels.env }} reports a KRaft leader (current-leader is -1). Check the controllers and their port 9093."
-      # source: confluent (a voter the quorum cannot reach)
-      - alert: KRaftUnknownVoterConnections
-        expr: max by (instance) (kafka_server_raft_metrics_number_unknown_voter_connections{job="kafka-controller"}) > 0
-        for: 5m
-        labels: { severity: warning, impact: SERVICE }
-        annotations:
-          summary: "{{ $labels.hostname }}: cannot reach a KRaft voter"
-          description: "{{ $labels.instance }} has had connections to {{ $value }} unknown voters for 5 minutes: a controller is down or its address in the quorum is wrong."
       # source: ours (earlier lab work): controller applies the metadata log late
       - alert: KRaftControllerMetadataLag
         expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
@@ -3978,7 +3962,7 @@ echo "confluent-alerts.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/pro
 ```
 
 ```out
-confluent-alerts.yml: 21 條規則
+confluent-alerts.yml: 19 條規則
 ```
 
 **Alertmanager 設定**：兩個 webhook receiver 示範兩種格式，銀行留一種、刪另一種。
@@ -4182,7 +4166,7 @@ kafka-broker      up 1 / 4
 kafka-controller  up 1 / 3
 rest-proxy        up 1 / 2
 合計 up 4 / 10
-告警規則 21 條，載入有錯 0 條
+告警規則 19 條，載入有錯 0 條
 Prometheus 看到的 Alertmanager: ['http://lab-mon-alertmanager:9093/api/v2/alerts']
 Grafana dashboard: 32 個
 {"details":{"application":"Prometheus","features":{"rulerApiEnabled":false}},"message":"Successfully queried the Prometheus API.","status":"OK"}
@@ -4433,7 +4417,7 @@ zookeeper-cluster.json                 11      0
 
 | dashboard（檔名） | 有資料／總數 | 判讀 |
 |---|---|---|
-| `kraft.json` | 18／18 | **可用**。KRaft 健康：leader、epoch、voter、high watermark、commit／election latency、metadata lag、broker 註冊數。這張靠 raft-metrics（見 17.10 的備註） |
+| `kraft.json` | 在三台 controller 的叢集是空的 | **不可用**。這張全靠 `kafka_server_raft_metrics_*`，而三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）Prometheus 裡一條 raft 指標都沒有（見 17.10 的備註）；上面表格的 18／18 是單台 controller 的拋棄式環境量到的，不適用 |
 | `kafka-cluster-kraft.json` | 75／80 | **可用**（主力）。缺的 5 個：「Offline Partitions Count」——官方 query 寫 `job="kafka-broker"`，但專用 controller 的叢集裡這個指標只在 `kafka-controller` 上，所以空（告警 `KafkaOfflinePartitions` 有涵蓋）；另 4 個是 Tiered Storage（我們沒開） |
 | `kafka-topics-kraft.json` | 13／13 | **可用**。topic 大小、流量、partition |
 | `kafka-transaction-coordinator.json` | 10／10 | **可用** |
@@ -4468,7 +4452,7 @@ lab-mon-* 已收掉：0 個剩下
 >
 > 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用 22 章的 syslog 告警；稽核事件看第 18 章。
 >
-> KRaft 指標：2026-10-25 在舊 lab 的 jshell 查不到 `kafka.server:type=raft-metrics`，所以 quorum 告警當時只用 controller 的四個指標。這次用 Confluent 官方規則抓，`kafka_server_raft_metrics_*`（current_leader、current_epoch、number_of_voters、high_watermark、commit／election latency 等 17 條）**有資料**，官方 `kraft.json` 的 18 個 panel 全部有值；告警因此多了「沒有 leader」「連不到 voter」兩條。兩次結論不同，原因還沒查清（這次是單 controller 的 dynamic quorum，舊的是三台）；正式叢集請在三台 controller 上再確認一次。
+> KRaft 指標：Confluent Server 的 `kafka_server_raft_metrics_*`（current_leader、number_of_voters、commit／election latency 等）**只有單台 controller（`--standalone`）的環境抓得到**。三台 controller 的叢集，不論 8.2.4 或遷移後的 8.3.2，實測 controller job 有三千多條序列，raft 指標卻是 0 條。所以 quorum 健康靠 controller 自己的四個指標：`ActiveControllerCount`（全叢集剛好 1）、`LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`（leader 更換次數）；quorum 內容用 `kafka-metadata-quorum describe --status` 看。官方 `kraft.json` 這張 dashboard 因此是空的，不引入也沒關係。
 
 # 18. 第十八站：稽核日誌（audit log）
 

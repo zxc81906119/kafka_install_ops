@@ -95,22 +95,6 @@ groups:
 
   - name: kraft
     rules:
-      # source: confluent (KRaft: no leader). raft-metrics are on every controller and broker
-      - alert: KRaftNoLeader
-        expr: max by (env) (kafka_server_raft_metrics_current_leader{job=~"kafka-controller|kafka-broker"}) < 0
-        for: 1m
-        labels: { severity: critical, impact: SERVICE }
-        annotations:
-          summary: "{{ $labels.env }}: KRaft has no leader"
-          description: "No node of {{ $labels.env }} reports a KRaft leader (current-leader is -1). Check the controllers and their port 9093."
-      # source: confluent (a voter the quorum cannot reach)
-      - alert: KRaftUnknownVoterConnections
-        expr: max by (instance) (kafka_server_raft_metrics_number_unknown_voter_connections{job="kafka-controller"}) > 0
-        for: 5m
-        labels: { severity: warning, impact: SERVICE }
-        annotations:
-          summary: "{{ $labels.hostname }}: cannot reach a KRaft voter"
-          description: "{{ $labels.instance }} has had connections to {{ $value }} unknown voters for 5 minutes: a controller is down or its address in the quorum is wrong."
       # source: ours (earlier lab work): controller applies the metadata log late
       - alert: KRaftControllerMetadataLag
         expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
