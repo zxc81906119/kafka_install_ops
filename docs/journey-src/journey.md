@@ -3491,7 +3491,7 @@ kb04: full sudo back (change window)
 | 誰 | 做什麼 |
 |---|---|
 | 小安 | exporter 的 jar 與 Confluent 官方規則檔已在 1.4 節帶進來；產抓取密碼、組設定、派送、滾動重啟；產給銀行的 `to-bank/`（scrape 設定、告警規則、Alertmanager 設定、Grafana 設定與 dashboard、根憑證、抓取密碼） |
-| 銀行監控團隊 | 把 `to-bank/` 放進自己的 Prometheus、Alertmanager、Grafana；確認 10 個 target 都是 up、規則載入、dashboard 都在；把 webhook 指到行內的事件系統（例如 Dynatrace） |
+| 銀行監控團隊 | 把 `to-bank/` 放進自己的 Prometheus、Alertmanager、Grafana；確認 10 個 target 都是 up、規則載入、dashboard 都在；把 webhook 指到行內的事件系統（IBM Netcool/OMNIbus，下稱 omnibus） |
 
 四種程序各用哪份規則，抓得到什麼：
 
@@ -3771,7 +3771,7 @@ echo "scrape-confluent.yml: $(grep -c job_name ~/monitoring/to-bank/prometheus/s
 scrape-confluent.yml: 4 個 job
 ```
 
-**告警規則**：21 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，是 Dynatrace 的 ProblemImpact）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
+**告警規則**：21 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，對應 omnibus 規格裡的 ProblemImpact 欄位）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
 
 - 官方 `broker-alerts.yml` 有兩條「Broker IO Activity」用的是一個永遠小於 1 的 control-plane 指標，等於測試規則，不收；改用 request handler 的一分鐘平均閒置率。
 - 官方的 `UncleanLeaderElectionsPerSec` 在 exporter 裡是累計次數，`> 0` 一旦發生過就永遠成立，改成看 10 分鐘內的增量。
@@ -3785,7 +3785,7 @@ scrape-confluent.yml: 4 個 job
 cat > ~/monitoring/to-bank/prometheus/confluent-alerts.yml <<'EOF'
 # Alert rules for the bank's Prometheus. Metric names are the ones Confluent's official JMX exporter rules produce
 # (jmx-monitoring-stacks, see the guide, chapter 1.4); job names match scrape-confluent.yml.
-# Every rule has:  labels.severity (critical|warning)  labels.impact (APPLICATION|SERVICE|INFRASTRUCTURE, Dynatrace's ProblemImpact)
+# Every rule has:  labels.severity (critical|warning)  labels.impact (APPLICATION|SERVICE|INFRASTRUCTURE, the ProblemImpact field of the bank omnibus format)
 #                  annotations.summary (one line)  annotations.description (full sentence, what to look at)
 # "source:" says where the rule comes from:
 #   official   = Confluent jmx-monitoring-stacks prometheus-alerts/ (kept, sometimes with the expression fixed for KRaft)
@@ -3982,7 +3982,7 @@ confluent-alerts.yml: 21 條規則
 **Alertmanager 設定**：兩個 webhook receiver 示範兩種格式，銀行留一種、刪另一種。
 
 - `webhook-default`：Alertmanager 預設的 JSON（version 4），一次 POST 帶一個通知群組裡所有告警。
-- `webhook-dynatrace`：用 Alertmanager 的範本在 `payload` 組自訂 JSON，欄位照 Dynatrace 問題通知的那組（`ProblemTitle`、`State` OPEN／RESOLVED、`ProblemSeverity`、`ProblemImpact`、`ProblemDetailsText`…）。`group_by: ['...']` 讓每筆告警自己一組，所以自訂格式永遠是一筆告警一個 POST。
+- `webhook-omnibus`：用 Alertmanager 的範本在 `payload` 組自訂 JSON，欄位照銀行 omnibus 的接收規格（`ProblemTitle`、`State` OPEN／RESOLVED、`ProblemSeverity`、`ProblemImpact`、`ProblemDetailsText`…）。`group_by: ['...']` 讓每筆告警自己一組，所以自訂格式永遠是一筆告警一個 POST。
 
 自訂 JSON 的寫法有兩個陷阱（2026-10-26 實測）：`payload` 用**字串寫法**，每個值都經 `toJson`，值裡有雙引號或冒號才不會弄壞 JSON；用 map 寫法時，含 `: ` 的值會被當成 YAML 物件、像數字的字串（`"007"`）會變成數字 7。範本裡拿不到 `.GroupKey`，要編號就用告警的 `Fingerprint`。webhook 網址 `WEBHOOK-RECEIVER:8080` 換成行內的；需要認證就在 receiver 加 `http_config`。
 
@@ -3990,9 +3990,9 @@ confluent-alerts.yml: 21 條規則
 cat > ~/monitoring/to-bank/alertmanager/alertmanager.yml <<'EOF'
 # Alertmanager configuration for the bank's Alertmanager. Two webhook receivers show the two formats; keep one, delete the other.
 #   webhook-default    Alertmanager's own JSON (version 4): one POST per notification group, all alerts of the group inside
-#   webhook-dynatrace  a custom JSON built with a template in `payload`: one flat event per alert, Dynatrace problem-notification fields
+#   webhook-omnibus  a custom JSON built with a template in `payload`: one flat event per alert, in the field layout of the bank omnibus format
 # group_by ['...'] puts every alert in its own group, so the custom format is always exactly one alert per POST.
-# Replace WEBHOOK-RECEIVER:8080 with the bank's webhook / Dynatrace endpoint (add authentication with http_config if it needs it).
+# Replace WEBHOOK-RECEIVER:8080 with the bank's omnibus webhook endpoint (add authentication with http_config if it needs it).
 global:
   resolve_timeout: 5m
 route:
@@ -4004,15 +4004,15 @@ route:
   routes:
     - receiver: webhook-default
       continue: true
-    - receiver: webhook-dynatrace
+    - receiver: webhook-omnibus
 receivers:
   - name: webhook-default
     webhook_configs:
       - url: http://WEBHOOK-RECEIVER:8080/default
         send_resolved: true
-  - name: webhook-dynatrace
+  - name: webhook-omnibus
     webhook_configs:
-      - url: http://WEBHOOK-RECEIVER:8080/dynatrace
+      - url: http://WEBHOOK-RECEIVER:8080/omnibus
         send_resolved: true
         # String form + toJson: every value is escaped by toJson, so quotes or colons in a description cannot break the JSON.
         # (The map form would turn "007" into the number 7 and read "a: b" as an object.)
@@ -4267,7 +4267,7 @@ print(json.dumps({'status': a['status'], 'labels': a['labels'], 'annotations': a
 再看**自訂格式**：一筆告警一個扁平的 JSON，欄位是前面範本組出來的；`description` 裡的雙引號、冒號、`007` 都完整保留，JSON 沒壞：
 
 ```bash
-docker logs lab-mon-webhook 2>&1 | grep '^POST /dynatrace' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:96 python3 -c "
+docker logs lab-mon-webhook 2>&1 | grep '^POST /omnibus' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:96 python3 -c "
 import json, sys
 head, body = sys.stdin.read().split('\n', 1)
 print(head)
@@ -4275,7 +4275,7 @@ print(json.dumps(json.loads(body), ensure_ascii=False, indent=1))"
 ```
 
 ```out
-/dynatrace Alertmanager/0.34.1 
+/omnibus Alertmanager/0.34.1 
 {
  "ImpactedEntity": "test.poc.lab",
  "ProblemDetailsText": "Test only: a \"quoted\" word and a colon: here, 007 stays a string.",
@@ -4297,13 +4297,13 @@ cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.
 ```
 
 ```out
-/dynatrace  OPEN
+/omnibus  OPEN
 /default    firing
 /default    resolved
-/dynatrace  RESOLVED
+/omnibus  RESOLVED
 ```
 
-> 實際的 Dynatrace：Events API 或問題通知的接收端要認證（API token），在 `webhook_configs` 的 `http_config` 加 `authorization`；token 放 Alertmanager 設定檔以外的檔案（`credentials_file`），不寫進 YAML。`ProblemSeverity` 的對應（這裡 critical → `ERROR`、warning → `PERFORMANCE`）是範例，照行內事件系統的定義改範本。
+> 實際的 omnibus：接收端如果要認證（例如 API token），在 `webhook_configs` 的 `http_config` 加 `authorization`；token 放 Alertmanager 設定檔以外的檔案（`credentials_file`），不寫進 YAML。`ProblemSeverity` 的對應（這裡 critical → `ERROR`、warning → `PERFORMANCE`）是範例，照 omnibus 的定義改範本。
 
 ## 17.9 哪些 dashboard 與 panel 有資料
 

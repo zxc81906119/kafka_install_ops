@@ -1,6 +1,6 @@
 # Alert rules for the bank's Prometheus. Metric names are the ones Confluent's official JMX exporter rules produce
 # (jmx-monitoring-stacks, see the guide, chapter 1.4); job names match scrape-confluent.yml.
-# Every rule has:  labels.severity (critical|warning)  labels.impact (APPLICATION|SERVICE|INFRASTRUCTURE, Dynatrace's ProblemImpact)
+# Every rule has:  labels.severity (critical|warning)  labels.impact (APPLICATION|SERVICE|INFRASTRUCTURE, the ProblemImpact field of the bank omnibus format)
 #                  annotations.summary (one line)  annotations.description (full sentence, what to look at)
 # "source:" says where the rule comes from:
 #   official   = Confluent jmx-monitoring-stacks prometheus-alerts/ (kept, sometimes with the expression fixed for KRaft)

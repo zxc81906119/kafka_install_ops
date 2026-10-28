@@ -1,8 +1,8 @@
 # Alertmanager configuration for the bank's Alertmanager. Two webhook receivers show the two formats; keep one, delete the other.
 #   webhook-default    Alertmanager's own JSON (version 4): one POST per notification group, all alerts of the group inside
-#   webhook-dynatrace  a custom JSON built with a template in `payload`: one flat event per alert, Dynatrace problem-notification fields
+#   webhook-omnibus  a custom JSON built with a template in `payload`: one flat event per alert, in the field layout of the bank omnibus format
 # group_by ['...'] puts every alert in its own group, so the custom format is always exactly one alert per POST.
-# Replace WEBHOOK-RECEIVER:8080 with the bank's webhook / Dynatrace endpoint (add authentication with http_config if it needs it).
+# Replace WEBHOOK-RECEIVER:8080 with the bank's omnibus webhook endpoint (add authentication with http_config if it needs it).
 global:
   resolve_timeout: 5m
 route:
@@ -14,15 +14,15 @@ route:
   routes:
     - receiver: webhook-default
       continue: true
-    - receiver: webhook-dynatrace
+    - receiver: webhook-omnibus
 receivers:
   - name: webhook-default
     webhook_configs:
       - url: http://WEBHOOK-RECEIVER:8080/default
         send_resolved: true
-  - name: webhook-dynatrace
+  - name: webhook-omnibus
     webhook_configs:
-      - url: http://WEBHOOK-RECEIVER:8080/dynatrace
+      - url: http://WEBHOOK-RECEIVER:8080/omnibus
         send_resolved: true
         # String form + toJson: every value is escaped by toJson, so quotes or colons in a description cannot break the JSON.
         # (The map form would turn "007" into the number 7 and read "a: b" as an object.)
