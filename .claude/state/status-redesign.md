@@ -20,7 +20,7 @@ Updated: 2026-10-28 23:50（**lab 使用中**：腳本版從零重跑開始，�
 - 腳本版從零重跑（16:25 起）：基底與憑證換發後驗收都 **40/40**；但在第 17 段被我改到正在跑的 run-customer.sh 害死（bash 邊讀邊跑，找 29-upgrade.sh）。已重新 push install/ 到 ops02，FROM=17 續跑 **19:11 完成**（`~/kafka-lab-runs/script-resume17-1028-1727.log`）：五次驗收全 40/40、0 FAIL，新檔名 21/23/25-1/25-2/26/29/30 與 run-customer 接線都對；super user／AD 斷線演練這一輪沒驗（叢集是舊設定裝的）。
 - 教訓已記 CLAUDE.md：不要改正在跑的腳本。
 
-## 下一步（使用者 2026-10-28 同意照此順序）
+## 下一步（使用者 2026-10-28 同意照此順序；睡前交代：每章「手動 → 文件（圖先於文字）→ 腳本」三步，章節順序問題先調再測，內容問題直接改）
 1. 目前的腳本版從零重跑（16:25 起，驗 cp-server／c3-monitoring／raft／脫鉤／C3 依賴）跑完 → 逐行看紀錄＋scan-log；27 個 FAIL 是第 5 段預期的「03 等銀行」。
 2. ~~super user 只剩 kafka-internal~~ **已改完 commit，未實跑**（第 11 章 bootstrap／11.3 AD 斷線演練的 out 值是推測的：role-binding list 表格格式、alice HTTP 401、14 個 topic、LDAPS 15 秒，下一輪實跑要對；run-customer 新增第 11 段 ad-drill，段號 12–29）（redesign/README.md 最後一節）：common.tpl、第 10 章；第 11 章 bootstrap 用 kafka-internal 憑證建第一條 binding（svc-ops → SystemAdmin）、rbac.txt 加 svc-ops／kafka-admin SystemAdmin、11.2 說法；新增「停 ad01 → alice 401、kafka-admin 9095 仍可用 → 開回」驗證（放 11 或 19）；10／11 站；README／CLAUDE.md、第 19 章「svc-ops 是 super user」字樣。
 3. ~~章節重構~~ 已做完（見進行中）。

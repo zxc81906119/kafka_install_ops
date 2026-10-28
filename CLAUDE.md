@@ -16,6 +16,8 @@ Details of the architecture and every component: @README.md
 - Ask decisions as **single/multi-select choices** (AskUserQuestion), not prose.
 - The manual (`docs/journey-src/journey.md`) is **hand commands first**; `install/steps/NN-*.sh` automate the same
   path. New procedures are validated by running the raw commands on the lab, never only through the scripts.
+- Every chapter follows three steps: **hand-run on the lab → write the manual (concept diagram before the text) → wrap as a script**. If chapter order is
+  wrong or chapters can merge, restructure first and test after; wrong content is simply fixed (user, 2026-10-28).
 - The user drives the design discussion (`redesign/README.md`); record only confirmed decisions and open questions.
 - Never print a password, key or token in chat. Secrets live in 0600 files (`~/secrets/*.pass`, `~/pki/store.pass`,
   `~/kafka-lab/secrets.env`) and are read into variables at run time.
