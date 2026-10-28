@@ -1,4 +1,4 @@
-# kafka.sh — 以操作者身分跑 Kafka 工具、呼叫 MDS、換 token;91 用保管庫的憑證。加上各項目共用的 Kafka / MDS 小工具。
+# kafka.sh — 以操作者身分跑 Kafka 工具、呼叫 MDS、換 token;91 用操作機上的緊急憑證檔。加上各項目共用的 Kafka / MDS 小工具。
 # 假設操作機已安裝 Confluent 的指令工具與 curl。這裡不放任何環境值:全部讀 OPMENU_* 變數。
 # 安全:帳密與 token 經 stdin 交給 curl(-K -),不進命令列;連線設定檔放記憶體檔案系統、離開時刪。
 
@@ -27,15 +27,15 @@ be_kafka() { # 操作機本機的指令工具,以操作者本人的 AD 身分(LD
   return $rc
 }
 
-# 91 緊急模式:client 憑證(PEM:私鑰 + 憑證鏈)從保管庫取進記憶體檔案系統,組成「憑證向 MDS 換 token」的連線設定,用完即刪。
+# 91 緊急模式:client 憑證(PEM:私鑰 + 憑證鏈)從操作機上 0600 的檔案(OPMENU_BREAKGLASS_PEM)讀進記憶體檔案系統,組成「憑證向 MDS 換 token」的連線設定,用完即刪。
 # 憑證身分(例 User:opmenu-breakglass)在 MDS 綁 SystemAdmin;broker 端不需要任何改動。
 be_bootstrap_kafka() {
   local tool="$1"; shift
-  [ -n "${OPMENU_BREAKGLASS_SECRET:-}" ] || { echo "沒有設定 OPMENU_BREAKGLASS_SECRET(緊急模式憑證在保管庫裡的名稱)" >&2; return 1; }
+  [ -n "${OPMENU_BREAKGLASS_PEM:-}" ] || { echo "沒有設定 OPMENU_BREAKGLASS_PEM(緊急模式憑證 PEM 的檔案路徑)" >&2; return 1; }
   local pem conf out rc mds
   pem="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"; conf="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"
-  secret_get "$OPMENU_BREAKGLASS_SECRET" > "$pem" || { rm -f "$pem" "$conf"; return 1; }
-  grep -q 'BEGIN .*PRIVATE KEY' "$pem" && grep -q 'BEGIN CERTIFICATE' "$pem" || { echo "保管庫回的不是 PEM 私鑰 + 憑證" >&2; rm -f "$pem" "$conf"; return 1; }
+  secret_get "$OPMENU_BREAKGLASS_PEM" > "$pem" || { rm -f "$pem" "$conf"; return 1; }
+  grep -q 'BEGIN .*PRIVATE KEY' "$pem" && grep -q 'BEGIN CERTIFICATE' "$pem" || { echo "緊急憑證檔不是 PEM 私鑰 + 憑證" >&2; rm -f "$pem" "$conf"; return 1; }
   mds="${OPMENU_MDS_URL%%,*}"
   cat > "$conf" <<EOC
 security.protocol=SASL_SSL

@@ -40,7 +40,7 @@
 | ad01 | 行內 AD（lab 用 Samba 模擬） | 銀行 |
 | lb01 | 負載平衡（lab 用 nginx 模擬） | 銀行 |
 | 行內監控（Prometheus、Alertmanager、Grafana） | 抓指標、發告警、看 dashboard；告警送到行內的事件系統（lab 用 `lab-mon-*` 四個容器模擬，第 17 章） | 銀行監控團隊 |
-| PVWA | CyberArk PAM 的網頁：平台密碼（passphrase、master key 等）的正本都在這裡，人工取放；ssh 私鑰不在這裡（3.1）（lab 用 Windows 上的 `~/kafka-lab/pvwa/` 資料夾模擬） | 銀行 Secrets 團隊 |
+| PVWA、PSMP | CyberArk PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA），由 PSMP 代登進操作機，進去就是 root。**這是本案和 CyberArk 唯一的關係**：平台的密碼與金鑰不放 CyberArk（lab 沒有 PVWA、PSMP，直接 `docker exec` 以 root 進） | 銀行 Secrets 團隊 |
 
 所有主機的 FQDN 是 `<主機>.poc.lab`。
 
@@ -55,9 +55,9 @@
 - 每個指令上方都有一行「▶ 在哪台（用哪個帳號）執行」。要換機器的那一個指令（以及每章第一個指令）會附上 lab 裡切過去的指令，例如 `docker exec -it -w /root lab-ops02-1 bash`；從一台容器換到另一台時，先 `exit` 回到 Git Bash 再切。正式環境進操作機是在 CyberArk 的 PVWA 網頁選目標、由 PSMP 代登（進去是 root）；從操作機連其他主機一律用 cpuser 的金鑰 ssh。
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
 - 指令都是一行可以整段貼上的；多行的 `heredoc`（`<<'EOF' … EOF`）要整段一起貼。
-- 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。正本在 PVWA；操作機上的是作業用的副本。從 PVWA 取出貼上時一律用**不顯示的寫法**（密碼見 3.4、15.2），PSMP 的錄影才不會錄到。
+- 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。平台的密碼與金鑰只放在操作機 root 才讀得到的位置（`~/secrets`、`~/pki`、`/secure/ssh`），不放 CyberArk。需要人手動輸入時一律用**不顯示的寫法**（`read -rs`），PSMP 的錄影才不會錄到。
 - **主線是「先裝基底、再遷移」**：第 1–20 章裝的是安裝基底，第 21、26、27 章把它遷移到目標版本，每一段之後都跑第 19 章的驗收。兩組版本的來由與限制在下面「版本路徑」。
-- 主線是本案客戶的情境：銀行的 CyberArk 只有 PAM（PVWA、PSMP、CPM），平台密碼由人從 PVWA 取放；操作機到各主機的 ssh 金鑰是操作機自己的，不放 CyberArk（3.1）。
+- 主線是本案客戶的情境：Kafka 平台和銀行的 CyberArk 已經脫鉤，只剩「人員在 PVWA 登入、由 PSMP 代登進操作機（root）」這一件事。平台的密碼、金鑰、憑證都在操作機上由 root 保管（0600／0400），操作機到各主機的 ssh 金鑰也是操作機自己的（3.1）。
 
 - 指令很長是為了「整段貼上就能跑」。看不懂沒關係，先照做；每一章開頭說這章要做什麼，結尾說看到什麼代表成功。
 
@@ -98,7 +98,7 @@
 | systemd drop-in | 不改 RPM 附的服務設定，另外放一個覆寫檔（`/etc/systemd/system/<unit>.service.d/`） |
 | versionlock | dnf 的鎖版本插件，避免 OS 例行更新把 Confluent 升掉 |
 | 落地區 | 外網下載好的檔案暫放的地方，經掃描核准後搬進內網 |
-| CyberArk PAM | 銀行的特權帳號系統：管人與帳號。元件：Vault（保管庫）、PVWA（Password Vault Web Access，人用的網頁）、CPM（Central Policy Manager，定期自動換密碼）、PSMP（Privileged Session Manager for SSH，代登 ssh 並錄影）。本案只用 PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA）、由 PSMP 代登進操作機（root）；平台密碼由人從 PVWA 取放；CPM 輪替 root 與 svc-mds-bind |
+| CyberArk PAM | 銀行的特權帳號系統：管人與帳號。元件：Vault（保管庫）、PVWA（Password Vault Web Access，人用的網頁）、CPM（Central Policy Manager，定期自動換密碼；本案不用）、PSMP（Privileged Session Manager for SSH，代登 ssh 並錄影）。本案只用到 PVWA 與 PSMP：人員在 PVWA 網頁登入（AD 帳密＋MFA）、由 PSMP 代登進操作機（root）；平台的密碼與金鑰不放 CyberArk |
 | cpuser | 每台主機（含操作機）同名的本機帳號，是安裝與維運的唯一 user：密碼鎖定、只收金鑰、UID／GID 都是 1500；操作機用 `/secure/ssh` 裡那一把私鑰連過去（3.1） |
 | Secret Protection | Confluent 的密碼加密功能：密文留在 `security.properties`，master key 以環境變數給服務 |
 | OP menu | 給維運人員的文字選單（在操作機以 root 跑）：用本人 AD 身分做 Kafka 類作業，主機類作業以 cpuser ssh（金鑰就是 `/secure/ssh` 的那把） |
@@ -126,7 +126,7 @@
 | 9 憑證 | 15 分 | — |
 | 10–13 設定、啟動、權限、REST、C3 | 40 分 | 每段啟動要等健康檢查；C3 第一次起來 1–2 分鐘 |
 | 15 Secret Protection（延伸） | 30 分 | 加密、派送、滾動重啟 |
-| 16 OP menu（延伸） | 20 分 | 保管庫加身分、裝選單、改 sudoers、三種身分試跑 |
+| 16 OP menu（延伸） | 20 分 | 準備緊急憑證檔、裝選單、改 sudoers、三種身分試跑 |
 | 17 監控（延伸） | 40 分 | 四種程序派送、滾動重啟（controller 與 broker 的指標要等 2 分鐘）、lab 的 Prometheus／Alertmanager／Grafana、告警測試 |
 | 18 稽核日誌（延伸） | 20 分 | 帳號、加密派送、滾動重啟、製造事件 |
 | 19 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
@@ -869,9 +869,9 @@ sha256-ok
 | 追溯 | 誰在什麼時間進了操作機的 root：CyberArk 的登入紀錄與 PSMP 錄影；各主機上看到的是 cpuser 的操作紀錄 |
 
 lab 裡：正式環境才有的三樣東西，這樣模擬：
-- **沒有 PVWA、PSMP**：你用 `docker exec -it -w /root lab-ops02-1 bash` 直接以 root 進操作機，就是「PSMP 代登之後」。Windows 上的 `~/kafka-lab/pvwa/` 資料夾仍用來模擬 PVWA 裡的平台密碼（「存進 PVWA」＝放進這個資料夾，「從 PVWA 取出」＝從這個資料夾複製貼上），但**不放 ssh 私鑰**。
+- **沒有 PVWA、PSMP**：你用 `docker exec -it -w /root lab-ops02-1 bash` 直接以 root 進操作機，就是「PSMP 代登之後」。平台的密碼與金鑰不放 CyberArk，所以 lab 也不需要模擬保管庫。
 - **沒有 LUKS**：`/secure/ssh` 是 0.5.6 compose 裡的獨立 docker volume `ops-secure`，只模擬「獨立的 file system」（獨立掛載點、容器重啟還在），沒有加密。
-- **沒有 CPM**：root 與 `svc-mds-bind` 的輪替只在正式環境。
+- **密碼與金鑰的輪替**都是人手動做（15.6、15.8、19.6、20），沒有任何自動輪替。
 
 ### 3.1.1 每台主機建 cpuser（銀行 OS 團隊）
 
@@ -996,7 +996,7 @@ not from a permitted host (host=kb01.poc.lab, ip=172.35.0.31, public key ED25…
 > - **操作機重開機**：`/secure/ssh` 要先掛載（解鎖）好；沒掛載時 ssh 找不到金鑰、連不上各主機，需要有處理流程（誰解鎖、怎麼解）。lab 的 volume 重開還在。
 > - **操作機重建**：重新產生金鑰對（3.1.2），由 OS 團隊重新佈署公鑰（3.1.3）；舊私鑰不備份、也找不回來。
 > - **換金鑰**（人工、不中斷）見 19.6。**sudo 全權收回**見 16.4、19.5。
-> - 人員進操作機就是 root，root 讀得到私鑰。防護不靠「人讀不到」，而靠：`from=`（私鑰被複製也用不了）、獨立加密的 file system 與排除備份（磁碟、快照被取走讀不出）、PVWA 的權限與 PSMP 錄影（誰在什麼時間進了 root）、主機端的 sudoers（16.4）。
+> - 人員進操作機就是 root，root 讀得到私鑰。防護不靠「人讀不到」，而靠：`from=`（私鑰被複製也用不了）、獨立加密的 file system 與排除備份（磁碟、快照被取走讀不出）、PVWA 的登入權限與 PSMP 錄影（誰在什麼時間進了 root）、主機端的 sudoers（16.4）。
 
 ## 3.2 OS 套件來源與根憑證信任
 
@@ -1106,25 +1106,12 @@ signed ad01.csr -> ad01-chain.crt  (CN = ad01.poc.lab, O = PoC Bank, C = TW; EKU
 Verify return code: 0 (ok)
 ```
 
-@role 銀行 AD 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+@role 銀行 AD 團隊（lab 由 Lab 管理員扮演）、小安 | Windows 終端 | 本機
 
-AD 團隊把 svc-mds-bind 的密碼和測試人員的密碼存進 PVWA（lab：pvwa/ 資料夾）：
-
-```bash
-cd ~/kafka-lab && mkdir -p pvwa && for k in bind:ldap-bind users:ad-test-users; do (umask 077; docker exec lab-ad01-1 cat /root/secrets/${k%%:*}.pass > pvwa/${k#*:}.pass); done && ls pvwa | grep pass
-```
-
-```out
-ad-test-users.pass
-ldap-bind.pass
-```
-
-@role 小安（從 PVWA 取出；lab 由 Windows 終端代貼） | Windows 終端 | 本機
-
-小安從 PVWA 取出，放進操作機的 `~/secrets/`（0700 目錄、0600 檔）。正式環境在操作機上每個檔執行一次 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/ldap-bind.pass; unset P; echo)`：`read -s` 讓貼上的密碼不顯示在畫面上（PSMP 錄影錄不到），`printf %s` 不多寫換行。lab 由 Windows 終端代貼：
+AD 團隊把 svc-mds-bind 的密碼和測試人員的密碼交給小安。正式環境用銀行自己的交付方式（當面、加密郵件等），**不放進 CyberArk 或任何保管庫**。小安放進操作機的 `~/secrets/`（0700 目錄、0600 檔）：在操作機上每個檔執行一次 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/ldap-bind.pass; unset P; echo)`，`read -s` 讓貼上的密碼不顯示在畫面上（PSMP 錄影錄不到），`printf %s` 不多寫換行。lab 由 Windows 終端把 ad01 上的檔直接送進操作機，不經過任何中間資料夾：
 
 ```bash
-docker exec lab-ops02-1 install -d -m 0700 /root/secrets && for f in ldap-bind ad-test-users; do docker exec -i lab-ops02-1 bash -c "umask 077; cat > ~/secrets/$f.pass" < ~/kafka-lab/pvwa/$f.pass; done; docker exec lab-ops02-1 ls -la /root/secrets | tail -n +4
+docker exec lab-ops02-1 install -d -m 0700 /root/secrets && for k in bind:ldap-bind users:ad-test-users; do docker exec lab-ad01-1 cat /root/secrets/${k%%:*}.pass | docker exec -i lab-ops02-1 bash -c "umask 077; cat > ~/secrets/${k#*:}.pass"; done; docker exec lab-ops02-1 ls -la /root/secrets | tail -n +4
 ```
 
 ```out
@@ -2157,37 +2144,40 @@ alice: "role": "SystemAdmin"
 carol: "role": "DeveloperRead"
 ```
 
-## 11.1 密碼交 Secrets 團隊保管（PVWA）
+## 11.1 密碼放在哪裡
 
-**這一節在做什麼**：把前面產生的密碼交給銀行保管。到這裡小安產生了幾組密碼，正本都要交銀行的 Secrets 團隊存進 PVWA；操作機上的 `~/secrets/`、`~/pki/store.pass` 只是作業用的副本：
+**這一節在做什麼**：到這裡小安產生了幾組密碼，先說清楚它們放在哪裡、誰會用。本案的平台密碼與金鑰**不交給任何保管庫**（也不放 CyberArk），只放在操作機 root 才讀得到的位置；能登入操作機的人員都是經 PVWA＋PSMP 進來的 root，有登入紀錄與錄影。
 
-| 密碼 | 誰要用 | PVWA 裡的 object（名稱依銀行慣例，以下是建議） |
+| 密碼 | 放在 | 誰要用 |
 |---|---|---|
-| `~/pki/store.pass`（所有 keystore／truststore） | 平台工程師 | `kafka-store-password` |
-| `~/secrets/kafka-admin.pass`（緊急備用的 SCRAM 管理帳號，10.4） | 平台工程師，MDS 故障時 | `kafka-admin-scram` |
-| `~/secrets/app-orders.pass`、`app-payments.pass` | 各應用程式團隊 | `kafka-scram-app-orders`、`kafka-scram-app-payments` |
-
-@role 銀行 Secrets 團隊（收下存進 PVWA；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-正式環境是小安在 PVWA 新增或更新 object、貼上內容。lab 裡：把操作機上的檔案複製進 `pvwa/` 資料夾來模擬：
-
-```bash
-cd ~/kafka-lab && (umask 077; docker exec lab-ops02-1 cat /root/pki/store.pass > pvwa/store.pass; for f in kafka-admin app-orders app-payments; do docker exec lab-ops02-1 cat /root/secrets/$f.pass > pvwa/$f.pass; done) && for f in store kafka-admin app-orders app-payments; do printf '%s ' "$f:$(wc -c < pvwa/$f.pass)"; done; echo
-```
-
-```out
-store:24 kafka-admin:24 app-orders:24 app-payments:24
-```
-
-> 應用程式團隊從 PVWA 取自己的 SCRAM 密碼，放進他們的設定；這本的 `~/conf/app-orders.properties` 是小安在操作機扮演應用程式用的。密碼換了（OP menu 35 換服務密碼）就要同步更新 PVWA 的那個 object。
-
-## 11.2 演練：緊急帳號 kafka-admin 用過就換密碼
-
-這一節演練「緊急帳號被人用過之後怎麼收拾」。`kafka-admin` 是 MDS 故障時唯一進得去的管理身分（CLIENT 9095，SCRAM，super user）。平常沒人用；一旦有人在緊急時從 PVWA 取出來用過，這個密碼就算曝光了，**用完當天就要換**。CPM 沒有可以換 Kafka SCRAM 密碼的 plugin，所以由小安換、再交回 PVWA。平常沒有程式掛在這個帳號上，所以一個帳號直接換、不需要 A／B 兩組，也不會中斷任何服務（應用程式的 SCRAM 帳號才需要 A／B，見 OP menu 35）。
+| `~/pki/store.pass`（所有 keystore／truststore） | 操作機，0600 | 平台工程師 |
+| `~/secrets/kafka-admin.pass`（緊急備用的 SCRAM 管理帳號，10.4） | 操作機，0600 | 平台工程師，MDS 故障時 |
+| `~/secrets/app-orders.pass`、`app-payments.pass` | 操作機，0600 | 各應用程式團隊（交付方式由銀行與應用程式團隊決定，不經過平台） |
 
 @role 小安 | ops02 | root
 
-先模擬一次緊急使用（用 PVWA 那份密碼從 9095 登入），再換密碼：新密碼先寫暫存檔，叢集改成功才換掉 `~/secrets/kafka-admin.pass`。`kafka-configs` 出錯時會把整串設定（含密碼）印出來，所以它的輸出一律丟掉，結果用 `--describe` 和實際登入確認：
+確認這幾個檔都只有 root 讀得到：
+
+```bash
+stat -c '%a %U %s 位元組 %n' ~/pki/store.pass ~/secrets/kafka-admin.pass ~/secrets/app-orders.pass ~/secrets/app-payments.pass
+```
+
+```out
+600 root 24 位元組 /root/pki/store.pass
+600 root 24 位元組 /root/secrets/kafka-admin.pass
+600 root 24 位元組 /root/secrets/app-orders.pass
+600 root 24 位元組 /root/secrets/app-payments.pass
+```
+
+> 這些檔案各只有一份。操作機重建時要重新產生並到叢集重設（`kafka-admin`、應用程式的 SCRAM 要用 MDS 或 `kafka-configs` 重設；keystore 要重簽或重新打包），所以操作機的備份要由銀行自己的備份機制處理，而且必須加密（已列入問題清單）。密碼換了（OP menu 35 換服務密碼）就要把新密碼交給應用程式團隊。
+
+## 11.2 演練：緊急帳號 kafka-admin 用過就換密碼
+
+這一節演練「緊急帳號被人用過之後怎麼收拾」。`kafka-admin` 是 MDS 故障時唯一進得去的管理身分（CLIENT 9095，SCRAM，super user）。平常沒人用；一旦有人在緊急時從操作機取出來用過，這個密碼就算曝光了，**用完當天就要換**。由小安直接在操作機換，換完存回 `~/secrets/kafka-admin.pass`。平常沒有程式掛在這個帳號上，所以一個帳號直接換、不需要 A／B 兩組，也不會中斷任何服務（應用程式的 SCRAM 帳號才需要 A／B，見 OP menu 35）。
+
+@role 小安 | ops02 | root
+
+先模擬一次緊急使用（用 `~/secrets/kafka-admin.pass` 從 9095 登入），再換密碼：新密碼先寫暫存檔，叢集改成功才換掉 `~/secrets/kafka-admin.pass`。`kafka-configs` 出錯時會把整串設定（含密碼）印出來，所以它的輸出一律丟掉，結果用 `--describe` 和實際登入確認：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; BS=kb01.poc.lab:9094; T=$(mktemp -d) && login() { grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $T/c.properties && printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="%s";\n' "$(cat $1)" >> $T/c.properties && kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list >/dev/null 2>&1 && echo 登入成功 || echo 被拒; } && echo "緊急使用（目前的密碼）：$(login ~/secrets/kafka-admin.pass)" && cp -p ~/secrets/kafka-admin.pass $T/old.pass && (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > $T/new.pass) && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name kafka-admin --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat $T/new.pass)]" >/dev/null 2>&1 && install -m 0600 $T/new.pass ~/secrets/kafka-admin.pass && echo "kafka-admin: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name kafka-admin 2>/dev/null | grep -o 'SCRAM-SHA-512=[^ ]*')" && echo "換完：新密碼 $(login ~/secrets/kafka-admin.pass)；舊密碼 $(login $T/old.pass)"; rm -rf $T
@@ -2201,18 +2191,7 @@ kafka-admin: SCRAM-SHA-512=iterations=8192
 
 > 新密碼會短暫出現在操作機的行程參數裡（`--add-config` 只吃命令列；`--add-config-file` 不接受 SCRAM 這個欄位）。能登入操作機的只有經 PSMP 進來的人員（root，全程錄影），可以接受。
 
-@role 銀行 Secrets 團隊（更新 PVWA 的 kafka-admin-scram，舊版本保留；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-cd ~/kafka-lab && cp -p pvwa/kafka-admin.pass pvwa/kafka-admin.prev.pass && (umask 077; docker exec lab-ops02-1 cat /root/secrets/kafka-admin.pass > pvwa/kafka-admin.pass) && echo "PVWA kafka-admin-scram 已更新：$(wc -c < pvwa/kafka-admin.pass) 字元"
-```
-
-```out
-PVWA kafka-admin-scram 已更新：24 字元
-```
-
-> 誰在什麼時候取用過 `kafka-admin-scram`，PVWA 的取用紀錄查得到；Kafka 那邊，稽核日誌（第 18 章）會記下 `User:kafka-admin` 做了什麼。兩邊對得上，才算這次緊急使用結案。
-
+> 誰在什麼時候用 `kafka-admin` 登入，Kafka 的稽核日誌（第 18 章）會記下 `User:kafka-admin` 做了什麼；誰在什麼時間進了操作機，看 CyberArk 的登入紀錄與 PSMP 錄影。兩邊對得上，才算這次緊急使用結案。
 
 # 12. 第十二站：REST Proxy
 
@@ -2649,7 +2628,7 @@ lab 裡：Windows 瀏覽器開 `https://localhost:19021`（正式環境是維運
 
 到這裡平台已經能用，但還不能交付。後面分兩段：
 
-- **交付前一定要做**：第 15 章把設定檔裡的密碼加密、master key 交 CyberArk 保管；第 16 章維運選單；第 17 章監控（JMX exporter，交付行內 Prometheus、Alertmanager、Grafana 的設定）；第 18 章稽核日誌；第 22.2 的 license 到期排程、第 25 章每日備份；最後第 19 章驗收與收尾。
+- **交付前一定要做**：第 15 章把設定檔裡的密碼加密（master key 只放操作機與各主機）；第 16 章維運選單；第 17 章監控（JMX exporter，交付行內 Prometheus、Alertmanager、Grafana 的設定）；第 18 章稽核日誌；第 22.2 的 license 到期排程、第 25 章每日備份；最後第 19 章驗收與收尾。
 - **遷移到目標版本**（主線，裝完基底的下一步）：第 21 章遷移 Confluent 與 JDK（8.2.4 → 8.3.2、JDK 21 → 25，C3 2.5.1 → 2.6.1）、第 26 章 OS 小版本更新（9.6 → 9.8）；每一段之後再跑第 19 章驗收。
 - **上線之後依需要**：第 20 章憑證輪替（每年）、第 23 章換 controller、第 24 章增減 broker、第 26 章每月 OS 修補、第 27 章單獨換 Control Center 版本。
 
@@ -2675,7 +2654,7 @@ metrics in prometheus: 111 kinds
 
 | 已完成 | 還沒做（之後的旅程） |
 |---|---|
-| 11 台主機就緒、套件裝好並鎖版本 | 設定檔密碼加密、master key 交 CyberArk（第 15 章） |
+| 11 台主機就緒、套件裝好並鎖版本 | 設定檔密碼加密、master key 只放操作機與各主機（第 15 章） |
 | 9 張銀行憑證、truststore、MDS token 金鑰 | 維運選單（OP menu）；稽核日誌分流與專用寫入帳號 |
 | controller、broker、MDS、RBAC（人員綁 AD 群組） | 外部監控：JMX exporter（7071）與行內 Prometheus、Alertmanager、Grafana 的設定（第 17 章） |
 | 應用程式 SCRAM 帳號、配額、範例 topic | 正式的端對端驗收清單 |
@@ -2721,7 +2700,7 @@ metrics in prometheus: 111 kinds
 | lab 專用：建銀行 OS 套件庫（3.2）時先裝工具再下載 | 套件庫少了 `createrepo_c-libs` | 乾淨容器，先下載、再裝工具 |
 | lab 專用：Docker VM 網路層卡死 | 所有 Java 都變慢、`docker stats` 也卡 | 任一容器 `timeout 5 ip addr` 卡住就重啟 Docker Desktop，不要查設定 |
 
-# 15. 第十五站：Secret Protection，master key 交 CyberArk 保管
+# 15. 第十五站：Secret Protection，加密設定檔裡的密碼
 
 下面這張圖說明 passphrase、master key、密文三者的關係與各自放哪裡。
 
@@ -2730,53 +2709,38 @@ metrics in prometheus: 111 kinds
 
 ![secretprotection]
 
-**這一章在做什麼**：讓設定檔裡不再有明文密碼。小安用 Confluent 的 Secret Protection 把密碼加密，再把解密用的 master key 交銀行的 CyberArk 保管。前提：第 10–13 章的服務都已經起來、第 9 章的 `~/pki/store.pass` 與 `~/secrets/` 裡的密碼檔都在。這一章會**滾動重啟**所有 controller、broker、REST Proxy、C3（15.5），請在變更時段一台一台做。
+**這一章在做什麼**：讓設定檔裡不再有明文密碼。小安用 Confluent 的 Secret Protection 把密碼加密，解密用的 master key 只放在操作機與各主機 root 才讀得到的位置（不放 CyberArk）。前提：第 10–13 章的服務都已經起來、第 9 章的 `~/pki/store.pass` 與 `~/secrets/` 裡的密碼檔都在。這一章會**滾動重啟**所有 controller、broker、REST Proxy、C3（15.5），請在變更時段一台一台做。
 
-設定檔裡的密碼要加密。本案客戶的 CyberArk 只有 PAM（程式不會向保管庫取值），所以用 Confluent 自己的 **Secret Protection**：密碼加密後留在主機上的 `security.properties`，解密用的 master key 由 CyberArk 保管（PVWA），啟動時經環境變數給服務。
+設定檔裡的密碼要加密。本案沒有可以在服務啟動時取值的保管庫，所以用 Confluent 自己的 **Secret Protection**：密碼加密後留在主機上的 `security.properties`，解密用的 master key 放在各主機的 `/etc/confluent/service.env`（0600 root），啟動時經環境變數給服務。
 
 ```
 passphrase ──(＋隨機 salt)──▶ master key ──▶ data key ──▶ 各個密碼的密文（security.properties）
-（CyberArk 保管）              （CyberArk 保管）
+（操作機，0600）               （操作機與各主機，0600）
                                    │
                         各主機 /etc/confluent/service.env（0600 root）→ systemd EnvironmentFile → 服務環境變數
 ```
 
 | 誰 | 做什麼 |
 |---|---|
-| 銀行 Secrets 團隊 | PVWA 同一個 safe 開兩個 object：passphrase（銀行產生，只給平台工程師）、master key（15.2 產生後存入）；lab 用 `~/kafka-lab/pvwa/` 資料夾模擬 |
-| 小安 | 取 passphrase 產 master key、交 CyberArk 保管、加密 properties、派送、滾動重啟；之後的 master key 輪替也是他 |
+| 小安 | 產生 passphrase 與 master key、加密 properties、派送、滾動重啟；之後的 master key 輪替也是他 |
 
-**為什麼兩樣都要存**（lab 實測）：master key 是 passphrase 加上一個隨機 salt 算出來的，salt 每次 `generate` 都重新產生，所以**只有 passphrase 算不回原本的 master key**；反過來，輪替 master key（15.6）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給。分成兩個 object 是為了分開授權：master key 給要啟動服務的一方（每台主機的 `service.env`），passphrase 主機不應該讀得到。
+**為什麼兩樣都要存**（lab 實測）：master key 是 passphrase 加上一個隨機 salt 算出來的，salt 每次 `generate` 都重新產生，所以**只有 passphrase 算不回原本的 master key**；反過來，輪替 master key（15.6）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給。兩樣放的地方不同：master key 要給啟動服務的一方（每台主機的 `service.env`），passphrase 主機不應該讀得到，所以只放操作機。
 
-## 15.1 銀行開好兩個 object，放進 passphrase
+## 15.1 產生 passphrase
 
+@role 小安 | ops02 | root
 
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-PVWA 同一個 safe 裡開兩個 object：`kafka-sp-passphrase`（值由銀行產生，只授權平台工程師取用）、`kafka-sp-master-key`（先開好，15.2 產生後存入）。lab：
+passphrase 由小安在操作機產生，放進 0600 的檔（已經有就不重產）：
 
 ```bash
-cd ~/kafka-lab && mkdir -p pvwa && (umask 077; [ -s pvwa/sp-passphrase.txt ] || openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > pvwa/sp-passphrase.txt) && echo "kafka-sp-passphrase: $(wc -c < pvwa/sp-passphrase.txt) chars"
-```
-
-```out
-kafka-sp-passphrase: 32 chars
-```
-
-## 15.2 小安取 passphrase、產生 master key
-
-
-@role 小安（從 PVWA 取出；lab 由 Windows 終端代貼） | Windows 終端 | 本機
-
-從 PVWA 取出 passphrase，放進操作機的 0600 檔（正式環境在操作機上 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/sp-passphrase.txt; unset P; echo)`，同 3.4 不顯示的寫法；不要貼進任何對話或工單）：
-
-```bash
-docker exec -i lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-passphrase.txt; echo "passphrase: $(wc -c < ~/secrets/sp-passphrase.txt) chars"' < ~/kafka-lab/pvwa/sp-passphrase.txt
+(umask 077; [ -s ~/secrets/sp-passphrase.txt ] || openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > ~/secrets/sp-passphrase.txt) && echo "passphrase: $(wc -c < ~/secrets/sp-passphrase.txt) chars"
 ```
 
 ```out
 passphrase: 32 chars
 ```
+
+## 15.2 產生 master key
 
 
 @role 小安 | ops02 | root
@@ -2794,28 +2758,16 @@ master key: 45 chars
 -rw------- 1 root root 169 … security.properties
 ```
 
-> 陷阱：`--passphrase` 一定要給**值本身**（`"$(cat 檔案)"`）。Confluent CLI v4 不認 `@檔案`、也不認 `-`（stdin），會把「`@/root/secrets/sp-passphrase.txt`」這串字當成 passphrase：產生、加密、輪替表面上都成功，但銀行給的 passphrase 根本沒用到，任何拿到 `security.properties` 又猜得到路徑的人都算得出 master key；檔案一改名，下一次輪替就 `incorrect master key passphrase`（2026-10-25 lab 實測）。15.6 結尾有檢查。
+> 陷阱：`--passphrase` 一定要給**值本身**（`"$(cat 檔案)"`）。Confluent CLI v4 不認 `@檔案`、也不認 `-`（stdin），會把「`@/root/secrets/sp-passphrase.txt`」這串字當成 passphrase：產生、加密、輪替表面上都成功，但自己產生的 passphrase 根本沒用到，任何拿到 `security.properties` 又猜得到路徑的人都算得出 master key；檔案一改名，下一次輪替就 `incorrect master key passphrase`（2026-10-25 lab 實測）。15.6 結尾有檢查。
 >
-> 給值的代價是執行那一瞬間值會出現在操作機的行程參數裡（`/proc/<pid>/cmdline`）。能登入操作機的人員都是 root（經 PVWA＋PSMP，全程錄影），`hidepid` 擋不住 root，所以這是接受的風險：靠 PVWA 的授權與 PSMP 的錄影管住「誰能進操作機」。15.8、11.2 用 `--config`／`--add-config` 帶密碼時也一樣。
+> 給值的代價是執行那一瞬間值會出現在操作機的行程參數裡（`/proc/<pid>/cmdline`）。能登入操作機的人員都是 root（經 PVWA＋PSMP，全程錄影），`hidepid` 擋不住 root，所以這是接受的風險：靠 PVWA 的登入授權與 PSMP 的錄影管住「誰能進操作機」。15.8、11.2 用 `--config`／`--add-config` 帶密碼時也一樣。
 
-「cannot be retrieved later」是 CLI 的提醒：CLI 不保存 master key，而且**再跑一次 `generate` 也拿不回同一把**（會換新的 salt，算出另一把）。所以產生之後馬上交 CyberArk 保管，確認存好了才往下派送；不能讓一把只存在操作機上的 key 上線。
+「cannot be retrieved later」是 CLI 的提醒：CLI 不保存 master key，而且**再跑一次 `generate` 也拿不回同一把**（會換新的 salt，算出另一把）。所以產生之後馬上確認 `master.key` 存好了（0600）、記下它的雜湊，才往下派送。
 
-
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-小安把 `master.key` 的內容交 Secrets 團隊存進 PVWA 的 `kafka-sp-master-key`（新版本；舊版本保留，回滾要用）。`tr -d '\n'` 是必要的：檔尾的換行要是跟著存進去，之後取回來貼上時多一個字元，服務就解不開密文。lab：
-
-```bash
-cd ~/kafka-lab && (umask 077; docker exec lab-ops02-1 cat /root/secrets/master.key | tr -d '\n' > pvwa/master-key.txt) && echo "kafka-sp-master-key stored, hash $(sha256sum < pvwa/master-key.txt | cut -c1-12)"
-```
-
-```out
-kafka-sp-master-key stored, hash 3f9c0a…（12 碼雜湊）
-```
 
 @role 小安 | ops02 | root
 
-存好之後，記下這一把的雜湊和變更單號，雜湊要和上一步 Secrets 團隊回報的一樣；之後主機重建、輪替時都用它核對 PVWA 裡存的是不是這一把：
+記下這一把的雜湊和變更單號；之後主機重建、輪替時都用它核對手上的是不是這一把：
 
 ```bash
 (umask 077; echo "$(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12) CHG-xxxx" > ~/secrets/master-key.custody) && cat ~/secrets/master-key.custody
@@ -2826,7 +2778,7 @@ kafka-sp-master-key stored, hash 3f9c0a…（12 碼雜湊）
 ```
 
 
-> 注意：只存 passphrase 是不夠的。passphrase 遺失、master key 還在：服務照常，只是不能用 15.6 的 `rotate`；master key 遺失：服務照常（每台的 `service.env` 都有），但主機重建時拿不到；兩樣都遺失：產生新的 master key、照 15.3–15.5 從明文來源重新加密並滾動重啟（約 30 分鐘，不中斷服務）。
+> 注意：兩樣都只放在操作機（master key 另外在每台主機的 `service.env`），操作機的備份由銀行的備份機制處理並加密（已列入問題清單）。passphrase 遺失、master key 還在：服務照常，只是不能用 15.6 的 `rotate`；master key 遺失（操作機掉了）：服務照常，從任一台的 `service.env` 取回即可；兩樣都遺失：產生新的 master key、照 15.3–15.5 從明文來源重新加密並滾動重啟（約 30 分鐘，不中斷服務）。
 
 ## 15.3 加密每台的 properties
 
@@ -2949,7 +2901,7 @@ service.env: root:root 600
 
 `security.properties` 裡那 1 筆是 `_metadata.symmetric_key.0.envvar=CONFLUENT_SECURITY_MASTER_KEY`，記的是「去哪個環境變數找 master key」，不是 key 本身。檔案開頭幾行 `_metadata.*` 是鹽、迭代次數，和被 master key 包起來的 data key。
 
-最後確認 passphrase 真的有用上（15.2 的陷阱）：在副本上試著輪替一次，正式檔不動。兩個都要是「是」；前一個是「否」代表 master key 不是用 PVWA 那組 passphrase 產生的，照 15.7「遺失怎麼辦」重新產生、重新加密：
+最後確認 passphrase 真的有用上（15.2 的陷阱）：在副本上試著輪替一次，正式檔不動。兩個都要是「是」；前一個是「否」代表 master key 不是用 `sp-passphrase.txt` 這組 passphrase 產生的，照 15.7「遺失怎麼辦」重新產生、重新加密：
 
 ```bash
 T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "目前的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
@@ -2962,30 +2914,17 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 ## 15.6 演練：輪替 master key
 
 
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+@role 小安 | ops02 | root
 
-銀行產生新 passphrase、更新 PVWA 的 `kafka-sp-passphrase`（舊版本保留）：
-
-```bash
-cd ~/kafka-lab && (umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > pvwa/sp-passphrase-new.txt) && echo "new passphrase stored"
-```
-
-```out
-new passphrase stored
-```
-
-@role 小安（從 PVWA 取出新 passphrase；lab 由 Windows 終端代貼） | Windows 終端 | 本機
-
-正式環境同 15.2 不顯示的寫法，檔名換成 `sp-passphrase-new.txt`：
+先產生新 passphrase（舊的留著，`rotate` 要同時給舊的）：
 
 ```bash
-docker exec -i lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/sp-passphrase-new.txt; echo "new passphrase: $(wc -c < ~/secrets/sp-passphrase-new.txt) chars"' < ~/kafka-lab/pvwa/sp-passphrase-new.txt
+(umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > ~/secrets/sp-passphrase-new.txt) && echo "new passphrase: $(wc -c < ~/secrets/sp-passphrase-new.txt) chars"
 ```
 
 ```out
 new passphrase: 32 chars
 ```
-
 
 @role 小安 | ops02 | root
 
@@ -3003,23 +2942,12 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 
 （精簡的 OS 沒有 `cmp`，所以用 sha256sum 比對。）
 
-新的 master key 一樣**先交 CyberArk 保管再上線**，兩個 object 都換成新值，舊版本留著回滾用：
-
-
-@role 銀行 Secrets 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-cd ~/kafka-lab && cp -p pvwa/master-key.txt pvwa/master-key.prev.txt && cp -p pvwa/sp-passphrase.txt pvwa/sp-passphrase.prev.txt && (umask 077; docker exec lab-ops02-1 cat /root/secrets/master.key | tr -d '\n' > pvwa/master-key.txt) && mv pvwa/sp-passphrase-new.txt pvwa/sp-passphrase.txt && echo "kafka-sp-master-key stored, hash $(sha256sum < pvwa/master-key.txt | cut -c1-12)（舊版本另存 .prev）"
-```
-
-```out
-kafka-sp-master-key stored, hash 7d21e4…（和 15.2 那一把不同）（舊版本另存 .prev）
-```
+新的 master key 上線前先把舊的留好：舊 passphrase 另存 `.prev`（舊 master key 已經在 `master.key.bak`，回滾要用），新 passphrase 換成現行檔，再記下新 master key 的雜湊和變更單號：
 
 @role 小安 | ops02 | root
 
 ```bash
-(umask 077; echo "$(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12) CHG-yyyy" > ~/secrets/master-key.custody) && cat ~/secrets/master-key.custody
+cp -p ~/secrets/sp-passphrase.txt ~/secrets/sp-passphrase.prev.txt && mv ~/secrets/sp-passphrase-new.txt ~/secrets/sp-passphrase.txt && (umask 077; echo "$(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12) CHG-yyyy" > ~/secrets/master-key.custody) && cat ~/secrets/master-key.custody
 ```
 
 ```out
@@ -3098,7 +3026,7 @@ LB：rest01 rest02
 
 @role 小安 | ops02 | root
 
-輪替完照 15.5 最後那個檢查再做一次：新的 passphrase（保管庫的現行版本）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
+輪替完照 15.5 最後那個檢查再做一次：新的 passphrase（`sp-passphrase.txt` 現在是新的那一份）＋新的 master key 要能再輪替，下一次例行輪替才不會卡住：
 
 ```bash
 T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'Save the master key') && bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" --local-secrets-file $T/s -o yaml 2>&1 </dev/null | grep -c 'incorrect master key passphrase'); unset CONFLUENT_SECURITY_MASTER_KEY; rm -rf $T; echo "目前的 passphrase 還能輪替：$([ "$ok" = 1 ] && echo 是 || echo 否)；錯的 passphrase 被拒：$([ "$bad" = 1 ] && echo 是 || echo 否)"
@@ -3114,42 +3042,40 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 
 | 項目 | 說明 |
 |---|---|
-| secret zero | master key 以一行落在每台主機的 `/etc/confluent/service.env`（0600 root）。本案客戶的 CyberArk 只有 PAM（沒有 CCP），服務啟動時不能向保管庫取值，所以 master key 一定落在主機上；資安若不接受磁碟副本，要另外提出需求，不在本手冊範圍 |
-| CyberArk 在這裡做什麼 | **保管與稽核，不參與執行期**：passphrase、master key 的正本與版本（重建主機、復原、輪替時取用）；誰在什麼時候取了、對應哪張變更單；以及 PSM／PSMP 控管誰能登入主機變成 root。服務啟動時不連 CyberArk |
+| secret zero | master key 以一行落在每台主機的 `/etc/confluent/service.env`（0600 root）。本案沒有可以在服務啟動時取值的保管庫，所以 master key 一定落在主機上；資安若不接受磁碟副本，要另外提出需求，不在本手冊範圍 |
+| CyberArk 在這裡做什麼 | **只管誰能登入操作機**：人員在 PVWA 登入、由 PSMP 代登成 root，有登入紀錄與錄影。passphrase、master key 不放 CyberArk，服務啟動時也不連 CyberArk |
 | 擋得住什麼、擋不住什麼 | 擋得住：設定檔被複製出去（備份、工單附檔、診斷資料、`confluent` 群組的人）時看不到密碼。擋不住：這台主機上的 root（`service.env` 就在本機）。要連 root 都擋，需要啟動時向外取 master key 的機制（本案客戶沒有 CCP，做不到） |
-| 遺失怎麼辦 | `rotate` 一定要**同時**有舊 passphrase 和舊 master key（環境變數），CLI 也沒有辦法從 passphrase＋`security.properties` 重新算出 master key（2026-10-25 lab 實測），所以兩個 object 都要保管。master key 遺失：從 PVWA 取回（服務啟動要它）。passphrase 遺失：服務照跑，但不能 `rotate`。缺一個又取不回：產生新的 master key、照 15.3–15.5 重新加密（不中斷服務） |
+| 遺失怎麼辦 | `rotate` 一定要**同時**有舊 passphrase 和舊 master key（環境變數），CLI 也沒有辦法從 passphrase＋`security.properties` 重新算出 master key（2026-10-25 lab 實測），所以兩樣都要留好（操作機的備份由銀行的備份機制處理並加密）。master key 遺失（操作機掉了）：從任一台主機的 `service.env` 取回。passphrase 遺失：服務照跑，但不能 `rotate`。缺一個又取不回：產生新的 master key、照 15.3–15.5 重新加密（不中斷服務） |
 | data key | `security.properties` 裡真正加密每筆密碼的那把，被 master key 包著。**不做例行輪替**：15.6 換的是外層的 master key。懷疑外洩時，拿到舊 master key＋舊 `security.properties` 的人已經解得出明文，所以要換的是**密碼本身**（keystore 跟著第 20 章換證、SCRAM 與 AD 查詢密碼用 `update`／15.8），再照 15.3–15.5 重新加密 |
-| 誰輪替 | CPM 不會自動輪替這種金鑰；由平台工程師依變更單執行 15.6，兩個 object 一起更新 |
-| 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟，與 master key 輪替無關。CPM 管的 AD 查詢密碼見 15.8 |
+| 誰輪替 | 沒有任何自動輪替；由平台工程師依變更單執行 15.6 |
+| 密碼本身的輪替 | 另一條流程：改密碼 → `confluent secret file update`（或重新 `encrypt` 該欄位）→ 派送 → 重啟，與 master key 輪替無關。AD 查詢密碼見 15.8 |
 
 > 陷阱：做過這一章之後，若回頭照第 10、12、13 章重新產生設定並派送，會把明文密碼寫回主機；改了設定要照 15.3–15.5 重新加密、派送、重啟。
 
-## 15.8 演練：CPM 換了 AD 查詢帳號的密碼
+## 15.8 演練：AD 查詢帳號的密碼換了
 
+`svc-mds-bind` 的密碼加密後固定在 `security.properties`。AD 團隊一換 AD 的密碼，broker 手上就是舊的：當下靠群組快取撐著，下次重啟時 MDS 起不來（14.1 的陷阱：卡在 `Waiting for all of the authorizer futures`）。所以 AD 換完，平台要跟著做一次：拿到新密碼 → 只更新這一個欄位的密文 → 派送 `security.properties` → 滾動重啟。
 
-`svc-mds-bind` 的密碼加密後固定在 `security.properties`。CPM 一換 AD 密碼，broker 手上就是舊的：當下靠群組快取撐著，下次重啟時 MDS 起不來（14.1 的陷阱：卡在 `Waiting for all of the authorizer futures`）。所以 CPM 換完，平台要跟著做一次：從 PVWA 取新密碼 → 只更新這一個欄位的密文 → 派送 `security.properties` → 滾動重啟。
+> 換密碼是人手動做、沒有自動排程；一定要先通知平台。想要零空窗，可以開 A／B 兩組查詢帳號交替（AD 只換閒置的那組，平台切過去再滾動重啟）。手冊以「依變更單、單一帳號」為準。
 
-> 待銀行確認：這個帳號的 CPM 輪替要**關掉自動排程、改成依變更單觸發**（CPM 換完通知平台工程師接著做這一節），或開 A／B 兩組查詢帳號交替（CPM 只換閒置的那組，平台切過去再滾動重啟，中間沒有空窗）。手冊以「依變更單觸發、單一帳號」為準。
+@role 銀行 AD 團隊（換密碼；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-@role 銀行 AD 團隊（CPM 換密碼；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-正式環境這一步是 CPM：改 AD、更新 PVWA 的 object，一次完成。lab 用 samba-tool 改密碼，再寫進 pvwa/（舊值另存 `.prev`）：
+AD 團隊在 AD 改密碼，把新密碼交給小安（交付方式同 3.4，不放保管庫）。lab 用 samba-tool 改密碼：
 
 ```bash
-docker exec lab-ad01-1 bash -c 'until P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $P =~ [A-Z] && $P =~ [a-z] && $P =~ [0-9] ]]; do :; done; samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"' && cd ~/kafka-lab && cp -p pvwa/ldap-bind.pass pvwa/ldap-bind.prev.pass && (umask 077; docker exec lab-ad01-1 cat /root/secrets/bind.pass > pvwa/ldap-bind.pass) && echo "PVWA svc-mds-bind updated"
+docker exec lab-ad01-1 bash -c 'until P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $P =~ [A-Z] && $P =~ [a-z] && $P =~ [0-9] ]]; do :; done; samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"'
 ```
 
 ```out
 AD: password changed
-PVWA svc-mds-bind updated
 ```
 
-@role 小安（從 PVWA 取出新密碼；lab 由 Windows 終端代貼） | Windows 終端 | 本機
+@role 小安（收到新密碼；lab 由 Windows 終端代遞） | Windows 終端 | 本機
 
-正式環境同 3.4 不顯示的寫法（檔名 `ldap-bind.pass`）：
+正式環境同 3.4 不顯示的寫法（檔名 `ldap-bind.pass`，舊的先另存 `ldap-bind.prev.pass`）。lab：
 
 ```bash
-docker exec -i lab-ops02-1 bash -c 'umask 077; cat > ~/secrets/ldap-bind.pass; echo "ldap-bind.pass: $(wc -c < ~/secrets/ldap-bind.pass) chars"' < ~/kafka-lab/pvwa/ldap-bind.pass
+docker exec lab-ad01-1 cat /root/secrets/bind.pass | docker exec -i lab-ops02-1 bash -c 'umask 077; cp -p ~/secrets/ldap-bind.pass ~/secrets/ldap-bind.prev.pass; cat > ~/secrets/ldap-bind.pass; echo "ldap-bind.pass: $(wc -c < ~/secrets/ldap-bind.pass) chars"'
 ```
 
 ```out
@@ -3186,9 +3112,9 @@ kb01 ldap auth errors since restart: 0
 kb01 bind 欄位仍是密文參照：1
 ```
 
-> 回滾（CPM 換錯、AD 被改回舊密碼）：刪 `.bak` 之前，把 `security.properties.bak` 派送回 10 台、再滾動重啟 controller 和 broker。
+> 回滾（換錯、AD 被改回舊密碼）：刪 `.bak` 之前，把 `security.properties.bak` 派送回 10 台、再滾動重啟 controller 和 broker。
 >
-> CPM 換密碼之後要「取密碼 → 更新密文 → 派送 → 滾動重啟」，所以 CPM 不能悄悄換，一定要通知平台。
+> AD 換密碼之後平台要做「更新密文 → 派送 → 滾動重啟」，所以不能悄悄換，一定要通知平台。
 
 # 16. 第十六站：維運選單（OP menu）
 
@@ -3206,30 +3132,29 @@ kb01 bind 欄位仍是密文參照：1
 
 | 誰 | 做什麼 |
 |---|---|
-| 銀行 Secrets 團隊 | PVWA 裡一個 object：緊急模式用的憑證（16.2 小安交付）；授權給維運人員取用。（ssh 私鑰不在 PVWA） |
 | 銀行 OS 團隊 | 各主機 cpuser 的 sudo 改成兩段式（16.4）；緊急主機模式的 OS 群組 `opmenu-emergency`（平常沒有成員） |
-| 小安 | 交付緊急憑證、裝選單、派送設定、綁緊急身分的權限、試跑 |
+| 小安 | 準備緊急憑證檔、裝選單、派送設定、綁緊急身分的權限、試跑 |
 
-選單取緊急憑證的方式：本案客戶只有 PVWA，維運人員從 PVWA 取出貼上。
+選單取緊急憑證的方式：緊急憑證放在操作機的 `~/secrets/opmenu-breakglass.pem`（0600，只有 root 讀得到），91 直接讀這個檔，沒有從別處取出貼上的動作。操作者本來就是 root，所以 91 的把關是「必填原因、記為 EMERGENCY 的稽核記錄」，不是讓人拿不到憑證。
 
-## 16.1 銀行準備保管庫
+## 16.1 緊急憑證放在哪裡
 
-**這一節在做什麼**：銀行 Secrets 團隊在 PVWA 先開好放緊急憑證的位置。PVWA 裡選單要用的 object（名稱依銀行慣例，寫進 16.3 的設定，選單會在提示裡告訴維運人員去哪裡取）：
+**這一節在做什麼**：說明選單 91（緊急模式）用的憑證放在哪裡。銀行沒有要準備的東西：憑證檔是第 9 章簽的 `opmenu-breakglass`（私鑰＋憑證鏈），16.2 由小安整理成一個 PEM 檔放在操作機：
 
-| object | 內容 | 誰放 |
+| 檔案 | 內容 | 權限 |
 |---|---|---|
-| `Safe KAFKA-OPS / opmenu-breakglass` | 緊急模式憑證（私鑰＋憑證鏈，PEM） | 小安在 16.2 交付 |
+| `~/secrets/opmenu-breakglass.pem` | 緊急模式憑證（私鑰＋憑證鏈，PEM） | 0600，root |
 
-授權給維運人員（AD 群組）取用；每次取用 PVWA 都有紀錄，對得上選單紀錄裡的同一個人。lab 沒有要另外做的事。
+選單 91 啟動時檢查這個檔必須是自己的、權限 0600 或 0400，否則拒絕執行。
 
 ## 16.2 交付緊急憑證、綁緊急身分的權限
 
-**這一節在做什麼**：把緊急模式要用的身分準備好，並設定各群組的角色。第 9 章簽好備用的 `opmenu-breakglass` 憑證（私鑰＋憑證鏈，PEM）交給保管庫，再把 `User:opmenu-breakglass` 綁成 SystemAdmin，這就是選單 91（緊急模式）用的身分。
+**這一節在做什麼**：把緊急模式要用的身分準備好，並設定各群組的角色。第 9 章簽好備用的 `opmenu-breakglass` 憑證（私鑰＋憑證鏈，PEM）整理成 `~/secrets/opmenu-breakglass.pem`，再把 `User:opmenu-breakglass` 綁成 SystemAdmin，這就是選單 91（緊急模式）用的身分。
 
-@role 銀行 Secrets 團隊（收下存進 PVWA；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+@role 小安 | ops02 | root
 
 ```bash
-cd ~/kafka-lab && (umask 077; docker exec lab-ops02-1 bash -c 'cat /root/pki/keys/opmenu-breakglass.key /root/pki/certs/opmenu-breakglass.crt' > pvwa/opmenu-breakglass.pem) && echo "opmenu-breakglass：$(grep -c 'BEGIN' pvwa/opmenu-breakglass.pem) 段 PEM（私鑰＋憑證鏈）"
+(umask 077; cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem) && echo "opmenu-breakglass：$(grep -c 'BEGIN' ~/secrets/opmenu-breakglass.pem) 段 PEM（私鑰＋憑證鏈）"
 ```
 
 ```out
@@ -3300,11 +3225,11 @@ cd ~/landing/tools/opmenu && sha256sum -c --quiet SHA256SUMS && rm -rf /opt/opme
 opmenu 27 items; known_hosts 20 keys
 ```
 
-設定檔只填無法推算的值（連線位址、可重啟的服務清單、主機登入的帳號與金鑰檔、91 的 PVWA object 名稱）。`OPMENU_ALLOW_ENV_OVERRIDE=1` 只為了下面能非互動試跑，正式環境拿掉。
+設定檔只填無法推算的值（連線位址、可重啟的服務清單、主機登入的帳號與金鑰檔、91 的緊急憑證檔路徑）。`OPMENU_ALLOW_ENV_OVERRIDE=1` 只為了下面能非互動試跑，正式環境拿掉。
 
 @role 銀行 OS 團隊（lab 由小安代勞） | ops02 | root
 
-`OPMENU_SSH_KEY_FILE` 就是 3.1 的那把私鑰檔，選單的 ssh 直接用它（`-i`、只用這一把、不問 ssh-agent）；`OPMENU_BREAKGLASS_SECRET` 是給人看的 PVWA 位置，91 要緊急憑證時會照這個提示維運人員去取：
+`OPMENU_SSH_KEY_FILE` 就是 3.1 的那把私鑰檔，選單的 ssh 直接用它（`-i`、只用這一把、不問 ssh-agent）；`OPMENU_BREAKGLASS_PEM` 是 91 讀的緊急憑證檔（必須是自己的檔、權限 0600 或 0400）：
 
 ```bash
 tee /etc/opmenu/opmenu.conf >/dev/null <<'EOF'
@@ -3318,7 +3243,7 @@ OPMENU_CONTROLLER_HOSTS="kc01.poc.lab kc02.poc.lab kc03.poc.lab"
 OPMENU_SSH_USER=cpuser
 OPMENU_SSH_KEY_FILE=/secure/ssh/cpuser_ed25519
 OPMENU_USER_FROM_OS=0
-OPMENU_BREAKGLASS_SECRET="Safe KAFKA-OPS / opmenu-breakglass（PEM）"
+OPMENU_BREAKGLASS_PEM=/root/secrets/opmenu-breakglass.pem
 OPMENU_LOG=/var/log/opmenu/opmenu.log
 OPMENU_SYSLOG=0
 OPMENU_ALLOW_ENV_OVERRIDE=1
@@ -3416,15 +3341,15 @@ bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；2
 
 @role 小安（代打 bob、carol、alice） | ops02 | root
 
-主機類項目（23、21）直接用 `/secure/ssh` 的金鑰，不會問任何東西。只有緊急模式（91）會提示「請到 CyberArk PVWA 取出：Safe KAFKA-OPS / opmenu-breakglass（PEM）」，維運人員從 PVWA 複製、貼上、按 `Ctrl-D`（貼上的內容不會出現在畫面）。為了把結果印在這裡，lab 用一支小腳本在虛擬終端機裡跑選單，等提示出現後把 stdin 的內容「貼」進去（沒有要貼的就給空的）：
+主機類項目（23、21）直接用 `/secure/ssh` 的金鑰，不會問任何東西。緊急模式（91）讀 `~/secrets/opmenu-breakglass.pem`，不會問你要貼什麼；它要求輸入原因，並記為 EMERGENCY。為了把結果印在這裡，lab 用一支小腳本跑選單（`--run <AD 帳號> <項目…>`）：
 
 ```bash
 cat > ~/conf/opmenu-try.sh <<'EOF'
 #!/usr/bin/env bash
-# lab：跑一次選單（--run <AD 帳號> <項目…>）；stdin 是「從 PVWA 取出要貼的內容」（沒有就給空的），提示出現後貼進虛擬終端機
+# lab：跑一次選單（--run <AD 帳號> <項目…>）；91 的緊急憑證直接讀 ~/secrets/opmenu-breakglass.pem，不需要貼上
 person=$1; shift
-password=$(cat ~/secrets/ad-test-users.pass); pasted=$(cat)
-{ sleep 8; [ -n "$pasted" ] && printf '%s\n' "$pasted"; printf '\004'; } | script -q -e -c "env OPMENU_USER=$person OPMENU_PASS='$password' OPMENU_YES=1 OPMENU_REASON=第16站試跑 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run $*" /dev/null | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -v '^SLF4J'
+password=$(cat ~/secrets/ad-test-users.pass)
+env OPMENU_USER=$person OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON=第16站試跑 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -v '^SLF4J'
 EOF
 chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; } && op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 31 orders.x 1 | tail -1; op alice 31 orders.optest 1 | tail -1; unset P
 ```
@@ -3436,10 +3361,10 @@ chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() {
 Created topic orders.optest.
 ```
 
-@role 維運人員 bob、alice（91 的緊急憑證從 PVWA 取出貼上；lab 由 Windows 終端代貼） | Windows 終端 | 本機
+@role 維運人員 bob、alice（91 讀操作機上的緊急憑證檔；lab 由 Windows 終端代打） | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && try() { docker exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh "$@"; }; try bob 23 kb04.poc.lab:confluent-server 10 </dev/null | grep -E 'kb04' | tail -2 | cut -c1-100; try bob 21 kb04.poc.lab:confluent-server </dev/null | tail -1; docker exec lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"'; try alice 91 kafka-topics --list < pvwa/opmenu-breakglass.pem | grep -c '^[a-z_]' | sed 's/^/91 緊急模式列出的 topic：/'; try alice 33 orders.optest </dev/null | grep 將執行
+cd ~/kafka-lab && try() { docker exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh "$@"; }; try bob 23 kb04.poc.lab:confluent-server 10 </dev/null | grep -E 'kb04' | tail -2 | cut -c1-100; try bob 21 kb04.poc.lab:confluent-server </dev/null | tail -1; docker exec lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"'; try alice 91 kafka-topics --list </dev/null | grep -c '^[a-z_]' | sed 's/^/91 緊急模式列出的 topic：/'; try alice 33 orders.optest </dev/null | grep 將執行
 ```
 
 ```out
@@ -3464,7 +3389,7 @@ echo "ssh-agent: $(pgrep -x ssh-agent | wc -l); private keys in /dev/shm,/tmp: $
 ```out
 ssh-agent: 0; private keys in /dev/shm,/tmp: 0; key file: root:root 400
 2026-10-22 22:40:47 +0800 | LAB | alice | os=root | 91 breakglass | sid=1792680046-22240 | EMERGENCY | kafka-topics --li
-2026-10-22 22:40:49 +0800 | LAB | alice | os=root | 91 緊急模式(以保管庫的備用憑證執行一個指令) | sid
+2026-10-22 22:40:49 +0800 | LAB | alice | os=root | 91 緊急模式(以備用憑證執行一個指令) | sid
 2026-10-22 22:40:56 +0800 | LAB | alice | os=root | 33 刪除 topic | sid=1792680050-22629 | OK | orders.optest [rc=0 6s
 ```
 
@@ -4068,7 +3993,7 @@ EOF
 dashboards: 32, placeholder datasource fixed, uid shared with another file (renamed): 4
 ```
 
-根憑證與抓取密碼，然後看整個資料夾。抓取密碼另外交 Secrets 團隊存進 PVWA，監控團隊從那裡取（lab 直接給檔）。**待銀行確認**（請銀行確認的事項 11.3、11.4）：行內 Prometheus 抓其他系統用哪種認證；7071 能否只放行行內 Prometheus 的來源位址（第 7 章的 firewalld 目前對所有來源開放）：
+根憑證與抓取密碼，然後看整個資料夾。抓取密碼另外交給銀行監控團隊（交付方式由銀行決定，不放 CyberArk；lab 直接給檔）。**待銀行確認**（請銀行確認的事項 11.3、11.4）：行內 Prometheus 抓其他系統用哪種認證；7071 能否只放行行內 Prometheus 的來源位址（第 7 章的 firewalld 目前對所有來源開放）：
 
 ```bash
 cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && (umask 077; cp ~/secrets/jmx-scrape.pass ~/monitoring/to-bank/prometheus/scrape.pass) && cd ~/monitoring/to-bank && find . -type f ! -name '*.json' | sort && echo "dashboards: $(ls grafana/dashboards/*.json | wc -l) 個 JSON"
@@ -4754,7 +4679,7 @@ kb01
 | ssh 私鑰 `/secure/ssh/cpuser_ed25519`（root、0400）留在操作機的獨立 file system；不放 CyberArk、不備份，操作機重建就重新產生並重新佈署公鑰（3.1） | `/tmp/` 裡安裝期間的暫存檔 |
 | | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它是 super user）；憑證輪替（第 20 章）、升級（第 21 章）前要先取回 |
 | | 各主機 cpuser 的全權 sudo（`/etc/sudoers.d/cpuser`）：移除，只留 `cpuser-ops` 窄規則（lab 留著，後面章節還要用） |
-| | 交給 Secrets 團隊存進 PVWA 的：store.pass、kafka-admin、應用程式 SCRAM（11.1）、master key 與 passphrase（15.2）、緊急憑證（16.2）、JMX 抓取密碼（17.5）、confluent-audit（18.1） |
+| | 平台的密碼與金鑰只留在操作機 root 才讀得到的位置：`~/secrets`（passphrase、master key、kafka-admin、應用程式 SCRAM、緊急憑證、confluent-audit 等，11.1、15.2、16.2、18.1）、`~/pki`、`/secure/ssh`；不放 CyberArk。操作機的備份交銀行的備份機制並加密（`/secure/ssh` 的私鑰依 3.1 不備份） |
 
 ```bash
 rm -rf /tmp/jmx-* /tmp/*.properties 2>/dev/null; du -sh ~/landing ~/repo 2>/dev/null | tr '\n' ' '; echo; for h in kc01 kb01 rest01 c3-01; do ssh $h.poc.lab 'printf "%s: /tmp 殘留 %s 個；sudoers %s\n" $(hostname) $(ls /tmp | grep -cv "^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.") "$(sudo ls /etc/sudoers.d | tr "\n" ",")"'; done; find ~ -maxdepth 2 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2>/dev/null | sed 's/^/權限不是 0600：/'; echo "收尾檢查完成"
@@ -5102,17 +5027,17 @@ kafka-internal 查 quorum：LeaderId: 1
 新的 app-legacy-billing（交給應用程式團隊）：REST=200；舊的（還在效期內）：REST=200
 ```
 
-緊急身分的 PEM 換了，保管庫裡那份也要換（舊的到期前都還有效）：
+緊急身分的 PEM 換了，操作機上的 `~/secrets/opmenu-breakglass.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
 
 
-@role 銀行 Secrets 團隊（更新 PVWA 的 opmenu-breakglass；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+@role 小安 | ops02 | root
 
 ```bash
-cd ~/kafka-lab && cp -p pvwa/opmenu-breakglass.pem pvwa/opmenu-breakglass.prev.pem 2>/dev/null; (umask 077; docker exec lab-ops02-1 bash -c 'cat /root/pki/keys/opmenu-breakglass.key /root/pki/certs/opmenu-breakglass.crt' > pvwa/opmenu-breakglass.pem) && echo "PVWA opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in pvwa/opmenu-breakglass.pem -noout -serial | tail -c 9)"
+cp -p ~/secrets/opmenu-breakglass.pem ~/secrets/opmenu-breakglass.prev.pem 2>/dev/null; (umask 077; cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem) && echo "opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/opmenu-breakglass.pem -noout -serial | tail -c 9)"
 ```
 
 ```out
-PVWA opmenu-breakglass 已更新，序號末 8 碼 …
+opmenu-breakglass 已更新，序號末 8 碼 …
 ```
 
 
@@ -5439,17 +5364,17 @@ kafka-internal 查 quorum：LeaderId: 1
 新的 app-legacy-billing（交給應用程式團隊）：REST=200；舊的（還在效期內）：REST=200
 ```
 
-緊急身分的 PEM 換了，保管庫裡那份也要換（舊的到期前都還有效）：
+緊急身分的 PEM 換了，操作機上的 `~/secrets/opmenu-breakglass.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
 
 
-@role 銀行 Secrets 團隊（更新 PVWA 的 opmenu-breakglass；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+@role 小安 | ops02 | root
 
 ```bash
-cd ~/kafka-lab && cp -p pvwa/opmenu-breakglass.pem pvwa/opmenu-breakglass.prev.pem 2>/dev/null; (umask 077; docker exec lab-ops02-1 bash -c 'cat /root/pki/keys/opmenu-breakglass.key /root/pki/certs/opmenu-breakglass.crt' > pvwa/opmenu-breakglass.pem) && echo "PVWA opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in pvwa/opmenu-breakglass.pem -noout -serial | tail -c 9)"
+cp -p ~/secrets/opmenu-breakglass.pem ~/secrets/opmenu-breakglass.prev.pem 2>/dev/null; (umask 077; cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem) && echo "opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/opmenu-breakglass.pem -noout -serial | tail -c 9)"
 ```
 
 ```out
-PVWA opmenu-breakglass 已更新，序號末 8 碼 …
+opmenu-breakglass 已更新，序號末 8 碼 …
 ```
 
 
@@ -5814,7 +5739,7 @@ rest01 8082=new
 rest02 8082=new
 ```
 
-換成正本：私鑰不動，只換 `.crt`／`.p12`；舊的留在 `~/pki/old-<日期時間>/certs/`（階段三的反向驗證會用到）。緊急身分的 PEM 更新到保管庫；`app-legacy-billing` 的新 p12 交給應用程式團隊，**一定要在階段三之前換上**：
+換成正本：私鑰不動，只換 `.crt`／`.p12`；舊的留在 `~/pki/old-<日期時間>/certs/`（階段三的反向驗證會用到）。緊急身分的 PEM 換到 `~/secrets/opmenu-breakglass.pem`；`app-legacy-billing` 的新 p12 交給應用程式團隊，**一定要在階段三之前換上**：
 
 ```bash
 cd ~/pki && OLD=old-$(date +%Y%m%d-%H%M) && install -d -m 0700 $OLD/certs && for n in $(awk '{print $1}' requests.txt); do mv certs/$n.crt certs/$n.p12 $OLD/certs/; install -m 0644 next/certs/$n.crt certs/; install -m 0600 next/certs/$n.p12 certs/; done && rm -rf next && mv bank-issuing-new.pem $OLD/ && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | wc -l) 個 topic" && echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')" && echo "app-legacy-billing 新鏈：REST=$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)；舊鏈（G2 還信）：REST=$(curl -s --cert $OLD/certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)"
@@ -5826,17 +5751,17 @@ kafka-internal 查 quorum：LeaderId: 1
 app-legacy-billing 新鏈：REST=200；舊鏈（G2 還信）：REST=200
 ```
 
-緊急身分的 PEM 換了，保管庫裡那份也要換（舊的到期前都還有效）：
+緊急身分的 PEM 換了，操作機上的 `~/secrets/opmenu-breakglass.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
 
 
-@role 銀行 Secrets 團隊（更新 PVWA 的 opmenu-breakglass；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+@role 小安 | ops02 | root
 
 ```bash
-cd ~/kafka-lab && cp -p pvwa/opmenu-breakglass.pem pvwa/opmenu-breakglass.prev.pem 2>/dev/null; (umask 077; docker exec lab-ops02-1 bash -c 'cat /root/pki/keys/opmenu-breakglass.key /root/pki/certs/opmenu-breakglass.crt' > pvwa/opmenu-breakglass.pem) && echo "PVWA opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in pvwa/opmenu-breakglass.pem -noout -serial | tail -c 9)"
+cp -p ~/secrets/opmenu-breakglass.pem ~/secrets/opmenu-breakglass.prev.pem 2>/dev/null; (umask 077; cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem) && echo "opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/opmenu-breakglass.pem -noout -serial | tail -c 9)"
 ```
 
 ```out
-PVWA opmenu-breakglass 已更新，序號末 8 碼 …
+opmenu-breakglass 已更新，序號末 8 碼 …
 ```
 
 
@@ -6462,7 +6387,7 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 
 @role 小安 | ops02 | root
 
-銀行向 Confluent 買到 license 後會拿到一串 JWT（`eyJ` 開頭）。它和密碼一樣交由 Secrets 團隊放進 PVWA，小安取用時放 `~/secrets/license.jwt`（0600）。依原廠文件：
+銀行向 Confluent 買到 license 後會拿到一串 JWT（`eyJ` 開頭）。銀行把它交給小安，小安放 `~/secrets/license.jwt`（0600，不放 CyberArk）。依原廠文件：
 
 1. `~/conf/common.tpl` 的 License 區塊加 `confluent.license=${LICENSE}`（controller 與 broker 共用）；REST Proxy、C3 的範本各加一行 `confluent.license=${LICENSE}`。
 2. 照第 10、12、13 章重新產生設定（`LICENSE=$(cat ~/secrets/license.jwt)` 帶進 `envsubst`）；密碼欄位照 15.3 一起加密。
@@ -6729,7 +6654,7 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 |---|---|---|---|
 | 叢集中繼資料 | RBAC、ACL、topic 與設定、SCRAM 帳號清單與配額、features、broker 動態設定 | 操作機每天排程匯出（本章），保留 30 天；變更前另外手動跑一次當快照 | 小安裝好之後自動跑 |
 | 各台的設定 | `/etc/confluent`、systemd drop-in、`/etc/kafka` 的 log4j2 | 銀行既有的主機備份系統（操作機的排程只匯出 Kafka 的中繼資料，不 ssh 進各台） | 銀行主機團隊 |
-| 機敏資料 | `~/pki` 的私鑰、`~/secrets`、master key | **事件觸發**：安裝、換憑證、換密碼的當下交 CyberArk 保管（第 15 章 master key 的做法），不排程 | 小安＋Secrets 團隊 |
+| 機敏資料 | `~/pki` 的私鑰、`~/secrets`、master key | **不在這支排程裡**：由銀行的備份機制備份操作機的 `~/pki`、`~/secrets`（要加密）；`/secure/ssh` 的私鑰依 3.1 不備份 | 銀行備份團隊 |
 
 訊息本身不做檔案備份：叢集內靠 replication factor 3、`min.insync.replicas=2`；異地備援（Cluster Linking）依銀行的 RPO／RTO 另議。
 
@@ -6850,7 +6775,7 @@ RBAC 的 principal：11 個；SHA256SUMS：7 個檔
 密碼字樣：0
 ```
 
-> `users.txt` 的 SCRAM 那幾行只有機制與迭代次數（`SCRAM-SHA-512=iterations=8192`），沒有密碼也沒有雜湊。帳號被刪掉時，這份清單告訴你要重建哪些帳號，密碼另向 Secrets 團隊取（第 15 章）。
+> `users.txt` 的 SCRAM 那幾行只有機制與迭代次數（`SCRAM-SHA-512=iterations=8192`），沒有密碼也沒有雜湊。帳號被刪掉時，這份清單告訴你要重建哪些帳號，密碼在操作機的 `~/secrets`（11.1）。
 
 ## 25.4 每天凌晨 2 點自動跑
 

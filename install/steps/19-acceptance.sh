@@ -107,7 +107,7 @@ if [ "$OPMENU" = 1 ]; then
 else
   log "OPMENU=0 或選單沒裝：略過選單重啟"
 fi
-cold_boot_expectation="master key 在各主機的 service.env，開機不依賴 PVWA；controller → broker 依序回來"
+cold_boot_expectation="master key 在各主機的 service.env，開機不依賴任何外部系統；controller → broker 依序回來"
 ask_bank "冷開機（全部主機同時關再開）由機房排程演練。預期：$cold_boot_expectation，" \
          "    C3 等 MDS 起來才啟動（第 13 站的 drop-in）。lab：bash install/lab/bank-sim.sh coldboot"
 

@@ -31,8 +31,8 @@ OPMENU_SSH_KEY_FILE='/secure/ssh/cpuser_ed25519'
 # 操作者身分:操作機上人員是 root(經 CyberArk PSMP 登入),所以操作者自己輸入 AD 帳號與密碼(Kafka 身分);作業系統帳號只在紀錄裡附註
 OPMENU_USER_FROM_OS=0
 
-# 機敏資料:91 緊急模式的憑證由維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh,唯一的來源);下面是提示用的 object 名稱
-OPMENU_BREAKGLASS_SECRET='kafka/breakglass/pem'         # 91 緊急模式憑證(私鑰 + 憑證鏈 PEM),身分 User:opmenu-breakglass 在 MDS 綁 SystemAdmin
+# 機敏資料:91 緊急模式的憑證放在操作機上只有 root 讀得到的檔案(lib/secrets/file.sh,唯一的來源);權限必須 0600/0400 且 owner 是執行者
+OPMENU_BREAKGLASS_PEM="$HOME/secrets/opmenu-breakglass.pem"   # 91 緊急模式憑證(私鑰 + 憑證鏈 PEM),身分 User:opmenu-breakglass 在 MDS 綁 SystemAdmin
 
 # 規範(依客戶規定)
 OPMENU_TOPIC_PATTERN='^[a-z][a-z0-9]+\.[a-z0-9.-]+$'

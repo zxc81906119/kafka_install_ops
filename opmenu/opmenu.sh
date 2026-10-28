@@ -2,12 +2,12 @@
 # Kafka 維運操作選單(OP menu)— 進入點:載入設定與共用程式、登入、顯示選單、迴圈。
 #
 # 結構:
-#   /etc/opmenu/opmenu.conf   這個環境的設定(連線位址、主機、保管庫、命名規範);換環境只改這裡。範本見 opmenu.conf.example
+#   /etc/opmenu/opmenu.conf   這個環境的設定(連線位址、主機、命名規範);換環境只改這裡。範本見 opmenu.conf.example
 #   lib/defaults.sh           所有設定項目與預設值(說明文件兼保險;opmenu.conf 沒設的才用它)
 #   lib/common.sh             共用:項目登記、紀錄、確認、輸入驗證、執行流程、主機權限閘門、ssh 金鑰檔檢查
-#   lib/kafka.sh              共用:以操作者身分跑 Kafka 工具、呼叫 MDS;91 用保管庫憑證
+#   lib/kafka.sh              共用:以操作者身分跑 Kafka 工具、呼叫 MDS;91 用操作機上的緊急憑證檔
 #   lib/hosts.sh              共用:ssh 到各主機重啟、看日誌、磁碟、診斷
-#   lib/secrets/manual.sh     91 緊急憑證從哪裡取:維運人員從 CyberArk PVWA 取出後貼上(唯一的來源)
+#   lib/secrets/file.sh       91 緊急憑證從哪裡取:操作機上 root 才讀得到的檔案(預設 ~/secrets/opmenu-breakglass.pem,0600)
 #   items/<編號>-<名稱>.sh     每個選單項目一個檔:開頭 item 一行宣告,下面 run() 做事
 #
 # 用法:
@@ -24,7 +24,7 @@ for _c in "${OPMENU_CONF:-}" /etc/opmenu/opmenu.conf "$OPMENU_HOME/opmenu.conf";
 if [ "${OPMENU_ALLOW_ENV_OVERRIDE:-0}" != 1 ]; then unset OPMENU_USER OPMENU_PASS OPMENU_YES OPMENU_REASON; fi   # 測試用的環境變數只在設定檔明確允許時才接受
 . "$OPMENU_HOME/lib/kafka.sh"
 . "$OPMENU_HOME/lib/hosts.sh"
-. "$OPMENU_HOME/lib/secrets/manual.sh" || { echo "找不到 lib/secrets/manual.sh"; exit 1; }
+. "$OPMENU_HOME/lib/secrets/file.sh" || { echo "找不到 lib/secrets/file.sh"; exit 1; }
 core_guard_host_actions   # 碰主機的介面先過權限閘門
 load_items "$OPMENU_HOME/items" || exit 1
 

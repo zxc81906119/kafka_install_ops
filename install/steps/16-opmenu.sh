@@ -5,7 +5,7 @@
 # 何時用：OPMENU=1。選單裝在操作機（人員經 PSMP 登入就是 root，直接跑選單），主機上不放代理程式，只靠 sudoers 限制 cpuser 能跑的指令。
 # 做什麼：
 #   16.1 確認銀行送來選單套件
-#   16.2 綁 conf/rbac-opmenu.txt 的 role binding；緊急憑證 PEM 請 Secrets 團隊放進 PVWA
+#   16.2 綁 conf/rbac-opmenu.txt 的 role binding；緊急憑證 PEM（私鑰＋憑證）由我方組好放 ~/secrets/opmenu-breakglass.pem（0600）
 #   16.3 裝選單：/opt/opmenu、/etc/opmenu（設定、身分、truststore、known_hosts）、/var/log/opmenu
 #   16.4 各主機加上 cpuser 的窄 sudo 規則 /etc/sudoers.d/cpuser-ops（逐一列出服務與指令寫法；全權那份由 OS 團隊在安裝完成後收回）
 #   16.5 試跑：alice／bob／carol 看到的選單不同、看不到的項目會被擋
@@ -31,15 +31,13 @@ run_menu_as() {
     | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'
 }
 
-ask_bank "16.2 Secrets 團隊：緊急憑證 PEM（$KEYS_DIR/opmenu-breakglass.key + $CERTS_DIR/opmenu-breakglass.crt）放進 PVWA 的 safe $PVWA_SAFE，" \
-         "    開給維運群組取用（建議雙人覆核、要填變更單號）。緊急憑證交付後操作機上的私鑰可移到離線保管。（主機用的 ssh 私鑰不放 PVWA，就是 $SSH_KEY。）" \
-         "16.3 選單套件 opmenu-*.tar.gz 隨落地區送到 $OPMENU_PACKAGE_DIR/。" \
+ask_bank "16.3 選單套件 opmenu-*.tar.gz 隨落地區送到 $OPMENU_PACKAGE_DIR/。" \
          "16.4 OS 團隊：各主機 $SSH_USER 的 sudo 改成兩段式（永久只留 /etc/sudoers.d/$SSH_USER-ops 逐一列出的 restart／status／journalctl；安裝期的全權 /etc/sudoers.d/$SSH_USER 做完收回）。"
 
 section "16.1 確認銀行的準備"
 if [ -f "$OPMENU_PACKAGE_DIR/SHA256SUMS" ] && (cd "$OPMENU_PACKAGE_DIR" && sha256sum -c --quiet SHA256SUMS); then ok "opmenu 套件 sha256 相符"
 else fail "$OPMENU_PACKAGE_DIR 缺檔或 sha256 不符"; fi
-# 沒有東西要準備：91 緊急模式用到緊急憑證時，維運人員自己從 PVWA 取出貼上（PVWA 上的 object 名稱寫在 opmenu.conf）
+# 沒有東西要等銀行：91 緊急模式用的緊急憑證 PEM 由我方在 16.2 組好放在操作機 ~/secrets（0600），不放 CyberArk
 [ "$FAIL_COUNT" = 0 ] || wait_for_bank
 
 section "16.2 role binding（conf/rbac-opmenu.txt：緊急身分 SystemAdmin、維運群組補 DescribeConfigs）"
@@ -70,14 +68,19 @@ cluster_fqdns=(); for host in $CLUSTER_HOSTS; do cluster_fqdns+=("$(fqdn "$host"
 ssh-keyscan -t ed25519 "${cluster_fqdns[@]}" 2>/dev/null | sort | install -m 0644 /dev/stdin /etc/opmenu/known_hosts
 # /var/log/opmenu：選單紀錄與匯出檔
 install -d -m 0750 -o root -g root /var/log/opmenu
-# 設定檔只填推算不出來的值：連線位址、可重啟的服務清單、PVWA object 名稱
-export ENV_LABEL=$OPMENU_ENV_LABEL PVWA_SAFE BOOTSTRAP_LDAP=$BROKER_LDAP SSH_USER SSH_KEY
+# 緊急憑證 PEM（91 用）：私鑰＋憑證串成一個檔，放操作機 ~/secrets（0600、root 才讀得到）；選單讀檔時會檢查權限與 owner
+BREAKGLASS_PEM=$SECRETS_DIR/opmenu-breakglass.pem
+install -d -m 0700 "$SECRETS_DIR"
+(umask 077; cat "$KEYS_DIR/opmenu-breakglass.key" "$CERTS_DIR/opmenu-breakglass.crt" > "$BREAKGLASS_PEM")
+if [ "$(stat -c %a "$BREAKGLASS_PEM")" = 600 ] && grep -q 'BEGIN .*PRIVATE KEY' "$BREAKGLASS_PEM" && grep -q 'BEGIN CERTIFICATE' "$BREAKGLASS_PEM"; then ok "緊急憑證 PEM：$BREAKGLASS_PEM（0600）"; else die "緊急憑證 PEM 組不起來：$BREAKGLASS_PEM"; fi
+# 設定檔只填推算不出來的值：連線位址、可重啟的服務清單、緊急憑證檔路徑
+export ENV_LABEL=$OPMENU_ENV_LABEL BREAKGLASS_PEM BOOTSTRAP_LDAP=$BROKER_LDAP SSH_USER SSH_KEY
 export BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS LB_FQDN
 LB_FQDN=$(fqdn "$LB_HOST")   # 選單 22 重啟 REST 前確認 LB 已經停用那一台
 BROKER_SERVICES=$(for host in $BROKERS; do printf '%s:confluent-server ' "$(fqdn "$host")"; done | sed 's/ $//')
 AUX_SERVICES=$(for host in $RESTS; do printf '%s:confluent-kafka-rest ' "$(fqdn "$host")"; done; printf '%s:confluent-control-center' "$C3_FQDN")
 CONTROLLER_HOSTS=$(for host in $CONTROLLERS; do fqdn "$host"; done | paste -sd' ')
-render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL PVWA_SAFE BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS LB_FQDN SSH_USER SSH_KEY \
+render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL BREAKGLASS_PEM BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS LB_FQDN SSH_USER SSH_KEY \
   || die "render opmenu.conf"
 install -m 0644 "$CONF_DIR/opmenu.conf" /etc/opmenu/opmenu.conf
 listed_items=$(/opt/opmenu/opmenu.sh --list 2>/dev/null | wc -l)
@@ -113,8 +116,8 @@ if [ "$alice_count" -gt "$bob_count" ] && [ "$bob_count" -gt "$carol_count" ] &&
 else fail "選單數量不符預期：alice $alice_count、bob $bob_count、carol $carol_count"; fi
 if grep -qw 91 <<<"${visible_items[alice]}" && ! grep -qw 91 <<<"${visible_items[bob]}"; then ok "91 緊急模式只有 alice（SystemAdmin）看得到"; else fail "91 的可見性不對"; fi
 
-# 健康檢查、重啟、緊急模式要動主機（ssh 用 $SSH_KEY）或用緊急憑證（值要人在終端機從 PVWA 貼上），非互動試跑做不了
-warn "重啟、看日誌要由維運人員互動登入試跑（手把手 16.5）；緊急模式要貼上 PVWA 取出的緊急憑證"
+# 健康檢查、重啟、緊急模式要動主機（ssh 用 $SSH_KEY）或用緊急憑證（讀 ~/secrets/opmenu-breakglass.pem、要人填原因），非互動試跑做不了
+warn "重啟、看日誌要由維運人員互動登入試跑（手把手 16.5）；緊急模式要互動填原因"
 
 section "16.6 收尾檢查"
 agent_count=$(pgrep -x ssh-agent | wc -l)

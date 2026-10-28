@@ -22,7 +22,7 @@ inside the containers. Always say which bank role is acting and keep the product
 | NTP | repo01 (`chronyd`, `local stratum 10`, `allow 172.35.0.0/24`) | nodes point `server repo01.poc.lab iburst` |
 | Load balancer | lb01 `/etc/nginx/stream.d/cp.conf` | L4 passthrough 8082 → rest01/rest02 (`hash $remote_addr consistent`); 9021 → c3-01 only for the Windows port mapping; `nginx -t && nginx -s reload` |
 | sudo for cpuser | `/etc/sudoers.d/cpuser` = `cpuser ALL=(ALL) NOPASSWD: ALL` (written with the account in 3.1.1) | after delivery only `/etc/sudoers.d/cpuser-ops`, every unit and exact command form listed (guide 16.4, 19.5); lab keeps the full rule for later chapters |
-| PVWA (CyberArk PAM) | Windows `~/kafka-lab/pvwa/` (0600 files) | platform secrets only (passphrase, master key, break-glass PEM, passwords); never the ssh key. Storing = copy the file in; retrieving = paste into ops02 (`docker exec -i … < pvwa/x`); keep the old value as `.prev`. Person login via PVWA web + PSMP cannot be simulated: enter ops02 as root with `docker exec` |
+| CyberArk (login only) | none | Platform secrets (passphrase, master key, `svc-mds-bind`, test-user passwords, break-glass PEM `~/secrets/opmenu-breakglass.pem`, …) are NOT vaulted: they stay in 0600 files on ops02 (`~/secrets`, `~/pki`), rotated by hand (keep the old value as `.prev`). The only CyberArk relation is person login via PVWA web + PSMP, which cannot be simulated: enter ops02 as root with `docker exec` |
 
 ## Rules
 - Paths for `docker cp`: container side `name:/path`, host side `"$(cygpath -m ...)"`; never a bare `/c/...` with

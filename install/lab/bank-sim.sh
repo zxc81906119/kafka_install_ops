@@ -55,8 +55,6 @@ intake() {
   as_root_on "$OPS_HOST" 'chmod -R a-w /root/landing && echo "$(find /root/landing -type f | wc -l) files, $(du -sh /root/landing | cut -f1)"'
 }
 
-PVWA_DIR=$LAB/pvwa   # PVWA 資料夾：lab 用它扮演 PVWA（平台密碼的正本；ssh 私鑰不放這裡）
-
 # 3.1 OS 團隊在一台主機上做的事（以 root）：建 cpuser、sshd 設定、公鑰行、安裝期 sudo。參數：主機短名、authorized_keys 的整行
 os_team_cpuser() {
   local host=$1 line=$2
@@ -160,6 +158,8 @@ prepare() {
   docker cp "$(windows_path "$LAB/ca/exchange/ad01-chain.crt")" "$(container_of "$AD_HOST"):/var/lib/samba/private/tls/cert.pem"
   docker cp "$(windows_path "$LAB/ca/root.crt")" "$(container_of "$AD_HOST"):/var/lib/samba/private/tls/ca.pem"
   as_root_on "$AD_HOST" 'cp /root/csr/ad01.key /var/lib/samba/private/tls/key.pem && chmod 600 /var/lib/samba/private/tls/key.pem && chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem && pkill -x samba; sleep 8; openssl s_client -connect localhost:636 -CAfile /var/lib/samba/private/tls/ca.pem </dev/null 2>/dev/null | grep "Verify return code"'
+  # 模擬「銀行 AD 團隊把帳號資訊（svc-mds-bind 的密碼、測試人員 alice／bob／carol 的密碼）交給我方」：
+  # 直接放進操作機 ~/secrets（0600，root 才讀得到）。平台的密碼與金鑰只留在操作機，不經 CyberArk
   as_root_on "$OPS_HOST" 'install -d -m 0700 /root/secrets'
   for k in bind:ldap-bind users:ad-test-users; do
     docker exec "$(container_of "$AD_HOST")" cat "/root/secrets/${k%%:*}.pass" | docker exec -i "$(container_of "$OPS_HOST")" bash -c "umask 077; cat > /root/secrets/${k#*:}.pass"

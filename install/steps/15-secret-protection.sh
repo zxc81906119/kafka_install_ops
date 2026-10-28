@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# 第 15 站：Secret Protection —— 密碼加密留在主機的 security.properties，master key 交 CyberArk 保管
+# 第 15 站：Secret Protection —— 密碼加密留在主機的 security.properties，passphrase 與 master key 只留在操作機 ~/secrets（0600，root 才讀得到）
 # where: ops02 （root）
 #
-# 何時用：SECRETS_MODE=sp（銀行只有 PAM，本案客戶）；SECRETS_MODE=plain 時直接略過。
-# master key 落地在每台的 /etc/confluent/service.env（0600 root；PVWA 故障時仍能重啟）。
-# CyberArk（PVWA）保管兩樣（2026-10-23 定案，lab 實測）：
-#   master key   服務解密用；主機重建、復原時從 PVWA 取回。只有 passphrase 算不回來（每次 generate 都換新的 salt）
-#   passphrase   輪替 master key（15.6 rotate）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給
-# 程式碰不到 PVWA：passphrase 由小安從 PVWA 取出放進檔案；master key 由 Secrets 團隊存進 PVWA。
-# 做什麼（一次把 15.2–15.5 做完，只滾動重啟一次）：
-#   15.1 確認銀行的準備：小安從 PVWA 取出的 passphrase 檔
-#   15.2 passphrase → 產生 master key（已有就沿用）→ master key 交 CyberArk 保管（Secrets 團隊存進 PVWA，確認後才往下）
+# 何時用：SECRETS_MODE=sp（本案客戶）；SECRETS_MODE=plain 時直接略過。
+# master key 落地在每台的 /etc/confluent/service.env（0600 root；開機不依賴任何外部系統）。
+# 2026-10-28 定案：平台的密碼與金鑰不放 CyberArk（PVWA），都在操作機 root 才讀得到的位置（0600）：
+#   master key   服務解密用；操作機這份（~/secrets/master.key）與各主機 service.env 各一份。只有 passphrase 算不回來（每次 generate 都換新的 salt）
+#   passphrase   輪替 master key（15.6 rotate）時 CLI 要「目前的 master key＋舊 passphrase」兩樣都給；由工程師在操作機產生，存 ~/secrets/sp-passphrase.txt
+# ~/secrets 與 ~/pki 的備份交給銀行自己的備份機制（操作機掉了，passphrase 就沒了；master key 還在各主機的 service.env）。
+# 做什麼（一次把 15.1–15.5 做完，只滾動重啟一次）：
+#   15.1 確認 passphrase 檔（還沒有 master key 又沒有 passphrase 檔時，由工程師在操作機產生：openssl rand，0600）
+#   15.2 passphrase → 產生 master key（已有就沿用）
 #   15.3 從明文範本重新產生每台的設定 → 加密密碼欄位
 #   15.4 派送 properties、security.properties、service.env
 #   15.5 滾動重啟、驗證
-# 產出：~/secrets/master.key、~/secrets/security.properties、~/conf/sp/<主機>.properties、~/conf/secrets.mode=sp、
-#       ~/secrets/master-key.custody（「master key 雜湊 單號」：PVWA 已存的是哪一把）
+# 產出：~/secrets/sp-passphrase.txt、~/secrets/master.key、~/secrets/security.properties、~/conf/sp/<主機>.properties、~/conf/secrets.mode=sp
 # 之後：換我們管的密碼（keystore 等）→ 重跑這一站；master key 輪替見手把手 15.6。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
@@ -26,46 +25,34 @@ if [ "$SECRETS_MODE" != sp ]; then log "SECRETS_MODE=$SECRETS_MODE：第 15 站�
 export JAVA_HOME=/opt/java/current
 
 SP_CONF_DIR=$CONF_DIR/sp                                # 每台產出的（加密後的）設定
-MASTER_KEY_FILE=$SECRETS_DIR/master.key                 # master key（CLI 不保存；正本交 CyberArk）
-PASSPHRASE_FILE=$SECRETS_DIR/sp-passphrase.txt          # 產生、輪替 master key 用的 passphrase（正本在 CyberArk）
-CUSTODY_FILE=$SECRETS_DIR/master-key.custody            # 「master key 雜湊 單號」，記下 PVWA 已存的是哪一把
+MASTER_KEY_FILE=$SECRETS_DIR/master.key                 # master key（CLI 不保存；操作機這份 0600，各主機 service.env 另有一份）
+PASSPHRASE_FILE=$SECRETS_DIR/sp-passphrase.txt          # 產生、輪替 master key 用的 passphrase（只在操作機，0600）
 LOCAL_SECRETS_FILE=$SECRETS_DIR/security.properties     # 所有主機共用的密文檔（操作機這份是正本）
 REMOTE_SECRETS_PATH=/etc/confluent/secrets/security.properties
-# PVWA 裡兩個 object（同一個 safe、分開授權）：passphrase 只給平台工程師；master key 由 Secrets 團隊存入
-PASSPHRASE_OBJECT=$PVWA_SAFE/secret-protection/passphrase
-MASTER_KEY_OBJECT=$PVWA_SAFE/secret-protection/master-key
 
-ask_bank "15.1 Secrets 團隊：PVWA 同一個 safe 裡開兩個 object：$PASSPHRASE_OBJECT（銀行產生值，只給平台工程師取）、$MASTER_KEY_OBJECT（15.2 產生後存入）。" \
-         "    小安從 PVWA 取出 passphrase，放進 $PASSPHRASE_FILE（0600，不要貼進任何對話或工單）。"
-
-section "15.1 確認銀行的準備"
+section "15.1 passphrase（工程師在操作機產生，0600；已有 master key 就不需要）"
 # 已經有 master key 就不需要 passphrase（日常重跑都是這種情況）
 if [ -s "$MASTER_KEY_FILE" ]; then ok "已有 master key，這次不需要 passphrase"
-elif [ "$(wc -c < "$PASSPHRASE_FILE" 2>/dev/null || echo 0)" -ge 16 ] && [ "$(stat -c %a "$PASSPHRASE_FILE")" = 600 ]; then ok "$PASSPHRASE_FILE 在（0600）"
-else fail "還沒有 $PASSPHRASE_FILE（至少 16 字元、0600）：從 PVWA 取出放進來"; fi
-[ "$FAIL_COUNT" = 0 ] || wait_for_bank
+else
+  if [ ! -s "$PASSPHRASE_FILE" ]; then
+    install -d -m 0700 "$SECRETS_DIR"
+    (umask 077; openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32 > "$PASSPHRASE_FILE")
+    ok "產生 passphrase：$PASSPHRASE_FILE（0600；值不顯示，請納入 ~/secrets 的備份）"
+  fi
+  if [ "$(wc -c < "$PASSPHRASE_FILE")" -ge 16 ] && [ "$(stat -c %a "$PASSPHRASE_FILE")" = 600 ]; then ok "$PASSPHRASE_FILE 在（0600）"
+  else fail "$PASSPHRASE_FILE 至少 16 字元、權限要 0600"; fi
+fi
+[ "$FAIL_COUNT" = 0 ] || die "passphrase 檔不合格"
 
 section "15.2 產生 master key（已有 master.key 就沿用：換掉會讓已派送的密文全部解不開）"
 if [ -s "$MASTER_KEY_FILE" ]; then
   ok "沿用既有的 $MASTER_KEY_FILE 與 $LOCAL_SECRETS_FILE"
 else
   [ "$(wc -c < "$PASSPHRASE_FILE")" -ge 16 ] || die "passphrase 太短或取值失敗"
-  rm -f "$LOCAL_SECRETS_FILE" "$CUSTODY_FILE"
+  rm -f "$LOCAL_SECRETS_FILE"
   (umask 077; confluent secret master-key generate --local-secrets-file "$LOCAL_SECRETS_FILE" \
      --passphrase "$(cat "$PASSPHRASE_FILE")" -o yaml | awk '/master_key/{print $2}' > "$MASTER_KEY_FILE")
   if [ "$(wc -c < "$MASTER_KEY_FILE")" -ge 40 ]; then ok "master key 產生（$MASTER_KEY_FILE，0600）"; else die "master key 產生失敗"; fi
-fi
-
-section "15.2 master key 交 CyberArk 保管（還沒確認保管前不派送：不能讓一把只存在操作機的 key 上線）"
-master_key_hash=$(tr -d '\n' < "$MASTER_KEY_FILE" | sha256sum | cut -c1-12)
-custody_line=$(cat "$CUSTODY_FILE" 2>/dev/null)
-if [ "${custody_line%% *}" = "$master_key_hash" ]; then
-  ok "PVWA 已保管這一把 master key（雜湊 $master_key_hash，單號 ${custody_line#* }）"
-else
-  ask_bank "15.2 Secrets 團隊：把 $MASTER_KEY_FILE 的內容存進 PVWA 的 $MASTER_KEY_OBJECT（新版本；舊版本保留，回滾要用）。" \
-           "    存好之後由小安記下單號：echo \"$master_key_hash <變更單號>\" > $CUSTODY_FILE && chmod 600 $CUSTODY_FILE" \
-           "    然後再跑一次這一站。"
-  wait_for_bank
 fi
 
 section "15.3 從明文範本重新產生每台設定，加密密碼欄位（密文集中在 security.properties）"

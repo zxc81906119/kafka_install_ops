@@ -12,9 +12,9 @@ Updated: 2026-10-28 10:50（**lab 使用中**：乾淨手冊實跑從零進行�
 - 2026-10-28：cp-server 改純 server（certs.txt、09／13／14／19／20 站、control-center.tpl、prometheus-generated.yml、手冊第 9／13／20 章、問題清單 6.2、圖）；19 站新增驗收「cp-server 只有 serverAuth 且連 9090 被拒」；第 17 章 raft 指標說明更正、兩條 raft 告警刪除。docx 已重建。
 
 ## 進行中（2026-10-28 下午）
-- **與 CyberArk 脫鉤**（使用者定案，見 redesign/README.md 最後一節）：平台密碼全留操作機 0600、CPM 輪替拿掉。手冊＋腳本＋opmenu＋文件改完才能重跑；**腳本版重跑已被我停掉，待改完重起**。
-- 已 commit：C3 連內建 Prometheus／Alertmanager 改用 svc-c3，c3-monitoring 只給 Prometheus→Alertmanager（PEM，c3-01 檔案數 9）。
-- 手冊 19.2 新增 cp-server 被拒檢查（16/16），尚未實跑。
+- **與 CyberArk 脫鉤已改完（手冊、install、opmenu、README、CLAUDE.md、問題清單第 8 章、access Word），docx 都重建**；**尚未實跑**。改動重點：15 站工程師自己產生 passphrase；16 的緊急憑證改讀 `~/secrets/opmenu-breakglass.pem`（設定名 `OPMENU_BREAKGLASS_PEM`）；run-customer.sh 段號變 1–28（刪掉三個 Secrets 團隊 stage）。腳本版重跑**之前被我停掉時沒停乾淨、跑到第 9 站，已全部殺掉**；下一輪從零重跑。
+- 待使用者回覆：`OPMENU_MENU_AUTHZ` 要不要明寫進派送的 opmenu.conf＋手冊 16.3 加項目→權限表。
+- 已 commit：C3 連內建 Prometheus／Alertmanager 改用 svc-c3；手冊 19.2 新增 cp-server 被拒檢查（16/16，未實跑）。
 
 ## 下一步
 1. 手冊實跑完 → 逐行看紀錄＋`scan-log.sh`；特別確認：c3-01 檔案數 10、C3 對 9090／9093 連線正常（keystore alias c3-monitoring）、第 9 章 CSR／檔案數（9、21）、20.2 的數字、17 章告警規則載入數 19、17.9 覆蓋率重算。

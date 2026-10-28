@@ -20,7 +20,7 @@
     ],
     [
       "前提",
-      "有 PAM（PVWA、PSMP、CPM）；沒有 CP、CCP、Conjur"
+      "有 PAM（PVWA、PSMP、CPM）；平台只用到 PVWA＋PSMP 的登入；沒有 CP、CCP、Conjur"
     ]
   ],
   "company": "資拓宏宇國際股份有限公司",
@@ -51,7 +51,7 @@
 
 | 項目 | 現況 |
 |---|---|
-| CyberArk | 有 PAM（PVWA、PSMP、CPM）；沒有 CP、CCP、Conjur |
+| CyberArk | 有 PAM（PVWA、PSMP、CPM）；平台只用到 PVWA＋PSMP 的登入；沒有 CP、CCP、Conjur |
 | 人員身分 | AD 帳號，CyberArk 已綁 AD，並已套用 MFA |
 | 登入點 | 操作機（人員先登入 CyberArk 的 PVWA 網頁，由 PSMP 代登進入） |
 

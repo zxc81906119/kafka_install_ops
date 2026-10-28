@@ -2,7 +2,7 @@
 
 > 2026-10-22 重新設計(redesign/README.md 第 13 節):**主機上不放任何 agent**,主機類動作用「和安裝同一個 cpuser」ssh 過去做,主機只靠 sudoers 限制;拿掉 ticket、清理日誌、docker 後端。
 > 2026-10-27 主機存取改版(redesign/README.md「新做法已進手冊與腳本」):人員經 CyberArk PVWA 網頁＋PSMP 登入操作機**就是 root**,選單以 root 執行;
-> 主機類動作用的 SSH 私鑰就是操作機獨立 file system 上的檔案 `/secure/ssh/cpuser_ed25519`(root、0400,和安裝同一把),**不再從 PVWA 貼進選單的 ssh-agent**;緊急模式憑證(91)仍由人從 PVWA 貼上。
+> 主機類動作用的 SSH 私鑰就是操作機獨立 file system 上的檔案 `/secure/ssh/cpuser_ed25519`(root、0400,和安裝同一把),**不再貼進選單的 ssh-agent**;緊急模式憑證(91)也是操作機上 root 才讀得到的檔案(`~/secrets/opmenu-breakglass.pem`,0600),不放 CyberArk、不再從 PVWA 取出貼上。與 CyberArk 唯一的關係是人員登入(PVWA 網頁＋PSMP)。
 > 部署走離線引進流程:在外網端打包成 `opmenu-<日期>.<sha8>.tar.gz`,隨落地區送到操作機 `~/landing/tools/opmenu/`(手把手 16.3)。
 
 給維運人員用的文字選單:人員經 CyberArk 登入操作機(進去是 root)後,從選單執行審核過的作業,每次執行留紀錄。
@@ -16,14 +16,14 @@
 | 檔案 | 角色 |
 |---|---|
 | `opmenu.sh` | 進入點:載入設定與共用程式、登入、**畫選單與迴圈**(唯一會顯示選單的檔案) |
-| `/etc/opmenu/opmenu.conf` | **這個環境的設定**:連線位址、主機與服務名、ssh 帳號與私鑰檔路徑、PVWA object 名稱(91)、命名規範。換環境只改這裡(範本 `opmenu.conf.example`) |
+| `/etc/opmenu/opmenu.conf` | **這個環境的設定**:連線位址、主機與服務名、ssh 帳號與私鑰檔路徑、緊急憑證檔路徑(91,`OPMENU_BREAKGLASS_PEM`)、命名規範。換環境只改這裡(範本 `opmenu.conf.example`) |
 | `lib/defaults.sh` | 所有設定項目與預設值,兼說明文件;`opmenu.conf` 沒設的才用它 |
 | `lib/common.sh` | 共用:項目登記(`item`、`load_items`)、紀錄、確認、輸入驗證(`v_*`)、執行流程(時窗、並行鎖、結果判斷)、主機權限閘門、ssh 私鑰檔檢查 |
-| `lib/kafka.sh` | 共用:以操作者身分跑 Kafka 工具、呼叫 MDS、換 token;91 用 PVWA 取出的憑證;各項目共用的 MDS 小工具(`k_*`) |
+| `lib/kafka.sh` | 共用:以操作者身分跑 Kafka 工具、呼叫 MDS、換 token;91 用操作機上的緊急憑證檔;各項目共用的 MDS 小工具(`k_*`) |
 | `lib/hosts.sh` | 共用:ssh 到各主機重啟、看日誌、磁碟、診斷;憑證到期日。**sudo 寫法固定**(見下方「sudoers」) |
-| `lib/secrets/manual.sh` | 91 緊急憑證從哪裡取(`secret_get`):維運人員從 CyberArk PVWA 取出後貼上(唯一的來源)。主機用的 ssh 私鑰不經過這裡 |
+| `lib/secrets/file.sh` | 91 緊急憑證從哪裡取(`secret_get <檔案路徑>`):操作機上 root 才讀得到的檔案;權限不是 0600/0400 或 owner 不是執行者就拒絕。主機用的 ssh 私鑰不經過這裡 |
 | `items/<編號>-<名稱>.sh` | **每個選單項目一個檔**:第一行 `item <編號> <層級> <變更類> <需確認> "<標題>" "<說明>"`,下面 `run() { … }`。加項目 = 加一個檔,停用 = 移走檔案 |
-| `tests/` | 單元測試,不需要叢集或保管庫 |
+| `tests/` | 單元測試,不需要叢集 |
 
 項目只呼叫 `be_*`(kafka.sh、hosts.sh)、`k_*`、`v_*`、`core_confirm`、`core_log` 與 `OPMENU_*` 設定,不碰 ssh、systemctl 或任何主機名稱。程式碼裡沒有環境值。
 
@@ -33,18 +33,18 @@
 |---|---|---|---|
 | 操作者的 AD 密碼 | 操作者自己 | 登入時輸入,換到 MDS token 後丟掉;Kafka 工具用的連線檔放記憶體檔案系統、離開時刪 | 否 |
 | 操作機 → 各主機 cpuser 的 SSH 私鑰(`OPMENU_SSH_KEY_FILE`,預設 `/secure/ssh/cpuser_ed25519`) | 操作機自己:獨立(加密)file system、root 0400,安裝與維運共用同一把;**不放 CyberArk、不備份**(操作機重建就重新產生,OS 團隊重新佈署公鑰) | 過了權限閘門、要碰主機時檢查檔案在不在(沒掛載就擋下);ssh 直接用這個檔(`-i`、`IdentitiesOnly`、不用 ssh-agent) | 是(在獨立 file system 上,不在系統碟) |
-| 91 緊急模式的 client 憑證(`OPMENU_BREAKGLASS_SECRET`,PEM) | CyberArk | 執行 91 時取到記憶體檔案系統,用完即刪;身分 `User:opmenu-breakglass` 在 MDS 綁 SystemAdmin | 否 |
-| 34／35 產生的 service account 新密碼 | 操作者自己的交接檔 `OPMENU_HANDOVER_DIR`(預設 `$HOME/opmenu-handover`,操作機上是 `/root/opmenu-handover`,目錄 0700、檔 0600) | 產生時寫入,不顯示在畫面;交給 Secrets 團隊存進 PVWA 後刪除。交接目錄寫不進去就不改密碼 | **是**(暫存,交接後刪) |
+| 91 緊急模式的 client 憑證(`OPMENU_BREAKGLASS_PEM`,PEM,預設 `~/secrets/opmenu-breakglass.pem`) | 操作機自己:`~/secrets` 底下 0600、owner 是執行者(不符就拒絕);不放 CyberArk | 執行 91 時讀到記憶體檔案系統,用完即刪;操作者本來就是 root,把關只剩必填原因與 EMERGENCY 稽核記錄;身分 `User:opmenu-breakglass` 在 MDS 綁 SystemAdmin | 否 |
+| 34／35 產生的 service account 新密碼 | 操作者自己的交接檔 `OPMENU_HANDOVER_DIR`(預設 `$HOME/opmenu-handover`,操作機上是 `/root/opmenu-handover`,目錄 0700、檔 0600) | 產生時寫入,不顯示在畫面;照應用程式團隊的交付方式交出去後刪除。交接目錄寫不進去就不改密碼 | **是**(暫存,交接後刪) |
 
 ## 換環境要做的事
 
-1. 複製 `opmenu.conf.example` 為 `/etc/opmenu/opmenu.conf`,填入:bootstrap(LDAP listener)、broker 與輔助服務清單(主機:服務名)、controller 主機、PVWA object 名稱。
+1. 複製 `opmenu.conf.example` 為 `/etc/opmenu/opmenu.conf`,填入:bootstrap(LDAP listener)、broker 與輔助服務清單(主機:服務名)、controller 主機、緊急憑證檔路徑(預設 `~/secrets/opmenu-breakglass.pem`)。
 2. `/etc/opmenu/ssl/`:`truststore.p12`(只放銀行根憑證)、`truststore.pass`(0600 root)、`ca.pem`。
 3. `/etc/opmenu/known_hosts`:各主機的 ssh 主機金鑰(`ssh-keyscan` 建,0644 root)。
 4. `/var/log/opmenu/` 目錄 0750 root;`OPMENU_SYSLOG=1` 時紀錄另送 syslog(root 改得到本機紀錄檔,所以遠端 syslog 那份才是佐證)。
 5. 各主機 cpuser 的 sudoers 永久規則 `/etc/sudoers.d/cpuser-ops`(安裝、升級時才另開全權 `/etc/sudoers.d/cpuser`),**逐一列出**,見下方「sudoers」。
 6. 操作機的 `/secure/ssh`(獨立加密 file system)已掛載,`cpuser_ed25519` 為 root:root 0400;各主機 cpuser 的 `authorized_keys` 有對應公鑰(`from=` 只允許操作機)。
-7. CyberArk:存 breakglass PEM(91 用);開給維運群組在 PVWA 取用(人工貼上,選單不連保管庫)。人員進操作機走 PVWA 網頁＋PSMP(進去是 root)。
+7. 緊急憑證:把 breakglass PEM(私鑰 + 憑證鏈)放到操作機 `~/secrets/opmenu-breakglass.pem`(0600,root 才讀得到);換發時舊的另存 `.prev`。人員進操作機走 PVWA 網頁＋PSMP(進去是 root),這是唯一和 CyberArk 有關的部分。
 7a. 建作業系統群組 `opmenu-emergency`(平常沒有成員),寫好事故時誰加人、事後誰移出的程序。操作者都是 root,所以「加人」就是把 root 加進群組:群組成了緊急主機模式的開關。
 8. 其餘檔案不用改。
 
@@ -100,7 +100,7 @@ sudoers 比對的是**完整的參數**:`journalctl -u confluent-server -n 5 --n
 /opt/opmenu/opmenu.sh                 # 互動選單
 /opt/opmenu/opmenu.sh --list          # 列出所有項目
 OPMENU_USER=alice OPMENU_PASS=... OPMENU_YES=1 /opt/opmenu/opmenu.sh --run 31 orders.test 1   # 非互動(需 OPMENU_ALLOW_ENV_OVERRIDE=1)
-tests/test-host-gate.sh tests/test-menu-filter.sh tests/test-ssh-key.sh tests/test-sudo-forms.sh   # 單元測試,不需要叢集或保管庫
+tests/test-host-gate.sh tests/test-menu-filter.sh tests/test-ssh-key.sh tests/test-sudo-forms.sh tests/test-secret-file.sh   # 單元測試,不需要叢集
 bash ~/install/lab/opmenu-items-test.sh   # lab 全項目回歸(ops02 root;會重啟 kb03、rest02、滾動重啟全部 broker,約 10 分鐘)
 bash ~/install/lab/opmenu-hostkey-test.sh # lab:私鑰檔缺少時被擋、sudoers 只放行列出的寫法(用臨時帳號驗,不動 cpuser 的全權規則)
 ```

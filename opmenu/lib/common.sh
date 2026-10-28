@@ -42,7 +42,7 @@ core_handover_secret() {
   ( umask 077; mkdir -p "$OPMENU_HANDOVER_DIR" ) || return 1
   file="$OPMENU_HANDOVER_DIR/$account-$(date +%Y%m%d-%H%M%S).pass"
   ( umask 077; printf '%s\n' "$secret" > "$file" ) || return 1
-  echo "新密碼已寫到 $file（只有你讀得到）。請交給 Secrets 團隊存進 PVWA，或照應用程式團隊的交付方式，完成後刪除：shred -u $file"
+  echo "新密碼已寫到 $file（只有你讀得到）。請照應用程式團隊的交付方式交出去，完成後刪除：shred -u $file"
   core_log HANDOVER "$account" "$file"
 }
 

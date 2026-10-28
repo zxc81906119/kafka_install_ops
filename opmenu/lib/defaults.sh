@@ -42,8 +42,8 @@ d OPMENU_SSH_KEY_FILE    '/secure/ssh/cpuser_ed25519'                   # 操作
 d OPMENU_SSH_CONTROL_PERSIST 600                                        # 同一 node 的 ssh 連線重用幾秒(ControlMaster);離開選單時全部關閉
 d OPMENU_KNOWN_HOSTS     '/etc/opmenu/known_hosts'                         # 各主機的 ssh 主機金鑰(管理員用 ssh-keyscan 建,0644 root);選單只信這份,不接受新主機
 
-# ── 機敏資料:91 緊急模式的憑證由維運人員從 CyberArk PVWA 取出後貼上(lib/secrets/manual.sh),進記憶體,用完即刪 ──
-d OPMENU_BREAKGLASS_SECRET 'kafka/breakglass/pem'                       # 91 緊急模式用的 client 憑證(私鑰 + 憑證鏈,PEM);只在執行 91 時取,用完即丟
+# ── 機敏資料:91 緊急模式的憑證放在操作機上只有 root 讀得到的檔案(lib/secrets/file.sh,0600/0400、owner 要是執行者),讀進記憶體,用完即刪 ──
+d OPMENU_BREAKGLASS_PEM    "$HOME/secrets/opmenu-breakglass.pem"           # 91 緊急模式用的 client 憑證檔(私鑰 + 憑證鏈,PEM);權限不是 0600/0400 或 owner 不是執行者就拒絕;只在執行 91 時讀,用完即丟
 d OPMENU_BREAKGLASS_BOOTSTRAP ''                                        # 91 連的 TOKEN listener(主機:9094,逗號分隔);空 = 由 OPMENU_BOOTSTRAP 的主機 + OPMENU_TOKEN_PORT 推算
 d OPMENU_TOKEN_PORT      9094
 
@@ -51,7 +51,7 @@ d OPMENU_TOKEN_PORT      9094
 d OPMENU_TOPIC_PATTERN   '^[a-z][a-z0-9]+\.[a-z0-9.-]+$'                # topic 命名:<系統>.<名稱>
 d OPMENU_SVC_PATTERN     '^[a-z][a-z0-9-]+$'                            # service account:例 app-orders
 d OPMENU_SVC_PAIR        '-a -b'                                         # 34／35／37：一個應用程式兩個帳號（<名稱>-a、<名稱>-b，權限相同），輪替密碼時換「沒在用的那個」，不中斷
-d OPMENU_HANDOVER_DIR    "$HOME/opmenu-handover"                       # 新密碼交接檔放哪（操作者自己的家目錄，0700／0600）；存進 PVWA 後刪掉
+d OPMENU_HANDOVER_DIR    "$HOME/opmenu-handover"                       # 新密碼交接檔放哪（操作者自己的家目錄，0700／0600）；交給應用程式團隊後刪掉
 d OPMENU_REPLICATION     3                                              # 建 topic 的 replication factor(標準值);沒填且 broker 少於 3 台時,登入後自動降到 broker 數
 d OPMENU_EMERGENCY_TOOLS 'kafka-topics kafka-configs kafka-consumer-groups kafka-acls kafka-metadata-quorum'   # 91 允許的工具
 d OPMENU_AUDIT_TOPIC     confluent-audit-log-events                     # 43 匯出的 audit topic

@@ -58,7 +58,7 @@ install/
 | 10 | `--only 10` | 重跑時設定或 drop-in 有變、服務在跑的主機一台一台重啟；15 做過會照樣加密，18 做過會帶上稽核設定 |
 | 11–13 | `--only 11` … `--only 13` | 12、13 重跑時 15 做過會照樣加密 |
 | 14 | `--only 14` | 只讀的總檢查。2–14 可一次跑：`bash install/install.sh --to 14` |
-| 15 | `--only 15` | `SECRETS_MODE=sp` 才用；沒有 passphrase 檔會停；master key 產生後停下等 Secrets 團隊存進 PVWA、記單號（`~/secrets/master-key.custody`）；15.6 輪替不在腳本裡 |
+| 15 | `--only 15` | `SECRETS_MODE=sp` 才用；沒有 passphrase 檔且沒有 master key 時，由工程師在操作機自己產生（`~/secrets/sp-passphrase.txt`，0600），接著產生 master key（`~/secrets/master.key`），不用等任何人；15.6 輪替不在腳本裡 |
 | 16 | `--only 16` | `OPMENU=1`；選單以 root 跑；16.4 寫每台的 `/etc/sudoers.d/cpuser-ops`（逐一列出服務與寫法）；重啟、看日誌要維運人員互動登入選單試跑（`lab/opmenu-hostkey-test.sh` 驗 sudoers 與私鑰檔） |
 | 17 | `--only 17` | `JMX_EXPORTER=1`；給銀行監控團隊的檔在 `~/monitoring/to-bank/`（prometheus／alertmanager／grafana）；官方規則與 dashboard 取自 `~/landing/monitoring/`（第 1 站帶進來）；C3 內建 Prometheus／Alertmanager 不動 |
 | 18 | `--only 18` | `AUDIT_LOG=1`；密碼依 `~/conf/secrets.mode`（15 留下的）處理 |
@@ -73,7 +73,7 @@ install/
 
 ## lab 與客戶環境的設定差異（conf/site.env）
 
-客戶的 CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登、CPM 輪替 root 與 svc-mds-bind），程式碰不到 PVWA（passphrase 由人取出、master key 由 Secrets 團隊存入）。
+與 CyberArk 唯一的關係是人員登入（PVWA 網頁＋PSMP 代登）。平台的密碼與金鑰（passphrase、master key、緊急憑證、`svc-mds-bind` 等）只留在操作機 root 才讀得到的位置（`~/secrets`、`~/pki`，0600），不放 PVWA；root 與 `svc-mds-bind` 的密碼也由人手動輪替（沒有 CPM）。
 人員登入 PVWA 後由 PSMP 代登進操作機就是 root；lab 沒有 PVWA／PSMP，直接 `docker exec` 以 root 進操作機。操作機到各主機一律 cpuser＋一把金鑰
 （放在獨立加密 file system `/secure/ssh`；lab 用 docker volume 模擬那個獨立 file system，LUKS 無法模擬）。下面這些要換：
 
@@ -115,12 +115,11 @@ install/
 | 開關 | 意思 |
 |---|---|
 | `SECRETS_MODE=sp|plain` | 密碼放法：第 15 站 Secret Protection（只有 PAM）／不處理（不建議，15 站直接略過） |
-| `PVWA_SAFE` | PVWA 裡放本平台 object 的 safe 名稱（15、16 站印給 Secrets 團隊的清單與選單設定用） |
 | `OPMENU` `JMX_EXPORTER` `AUDIT_LOG` | 16／17／18 站要不要做 |
 
-選單的緊急憑證（91）由維運人員從 PVWA 取出貼上（沒有其他來源可選）；主機用的 ssh 私鑰就是 `/secure/ssh` 的那個檔，不經 PVWA。
+選單的緊急憑證（91）是操作機上的檔案 `~/secrets/opmenu-breakglass.pem`（0600、owner 是執行者，16 站組好、20 站換發時舊的另存 `.prev`），選單設定項 `OPMENU_BREAKGLASS_PEM` 可改路徑；主機用的 ssh 私鑰就是 `/secure/ssh` 的那個檔。兩者都不經 PVWA。
 
-15 站一次把 15.2–15.5 做完，只滾動重啟一次；18 站依 `~/conf/secrets.mode`（15 站留下的）決定密碼怎麼放。
+15 站一次把 15.1–15.5 做完，只滾動重啟一次；18 站依 `~/conf/secrets.mode`（15 站留下的）決定密碼怎麼放。
 
 ## 和文件的差異（刻意的）
 

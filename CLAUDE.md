@@ -18,7 +18,7 @@ Details of the architecture and every component: @README.md
   path. New procedures are validated by running the raw commands on the lab, never only through the scripts.
 - The user drives the design discussion (`redesign/README.md`); record only confirmed decisions and open questions.
 - Never print a password, key or token in chat. Secrets live in 0600 files (`~/secrets/*.pass`, `~/pki/store.pass`,
-  `~/kafka-lab/pvwa/`, `~/kafka-lab/secrets.env`) and are read into variables at run time.
+  `~/kafka-lab/secrets.env`) and are read into variables at run time.
 
 ## Session start and hand-off (skill `handoff`)
 - First: `git branch --show-current` + `git worktree list`, then read `.claude/state/status-<branch>.md` and the
@@ -54,12 +54,12 @@ Details of the architecture and every component: @README.md
   and pass Windows paths through `cygpath -m` (Node is a Windows program: convert paths before handing them over).
 - ops02 → all hosts: user `cpuser` (UID/GID 1500, locked password), one key `/secure/ssh/cpuser_ed25519` (root 0400) on the
   separate file system simulated by docker volume `ops-secure` (no LUKS); `~/.ssh/config` makes plain `ssh kb01.poc.lab` use it.
-  It survives restarts (volume), nothing to re-paste. `~/kafka-lab/pvwa/` holds platform secrets only, never an ssh key.
+  It survives restarts (volume), nothing to re-paste. Platform secrets live only on ops02 (`~/secrets`, `~/pki`, root 0600); there is no vault simulation.
 - Bind mounts of Windows folders (9p) are slow for multi-GB reads: download inside the container, then copy out.
 - After a Docker Desktop restart check `docker ps --format '{{.Names}}' | cut -d- -f1 | sort | uniq -c`.
 - If every container's `timeout 5 ip addr` hangs, the VM's netlink is wedged: restart Docker Desktop, don't debug configs.
 - In the lab Claude plays the bank (`install/lab/bank-sim.sh`, or the guide's 銀行 blocks): AD (samba-tool on ad01),
-  CA (`~/kafka-lab/ca`), OS repo and NTP on repo01, nginx on lb01, PVWA (`~/kafka-lab/pvwa/`), the OS team (cpuser account, sshd drop-in, public key line with `from=`, install-period sudo on every host incl. ops02; `bank-sim.sh prepare`),
+  CA (`~/kafka-lab/ca`), OS repo and NTP on repo01, nginx on lb01, the OS team (cpuser account, sshd drop-in, public key line with `from=`, install-period sudo on every host incl. ops02; `bank-sim.sh prepare`),
   monitoring (Prometheus, Alertmanager, Grafana, webhook receiver) as four
   `lab-mon-*` containers (`bank-sim.sh monitoring`; remove them with `monitoring-stop` before any `down -v`).
 
@@ -71,8 +71,9 @@ Details of the architecture and every component: @README.md
 - Only Confluent packages and the JDK are version-locked; C3's `cyrus-sasl`/`openssl-devel` follow OS patching.
 - Apps connect directly with SCRAM; apps via REST Proxy must use client certificates (REST has no password path).
 - Humans use AD accounts; RBAC binds AD groups, never individuals. Platform services use certificates, not AD.
-- CyberArk at this customer = PAM only: a person logs in to the PVWA web page (AD + MFA), PSMP logs them in to ops02 as root; root and
-  `svc-mds-bind` rotated by CPM; platform secrets are vaulted in PVWA but rotated manually (Secret Protection master key: PVWA stores it, we rotate it).
+- CyberArk is decoupled from the platform (decided 2026-10-28): the only link is that a person logs in to the PVWA web page (AD + MFA) and PSMP
+  logs them in to ops02 as root. Platform secrets (passphrase, master key, SCRAM, svc-mds-bind, breakglass PEM, license) live only on ops02 in root-only
+  0600 files; nothing is vaulted; no CPM rotation — root is the bank's, `svc-mds-bind` is rotated by hand and the bank must tell us (update cipher text, rolling restart).
 - One SSH key pair (ed25519), private key only on ops02 in a separate encrypted file system `/secure/ssh` (root 0400), not in CyberArk, not backed up;
   ops02 rebuilt = new pair + OS team redeploys the public key. Public key in each host's `cpuser` authorized_keys with only `from="<ops02 IP>,127.0.0.1,::1"`.
   Rotation is manual (new+old coexist, guide 19.6). `cpuser` sudo: full `NOPASSWD` during install/upgrade, afterwards only `/etc/sudoers.d/cpuser-ops`
@@ -82,7 +83,7 @@ Details of the architecture and every component: @README.md
 - Monitoring (chapter 17): JMX exporter on controllers, brokers, REST Proxy, C3; Prometheus, Alertmanager and Grafana are the bank's, we deliver
   config + Confluent's official jmx-monitoring-stacks files (pinned commit, brought in through chapters 1-2). C3's embedded Prometheus/Alertmanager stay
   untouched and are not used for alerting (no C3 alert triggers/actions).
-- MDS token key pair is fixed (rotate only on compromise); cpuser sudo is `NOPASSWD` during install; CPM's reconcile account is not cpuser.
+- MDS token key pair is fixed (rotate only on compromise); cpuser sudo is `NOPASSWD` during install.
 
 ## Gotchas learned the hard way
 - A Rocky 9.6 image's default repo files point at the **latest 9.x** (mirrorlist with `$releasever` = 9): `dnf install` there installs 9.8 packages. Freeze to the vault (`dl.rockylinux.org/vault/rocky/9.6`, repo ids `vault96-*`); 9.8 lives in `pub/rocky/9.8`, 9.6 is not in `pub`.

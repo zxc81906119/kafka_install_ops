@@ -30,7 +30,7 @@ last_log() { tail -n "${1:-5}" /var/log/opmenu/opmenu.log; }
 echo "== A. bob 看 kb04 的日誌（用金鑰檔）"
 run_menu bob "$OUT/a.txt" 23 "kb04.$DOMAIN:confluent-server" 5
 check "選單紀錄：bob 的 23 號 OK" "grep -q '| bob | .*23 查看服務日誌 .* | OK |' <<<\"\$(last_log 10)\""
-check "沒有提示貼上私鑰" "! grep -q 'PVWA' '$OUT/a.txt'"
+check "沒有提示貼上私鑰" "! grep -q '貼上' '$OUT/a.txt'"
 check "操作機沒有 ssh-agent" "[ \"\$(pgrep -x ssh-agent | wc -l)\" = 0 ]"
 
 echo "== B. 私鑰檔暫時移走"

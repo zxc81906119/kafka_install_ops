@@ -191,9 +191,12 @@ promote() {
   if [ "$topic_count" -gt 0 ]; then ok "svc-ops 管理 client 可用（$topic_count 個 topic）"; else fail "svc-ops 管理 client 失敗"; fi
   leader_line=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')
   if [ -n "$leader_line" ]; then ok "kafka-internal 查 quorum 可用（$leader_line）"; else fail "kafka-internal 查 quorum 失敗"; fi
-  # 緊急身分：PVWA 裡那份要更新（交給 Secrets 團隊換 PVWA 裡的 object）
-  if [ "$OPMENU" = 1 ]; then
-    ask_bank "Secrets 團隊：PVWA 裡的緊急憑證換成新的（$KEYS_DIR/opmenu-breakglass.key + $CERTS_DIR/opmenu-breakglass.crt）。"
+  # 緊急身分：選單 91 讀的 ~/secrets/opmenu-breakglass.pem 換成新憑證（舊的另存 .prev）
+  if [ "$OPMENU" = 1 ] && [ -f "$KEYS_DIR/opmenu-breakglass.key" ]; then
+    local breakglass_pem=$SECRETS_DIR/opmenu-breakglass.pem
+    [ ! -f "$breakglass_pem" ] || install -m 0600 "$breakglass_pem" "$breakglass_pem.prev"
+    (umask 077; cat "$KEYS_DIR/opmenu-breakglass.key" "$CERTS_DIR/opmenu-breakglass.crt" > "$breakglass_pem")
+    ok "新憑證已放到 $breakglass_pem（0600；舊的另存 $breakglass_pem.prev）"
   fi
   local rest_app_code
   rest_app_code=$(rest_app_curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters")
