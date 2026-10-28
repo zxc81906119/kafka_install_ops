@@ -65,6 +65,10 @@
 
 ### 版本路徑：安裝基底與遷移目標
 
+下面這張圖把四層版本和遷移的先後順序畫在一起。
+
+![versionpath]
+
 | 層 | 安裝基底（第 1–20 章裝的） | 遷移目標（第 21、26、27 章） | 為什麼 |
 |---|---|---|---|
 | Confluent Platform | 8.2.4 | 8.3.2 | 第 21 章：套件滾動升級、finalize |
@@ -771,6 +775,10 @@ cd /out && find rpm rpm-target tools gpg-keys monitoring -type f | LC_ALL=C sort
 
 ## 2.2 檔案交換：送到操作機
 
+下面這張圖說明落地區裡每個目錄是什麼、之後各自送去哪裡用。
+
+![landing]
+
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
 正式環境由行內的檔案交換平台把核准的檔案送到操作機的 `~/landing`（root 的家目錄底下）。lab 裡：用 `docker cp` 模擬這個平台；送進去之後把目錄設成唯讀（對 root 其實擋不住寫入，只是約定「落地區的檔案不改」）：
@@ -844,6 +852,10 @@ sha256-ok
 | JDK | 完整 JDK（不是 headless／JRE） | 原廠支援排錯時需要（這本用的 Temurin tar 就是完整 JDK） |
 
 ## 3.1 安裝帳號 cpuser 與 SSH 金鑰
+
+下面這張圖畫的是：人怎麼進操作機，操作機又怎麼連到每一台主機。
+
+![access]
 
 **這一節在做什麼**：先由銀行 OS 團隊在每台主機建好安裝帳號 `cpuser`，小安在操作機產生 SSH 金鑰對，OS 團隊把公鑰放進每台主機，最後驗證「只有操作機能用這把金鑰登入」。這一節把「人怎麼進操作機」和「操作機怎麼連各主機」分開（完整設計見《CyberArk 登入與主機存取設計》）：
 
@@ -920,6 +932,10 @@ EOF
 ```
 
 ### 3.1.3 公鑰放進每台主機（銀行 OS 團隊）
+
+下面這張圖列出這把金鑰相關的每個檔案放在哪裡、權限多少、誰放的。
+
+![keyfiles]
 
 @role 銀行 OS 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -1597,6 +1613,10 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 
 ## 9.3 匯入前檢查、做成 keystore
 
+下面這張圖說明 keystore 和 truststore 各管什麼、兩台機器連線時互相檢查什麼。
+
+![trust]
+
 銀行回覆的憑證不能直接用：先拆開、逐張檢查，全部沒問題才打包成 Java 能讀的檔。這一節是小安防止「拿到錯的憑證才在啟動時才發現」的最後一關。
 
 @role 小安 | ops02 | root
@@ -1666,6 +1686,10 @@ kb01   5 files: cp-server.p12 kafka-internal.p12 mds-token-keypair.pem mds-token
 ```
 
 ## 10.2 設定檔
+
+下面這張圖是各個 listener 的用途，以及誰會連哪一個。
+
+![listeners]
 
 @role 小安 | ops02 | root
 
@@ -1929,6 +1953,10 @@ kc01  heap=384m exec=/etc/confluent/kafka/server.properties data=cp-kafka:conflu
 
 ## 10.4 格式化、啟動
 
+下面這張圖說明 KRaft quorum 的成員角色，以及 describe 輸出裡的 Lag 是什麼意思。
+
+![kraft]
+
 @role 小安 | ops02 | root
 
 格式化是替每台建立 Kafka 的儲存目錄與身分（只做一次）。整個叢集共用一個 cluster id、每台 controller 一個 directory id；controller 用動態 quorum（可以事後增減成員）格式化，並寫入緊急備用的 SCRAM 管理帳號 `kafka-admin`；broker 格式化成觀察者（observer：不參與 quorum 投票，只讀取 metadata）。
@@ -2005,6 +2033,14 @@ kb04 MDS=200
 # 11. 第十一站：帳號與權限
 
 ![identity]
+
+下面這張圖說明 svc-ops 這類身分怎麼用憑證換到 token，再進 TOKEN listener。
+
+![tokenflow]
+
+下面這張圖畫出一個人的權限怎麼從 AD 群組一路接到 Kafka 資源。
+
+![rbac]
 
 **這一章在做什麼**：叢集起來之後，建立「誰能做什麼」：操作機的管理身分、應用程式的 SCRAM 帳號、綁在 AD 群組上的 RBAC 角色（Role-Based Access Control，角色式權限）。前提：第 10 章的 broker 與 MDS 都已經正常。
 
@@ -2286,6 +2322,10 @@ via LB: 200
 
 ## 12.1 之後每次重啟 REST Proxy：先請 LB 團隊停用那一台
 
+下面這張圖把五步每一步時，兩台 REST Proxy 各是什麼狀態畫出來。
+
+![restdrain]
+
 **這一節在做什麼**：定出之後每次重啟 REST Proxy 的標準做法（先請 LB 團隊把那一台停用，等連線排空再重啟），避免應用程式在重啟那幾秒收到錯誤。原因：nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（遷移實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26 章）都照這個順序：
 
 1. LB 團隊停用 rest01 → 2. 小安等連線排空、重啟 rest01、確認 200 → 3. LB 團隊恢復 rest01、停用 rest02 → 4. 小安重啟 rest02 → 5. LB 團隊恢復 rest02
@@ -2406,6 +2446,10 @@ kill $(cat /tmp/lbprobe.pid); sleep 1; echo "經 LB 打了 $(wc -l < /tmp/lbprob
 > 對照：不排空、直接重啟兩台，同樣的探測 lab 實測 68 次裡 1 次失敗（請求剛好落在重啟的那一刻）。應用程式若用長連線（HTTP keep-alive），排空會等到它們斷線為止；60 秒還沒斷，腳本停下不重啟，要和應用程式團隊確認再做。
 
 # 13. 第十三站：Control Center
+
+下面這張圖分清楚 C3 內建的監控元件和銀行的監控各管什麼。
+
+![c3roles]
 
 **這一章在做什麼**：在 c3-01 安裝 Control Center（C3，Confluent 的網頁管理介面），讓維運人員用 AD 帳號登入、看叢集狀況。前提：第 10、11 章的 broker、MDS 與 RBAC 已就緒，第 9 章的 `svc-c3` 憑證已做好。完成的樣子：瀏覽器開 9021 可以用 alice 登入，且畫面有資料。
 
@@ -2676,6 +2720,10 @@ metrics in prometheus: 111 kinds
 | lab 專用：Docker VM 網路層卡死 | 所有 Java 都變慢、`docker stats` 也卡 | 任一容器 `timeout 5 ip addr` 卡住就重啟 Docker Desktop，不要查設定 |
 
 # 15. 第十五站：Secret Protection，master key 交 CyberArk 保管
+
+下面這張圖說明 passphrase、master key、密文三者的關係與各自放哪裡。
+
+![keyhier]
 
 
 ![secretprotection]
@@ -3143,6 +3191,10 @@ kb01 bind 欄位仍是密文參照：1
 # 16. 第十六站：維運選單（OP menu）
 
 ![opmenu]
+
+下面這張圖跟著一次選單操作，從登入走到記錄。
+
+![opmenuflow]
 
 **這一章在做什麼**：裝一個給維運人員用的文字選單（OP menu），讓他們用自己的 AD 帳號做日常作業（看狀態、重啟、看日誌、建 topic、查權限），不用記指令。前提：第 11 章的 RBAC 與 AD 群組已經建好，第 9 章的 `opmenu-breakglass` 憑證已簽發，3.1 的 cpuser 金鑰可用。名詞：選單裡每個項目有編號（例如 21 重啟、23 看日誌、91 緊急模式）；「緊急模式」就是平常用不到、用於 MDS 故障時的備用路徑（break-glass）。
 
@@ -4149,6 +4201,10 @@ Windows 瀏覽器開 `http://localhost:13000` 就是 Grafana，左邊 Dashboards
 
 ## 17.8 測告警：兩種 webhook 格式與解除
 
+下面這張圖畫出一條告警從指標到兩種 webhook 的路徑。
+
+![alertpath]
+
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
 不用弄壞叢集：在 Prometheus 多放一條永遠成立的測試規則（`vector(1)`），帶著和正式規則一樣的標籤與註解（`description` 裡故意放了雙引號和冒號，看自訂 JSON 會不會被弄壞）。Prometheus 重新載入規則後，告警送到 Alertmanager，約 1 分鐘內（規則每 30 秒算一次，再加 Alertmanager 的 group_wait 10 秒）兩個 receiver 都會收到：
@@ -4731,6 +4787,10 @@ kc01: /tmp 殘留 0 個；sudoers cpuser,cpuser-ops,
 
 
 ## 19.6 演練：換 SSH 金鑰（人工、不中斷）
+
+下面這張圖把換金鑰五個步驟每個時間點的狀態畫成表。
+
+![keyrotate]
 
 金鑰長期不換是風險，所以定期人工換一次（週期見問題清單 4.6）。做法是「新舊並存」：先讓各主機同時認得新舊兩把公鑰，確認新金鑰能登入每一台，再換掉操作機上的私鑰、刪掉舊公鑰。**每個時間點操作機上都有一把能用的私鑰**，所以不中斷。全程在操作機以 root 做；cpuser 自己的 `authorized_keys` 由 cpuser 改（用舊金鑰登入去改），不需要 OS 團隊，也不動 sudo。
 
@@ -5910,6 +5970,10 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 ![upgrade]
 
+下面這張圖把遷移每一節的先後排出來，並標出不能回頭的那一步。
+
+![migrationflow]
+
 安裝基底（第 1–20 章）裝的是 **Confluent Platform 8.2.4**、**Control Center 2.5.1**、**JDK 21**。這一章是主線的下一步：遷移到 **Confluent Platform 8.3.2**，C3 同時升到 **2.6.1**，並把 **JDK 21 換成 25**。順序和原因：
 
 - **C3 先升**：原廠相容表上 C3 2.5.x 只支援到 CP 8.2.x，2.6.x 才支援到 8.3.x（2.6.x 的範圍是 7.5.15 到 8.3.x，所以 2.6.1 配著 8.2.4 也在支援範圍內）。CP 一升到 8.3，2.5.1 就落在支援範圍外，所以 C3 要在 broker 之前換（21.3）。
@@ -6423,6 +6487,10 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 
 # 23. 第二十三站：換掉一台 controller
 
+下面這張圖畫出換掉 kc03 的每一步，quorum 裡的成員怎麼變。
+
+![controllerswap]
+
 **這一章在做什麼**：controller 的主機壞了或資料碟壞了，怎麼把它換成一台新的，而不中斷叢集。順序：先看 quorum（23.1）→ 模擬壞掉（23.2，lab 專用）→ 把舊成員移出（23.3）→ 重新格式化並追上（23.4）→ 加回（23.5）。前提：其他兩台 controller 健康。
 
 controller 的 quorum 是動態的（第 10 章用 `--initial-controllers` 格式化）：成員是「node id＋directory id」。換一台 controller，就是把舊的那組移出 quorum、把新的那組加進來，一次只動一個成員。
@@ -6547,6 +6615,10 @@ kb01 MDS=200 kb02 MDS=200 kb03 MDS=200 kb04 MDS=200
 
 # 24. 第二十四站：broker 縮減與擴充
 
+下面這張圖畫出縮減、再擴充 kb04 的過程。
+
+![brokerscale]
+
 **這一章在做什麼**：拿掉一台 broker（縮減）、或加一台 broker（擴充），應用程式不中斷。順序：先做前置檢查（24.1）→ 縮減（24.2）→ 擴充（24.3）。名詞：Self-Balancing 是 Confluent 的自動資料平衡功能，負責把 partition 的 replica 搬到合適的 broker。
 
 broker 的資料由 Self-Balancing（第 10 章 `confluent.balancer.enable=true`）搬：縮減時用 `kafka-remove-brokers` 把要拿掉的那台的 replica 全部搬走、它自己關機；擴充時空的 broker 一加入，Self-Balancing 自動把資料搬過去。
@@ -6658,6 +6730,10 @@ for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep
 ```
 
 # 25. 第二十五站：日常備份
+
+下面這張圖說明每天的匯出流程，以及三類備份各自的處理方式。
+
+![backup]
 
 **這一章在做什麼**：每天自動把叢集的「設定類」中繼資料（誰有什麼權限、有哪些 topic 與設定）匯出成文字檔，遇到誤刪時能照著重建。訊息本身不備份。順序：建專用的唯讀身分（25.1、25.2）→ 匯出腳本（25.3）→ 排程（25.4）→ 怎麼比對與還原（25.5）。
 
@@ -6856,6 +6932,10 @@ orders.backup-demo 還在嗎：0
 還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。
 
 # 26. 第二十六站：OS 修補與小版本更新
+
+下面這張圖把整章的順序和每台機器重複做的事畫出來。
+
+![ospatch]
 
 **這一章在做什麼**：銀行的作業系統要更新（每月修補，或 9.6 → 9.8 小版本）時，我方怎麼一台一台修，修完確認平台健康。前提：Confluent 套件已被 versionlock 鎖住（第 8 章）。主線上接在第 21 章之後。
 
