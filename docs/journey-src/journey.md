@@ -4056,7 +4056,7 @@ new passphrase: 32 chars
 小安手上還有舊 passphrase（`sp-passphrase.txt`），用 `rotate --master-key` 把 data key 重新包一次。密碼本身與 properties 都不動，只有 `security.properties` 和各主機的 `service.env` 要換：
 
 ```bash
-cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && cp -p ~/secrets/master.key ~/secrets/master.key.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && (umask 077; confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "$(cat ~/secrets/sp-passphrase-new.txt)" --local-secrets-file ~/secrets/security.properties -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key) && unset CONFLUENT_SECURITY_MASTER_KEY && echo "master key changed: $([ "$(sha256sum < ~/secrets/master.key)" = "$(sha256sum < ~/secrets/master.key.bak)" ] && echo no || echo yes)" && mv ~/secrets/sp-passphrase-new.txt ~/secrets/sp-passphrase.txt && (umask 077; echo "CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)" > ~/secrets/service.env) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/secrets/security.properties ~/secrets/service.env $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && sudo install -o root -g root -m 0600 /tmp/service.env /etc/confluent/service.env && rm -f /tmp/security.properties /tmp/service.env && printf "%s " $(hostname)'; done; rm -f ~/secrets/service.env; echo
+cp -p ~/secrets/security.properties ~/secrets/security.properties.bak && cp -p ~/secrets/master.key ~/secrets/master.key.bak && export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key) && (umask 077; confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "$(cat ~/secrets/sp-passphrase-new.txt)" --local-secrets-file ~/secrets/security.properties -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key) && unset CONFLUENT_SECURITY_MASTER_KEY && echo "master key changed: $([ "$(sha256sum < ~/secrets/master.key)" = "$(sha256sum < ~/secrets/master.key.bak)" ] && echo no || echo yes)" && cp -p ~/secrets/sp-passphrase.txt ~/secrets/sp-passphrase.prev.txt && mv ~/secrets/sp-passphrase-new.txt ~/secrets/sp-passphrase.txt && (umask 077; echo "CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)" > ~/secrets/service.env) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/secrets/security.properties ~/secrets/service.env $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && sudo install -o root -g root -m 0600 /tmp/service.env /etc/confluent/service.env && rm -f /tmp/security.properties /tmp/service.env && printf "%s " $(hostname)'; done; rm -f ~/secrets/service.env; echo
 ```
 
 ```out
@@ -4067,12 +4067,12 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 
 （精簡的 OS 沒有 `cmp`，所以用 sha256sum 比對。）
 
-新的 master key 上線前先把舊的留好：舊 passphrase 另存 `.prev`（舊 master key 已經在 `master.key.bak`，回滾要用），新 passphrase 換成現行檔，再記下新 master key 的雜湊和變更單號：
+上一步已經把舊 passphrase 另存 `.prev`、新的換成現行檔（舊 master key 在 `master.key.bak`，回滾要用）。記下新 master key 的雜湊和變更單號：
 
 @role 小安 | ops02 | root
 
 ```bash
-cp -p ~/secrets/sp-passphrase.txt ~/secrets/sp-passphrase.prev.txt && mv ~/secrets/sp-passphrase-new.txt ~/secrets/sp-passphrase.txt && (umask 077; echo "$(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12) CHG-yyyy" > ~/secrets/master-key.custody) && cat ~/secrets/master-key.custody
+(umask 077; echo "$(tr -d '\n' < ~/secrets/master.key | sha256sum | cut -c1-12) CHG-yyyy" > ~/secrets/master-key.custody) && cat ~/secrets/master-key.custody
 ```
 
 ```out
