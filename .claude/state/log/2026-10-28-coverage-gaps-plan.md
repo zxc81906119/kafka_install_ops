@@ -17,3 +17,7 @@
 - 做法（兩層）：①blackbox_exporter（銀行的監控主機）探 server 憑證，`probe_ssl_earliest_cert_expiry - time()`，60 天 warning、30 天 critical；要 mTLS 的埠（REST 8082、C3 9090、controller 9093）需另一張專用 clientAuth 探測憑證，且它自己也要被監控；②操作機每日腳本讀 `~/pki/certs/*.crt` 的 notAfter（涵蓋我方持有的 client 憑證），寫 syslog 沿用 22 章路徑。
 - 看不到的：應用程式的 client 憑證（在別人機器上，靠銀行 CA／CLM）、truststore 的根與中繼（server 不送根）。
 - 寫法：放在第 17 章補章，標明「選配、建議」；問題清單加一題：銀行 CA／資安有沒有憑證到期通知機制、通知誰、提前幾天。先手動 lab 驗證再做腳本，順序排在前面四項之後。
+
+## 20.6 應用程式 SCRAM 密碼輪替（2026-10-28 追加，使用者排入）
+- 現況：只有 OP menu 34／35／37（A／B）；手冊沒有手動演練；lab 的 apps.txt 是單一帳號（app-orders、app-payments），和 A／B 設計不一致，35 在 lab 沒真正輪替過。
+- 要做：apps.txt／rbac.txt 改成 -a／-b 兩帳號同一組 binding（第 11 章、11 站）；新增 20.6 手動演練（流量不中斷、舊密碼被拒）；16.5 加 35 試跑；19 站驗收加一項。順序：23.6 之後、24 之前。
