@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-29 03:00（lab 使用中：補章進行中；叢集在最終狀態，app-orders 現在用 -b）
+Updated: 2026-10-29 03:40（lab 使用中：補章進行中；叢集在最終狀態，app-orders 現在用 -b）
 
 ## 現在在做什麼
 `bash docs/journey-src/tools/run-full.sh customer` 從零跑（開始 10:46，紀錄 `~/kafka-lab-runs/run-customer-0-99-20261028-1046.log`，路徑也在 `~/kafka-lab-runs/current-log.txt`）。
@@ -12,6 +12,7 @@ Updated: 2026-10-29 03:00（lab 使用中：補章進行中；叢集在最終狀
 - 2026-10-28：cp-server 改純 server（certs.txt、09／13／14／19／20 站、control-center.tpl、prometheus-generated.yml、手冊第 9／13／20 章、問題清單 6.2、圖）；19 站新增驗收「cp-server 只有 serverAuth 且連 9090 被拒」；第 17 章 raft 指標說明更正、兩條 raft 告警刪除。docx 已重建。
 
 ## 進行中（2026-10-29 凌晨）
+- **第 24 章 磁碟與容量完成**（手動 9/9 塊 `run-full customer 24 24`；`24-disk.sh usage｜alerts｜drill`、`bank-sim.sh monitoring-reload`、run-customer 第 26 段，之後各段 +1；規則 19 → 21 條；問題清單 4.9／11.9；圖 D.disk；log/2026-10-29-ch24-disk.md）。接著：28 故障排查速查 → 27 新應用上線 → 22 憑證到期監控（lab 要建）→ 30 章套件庫保險。
 - **腳本版從零重跑完成（02:02）**：全過、八次驗收 40/40、C3 JDK 25 驗證通過（細節 log/2026-10-28-script-run-and-next.md 最後一節）。第 4 項（從零重跑）**完成**；手冊修正（21.3 換 ca.pem、operators DeveloperRead、11.2／16.5／18.3 數值）由下一輪手冊實跑驗。
 - 補章：**23.6 還原演練完成**（手動 12/12、腳本 drill 通過、run-customer 第 25 段）→ **20.6 SCRAM A/B 完成**（第 11 章/11 站建 -a/-b；手動 20 章 23/23、16 章 15/15；19 站 42/42；16 站加 35 試跑通過）→ 24 → 28 → 27 → 22 → 30 保險。每章手動 → 文件 → 腳本。
 

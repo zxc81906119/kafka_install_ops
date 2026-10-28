@@ -5801,7 +5801,214 @@ app-restore 寫一筆：ok；讀回：1
 
 # 24. 第二十四站：磁碟與容量
 
-**這一章在做什麼**（待補）：broker 資料盤使用率的告警（第 17 章的規則補一條）、快滿時怎麼處理（retention、搬 partition）、換資料碟與擴容的程序。先手動在 lab 走一次，再做成腳本。
+下面這張圖是這一章的地圖：用量在哪裡看（24.1）、資料盤有哪三種告警訊號（24.2）、快滿時照什麼順序做（24.3）。
+
+![disk]
+
+**這一章在做什麼**：broker 的資料盤（`log.dirs=/var/lib/kafka/data`，第 10 章）是平台裡唯一會自己長大的東西：topic 沒設 retention、應用程式流量變大、replication factor 3 讓每筆訊息存三份。這一章把「看用量 → 告警 → 快滿時的處理 → 擴容與換碟」走一遍，24.3 在 lab 用一個示範 topic 真的做：寫 5 MB、縮短 retention 看 segment 被刪、再把 partition 搬到別台 broker。前提：第 14 章的檢查正常、第 17 章的監控已接上（24.2 要多給一個規則檔）。完成的樣子：24.1 印得出每台 broker 的合計與最大的 topic；銀行 Prometheus 多載入一個規則檔（19 → 21 條）；示範 topic 縮短 retention 後三個 replica 都變 0、partition 搬離 kb01 後 kb01 上的目錄消失。
+
+## 24.1 看用量：哪台 broker、哪個 topic 吃多少
+
+@role 小安 | ops02 | root
+
+Kafka 自己知道每個 partition 在每台 broker 占多少位元組（`kafka-log-dirs`，走管理 listener，不用 ssh 進主機；維運人員用 OP menu 也能查）。輸出的最後一行是 JSON，用 python 整理成「每台合計、partition 數、最大的三個 topic」：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-log-dirs --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe 2>/dev/null | tail -1 | python3 -c '
+import json, sys, collections
+d = json.load(sys.stdin)
+for b in sorted(d["brokers"], key=lambda b: b["broker"]):
+    for ld in b["logDirs"]:
+        by = collections.Counter()
+        for p in ld["partitions"]:
+            by[p["partition"].rsplit("-", 1)[0]] += p["size"]
+        top = ", ".join("%s %.1f MB" % (t, s / 1048576) for t, s in by.most_common(3))
+        print("broker %s %s: %.1f MB, %d partitions; 最大: %s" % (b["broker"], ld["logDir"], sum(by.values()) / 1048576, len(ld["partitions"]), top))'
+```
+
+```out
+broker 101 /var/lib/kafka/data: 9.1 MB, 150 partitions; 最大: _confluent-telemetry-metrics 8.0 MB, __consumer_offsets 0.4 MB, orders.load 0.2 MB
+broker 102 /var/lib/kafka/data: 11.5 MB, 154 partitions; 最大: _confluent-telemetry-metrics 10.1 MB, __consumer_offsets 0.4 MB, orders.load 0.3 MB
+broker 103 /var/lib/kafka/data: 10.7 MB, 150 partitions; 最大: _confluent-telemetry-metrics 9.5 MB, __consumer_offsets 0.3 MB, orders.load 0.2 MB
+broker 104 /var/lib/kafka/data: 3.3 MB, 149 partitions; 最大: _confluent-telemetry-metrics 2.7 MB, __consumer_offsets 0.2 MB, orders.events 0.1 MB
+```
+
+lab 裡最大的是 `_confluent-telemetry-metrics`（Confluent 自己的 telemetry topic，retention 由它自己管）；正式環境看的是應用程式的 topic，而且數字會是 GB 起跳。正式環境有多個 `log.dirs` 時每個目錄各一行。
+
+資料盤本身還剩多少，用 `df` 看每台 broker。`/var/lib/kafka/data` 是 0750，但 `df` 看的是掛載點 `/var/lib/kafka`，cpuser 不用 sudo：
+
+```bash
+for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab "df -h /var/lib/kafka | awk -v h=$h 'NR==2 {print h\": \"\$3\" 用 / \"\$2\"（\"\$5\"）掛在 \"\$6}'"; done
+```
+
+```out
+kb01: 149G 用 / 1007G（16%）掛在 /
+kb02: 149G 用 / 1007G（16%）掛在 /
+kb03: 149G 用 / 1007G（16%）掛在 /
+kb04: 149G 用 / 1007G（16%）掛在 /
+```
+
+（lab 是容器，資料盤是和 OS 共用的 overlay，所以四台都顯示整個根目錄；正式環境 `/var/lib/kafka` 是獨立的 XFS 掛載點，7.2 有檢查，每台會各自不同。）
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+同樣的數字銀行 Prometheus 也有：第 17 章的 exporter 規則把每個 partition 的大小變成 `kafka_log_log_size`，可以依 topic 加總、畫趨勢；`kafka_log_logmanager_logdirectoryoffline` 是每台 broker 的 log dir 是否離線（0 正常）。lab 從容器裡查（`__cluster_metadata` 是 KRaft 的 metadata log，每台 broker 都有一份，不是 topic；`topk` 會把它一起列出來）：
+
+```bash
+docker run --rm --network lab_labnet lab-node:96 bash -c 'q() { curl -s --data-urlencode "query=$1" http://lab-mon-prometheus:9090/api/v1/query; }; q "topk(3, sum by (topic) (kafka_log_log_size))" | python3 -c "
+import json, sys
+for r in json.load(sys.stdin)[\"data\"][\"result\"]: print(\"%-32s %.1f MB（三個 replica 合計）\" % (r[\"metric\"][\"topic\"], float(r[\"value\"][1]) / 1048576))"; q "count(kafka_log_logmanager_logdirectoryoffline{job=\"kafka-broker\"} == 0)" | python3 -c "
+import json, sys
+print(\"log dir 正常的 broker：%s / 4\" % json.load(sys.stdin)[\"data\"][\"result\"][0][\"value\"][1])"'
+```
+
+```out
+_confluent-telemetry-metrics     30.1 MB（三個 replica 合計）
+__cluster_metadata               17.4 MB（三個 replica 合計）
+__consumer_offsets               1.2 MB（三個 replica 合計）
+log dir 正常的 broker：4 / 4
+```
+
+## 24.2 告警：資料盤的三種訊號
+
+@role 小安 | ops02 | root
+
+| 訊號 | 誰的指標 | 規則 | 意思 |
+|---|---|---|---|
+| log dir 離線 | 我方 JMX exporter：`kafka_log_logmanager_logdirectoryoffline` | `KafkaLogDirOffline`（這一節加） | 磁碟壞了或滿到寫不進去；只有一個 `log.dirs` 時 broker 會自己停掉，`ConfluentTargetDown` 也會響 |
+| 資料盤用量超過 80% | 銀行主機監控（node_exporter 的 `node_filesystem_*`） | `KafkaDataDiskFillingUp`（這一節給**範例**，mountpoint、job 由銀行改） | 滿之前就通知，照 24.3 處理；滿了 broker 就停 |
+| broker 停了 | 第 17 章既有 | `ConfluentTargetDown`、`KafkaUnderReplicatedPartitions` | 磁碟事件的後果，不是原因 |
+
+Kafka 的 JMX 沒有「磁碟剩多少」這種指標（它只知道自己寫了多少），所以用量告警一定靠主機層：銀行既有的 node_exporter（或其他主機監控）。我們給的是第二個規則檔，和 17.5 的 `confluent-alerts.yml` 放在一起；17.6 的 `rule_files` 用的是 `confluent-alerts*.yml`，新檔放進去 reload 就會載入。整段貼到 EOF：
+
+```bash
+cat > ~/monitoring/to-bank/prometheus/confluent-alerts-disk.yml <<'EOF'
+# Disk and capacity rules for the bank's Prometheus (guide, chapter 24.2). Loaded next to confluent-alerts.yml
+# (rule_files: /etc/prometheus/confluent/confluent-alerts*.yml). Same label conventions as confluent-alerts.yml.
+groups:
+  - name: kafka-disk
+    rules:
+      # source: ours. kafka.log:type=LogManager,name=LogDirectoryOffline (one series per log dir) really exists on Confluent Server 8.2.4 / 8.3.2.
+      # With a single log.dirs the broker shuts itself down when the directory fails, so ConfluentTargetDown fires too; this rule names the directory.
+      - alert: KafkaLogDirOffline
+        expr: max by (hostname, logdirectory) (kafka_log_logmanager_logdirectoryoffline{job="kafka-broker"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: log directory {{ $labels.logdirectory }} offline"
+          description: "Broker {{ $labels.hostname }} reports its log directory {{ $labels.logdirectory }} offline (disk error or full file system). Its partitions moved to other leaders; check dmesg, df -h and the broker log, then repair or replace the disk (guide 24.4)."
+      # source: ours, EXAMPLE for the bank's host monitoring: needs node_exporter on the brokers (the bank's, not ours; the lab has none, so this rule never fires there).
+      # Adjust mountpoint, job and threshold to the bank's node_exporter setup; the point is to page before the disk is full, not after.
+      - alert: KafkaDataDiskFillingUp
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/var/lib/kafka"} / node_filesystem_size_bytes{mountpoint="/var/lib/kafka"}) > 0.80
+        for: 15m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.instance }}: Kafka data disk above 80%"
+          description: "The data disk of {{ $labels.instance }} is {{ $value | humanizePercentage }} full. Follow guide 24.3: find the biggest topics (kafka-log-dirs), shorten retention or move partitions, then grow the disk (24.4). At 100% the broker stops."
+EOF
+echo "confluent-alerts-disk.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/prometheus/confluent-alerts-disk.yml) 條規則"
+```
+
+```out
+confluent-alerts-disk.yml: 2 條規則
+```
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+正式環境是銀行監控團隊把這個檔放到 `/etc/prometheus/confluent/`、reload Prometheus，再把 `KafkaDataDiskFillingUp` 的 mountpoint 與 job 改成行內 node_exporter 的寫法。lab：複製進 `bank-monitoring/prometheus/confluent/`（Prometheus 容器唯讀掛著這個資料夾）；`prometheus.yml` 的 `rule_files` 若還是單一檔名就改成 `confluent-alerts*.yml`（17.6 的寫法）；`prometheus.yml` 是以單檔掛進容器的，改了要 `docker restart` 才讀得到（正式環境是 reload）。剛載入的規則 health 是 unknown，要等過一次 evaluation（30 秒）才變 ok，所以數規則前最多等 100 秒：
+
+```bash
+cd ~/kafka-lab/bank-monitoring && docker cp lab-ops02-1:/root/monitoring/to-bank/prometheus/confluent-alerts-disk.yml "$(cygpath -m "$PWD/prometheus/confluent/confluent-alerts-disk.yml")" && { grep -q 'confluent-alerts\*\.yml' prometheus/prometheus.yml || sed -i 's#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml; } && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do docker exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done && for i in $(seq 1 20); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
+import json, sys
+g = json.load(sys.stdin)[\"data\"][\"groups\"]
+r = [x for y in g for x in y[\"rules\"]]
+print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".join(y[\"name\"] for y in g), sum(x[\"health\"] != \"ok\" for x in r)))"'); grep -q '載入有錯 0 條' <<<"$r" && break; sleep 5; done; echo "$r"
+```
+
+```out
+告警規則 21 條（kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+```
+
+> lab 沒有 node_exporter，`KafkaDataDiskFillingUp` 的查詢永遠是空的，規則載入正常但不會響；`KafkaLogDirOffline` 的指標四台 broker 都有（24.1 查過是 0）。磁碟真的壞掉沒辦法在 lab 演，這一條靠規則載入與指標存在來確認。
+
+## 24.3 快滿時：先爭取空間，再處理根因
+
+@role 小安 | ops02 | root
+
+資料盤用量告警響了（或 24.1 看到某台快滿），依序做，每一步做完都回 24.1 看一次：
+
+| 順序 | 動作 | 指令 | 注意 |
+|---|---|---|---|
+| ① | 找最大的 topic | 24.1 的 `kafka-log-dirs` | 通常是沒設 retention 的 topic（預設 `log.retention.hours=168`，7 天）或流量突然變大的 topic |
+| ② | 縮短 retention | `kafka-configs --alter --entity-type topics --entity-name <topic> --add-config retention.ms=<毫秒>`（或 `retention.bytes`） | 只刪**關掉的** segment，現用的那個不刪；broker 每 `log.retention.check.interval.ms`（預設 5 分鐘）檢查一次才真的刪。事後記得改回來（`--delete-config retention.ms` 回到 broker 預設） |
+| ③ | 精準刪到某個 offset | `kafka-delete-records --offset-json-file`（指定 topic、partition、offset） | 應用程式確定不再讀這段才做；也是等下一次檢查才釋放空間（lab 實測 kb03 13 秒、kb01 4 分半） |
+| ④ | 把 partition 搬離那台 | `kafka-reassign-partitions --execute`（下面示範） | 搬的時候是一份完整的複製流量，正式環境加 `--throttle <bytes/s>`；搬完舊 broker 上的目錄自己消失 |
+| ⑤ | 加 broker、擴容 | 25.2.3、24.4 | Self-Balancing 會把 partition 搬到新 broker |
+
+不要做的事：手動 `rm` `/var/lib/kafka/data` 底下的檔（broker 會壞、replica 掉出 ISR），也不要停 broker 來「省空間」（它的 partition 只是換別台繼續長）。
+
+lab 用一個示範 topic 走 ②、④：segment 設成 1 MB（預設 1 GB，這樣才看得到 segment 被刪），寫 50000 筆 × 100 B，三個 replica 各 5 MB 多：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && sz() { kafka-log-dirs $A --describe --topic-list orders.disk-demo 2>/dev/null | tail -1 | python3 -c 'import json, sys; d = json.load(sys.stdin); print(", ".join("broker %s %d KB" % (b["broker"], p["size"] // 1024) for b in sorted(d["brokers"], key=lambda b: b["broker"]) for ld in b["logDirs"] for p in ld["partitions"]))'; } && kafka-topics $A --create --if-not-exists --topic orders.disk-demo --partitions 1 --replication-factor 3 --config segment.bytes=1048576 >/dev/null 2>&1 && kafka-producer-perf-test --topic orders.disk-demo --num-records 50000 --throughput -1 --record-size 100 --producer.config ~/conf/app-orders.properties --producer-props bootstrap.servers=kb01.poc.lab:9095 2>&1 | tail -1 | grep -o '^[0-9]* records sent' && sleep 3 && echo "寫入後：$(sz)" && echo "replica 在：$(kafka-topics $A --describe --topic orders.disk-demo 2>/dev/null | grep -o 'Replicas: [0-9,]*')"
+```
+
+```out
+50000 records sent
+寫入後：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
+replica 在：Replicas: 101,103,102
+```
+
+② 縮短 retention 到 60 秒。改完 Kafka 不會馬上刪：要等 broker 的 retention 檢查（每 5 分鐘），輪到時連現用的 segment 也會被關掉、刪掉（資料都超過 60 秒了），所以三個 replica 最後都是 0。這裡每 10 秒看一次、最多等 7 分鐘：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && sz() { kafka-log-dirs $A --describe --topic-list orders.disk-demo 2>/dev/null | tail -1 | python3 -c 'import json, sys; d = json.load(sys.stdin); print(", ".join("broker %s %d KB" % (b["broker"], p["size"] // 1024) for b in sorted(d["brokers"], key=lambda b: b["broker"]) for ld in b["logDirs"] for p in ld["partitions"]))'; } && kafka-configs $A --alter --entity-type topics --entity-name orders.disk-demo --add-config retention.ms=60000 >/dev/null 2>&1 && echo "retention.ms=60000 已設 $(date +%T)" && for i in $(seq 1 42); do s=$(sz); grep -qE '[1-9][0-9]{3} KB' <<<"$s" || break; sleep 10; done; echo "等了約 $((i*10)) 秒：$s" && kafka-configs $A --alter --entity-type topics --entity-name orders.disk-demo --delete-config retention.ms >/dev/null 2>&1 && echo "retention.ms 已改回 broker 預設"
+```
+
+```out
+retention.ms=60000 已設 03:12:25
+等了約 220 秒：broker 101 0 KB, broker 102 0 KB, broker 103 0 KB
+retention.ms 已改回 broker 預設
+```
+
+④ 把 partition 搬離 kb01（broker 101）。再寫一次 50000 筆讓它有東西可搬，寫一個 reassignment JSON 指定新的 replica 名單 `102,103,104`，`--execute` 開始、`--verify` 等到 completed；搬完 kb01 上的 partition 目錄自己消失（lab 5 MB 三秒就好；正式環境 GB 級要加 `--throttle`）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && sz() { kafka-log-dirs $A --describe --topic-list orders.disk-demo 2>/dev/null | tail -1 | python3 -c 'import json, sys; d = json.load(sys.stdin); print(", ".join("broker %s %d KB" % (b["broker"], p["size"] // 1024) for b in sorted(d["brokers"], key=lambda b: b["broker"]) for ld in b["logDirs"] for p in ld["partitions"]))'; } && kafka-producer-perf-test --topic orders.disk-demo --num-records 50000 --throughput -1 --record-size 100 --producer.config ~/conf/app-orders.properties --producer-props bootstrap.servers=kb01.poc.lab:9095 >/dev/null 2>&1; sleep 3; echo "搬之前：$(sz)" && printf '{"version":1,"partitions":[{"topic":"orders.disk-demo","partition":0,"replicas":[102,103,104]}]}\n' > ~/conf/disk-demo-reassign.json && kafka-reassign-partitions $A --reassignment-json-file ~/conf/disk-demo-reassign.json --execute 2>&1 | grep -E '^Successfully|^Error'; t0=$(date +%s); for i in $(seq 1 30); do kafka-reassign-partitions $A --reassignment-json-file ~/conf/disk-demo-reassign.json --verify 2>/dev/null | grep -q 'is completed' && break; sleep 5; done; echo "搬完（$(( $(date +%s) - t0 )) 秒）：$(sz)" && echo "replica 在：$(kafka-topics $A --describe --topic orders.disk-demo 2>/dev/null | grep -o 'Replicas: [0-9,]*')" && sleep 5 && echo "kb01 上的目錄：$(ssh kb01.poc.lab 'sudo ls -d /var/lib/kafka/data/orders.disk-demo-0* 2>/dev/null || echo 不存在')"
+```
+
+```out
+搬之前：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
+Successfully started partition reassignment for orders.disk-demo-0
+搬完（3 秒）：broker 102 5370 KB, broker 103 5370 KB, broker 104 5370 KB
+replica 在：Replicas: 102,103,104
+kb01 上的目錄：不存在
+```
+
+清掉示範 topic（正式環境當然不做這步；要搬一整台 broker 的所有 partition 時，用 25.2.2 的 `kafka-remove-brokers` 讓 Self-Balancing 搬，不要自己寫幾百行 JSON）：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --delete --topic orders.disk-demo && rm -f ~/conf/disk-demo-reassign.json && echo "orders.disk-demo 已刪"
+```
+
+```out
+orders.disk-demo 已刪
+```
+
+## 24.4 擴容與換碟
+
+@role 小安 | ops02 | root
+
+| 情況 | 誰做 | 怎麼做 | broker 要停嗎 |
+|---|---|---|---|
+| 資料盤放大（VM 磁碟加大） | 銀行 OS 團隊 | LVM：`lvextend` + `xfs_growfs /var/lib/kafka`（XFS 只能線上放大，不能縮） | 不用；做完 24.1 的 `df` 確認 |
+| 同一台 broker 換資料碟 | OS 團隊換碟、我方做 25.2 | 25.2.2 `kafka-remove-brokers` 把 partition 搬走 → 停服務、換碟、掛回 `/var/lib/kafka` → 25.2.3 以空的 broker 加回，Self-Balancing 搬回 | 停這一台，叢集不中斷 |
+| controller 換資料碟 | 同上，照 25.1 | 移出 quorum → 換碟 → 重新格式化（觀察者）→ 加回 | 停這一台 |
+| 整體不夠：加 broker | 我方＋OS 團隊 | 新主機照 4、5、7、8、10 章準備，25.2.3 加入 | 不用 |
+
+容量估算（請銀行確認的事項 4.1 的磁碟規格用）：每台 broker 的資料盤 ≈ 每天寫入量 × retention 天數 × replication factor ÷ broker 數 × 1.3（30% 餘裕給 segment 滾動、compaction、搬 partition 時的暫時兩份）。寫入量與 retention 是應用程式團隊要給的數字（請銀行確認的事項 12.2）；上線後用銀行 Prometheus 的 `kafka_log_log_size` 看趨勢，提前三個月知道什麼時候要擴。lab 是容器、資料盤和 OS 共用，放大磁碟與換碟沒辦法演，只演 25.1／25.2 的搬遷程序。
+
 
 # 25. 第二十五站：節點更換與增減
 

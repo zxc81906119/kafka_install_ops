@@ -207,7 +207,7 @@ monitoring() {   # 17.6（lab）：銀行監控團隊用小安給的 to-bank/ �
   cat > "$dir/prometheus/prometheus.yml" <<'YML'
 global: { scrape_interval: 30s, evaluation_interval: 30s }
 scrape_config_files: [ /etc/prometheus/confluent/scrape-confluent.yml ]
-rule_files: [ /etc/prometheus/confluent/confluent-alerts.yml ]
+rule_files: [ /etc/prometheus/confluent/confluent-alerts*.yml ]
 alerting: { alertmanagers: [ { static_configs: [ { targets: [ "lab-mon-alertmanager:9093" ] } ] } ] }
 YML
   cat > "$dir/webhook/receiver.py" <<'PY'
@@ -228,6 +228,26 @@ PY
   docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $hosts -v "$(windows_path "$dir/prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null
   docker run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(windows_path "$dir/grafana/provisioning"):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null
   announce "Windows 瀏覽器：Prometheus http://localhost:19090（若有發布）、Grafana http://localhost:13000（匿名 Admin，只在 lab）"
+}
+
+monitoring_reload() {   # 24.2（lab）：小安又給了規則檔（to-bank/prometheus/confluent-alerts-disk.yml）：放進去、叫 Prometheus 重讀，數規則
+  announce "24.2 監控團隊：把 to-bank/prometheus/ 的新檔放進 Prometheus，reload，確認規則載入"
+  local dir=$LAB/bank-monitoring tmp
+  [ -d "$dir/prometheus/confluent" ] || { echo "沒有 $dir：先跑 monitoring"; return 1; }
+  tmp=$(mktemp -d); docker cp "$(container_of "$OPS_HOST"):/root/monitoring/to-bank/prometheus" "$(windows_path "$tmp")" && cp "$tmp"/prometheus/*.yml "$dir/prometheus/confluent/"; rm -rf "$tmp"
+  # prometheus.yml 是單檔掛進容器的：改了（舊版只列 confluent-alerts.yml）要 restart 才讀得到；沒改就 reload
+  if grep -q 'confluent-alerts\*\.yml' "$dir/prometheus/prometheus.yml"; then
+    docker exec lab-mon-prometheus wget -qO- --post-data= http://localhost:9090/-/reload >/dev/null 2>&1 || docker restart lab-mon-prometheus >/dev/null
+  else
+    sed -i 's#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' "$dir/prometheus/prometheus.yml"; docker restart lab-mon-prometheus >/dev/null
+  fi
+  for i in $(seq 1 12); do docker exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done
+  # 剛載入的規則 health 是 unknown，要等一次 evaluation（30 s）才是 ok：最多等 100 s
+  local r; for i in $(seq 1 20); do r=$(docker run --rm --network lab_labnet "$NODE_IMAGE" bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
+import json, sys
+g = json.load(sys.stdin)[\"data\"][\"groups\"]
+r = [x for y in g for x in y[\"rules\"]]
+print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".join(y[\"name\"] for y in g), sum(x[\"health\"] != \"ok\" for x in r)))"'); grep -q '載入有錯 0 條' <<<"$r" && break; sleep 5; done; echo "$r"
 }
 
 coldboot() {   # 19.4：機房停電：全部主機同時關、同時開
@@ -277,6 +297,7 @@ case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboo
   os-sync) os_sync;;
   landing-layout) landing_layout;;
   monitoring-stop) monitoring_stop;;
+  monitoring-reload) monitoring_reload;;
   lb-watch) lb_watch "${2:-}";;
   sign-next) sign_next "${2:-ca}";;
-  ad-drill) ad_drill;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop coldboot（19.4）sign-next lb-watch"; exit 1;; esac
+  ad-drill) ad_drill;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop monitoring-reload（24.2）coldboot（19.4）sign-next lb-watch"; exit 1;; esac

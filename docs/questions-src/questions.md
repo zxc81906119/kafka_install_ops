@@ -41,6 +41,7 @@
 | 4.6 | 各主機 cpuser 的 `authorized_keys` 公鑰由 OS 團隊依變更單放入，前面只加 `from="操作機 IP,127.0.0.1,::1"`（寫 IP、不寫主機名稱；操作機連自己時來源可能是這三種）？定期換金鑰（人工、新舊並存、不中斷）的週期與由誰執行？ | 私鑰被複製到別處也用不了；金鑰長期不換是風險 | 只加 `from=`，不加 `restrict`、`pty`；每年人工換一次，由平台工程師在操作機執行（手把手 20.5） |
 | 4.7 | SELinux、透明大頁（THP）、核心參數（sysctl）的調整要開什麼變更單？ | Kafka 建議關閉 THP、調整部分核心參數 | 依角色寫進 `/etc/sysctl.d`，SELinux 維持 enforcing |
 | 4.8 | Confluent CLI 的 passphrase、SCRAM 密碼只能從命令列給，執行那一瞬間會出現在操作機的行程參數：能登入操作機的只有經 PSMP 進來的人員（root，全程錄影），是否接受？ | `hidepid` 擋不住 root，所以靠 PVWA 的授權與 PSMP 的錄影管住「誰能進操作機」 | 接受；操作機只開放給 PSMP 代登的人員 |
+| 4.9 | broker 的資料盤：是不是獨立的 XFS 檔案系統掛在 `/var/lib/kafka`？用 LVM、能不能線上放大（`lvextend` + `xfs_growfs`，不停 broker）？磁碟壞了換碟的流程與時程？ | 資料盤是平台唯一會長大的東西；放大與換碟都是 OS 團隊做，我方只做搬遷（手把手第 24、25 章） | 獨立 XFS 掛載點、LVM 可線上放大；換碟時我方先把 partition 搬走、換完以空的 broker 加回 |
 
 # 5. 網路（網路團隊）
 
@@ -118,6 +119,7 @@
 | 11.6 | Grafana 怎麼放 dashboard 與 datasource：檔案佈建（provisioning）還是手動匯入？登入用 AD（LDAP／SSO）嗎？誰能改 dashboard？ | 32 個官方 dashboard 以檔案佈建最容易維護與重建；Grafana 的權限要和平台的 RBAC 分開想 | 檔案佈建、唯讀；datasource 名稱與 uid 固定為 Prometheus |
 | 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |
 | 11.8 | 確認：告警與 dashboard 只用行內這一套，不在 Control Center 建 alert trigger／action（C3 內建的 Prometheus、Alertmanager 只給 C3 畫面用） | C3 內建 Alertmanager 的設定會被 C3 重寫、webhook 內容不能自訂 | 如此設計；請銀行確認沒有別的流程依賴 C3 的告警功能 |
+| 11.9 | broker 主機有沒有 node_exporter（或其他主機監控）？資料盤用量超過 80% 的告警由誰設？ | Kafka 的 JMX 沒有「磁碟剩多少」的指標，用量告警只能靠主機層；我們給一條範例規則（`KafkaDataDiskFillingUp`，手把手 24.2），mountpoint、job 要照行內 node_exporter 改 | 銀行主機監控負責；log dir 離線（`KafkaLogDirOffline`）由我方規則負責 |
 
 # 12. 範圍確認（專案窗口）
 

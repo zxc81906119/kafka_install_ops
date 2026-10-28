@@ -754,6 +754,25 @@ D.scramab = () => svg(800, 360, [
   box(20, 262, 760, 76, '誰做', ['維運選單 34 建 A／B 一對、35 換「現在沒在用的那個」（kafka-admins）；手動步驟＝選單背後做的事', '單一帳號的舊應用（例如 app-legacy-billing 走憑證、不是 SCRAM）不適用；先用 34 建一對再遷移'], 'gray'),
 ].join(''));
 
+// 23 disk and capacity (chapter 24): where to look, what alerts, and the order of actions when a data disk fills up
+D.disk = () => svg(800, 440, [
+  region(10, 12, 780, 118, "24.1 看用量：三個地方，從操作機就看得到", "teal"),
+  box(26, 44, 240, 72, "kafka-log-dirs --describe", ["每個 broker、每個 partition 的位元組數", "整理後：每台合計、最大的 topic"], "teal"),
+  box(286, 44, 230, 72, "df -h /var/lib/kafka", ["每台 broker 的資料盤還剩多少", "cpuser 不用 sudo（看的是掛載點）"], "teal"),
+  box(536, 44, 240, 72, "銀行 Prometheus", ["kafka_log_log_size：每個 topic 占多少", "kafka_log_logmanager_logdirectoryoffline"], "teal"),
+  region(10, 146, 780, 96, "24.2 告警：資料盤的三種訊號", "amber"),
+  box(26, 178, 240, 50, "KafkaLogDirOffline（我方規則）", ["broker 報 log dir 離線 → 立刻 critical"], "amber"),
+  box(286, 178, 230, 50, "資料盤用量 > 80%（銀行主機監控）", ["node_exporter 的 filesystem 指標；給範例規則"], "amber"),
+  box(536, 178, 240, 50, "停掉的 broker（第 17 章既有）", ["TargetDown、UnderReplicated 一起響"], "gray"),
+  region(10, 258, 780, 170, "24.3 快滿時的順序：先爭取空間，再處理根因", "coral"),
+  box(26, 290, 170, 80, "① 找最大的 topic", ["24.1 的清單", "通常是沒設 retention 的 topic"], "coral"), num(26, 290, "1"),
+  box(216, 290, 180, 80, "② 縮短 retention", ["kafka-configs 改 retention.ms", "只刪關掉的 segment", "最多等 5 分鐘才真的刪"], "coral"), num(216, 290, "2"),
+  box(416, 290, 180, 80, "③ 把 partition 搬走", ["kafka-reassign-partitions", "指定新的 replica 名單", "搬完舊 broker 上的檔自己消失"], "blue"), num(416, 290, "3"),
+  box(616, 290, 160, 80, "④ 擴容或加 broker", ["銀行 OS 團隊放大資料盤", "或 25.2.3 加 broker、SBC 搬"], "blue"), num(616, 290, "4"),
+  arrow(196, 330, 214, 330), arrow(396, 330, 414, 330), arrow(596, 330, 614, 330),
+  box(26, 382, 750, 36, "不要做的事：手動 rm /var/lib/kafka/data 底下的檔（broker 會壞掉、ISR 掉出去）；也不要停 broker 來「省空間」", [], "gray"),
+].join(""));
+
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;

@@ -1,0 +1,23 @@
+# Disk and capacity rules for the bank's Prometheus (guide, chapter 24.2). Loaded next to confluent-alerts.yml
+# (rule_files: /etc/prometheus/confluent/confluent-alerts*.yml). Same label conventions as confluent-alerts.yml.
+groups:
+  - name: kafka-disk
+    rules:
+      # source: ours. kafka.log:type=LogManager,name=LogDirectoryOffline (one series per log dir) really exists on Confluent Server 8.2.4 / 8.3.2.
+      # With a single log.dirs the broker shuts itself down when the directory fails, so ConfluentTargetDown fires too; this rule names the directory.
+      - alert: KafkaLogDirOffline
+        expr: max by (hostname, logdirectory) (kafka_log_logmanager_logdirectoryoffline{job="kafka-broker"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: log directory {{ $labels.logdirectory }} offline"
+          description: "Broker {{ $labels.hostname }} reports its log directory {{ $labels.logdirectory }} offline (disk error or full file system). Its partitions moved to other leaders; check dmesg, df -h and the broker log, then repair or replace the disk (guide 24.4)."
+      # source: ours, EXAMPLE for the bank's host monitoring: needs node_exporter on the brokers (the bank's, not ours; the lab has none, so this rule never fires there).
+      # Adjust mountpoint, job and threshold to the bank's node_exporter setup; the point is to page before the disk is full, not after.
+      - alert: KafkaDataDiskFillingUp
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/var/lib/kafka"} / node_filesystem_size_bytes{mountpoint="/var/lib/kafka"}) > 0.80
+        for: 15m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.instance }}: Kafka data disk above 80%"
+          description: "The data disk of {{ $labels.instance }} is {{ $value | humanizePercentage }} full. Follow guide 24.3: find the biggest topics (kafka-log-dirs), shorten retention or move partitions, then grow the disk (24.4). At 100% the broker stops."
