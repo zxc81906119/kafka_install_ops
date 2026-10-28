@@ -221,13 +221,13 @@ D.edge = () => svg(760, 210, [
   arrow(550, 160, 588, 160),
 ].join(''));
 
-// 13. Secret Protection with the master key in the vault
+// 13. Secret Protection: passphrase and master key stay on the ops host (root, 0600); nothing is vaulted
 D.secretprotection = () => svg(800, 300, [
-  region(20, 28, 250, 262, "銀行 CyberArk（PAM）", "amber"),
-  box(36, 60, 218, 62, "Vault：passphrase", ["版本保留，可回滾", "取用要變更單、留紀錄"], "amber"),
-  box(36, 150, 218, 62, "PVWA", ["人從 PVWA 取出貼上", "lab 用資料夾模擬"], "amber"),
+  region(20, 28, 250, 262, "操作機 ~/secrets（root、0600）", "amber"),
+  box(36, 60, 218, 62, "passphrase", ["工程師在操作機產生", "sp-passphrase.txt；輪替時要舊的"], "amber"),
+  box(36, 150, 218, 62, "master key", ["CLI 由 passphrase 產生", "master.key；也在每台 service.env"], "amber"),
   arrow(145, 150, 145, 122, null, { dash: true }),
-  box(320, 40, 210, 62, "操作機（變更時段）", ["取 passphrase → master key", "encrypt / rotate，用完刪"], "blue"),
+  box(320, 40, 210, 62, "操作機（變更時段）", ["passphrase → master key", "encrypt / rotate"], "blue"),
   arrow(256, 91, 318, 71, null, { via: [[290, 91], [290, 71]] }),   // passphrase：Vault → 操作機
   box(320, 130, 210, 62, "security.properties", ["所有主機同一份密文", "0640 root:confluent"], "blue"),
   box(320, 215, 210, 62, "service.env", ["MASTER_KEY=… 只有一行", "0600 root"], "coral"),
@@ -241,17 +241,17 @@ D.secretprotection = () => svg(800, 300, [
 // 14. OP menu: who runs what, where the secrets come from
 D.opmenu = () => svg(800, 310, [
   box(20, 50, 150, 62, "維運人員", ["經 PVWA + PSMP 登入操作機(root)", "輸入自己的 AD 帳密"], "gray"),
-  box(220, 50, 200, 62, "OP menu(操作機)", ["只顯示本人有權限的項目", "每步留紀錄:AD 帳號 + os=root"], "blue"),
+  box(220, 50, 200, 62, "OP menu(操作機)", ["全部項目都顯示,沒權限的做了被拒", "每步留紀錄:AD 帳號 + os=root"], "blue"),
   arrow(170, 81, 218, 81),
   box(470, 50, 150, 62, "MDS", ["AD 帳密換 token", "問:這個人能做什麼?"], "blue"),
   arrow(420, 81, 468, 81),
-  box(650, 50, 130, 62, "CyberArk PVWA", ["breakglass 憑證", "只有 91 用"], "amber"),
-  arrow(650, 60, 320, 48, "91 時人從 PVWA 取出貼上,用完即丟", { via: [[635, 60], [635, 22], [320, 22]], lx: 478, ly: 16, dash: true }),
+  box(650, 50, 130, 62, "緊急憑證檔", ["~/secrets/opmenu-breakglass.pem", "root 0600,只有 91 用"], "amber"),
+  arrow(650, 60, 320, 48, "91 讀這個檔;本人先過管理員閘門", { via: [[635, 60], [635, 22], [320, 22]], lx: 478, ly: 16, dash: true }),
   box(220, 140, 200, 62, "Kafka 類項目", ["以本人身分走 LDAP listener", "RBAC 依 AD 群組決定"], "blue"),
   arrow(320, 112, 320, 138),
   box(470, 140, 150, 62, "broker", ["topic、權限、lag、稽核"], "gray"),
   arrow(420, 171, 468, 171),
-  box(20, 225, 170, 62, "操作機的 ssh 私鑰", ["/secure/ssh,root 0400", "不經 PVWA、不經 agent"], "gray"),
+  box(20, 225, 170, 62, "操作機的 ssh 私鑰", ["/secure/ssh,root 0400", "不放保管庫、不經 agent"], "gray"),
   arrow(190, 256, 218, 256),
   box(220, 225, 200, 62, "主機類項目(需 Operator)", ["ssh cpuser@主機", "sudo 逐一列出 restart / journalctl"], "blue"),
   arrow(320, 202, 320, 223),
@@ -546,8 +546,8 @@ D.c3roles = () => svg(800, 392, [
 
 // 15 the key hierarchy of Secret Protection
 D.keyhier = () => svg(800, 320, [
-  box(20, 30, 150, 80, 'passphrase', ['銀行產生', 'PVWA 保管', '只給平台工程師'], 'amber'),
-  box(250, 30, 150, 80, 'master key', ['CLI 產生', 'PVWA 也保管', '每台 service.env'], 'coral'),
+  box(20, 30, 150, 80, 'passphrase', ['工程師在操作機產生', '只在操作機 ~/secrets', '0600，不放 CyberArk'], 'amber'),
+  box(250, 30, 150, 80, 'master key', ['CLI 產生', '操作機 ~/secrets', '每台 service.env'], 'coral'),
   box(470, 30, 130, 80, 'data key', ['用它加密', '各個密碼'], 'gray'),
   box(650, 30, 130, 80, '密文', ['security.properties', '所有主機同一份'], 'gray'),
   arrow(170, 70, 248, 70), ctext(209, 58, '＋隨機 salt', { size: 11 }),
@@ -558,24 +558,24 @@ D.keyhier = () => svg(800, 320, [
   box(600, 140, 180, 60, '服務啟動', ['環境變數 → 解 data key', '→ 解出密碼'], 'gray'),
   arrow(570, 170, 598, 170, null, { dash: true }),
   arrow(715, 110, 715, 138),
-  box(380, 224, 400, 66, '解密完全在主機本地', ['不連任何外部系統（CyberArk 只在人取放時用到）', '密文外洩而 master key 沒有：打不開'], 'gray', { dash: true }),
+  box(380, 224, 400, 66, '解密完全在主機本地', ['不連任何外部系統（也不連 CyberArk）', '密文外洩而 master key 沒有：打不開'], 'gray', { dash: true }),
 ].join(''));
 
 // 16 the OP menu: what happens between login and a command on a host
 D.opmenuflow = () => svg(800, 440, [
   box(20, 20, 230, 62, '維運人員', ['經 PVWA + PSMP 進操作機（root）', '執行 /opt/opmenu/opmenu.sh'], 'gray'), num(20, 20, '1'),
   box(285, 20, 230, 62, '輸入自己的 AD 帳密', ['選單用它向 MDS 換 token', '本人的 token，不是共用帳號'], 'blue'), num(285, 20, '2'),
-  box(550, 20, 230, 62, 'MDS 問答', ['這個人的 AD 群組能做什麼？', '只顯示他有權限的項目'], 'blue'), num(550, 20, '3'),
+  box(550, 20, 230, 62, 'MDS 換 token', ['本人的 token，之後每個動作都用它', '選單全部顯示，沒權限的做了被拒'], 'blue'), num(550, 20, '3'),
   arrow(250, 51, 283, 51), arrow(515, 51, 548, 51),
   box(20, 160, 230, 96, 'Kafka 類', ['topic、權限、lag、稽核', '以本人身分走 LDAP 9096', 'RBAC 由 Kafka 強制，繞不過'], 'blue'),
   box(285, 160, 230, 96, '主機類（要 Operator）', ['先問 MDS：本人有權限嗎', '用 /secure/ssh 的金鑰 ssh cpuser', '這一關是流程控管，不是硬性隔離'], 'blue'),
-  box(550, 160, 230, 96, '91 緊急模式', ['從 PVWA 取出 breakglass 憑證貼上', '以 SystemAdmin 執行一個指令', '必填原因，記為 EMERGENCY'], 'coral'),
+  box(550, 160, 230, 96, '91 緊急模式', ['先問 MDS：本人是不是管理員', '讀 ~/secrets/opmenu-breakglass.pem，以備用身分執行一個指令', '必填原因，記為 EMERGENCY'], 'coral'),
   arrow(665, 82, 135, 158, null, { via: [[665, 120], [135, 120]] }), arrow(665, 82, 400, 158, null, { via: [[665, 120], [400, 120]] }), arrow(665, 82, 665, 158),
   box(20, 290, 230, 62, 'broker', ['每個動作 Kafka 端記的是本人'], 'gray'),
   arrow(135, 256, 135, 288),
   box(285, 290, 230, 62, 'sudo 只放行三件事', ['restart、status、journalctl -n 200', '每種寫法逐一列出，多帶參數就拒絕'], 'amber'),
   arrow(400, 256, 400, 288),
-  box(550, 290, 230, 62, '用完即丟', ['憑證不落地，PVWA 取用也有紀錄'], 'gray'),
+  box(550, 290, 230, 62, '用完即丟', ['憑證副本放記憶體檔案系統，用完即刪'], 'gray'),
   arrow(665, 256, 665, 288),
   box(20, 376, 760, 44, '每一步寫一行紀錄 /var/log/opmenu/opmenu.log', ['AD 帳號 ｜ os=root ｜ 項目 ｜ 結果；再往上追是 CyberArk 登入紀錄與 PSMP 錄影'], 'teal'),
 ].join(''));
@@ -699,7 +699,7 @@ D.backup = () => svg(800, 420, [
   region(10, 262, 780, 148, '要備份的分三類，各走各的路', 'gray'),
   box(20, 296, 240, 98, '叢集中繼資料', ['操作機每天排程（上面）', '變更前再手動匯出一份'], 'teal'),
   box(280, 296, 240, 98, '各台的設定', ['/etc/confluent、drop-in', '銀行既有的主機備份系統', '操作機不 ssh 進各台'], 'amber'),
-  box(540, 296, 240, 98, '機敏資料', ['私鑰、密碼、master key', '事件觸發：安裝、換憑證、', '換密碼當下交 CyberArk'], 'coral'),
+  box(540, 296, 240, 98, '機敏資料', ['操作機 ~/secrets、~/pki', '銀行的備份機制備份操作機（加密）', '/secure/ssh 的私鑰不備份'], 'coral'),
 ].join(''));
 
 // 26 OS patching / minor-version update: order, and the loop on each host
