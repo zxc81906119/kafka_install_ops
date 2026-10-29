@@ -207,6 +207,21 @@ const md = fs.readFileSync(SRC, 'utf8');
     process.exit(1);
   }
 }
+// 程式碼區塊（```）要成對；多一個會把後面整段當成指令，run-chapter.js 就找不到之後的章（2026-10-29 踩過）
+{
+  let open = 0; const ids = [];
+  md.split('\n').forEach((line, i) => {
+    if (/^```/.test(line)) open = open ? 0 : i + 1;
+    const m = !open && /^# ([0-9]{1,2}|[A-Z])\. /.exec(line); if (m) ids.push(m[1]);
+  });
+  const want = [...Array(32).keys()].map(String).concat('B');
+  const missing = want.filter((id) => !ids.includes(id));
+  if (open || missing.length) {
+    if (open) console.error(`journey.md:${open} 開了 \`\`\` 沒有關`);
+    if (missing.length) console.error(`找不到這些章（多半是前面的 \`\`\` 沒成對）：${missing.join(' ')}`);
+    process.exit(1);
+  }
+}
 const metaMatch = /^<!--meta\n([\s\S]*?)\n-->\n/.exec(md);
 const meta = JSON.parse(metaMatch[1]);
 if (meta.theme) { Object.assign(C, meta.theme.colors || {}); if (meta.theme.font) FONT = meta.theme.font; }

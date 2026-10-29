@@ -872,6 +872,24 @@ D.rbacmodel = () => svg(800, 610, [
   box(20, 534, 760, 60, '一條 role binding ＝ 誰 ＋ 角色 ＋ 範圍 ＋ 資源', ['誰＝User:<名字> 或 Group:<AD 群組>；資源只有綁資源的角色要給。權限是加總的，沒有「拒絕」型的 binding'], 'amber'),
 ].join(''));
 
+// 28.6 MDS (8090) unreachable from ops02: what still works and through which door
+D.mdsdown = () => svg(800, 470, [
+  region(20, 30, 250, 330, '操作機 ops02（root）', 'gray'),
+  box(36, 62, 218, 62, '選單：AD 登入', ['要先向 MDS 換 token'], 'coral'),
+  box(36, 150, 218, 74, '選單：緊急主機模式', ['OS 團隊臨時把 root 加進', 'opmenu-emergency，重新登入'], 'amber'),
+  box(36, 258, 218, 74, 'kafka-admin（SCRAM）', ['密碼在 ~/secrets/kafka-admin.pass', '用過當天照 20.2 換'], 'teal'),
+  region(530, 30, 250, 330, 'broker kb01–kb04', 'blue'),
+  box(546, 62, 218, 62, 'MDS 8090', ['token、role binding、AD 登入'], 'coral', { dash: true }),
+  box(546, 150, 218, 74, 'ssh 22（cpuser）', ['看日誌、磁碟、收集診斷、', '重啟服務（16 18 21 22 23）'], 'amber'),
+  box(546, 258, 218, 74, 'CLIENT 9095（SCRAM）', ['topic、設定、SCRAM 帳號', '授權看 broker 本機的 binding'], 'teal'),
+  arrow(254, 93, 544, 93, '8090 被擋（或 MDS 全掛）：登入失敗', { color: '#993C1D', dash: true }),
+  arrow(254, 187, 544, 187, '不經 MDS、不經 AD'),
+  arrow(254, 295, 544, 295, '不經 MDS、不經 AD'),
+  ctext(400, 120, '✕', { size: 28, bold: true, fill: '#993C1D' }),
+  box(20, 380, 370, 74, '做不到的（要等 MDS 回來）', ['改 role binding、AD 人員登入選單與 C3、', '91 緊急憑證（也要向 MDS 換 token）'], 'coral'),
+  box(410, 380, 370, 74, '恢復', ['① 網路團隊開回 8090 ② OS 團隊把 root 移出群組', '③ 照 20.2 換 kafka-admin 密碼 ④ 對稽核紀錄結案'], 'gray'),
+].join(''));
+
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;

@@ -817,8 +817,8 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/
 ```
 
 ```out
-78
-6.2G	/root/landing
+83
+6.9G	/root/landing
 ```
 
 79 個檔：兩套 RPM 各 11、1 個 jar、2 把公鑰、48 個官方監控檔、`SHA256SUMS`、`os-packages.txt`、`bank/` 的兩個 JDK 各兩個檔（tar 與 .sha256）。
@@ -3182,7 +3182,7 @@ cd ~/landing/tools/opmenu && sha256sum -c --quiet SHA256SUMS && rm -rf /opt/opme
 ```
 
 ```out
-opmenu 27 items; known_hosts 20 keys
+opmenu 27 items; known_hosts 10 keys
 ```
 
 設定檔只填無法推算的值（連線位址、可重啟的服務清單、主機登入的帳號與金鑰檔、91 的緊急憑證檔路徑）。`OPMENU_ALLOW_ENV_OVERRIDE=1` 只為了下面能非互動試跑，正式環境拿掉。
@@ -4082,10 +4082,10 @@ print(\"告警規則 %d 條，載入有錯 %d 條\" % (len(r), sum(x[\"health\"]
 
 ```out
 control-center    up 1 / 1
-kafka-broker      up 1 / 4
-kafka-controller  up 1 / 3
-rest-proxy        up 1 / 2
-合計 up 4 / 10
+kafka-broker      up 4 / 4
+kafka-controller  up 3 / 3
+rest-proxy        up 2 / 2
+合計 up 10 / 10
 告警規則 19 條，載入有錯 0 條
 Prometheus 看到的 Alertmanager: ['http://lab-mon-alertmanager:9093/api/v2/alerts']
 Grafana dashboard: 32 個
@@ -5003,7 +5003,7 @@ cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do cat incoming/$
 ```
 
 ```out
-14
+18
 kafka-internal: old=F343BC55 new=F343BC5D
 cp-server: old=F343BC54 new=F343BC5C
 ```
@@ -5360,7 +5360,7 @@ cd ~/pki/next && for n in $(awk '{print $1}' ../requests.txt); do cat incoming/$
 ```
 
 ```out
-14
+18
 kafka-internal: old=F343BC55 new=F343BC5D
 cp-server: old=F343BC54 new=F343BC5C
 ```
@@ -7027,13 +7027,15 @@ Uneven load balance status:
 背景寫入的結果（整段縮減與擴充期間，最大延遲出現在 replica 搬移時）：
 
 ```bash
-for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep 10; done; tail -1 ~/scale-load.log; echo "錯誤：$(grep -ciE 'error|exception' ~/scale-load.log)"
+for i in $(seq 1 60); do pgrep -f ProducerPerformance >/dev/null || break; sleep 10; done; tail -1 ~/scale-load.log; echo "錯誤（ERROR 行）：$(grep -c '\] ERROR ' ~/scale-load.log)；leader 搬家時的重試警告（WARN，會自動重送）：$(grep -c 'NOT_LEADER_OR_FOLLOWER' ~/scale-load.log)"
 ```
 
 ```out
-60000 records sent, 49.999167 records/sec (0.01 MB/sec), 10.33 ms avg latency, 1132.00 ms max latency, 10 ms 50th, 14 ms 95th, 19 ms 99th, 164 ms 99.9th.
-錯誤：0
+60000 records sent, 49.996584 records/sec (0.01 MB/sec), 9.60 ms avg latency, 750.00 ms max latency, 9 ms 50th, 14 ms 95th, 22 ms 99th, 70 ms 99.9th.
+錯誤（ERROR 行）：0；leader 搬家時的重試警告（WARN，會自動重送）：2
 ```
+
+6 萬筆全部送出就是沒有遺失；重試警告是 replica 搬移、leader 換台的那一刻，producer 自己重送成功（`retries` 預設無限）。
 
 # 26. 第二十六站：License 到期監控與每日檢查
 
@@ -7300,14 +7302,14 @@ LB：rest01 rest02
 lab 把交接檔寫出來看格式（內容不印到畫面）：
 
 ```bash
-install -d -m 0700 ~/handover && (umask 077; { echo "app-inventory（$(date +%F)）：bootstrap kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095；SASL_SSL／SCRAM-SHA-512；平常用 -a"; for a in app-inventory-a app-inventory-b; do echo "$a $(cat ~/secrets/$a.pass)"; done; } > ~/handover/app-inventory-$(date +%F).txt; install -d -m 0700 ~/handover/app-shipping && cp ~/pki/certs/app-shipping.p12 ~/pki/certs/bank-root.pem ~/handover/app-shipping/ && echo "p12 密碼另送：$(cat ~/secrets/app-shipping-p12.pass)" > ~/handover/app-shipping/README-password.txt) && find ~/handover -type f -printf '%m %u %s %P\n' | sort -k4
+install -d -m 0700 ~/handover && (umask 077; { echo "app-inventory（$(date +%F)）：bootstrap kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095；SASL_SSL／SCRAM-SHA-512；平常用 -a"; for a in app-inventory-a app-inventory-b; do echo "$a $(cat ~/secrets/$a.pass)"; done; } > ~/handover/app-inventory-$(date +%F).txt; install -d -m 0700 ~/handover/app-shipping && install -m 0600 ~/pki/certs/app-shipping.p12 ~/pki/certs/bank-root.pem ~/handover/app-shipping/ && echo "p12 密碼另送：$(cat ~/secrets/app-shipping-p12.pass)" > ~/handover/app-shipping/README-password.txt) && find ~/handover -type f -printf '%m %u %s %P\n' | sort -k4
 ```
 
 ```out
-600 root 3 app-inventory-2026-10-29.txt
-600 root 1 app-shipping/README-password.txt
-600 root 1 app-shipping/app-shipping.p12
-600 root 1 app-shipping/bank-root.pem
+600 root 238 app-inventory-2026-10-29.txt
+600 root 44 app-shipping/README-password.txt
+600 root 4444 app-shipping/app-shipping.p12
+600 root 1976 app-shipping/bank-root.pem
 ```
 
 ## 27.5 驗證：用該身分寫一筆、讀一筆
@@ -7512,6 +7514,142 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x
 
 要找二線或原廠時帶這些（選單 18 一次打包：各台最近 200 行日誌、`kafka-topics --describe`、consumer groups、磁碟用量）。原廠通常還會要：broker 的設定檔（去掉密碼：Secret Protection 的密文本來就不是明文）、`kafka-metadata-quorum describe --replication`、告警時間軸（Alertmanager）、變更單（最近動過什麼）。密碼、私鑰、master key 永遠不交出去。
 
+
+## 28.6 MDS 的 8090 不能用時
+
+![mdsdown]
+
+**這一節在做什麼**：操作機連不到任何一台 MDS（8090）時，人員的 AD 登入做不了，選單進不去，91 緊急憑證也換不到 token。常見原因是防火牆規則改壞了，或 MDS 全掛了（看 28.4 的 `Waiting for all of the authorizer futures`）。這時還有兩扇門：主機類的工作（看日誌、重啟服務）走選單的**緊急主機模式**，Kafka 類的工作（topic、設定、SCRAM 帳號）走 **`kafka-admin`**（SCRAM，9095）。兩者都不經 MDS、不經 AD，授權由 broker 本機的 binding 判斷（11.2 驗證過）。做不到的是改 role binding；MDS 全掛時人員也登不進 C3，經 REST Proxy 的應用程式要看 REST 是否還換得到 token（28.4）。
+
+lab 用「網路團隊在 broker 上擋掉操作機連 8090」模擬（只加 runtime 規則，`firewall-cmd --reload` 或重開機就消失）；broker 之間、REST Proxy、C3 連 MDS 都不受影響。
+
+@role 銀行網路團隊（lab 由 Windows 終端代打） | Windows 終端 | 本機
+
+```bash
+for h in kb01 kb02 kb03 kb04; do echo "$h: $(docker exec lab-$h-1 firewall-cmd --add-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"; done
+```
+
+```out
+kb01: success
+kb02: success
+kb03: success
+kb04: success
+```
+
+@role 維運人員 bob | ops02 | root
+
+8090 不通、9095 還通；選單登入失敗，畫面直接指向這一節：
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kb01 kb02 kb03 kb04; do printf '%s 8090=%s 9095=%s\n' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)" "$(timeout 5 bash -c "</dev/tcp/$h.poc.lab/9095" 2>/dev/null && echo 通 || echo 不通)"; done; bash ~/conf/opmenu-try.sh bob 11 | head -4 | cut -c1-120
+```
+
+```out
+kb01 8090=000 9095=通
+kb02 8090=000 9095=通
+kb03 8090=000 9095=通
+kb04 8090=000 9095=通
+MDS 全部連不上:https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090
+無法連到 MDS（Kafka 的權限服務），AD 登入做不了。
+Kafka 類的緊急操作（topic、設定、SCRAM 帳號）改用手把手 28.6 的 kafka-admin（SCRAM,9095,不經 MDS 與 AD）；用過當天照 20.2 換密碼。
+緊急主機模式只開放給作業系統群組 opmenu-emergency 的人（平常 root 不在群組、緊急模式關著；事故時由 OS 團隊依程序把 root 臨時加進群組，事後移
+```
+
+**主機類：緊急主機模式**。平常 `opmenu-emergency` 沒有成員；事故時依銀行程序請 OS 團隊把 root 臨時加進去（群組不存在就先建）：
+
+@role 銀行 OS 團隊 | ops02 | root
+
+```bash
+groupadd -f opmenu-emergency && gpasswd -a root opmenu-emergency >/dev/null && getent group opmenu-emergency
+```
+
+```out
+opmenu-emergency:x:1501:root
+```
+
+@role 維運人員 bob | ops02 | root
+
+群組要**重新登入**才生效（正式環境是重新經 PSMP 登入；lab 用 `su - root` 代替）。緊急主機模式只開放 16、18、21、22、23，身分記成「未經 AD 驗證」；Kafka 類項目會被擋下：
+
+```bash
+su - root -c 'bash ~/conf/opmenu-try.sh bob 23 kb04.poc.lab:confluent-server 3 | grep -q "kb04 kafka-server-start" && echo "23 看 kb04 日誌：OK"; bash ~/conf/opmenu-try.sh bob 31 orders.em 1 | tail -1'; tail -3 /var/log/opmenu/opmenu.log | cut -d'|' -f3,5,7
+```
+
+```out
+23 看 kb04 日誌：OK
+項目 31 在緊急主機模式不開放(只能做 OPMENU_EMERGENCY_ITEMS 列的主機類項目)。Kafka 類操作改用手把手 28.6 的 kafka-admin。
+ bob | login | MDS_DOWN
+ bob(緊急,未經AD驗證) | login | EMERGENCY_HOST
+ bob(緊急,未經AD驗證) | 31 建立 topic | DENIED
+```
+
+> 21（重啟 broker）在緊急主機模式下做不了 under-replicated／offline 檢查（那要 Kafka 的權限），會改成警告並要求確認。
+
+**Kafka 類：`kafka-admin`**。
+
+@role 小安 | ops02 | root
+
+設定檔放暫存目錄、用完刪掉，密碼不印出來。這裡示範查狀態、建 topic、改 retention、刪 topic；SCRAM 帳號的建立與換密碼（20.6）也一樣走 9095：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; T=$(mktemp -d) && grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $T/admin.properties && printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="%s";\n' "$(cat ~/secrets/kafka-admin.pass)" >> $T/admin.properties && A="--bootstrap-server kb01.poc.lab:9095,kb02.poc.lab:9095 --command-config $T/admin.properties" && echo "topic 數：$(kafka-topics $A --list | wc -l)；under-replicated：$(kafka-topics $A --describe --under-replicated-partitions | grep -c Partition:)；offline：$(kafka-topics $A --describe --unavailable-partitions | grep -c Partition:)" && kafka-topics $A --create --topic orders.mds-down --partitions 3 --replication-factor 3 >/dev/null 2>&1 && echo "建立 orders.mds-down：OK" && kafka-configs $A --alter --entity-type topics --entity-name orders.mds-down --add-config retention.ms=86400000 >/dev/null 2>&1 && echo "$(kafka-configs $A --describe --entity-type topics --entity-name orders.mds-down | grep -o 'retention.ms=[0-9]*' | head -1)" && kafka-topics $A --delete --topic orders.mds-down && echo "刪除 orders.mds-down：OK"; rm -rf $T
+```
+
+```out
+topic 數：18；under-replicated：0；offline：0
+建立 orders.mds-down：OK
+retention.ms=86400000
+刪除 orders.mds-down：OK
+```
+
+> 誰在什麼時候用了 `kafka-admin`，Kafka 稽核日誌（第 18 章）記成 `User:kafka-admin`；要和 CyberArk 登入紀錄、PSMP 錄影對起來才知道是哪個人。
+
+**恢復**：網路團隊開回 8090；OS 團隊把 root 移出群組；確認選單照常登入；最後照 20.2 換 `kafka-admin` 的密碼（同一行指令）。
+
+@role 銀行網路團隊（lab 由 Windows 終端代打） | Windows 終端 | 本機
+
+```bash
+for h in kb01 kb02 kb03 kb04; do echo "$h: $(docker exec lab-$h-1 firewall-cmd --remove-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"; done
+```
+
+```out
+kb01: success
+kb02: success
+kb03: success
+kb04: success
+```
+
+@role 銀行 OS 團隊 | ops02 | root
+
+```bash
+gpasswd -d root opmenu-emergency >/dev/null && echo "opmenu-emergency 成員：$(getent group opmenu-emergency | cut -d: -f4)（空）"
+```
+
+```out
+opmenu-emergency 成員：（空）
+```
+
+@role 小安 | ops02 | root
+
+```bash
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kb01 kb02 kb03 kb04; do printf '%s 8090=%s  ' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)"; done; echo; su - root -c 'bash ~/conf/opmenu-try.sh bob 11' | grep -E '^-- (你的 MDS token|broker 在線:)'
+```
+
+```out
+kb01 8090=200  kb02 8090=200  kb03 8090=200  kb04 8090=200  
+-- 你的 MDS token:已用 9s,剩約 3591s
+-- broker 在線:4 / 4(設定的 broker 數)
+```
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; BS=kb01.poc.lab:9094; T=$(mktemp -d) && login() { grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $T/c.properties && printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="%s";\n' "$(cat $1)" >> $T/c.properties && kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list >/dev/null 2>&1 && echo 登入成功 || echo 被拒; } && echo "緊急使用（目前的密碼）：$(login ~/secrets/kafka-admin.pass)" && cp -p ~/secrets/kafka-admin.pass $T/old.pass && (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > $T/new.pass) && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name kafka-admin --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat $T/new.pass)]" >/dev/null 2>&1 && install -m 0600 $T/new.pass ~/secrets/kafka-admin.pass && echo "kafka-admin: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name kafka-admin 2>/dev/null | grep -o 'SCRAM-SHA-512=[^ ]*')" && echo "換完：新密碼 $(login ~/secrets/kafka-admin.pass)；舊密碼 $(login $T/old.pass)"; rm -rf $T
+```
+
+```out
+緊急使用（目前的密碼）：登入成功
+kafka-admin: SCRAM-SHA-512=iterations=8192
+換完：新密碼 登入成功；舊密碼 被拒
+```
 
 # 29. 第二十九站：遷移到新版 Confluent 與 JDK
 
@@ -8457,10 +8595,10 @@ zookeeper-cluster.json                 11      0
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-驗完把 lab 的四個監控容器收掉（正式環境是銀行的系統，不收）。設定資料夾 `~/kafka-lab/bank-monitoring` 留著；重建 lab（第 0 章 `down -v`）之前一定要先收，否則容器還接在 labnet 上，網路刪不掉：
+驗完把 lab 的五個監控容器收掉（第 17 章的四個加上第 22 章的 blackbox）（正式環境是銀行的系統，不收）。設定資料夾 `~/kafka-lab/bank-monitoring` 留著；重建 lab（第 0 章 `down -v`）之前一定要先收，否則容器還接在 labnet 上，網路刪不掉：
 
 ```bash
-docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null && echo "lab-mon-* 已收掉：$(docker ps -a --format '{{.Names}}' | grep -c '^lab-mon-') 個剩下"
+docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook lab-mon-blackbox >/dev/null && echo "lab-mon-* 已收掉：$(docker ps -a --format '{{.Names}}' | grep -c '^lab-mon-') 個剩下"
 ```
 
 ```out

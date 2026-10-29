@@ -66,6 +66,7 @@ EOC
 emergency_login() {
   core_log MDS_DOWN login ""
   echo "${CR}無法連到 MDS（Kafka 的權限服務），AD 登入做不了。${C0}"
+  echo "Kafka 類的緊急操作（topic、設定、SCRAM 帳號）改用手把手 28.6 的 kafka-admin（SCRAM,9095,不經 MDS 與 AD）；用過當天照 20.2 換密碼。"
   if [ -z "${OPMENU_EMERGENCY_GROUP:-}" ]; then echo "請確認 cluster 狀態或通知管理員。"; exit 1; fi
   if ! id -nG | tr ' ' '\n' | grep -qx "$OPMENU_EMERGENCY_GROUP"; then
     echo "緊急主機模式只開放給作業系統群組 $OPMENU_EMERGENCY_GROUP 的人（平常 root 不在群組、緊急模式關著；事故時由 OS 團隊依程序把 root 臨時加進群組，事後移出）。"

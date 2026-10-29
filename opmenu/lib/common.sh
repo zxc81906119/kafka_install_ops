@@ -102,7 +102,7 @@ _core_run() {
   local id="$1"; shift
   [ -n "${ACT_TITLE[$id]:-}" ] || { echo "沒有這個項目:$id"; return 1; }
   if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then   # 只有緊急主機模式會隱藏項目(MDS 連不上,Kafka 類做不了):直接輸入編號一樣擋下並記錄
-    echo "${CR}項目 $id 在緊急主機模式不開放(只能做 OPMENU_EMERGENCY_ITEMS 列的主機類項目)。${C0}"
+    echo "${CR}項目 $id 在緊急主機模式不開放(只能做 OPMENU_EMERGENCY_ITEMS 列的主機類項目)。Kafka 類操作改用手把手 28.6 的 kafka-admin。${C0}"
     core_log DENIED "$id ${ACT_TITLE[$id]}" "not in emergency items"; return 1
   fi
   echo; echo "${CB}[$id] ${ACT_TITLE[$id]}${C0}  (${TIER_NAME[${ACT_TIER[$id]}]})"
