@@ -543,3 +543,9 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - **操作機不直連 AD**（實測）：操作機加 blackhole 路由擋掉 ad01 → 直接連 636 失敗；alice 經選單登入、11 健康檢查、12 列 topic 照常，錯密碼仍被拒；同時段操作機開出的連線中，到 636／389 的 0 條；對照 kb01 上連 ad01:636 的連線 5 條。AD 帳密只由 broker（MDS `/security/1.0/authenticate`、LDAP listener 9096）去驗。
 - **與 MDS 的認證**：登入時一次 basic auth 換 MDS token，之後都用 Bearer token；Kafka 動作用本人 AD 帳密走 SASL PLAIN（9096）；91 用憑證換 token。選單不用 confluent CLI。
 - **token 換新（使用者定案：到期前自動換新）**：每個動作開始前，token 用了超過 TTL − 300 秒就用本次登入的帳密重新 authenticate（`core_token_fresh`，主 shell 執行），記 `TOKEN_RENEWED`；失敗不執行動作、記 `TOKEN_RENEW_FAIL`、請重新登入。帳密取自 session 原本就有的 Kafka 連線設定（0600、離開即刪），不另外保存。`tests/test-token-renew.sh` 11 項；lab 以 TTL=300 對真 MDS 驗過。
+
+### MDS 不能用時的緊急路徑（2026-10-29 定案）
+
+- MDS 內建在 broker：authorizer 沒就緒的 broker 只開 9092，對 client 的 9094／9095／9096 都不開（10-29 事故實測），所以「所有 MDS 都卡住」時任何身分都進不去。
+- 部分失效時：91（緊急憑證換 MDS token）原本只帶第一台 MDS → 改成逐台問 `/v1/metadata/id`、用第一台回 200 的；全部連不上就停下並指向 kafka-admin 程序（`tests/test-breakglass-mds.sh`）。
+- `kafka-admin`（SCRAM、9095、SystemAdmin）是唯一不經 MDS 也不經 AD 的管理身分（授權由 broker 本機的 binding 快取判斷）。使用者定案：**維持手動、不進選單**；手冊第 28 章加「MDS 的 8090 不能用時」一節（lab 擋 8090 實測後補），用完照 20.2 換密碼。

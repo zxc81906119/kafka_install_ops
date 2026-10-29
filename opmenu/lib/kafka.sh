@@ -36,7 +36,10 @@ be_bootstrap_kafka() {
   pem="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"; conf="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"
   secret_get "$OPMENU_BREAKGLASS_PEM" > "$pem" || { rm -f "$pem" "$conf"; return 1; }
   grep -q 'BEGIN .*PRIVATE KEY' "$pem" && grep -q 'BEGIN CERTIFICATE' "$pem" || { echo "緊急憑證檔不是 PEM 私鑰 + 憑證" >&2; rm -f "$pem" "$conf"; return 1; }
-  mds="${OPMENU_MDS_URL%%,*}"
+  # 憑證換 token 要找一台活著的 MDS:逐台問 /v1/metadata/id,用第一台回 200 的(不能假設 metadataServerUrls 會自己換台)
+  local u; mds=""
+  for u in ${OPMENU_MDS_URL//,/ }; do [ "$(be_http -o /dev/null -w "%{http_code}" "$u/v1/metadata/id" 2>/dev/null)" = 200 ] && { mds=$u; break; }; done
+  [ -n "$mds" ] || { echo "所有 MDS 都連不上($OPMENU_MDS_URL):緊急憑證換不到 token。Kafka 的緊急操作改用手把手 28.6 的 kafka-admin(SCRAM,9095)" >&2; rm -f "$pem" "$conf"; return 1; }
   cat > "$conf" <<EOC
 security.protocol=SASL_SSL
 sasl.mechanism=OAUTHBEARER
