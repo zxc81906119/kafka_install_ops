@@ -43,7 +43,8 @@ grant() {
   (umask 077; sed "s#/svc-ops.p12#/svc-backup.p12#" "$ADMIN_CLIENT_CONF" > "$BACKUP_CLIENT_CONF")
   grep -q svc-backup.p12 "$BACKUP_CLIENT_CONF" && ok "client-backup.properties 指向 svc-backup.p12" || die "client-backup.properties 產生失敗"
   section "23.2 最小權限：SecurityAdmin＋兩條 ACL"
-  if retry 3 5 cli_as svc-ops iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster "$(cluster_id)" >/dev/null; then ok "SecurityAdmin"
+  wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
+  if cli_as svc-ops iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster "$(cluster_id)" >/dev/null; then ok "SecurityAdmin"
   else fail "SecurityAdmin role binding"; fi
   kafka-acls "${admin[@]}" --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --topic '*' >/dev/null 2>&1 &&
     kafka-acls "${admin[@]}" --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --cluster >/dev/null 2>&1 &&
@@ -118,6 +119,7 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
   local admin=(--bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF")
   [ -d "$dir" ] || die "沒有備份目錄 $dir"
   section "23.6 從 $dir 還原（topic：$topic、帳號：$user）"
+  wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
   if [ "$topic" != - ]; then
     local partitions rf kv cfg=()
     read -r partitions rf <<<"$(grep -P "^Topic: $topic\t" "$dir/topics.txt" | head -1 | sed 's/.*PartitionCount: \([0-9]*\).*ReplicationFactor: \([0-9]*\).*/\1 \2/')"
@@ -132,7 +134,7 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
     while IFS='|' read -r principal role rtype rname pattern; do
       principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
       args=(--principal "$principal" --role "$role" --kafka-cluster "$cid"); [ -n "$rtype" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
-      retry 3 5 cli_as svc-ops iam rbac role-binding create "${args[@]}" >/dev/null 2>&1 && n=$((n+1))
+      cli_as svc-ops iam rbac role-binding create "${args[@]}" >/dev/null 2>&1 && n=$((n+1))
     done < <(awk -v u="User:$user" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$dir/rbac.txt")
     ok "role binding：$n 條"
     iter=$(grep "SCRAM credential configs for user-principal '$user'" "$dir/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
@@ -149,20 +151,21 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
 drill() {
   local topic=orders.restore-demo user=app-restore cid dir client_conf role
   local admin=(--bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF")
+  wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
   cid=$(cluster_id)
   section "23.6 還原演練：建演練物件（topic 帶動態設定、帳號帶配額、三條 binding）、備份"
   kafka-topics "${admin[@]}" --create --if-not-exists --topic "$topic" --partitions 3 --replication-factor 3 --config retention.ms=3600000 >/dev/null 2>&1 || die "建 $topic 失敗"
   [ -s "$SECRETS_DIR/$user.pass" ] || (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$SECRETS_DIR/$user.pass")
   kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat "$SECRETS_DIR/$user.pass")]" >/dev/null 2>&1 || die "建 SCRAM $user 失敗"
   kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null 2>&1 || die "配額失敗"
-  for role in DeveloperRead DeveloperWrite; do retry 3 5 cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" >/dev/null 2>&1 || die "binding $role 失敗"; done
-  retry 3 5 cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" >/dev/null 2>&1 || die "binding Group 失敗"
+  for role in DeveloperRead DeveloperWrite; do cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" >/dev/null 2>&1 || die "binding $role 失敗"; done
+  cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" >/dev/null 2>&1 || die "binding Group 失敗"
   run_backup; dir=$(ls -d "$BACKUP_ROOT"/20* | tail -1)
   [ "$(grep -c "$topic" "$dir/topics.txt")" -gt 0 ] && [ "$(grep -c "^== User:$user" "$dir/rbac.txt")" = 1 ] && ok "備份 $dir 含演練物件" || die "備份裡沒有演練物件"
   section "23.6 誤刪：topic、三條 binding、SCRAM 憑據與配額"
   kafka-topics "${admin[@]}" --delete --topic "$topic" >/dev/null 2>&1
-  for role in DeveloperRead DeveloperWrite; do retry 3 5 cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" --force >/dev/null 2>&1; done
-  retry 3 5 cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" --force >/dev/null 2>&1
+  for role in DeveloperRead DeveloperWrite; do cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" --force >/dev/null 2>&1; done
+  cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" --force >/dev/null 2>&1
   kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config SCRAM-SHA-512 >/dev/null 2>&1
   kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
   local left; left="topic $(kafka-topics "${admin[@]}" --list 2>/dev/null | grep -c "^$topic$") binding $(cli_as svc-ops iam rbac role-binding list --principal "User:$user" --kafka-cluster "$cid" 2>/dev/null | grep -c "User:$user") 帳號設定 $(kafka-configs "${admin[@]}" --describe --entity-type users --entity-name "$user" 2>/dev/null | grep -c .)"
@@ -177,8 +180,8 @@ drill() {
   rm -f "$client_conf"
   if [ "$got" = 1 ]; then ok "$user 寫一筆、讀回 1 筆"; else fail "$user 寫讀失敗（got=$got）"; fi
   kafka-topics "${admin[@]}" --delete --topic "$topic" >/dev/null 2>&1
-  for role in DeveloperRead DeveloperWrite; do retry 3 5 cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" --force >/dev/null 2>&1; done
-  retry 3 5 cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" --force >/dev/null 2>&1
+  for role in DeveloperRead DeveloperWrite; do cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cid" --force >/dev/null 2>&1; done
+  cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cid" --force >/dev/null 2>&1
   kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config SCRAM-SHA-512 >/dev/null 2>&1
   kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
   rm -f "$SECRETS_DIR/$user.pass"

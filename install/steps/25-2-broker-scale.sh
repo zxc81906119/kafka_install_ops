@@ -89,7 +89,7 @@ add_broker() {
   section "25.2.3 $host 清空、以觀察者格式化、啟動"
   ssh_script "$host" CLUSTER_ID="$CLUSTER_ID" <<<"$RUN_WITH_MASTER_KEY
 $FORMAT_EMPTY_BROKER" | while read -r line; do log "$line"; done
-  retry 60 5 curl -s -o /dev/null -f -m 5 "https://$(fqdn "$host"):8090/v1/metadata/id" && ok "$host MDS 200" || die "$host 起不來（sudo journalctl -u confluent-server -n 50）"
+  retry 60 5 curl -s -o /dev/null -f -m 5 "https://$(fqdn "$host"):8090/v1/metadata/id" && wait_mds_writer && ok "$host MDS 200" || die "$host 起不來（sudo journalctl -u confluent-server -n 50）"
   section "25.2.3 等 Self-Balancing 把資料搬到 $node_id"
   for attempt in $(seq 1 120); do
     replicas=$(replicas_on "$node_id"); under_replicated=$(under_replicated_count)

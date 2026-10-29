@@ -202,6 +202,7 @@ for host in $BROKERS; do
 done
 log "等 broker 註冊與 MDS 起來（約 45 秒）"
 sleep 45
+wait_mds_writer || fail "MDS 寫入者沒有就緒"
 observer_count=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null \
   | grep CurrentObservers | grep -o '"id": [0-9]*' | wc -l)
 if [ "$observer_count" = "$(wc -w <<<"$BROKERS")" ]; then ok "CurrentObservers：$observer_count 台 broker"; else fail "CurrentObservers 只有 $observer_count 台"; fi

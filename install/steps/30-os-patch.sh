@@ -54,7 +54,7 @@ wait_healthy() {
   local host=$1 attempt lag
   case $host in
     kb*) for attempt in $(seq 1 90); do
-           [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8090/v1/metadata/id")" = 200 ] && [ "$(under_replicated_count)" = 0 ] && return 0; sleep 10
+           [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8090/v1/metadata/id")" = 200 ] && [ "$(under_replicated_count)" = 0 ] && { wait_mds_writer; return; }; sleep 10
          done;;
     kc*) for attempt in $(seq 1 90); do
            lag=$(quorum describe --replication | awk -v id="$(node_id_of "$host")" '$1 == id {print $4}'); [ "$lag" = 0 ] && return 0; sleep 5
