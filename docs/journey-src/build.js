@@ -199,6 +199,14 @@ function cover(meta) {
 }
 
 const md = fs.readFileSync(SRC, 'utf8');
+// XML 1.0 不允許 tab／換行以外的控制字元（例如貼進指令裡的 ESC）：Word 遇到會說「記憶體不足」而打不開，所以這裡就擋下並指出行號
+{
+  const bad = md.split('\n').map((line, i) => [i + 1, line]).filter(([, line]) => /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(line));
+  if (bad.length) {
+    for (const [n, line] of bad) console.error(`journey.md:${n} 有控制字元 ${[...line].filter((c) => c.charCodeAt(0) < 32 && !'\t\r'.includes(c)).map((c) => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0')).join(' ')}（改寫成可見的寫法，例如 \\x1b）`);
+    process.exit(1);
+  }
+}
 const metaMatch = /^<!--meta\n([\s\S]*?)\n-->\n/.exec(md);
 const meta = JSON.parse(metaMatch[1]);
 if (meta.theme) { Object.assign(C, meta.theme.colors || {}); if (meta.theme.font) FONT = meta.theme.font; }

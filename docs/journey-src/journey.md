@@ -2843,7 +2843,7 @@ kb04 MDS=200 after ~20s
 換應用程式 SCRAM 密碼用 35：告訴它應用程式現在用哪一個帳號，它只換另一個（A／B，20.6 是背後的手動步驟）；新密碼寫在操作者的交接檔，交出去後 `shred`。這裡用 app-payments 示範（app-orders 留給第 19 章驗收與 20.6）：
 
 ```bash
-P=$(cat ~/secrets/ad-test-users.pass); env OPMENU_USER=alice OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run 35 app-payments app-payments-a 2>&1 | grep -v '^SLF4J' | sed 's/[[0-9;]*m//g' | grep -E '將執行|新密碼已寫到|下一步' | sed -E 's/-[0-9]{8}-[0-9]{6}.pass/-<時間>.pass/g'; unset P; shred -u ~/opmenu-handover/app-payments-b-*.pass && echo "交接檔已 shred"
+P=$(cat ~/secrets/ad-test-users.pass); env OPMENU_USER=alice OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run 35 app-payments app-payments-a 2>&1 | grep -v '^SLF4J' | sed 's/\x1b[[0-9;]*m//g' | grep -E '將執行|新密碼已寫到|下一步' | sed -E 's/-[0-9]{8}-[0-9]{6}.pass/-<時間>.pass/g'; unset P; shred -u ~/opmenu-handover/app-payments-b-*.pass && echo "交接檔已 shred"
 ```
 
 ```out
