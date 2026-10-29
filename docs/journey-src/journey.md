@@ -3792,9 +3792,10 @@ groups:
         annotations:
           summary: "{{ $labels.hostname }}: network threads busy"
           description: "Network processor threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes. Check connection counts and num.network.threads."
-      # source: confluent (request latency); ours: Produce p99, 500 ms
+      # source: confluent (request latency); ours: Produce p99, 500 ms, only while the broker really serves Produce requests:
+      # the p99 is a Yammer histogram that changes only when new requests arrive, so after traffic stops it keeps the last slow value forever
       - alert: KafkaProduceLatencyHigh
-        expr: max by (instance, hostname) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500
+        expr: max by (instance, hostname) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500 and on (instance) sum by (instance) (rate(kafka_network_requestmetrics_requestspersec{job="kafka-broker",request="Produce"}[10m])) > 1
         for: 10m
         labels: { severity: warning, impact: APPLICATION }
         annotations:

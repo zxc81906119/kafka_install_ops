@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-29 19:00（lab 空著，遷移完成後的狀態；監控容器已由 B.2 收掉）
+Updated: 2026-10-29 19:05（**lab 使用中**：腳本版從零實跑 run-customer.sh，紀錄路徑在 ~/kafka-lab-runs/current-script-log.txt）
 
 ## 現在在做什麼
 手冊實跑收尾、28.6、C3 Streams／RocksDB 監控都做完並 commit；下一項是腳本版從零再跑一次。
