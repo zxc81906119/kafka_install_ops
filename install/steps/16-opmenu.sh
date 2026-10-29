@@ -108,8 +108,11 @@ ask_bank "安裝全部完成後：OS 團隊移除各主機的 /etc/sudoers.d/$SS
 section "16.5 試跑：選單全部顯示，沒權限的做了被 Kafka 拒絕"
 menu_bob=$(run_menu_as bob menu | grep '@@MENU@@' | cut -d' ' -f2-); menu_alice=$(run_menu_as alice menu | grep '@@MENU@@' | cut -d' ' -f2-)
 if [ -n "$menu_bob" ] && [ "$menu_bob" = "$menu_alice" ]; then ok "bob 與 alice 看到同一份選單（$(wc -w <<<"$menu_bob") 項）"; else fail "選單應該全部顯示：bob「$menu_bob」alice「$menu_alice」"; fi
-bob_create=$(run_menu_as bob 31 orders.optest-bob 1 | tail -3)
-if grep -q "Kafka 拒絕" <<<"$bob_create"; then ok "bob（Operator）建 topic 被 Kafka 拒絕"; else fail "bob 建 topic 應被拒：$bob_create"; fi
+# 維運群組是 Operator＋DeveloperManage Topic:*（2026-10-29 定案）：健康檢查要 DescribeConfigs，能建刪 topic，但不能改權限
+bob_health=$(run_menu_as bob 11)
+if grep -q -- '-- broker 在線:' <<<"$bob_health" && ! grep -q "Kafka 拒絕" <<<"$bob_health"; then ok "bob（維運）11 健康檢查跑得完（under-replicated／offline 檢查要 DescribeConfigs）"; else fail "bob 的 11 健康檢查：$(grep -m2 -E '拒絕|failed' <<<"$bob_health" | tr '\n' ' ')"; fi
+bob_grant=$(run_menu_as bob 42 add kafka-devs DeveloperRead Topic orders. | tail -1)
+if grep -q "拒絕" <<<"$bob_grant"; then ok "bob（維運）改權限（42）被 MDS 拒絕"; else fail "bob 改權限應被拒：$bob_grant"; fi
 bob_91=$(run_menu_as bob 91 kafka-topics --list | tail -3)
 if grep -q "Authorization failed" <<<"$bob_91"; then ok "bob 進 91 緊急模式被管理員閘門擋下"; else fail "bob 的 91 應被擋：$bob_91"; fi
 run_menu_as alice 33 orders.optest >/dev/null 2>&1   # 重跑時上一輪的示範 topic 可能還在
