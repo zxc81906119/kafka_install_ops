@@ -294,11 +294,11 @@ jar-sha1-ok
 Confluent 官方的監控檔（exporter 規則、告警規則、Grafana dashboard）在 GitHub 的 confluentinc/jmx-monitoring-stacks（Apache-2.0）。**固定在一個 commit**（`f376263f…`，2026-05-28），不跟 main 走：第 17 章的 dashboard 與規則是照這一版的指標名稱寫的。只取要用的路徑（32 個 dashboard、告警規則、controller／broker／REST 三份 exporter 規則），jar 不拿（用上面 Maven Central 驗過的那個）。`COMMIT` 檔記下版本，之後每一關的 `SHA256SUMS` 也會涵蓋它們：
 
 ```bash
-SHA=f376263fc6d7270185ab6abab9a8c379079e2a92 && mkdir -p /out/monitoring /tmp/jms-x && curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$SHA.tar.gz" | tar -xz -C /tmp/jms-x --wildcards '*/LICENSE' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' '*/jmxexporter-prometheus-grafana/assets/prometheus/*' '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' && rm -rf /out/monitoring/jmx-monitoring-stacks && mv /tmp/jms-x/jmx-monitoring-stacks-* /out/monitoring/jmx-monitoring-stacks && echo "$SHA" > /out/monitoring/jmx-monitoring-stacks/COMMIT && rm -rf /tmp/jms-x && echo "commit ${SHA:0:12}: $(find /out/monitoring -type f | wc -l) 個檔，dashboard $(ls /out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l) 個"
+SHA=f376263fc6d7270185ab6abab9a8c379079e2a92 && mkdir -p /out/monitoring /tmp/jms-x && curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$SHA.tar.gz" | tar -xz -C /tmp/jms-x --wildcards '*/LICENSE' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' '*/jmxexporter-prometheus-grafana/assets/prometheus/*' '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' '*/shared-assets/jmx-exporter/kafka_streams.yml' '*/shared-assets/jmx-exporter/kafka_streams.yml' && rm -rf /out/monitoring/jmx-monitoring-stacks && mv /tmp/jms-x/jmx-monitoring-stacks-* /out/monitoring/jmx-monitoring-stacks && echo "$SHA" > /out/monitoring/jmx-monitoring-stacks/COMMIT && rm -rf /tmp/jms-x && echo "commit ${SHA:0:12}: $(find /out/monitoring -type f | wc -l) 個檔，dashboard $(ls /out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l) 個"
 ```
 
 ```out
-commit f376263fc6d7: 47 個檔，dashboard 32 個
+commit f376263fc6d7: 48 個檔，dashboard 32 個
 ```
 
 平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行。**版本號是下載機的 OS repo（停在 9.6，A.7）的內容**：銀行的套件庫之後同步到 9.8 時這幾個會更新（30.5）：
@@ -356,7 +356,7 @@ cd /out && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "too
 72 SHA256SUMS
 ```
 
-22 個 RPM（基底 11、目標 11）、1 個 jar、2 把公鑰、47 個官方監控檔（含 `COMMIT`）（JDK 是銀行的檔案，有自己的 sha256，不列在這裡）。這份 `SHA256SUMS` 之後每一關都會再用一次。下載機的工作到此結束。
+22 個 RPM（基底 11、目標 11）、1 個 jar、2 把公鑰、48 個官方監控檔（含 `COMMIT`）（JDK 是銀行的檔案，有自己的 sha256，不列在這裡）。這份 `SHA256SUMS` 之後每一關都會再用一次。下載機的工作到此結束。
 
 # 3. 第三站：把東西送進銀行
 
@@ -389,7 +389,7 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/
 6.2G	/root/landing
 ```
 
-78 個檔：兩套 RPM 各 11、1 個 jar、2 把公鑰、47 個官方監控檔、`SHA256SUMS`、`os-packages.txt`、`bank/` 的兩個 JDK 各兩個檔（tar 與 .sha256）。
+79 個檔：兩套 RPM 各 11、1 個 jar、2 把公鑰、48 個官方監控檔、`SHA256SUMS`、`os-packages.txt`、`bank/` 的兩個 JDK 各兩個檔（tar 與 .sha256）。
 
 ## 3.3 進內網後再驗一次
 

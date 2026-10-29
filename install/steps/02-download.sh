@@ -98,7 +98,7 @@ else
   curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$MONITORING_STACKS_COMMIT.tar.gz" \
     | tar -xz -C /tmp/jms-x --wildcards '*/LICENSE' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' \
         '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' '*/jmxexporter-prometheus-grafana/assets/prometheus/*' \
-        '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' \
+        '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' '*/shared-assets/jmx-exporter/kafka_streams.yml' \
     || die "抓不到 jmx-monitoring-stacks（下載機沒有外網，或 github.com 連不到）"
   mv /tmp/jms-x/jmx-monitoring-stacks-* "$MONITORING_DIR_OUT" && echo "$MONITORING_STACKS_COMMIT" > "$MONITORING_DIR_OUT/COMMIT"
   rm -rf /tmp/jms-x
