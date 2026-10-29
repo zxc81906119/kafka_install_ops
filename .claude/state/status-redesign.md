@@ -20,7 +20,9 @@ Updated: 2026-10-29 19:05（**lab 使用中**：腳本版從零實跑 run-custom
   - log：log/2026-10-29-operator-rbac.md。
 
 ## 下一步（依序）
-1. 腳本版從零再跑一次（驗今天全部改動：rbac-opmenu.txt、選單 33／28.6 訊息、28-triage mds-down／mds-back、17 站 C3 規則與 22 條告警、21 站同步 to-bank ca.pem）。
+1. 腳本版從零再跑一次（進行中：第 28 段起續跑；修過 02 站 SHA256SUMS、16 站 bob 檢查、KafkaProduceLatencyHigh 只在有流量時判斷）。
+2. JMX exporter 升 1.7.0＋keystore 密碼改環境變數（使用者定案；先 lab 實測 `${VAR}`，不行比較 PEM）→ 手冊 2.x 下載、17.1／17.3、腳本 02／17 站、site.env → 重跑 17 與 B。
+3. 最後用最新手冊從第 0 章完整跑一次手動版（待使用者決定時間）。
 - 待使用者決定／回覆銀行：opmenu-emergency 對 root 的意義；換金鑰週期；dashboard job label；docs/evidence 版控；omnibus 正式值；銀行有沒有 Kafka Streams 應用。
 
 ## 環境狀態

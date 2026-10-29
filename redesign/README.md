@@ -562,3 +562,8 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 順帶修：選單 33 刪 topic 前的 consumer 檢查失敗時原本當成「沒有 consumer」照刪，改成檢查失敗就拒絕。
 - 手冊 11.3 新增 RBAC 全貌（範圍、子 cluster、資源、10 個角色的實際操作，指令從 MDS 讀）。
 - 選單 36（重設 consumer 讀取位置）維運也能做（Group:* 的 DeveloperRead 帶 Read）：使用者定案**不收**，重設 offset 屬於維運工作（依應用團隊的變更單）。RBAC 收不乾淨：Group 有 Describe 的內建角色只有 DeveloperRead（＋Read，能重設）與 DeveloperManage（＋Delete，能刪停掉的 group）。
+
+### JMX exporter 升到 1.7.0、keystore 密碼不再明文（2026-10-29 定案，待 lab 實測）
+- 原本 1.0.1（約 2024 年，沒有特別理由）。1.7.0（2026-10-06）修 SSL 下 JVM 關閉卡住、HTTP server 安全邊界、認證快取、缺屬性 NPE，支援 PEM；1.6.0 加 basic auth 防時序攻擊；1.4.0 起 YAML 可用環境變數。使用者選 1.7.0。
+- exporter YAML 的 keystore 明文密碼改從環境變數讀（systemd drop-in 的 EnvironmentFile，0600 root）。文件只寫 PEM 私鑰密碼支援 `${ENV}`、keystore 密碼省略時讀 `javax.net.ssl.keyStorePassword`（系統屬性會出現在 ps，不用）；release notes 說 1.4.0 起 keystore 密碼可用環境變數 → lab 先試 `keyStore.password: ${VAR}`，不行再比較 PEM 方案。
+- 驗證：重跑第 17 章（指標名稱、數量）與附錄 B 覆蓋率。
