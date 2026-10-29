@@ -557,3 +557,4 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 定案：`Group:kafka-operators` = Operator（cluster）＋ DeveloperManage `Topic:*` ＋ DeveloperRead `Group:*`（13／15／18／33 要 Group Describe，最小的角色是 DeveloperRead）。維運能建、刪 topic，讀不到訊息。
 - 順帶修：選單 33 刪 topic 前的 consumer 檢查失敗時原本當成「沒有 consumer」照刪，改成檢查失敗就拒絕。
 - 手冊 11.3 新增 RBAC 全貌（範圍、子 cluster、資源、10 個角色的實際操作，指令從 MDS 讀）。
+- 選單 36（重設 consumer 讀取位置）維運也能做（Group:* 的 DeveloperRead 帶 Read）：使用者定案**不收**，重設 offset 屬於維運工作（依應用團隊的變更單）。RBAC 收不乾淨：Group 有 Describe 的內建角色只有 DeveloperRead（＋Read，能重設）與 DeveloperManage（＋Delete，能刪停掉的 group）。

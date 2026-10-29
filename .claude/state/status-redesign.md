@@ -19,7 +19,7 @@ Updated: 2026-10-29 17:20（lab 空著：手冊實跑已完成，lab 停在遷�
 1. 第 28 章新增 28.6「MDS 的 8090 不能用時」：lab 由「銀行網路團隊」在 kb01–04 用 firewalld 暫拿掉 8090 → 選單登入失敗、91 提示 → `kafka-admin`（SCRAM、9095）做 topic 類操作 → 開回 8090 → 照 20.2 換 kafka-admin 密碼。先手動實跑再寫。
 2. C3 Streams／RocksDB 監控（使用者要加）：C3 的 jmx 規則改為官方 `kafka_streams.yml` 只收 `kafka.streams:*`（我們的 client_state、Jetty 規則放前面）；先在 lab 量序列數、確認 C3 的 MBean key 順序不會讓官方 pattern 拆錯 label；告警（背景錯誤、丟棄紀錄、處理停滯）→ 手冊 17 章／附錄 B → 腳本 17 站；更正 redesign「C3 維持精簡」。
 3. 腳本版從零再跑一次（驗今天全部改動，含 rbac-opmenu.txt 與選單 33）。
-- 待使用者決定／回覆銀行：bob 有 Group Read＋Topic Describe，選單 36 能重設任何 group 的 offset（不是這次造成的）要不要收；opmenu-emergency 對 root 的意義；換金鑰週期；dashboard job label；docs/evidence 版控；omnibus 正式值；銀行有沒有 Kafka Streams 應用。
+- 待使用者決定／回覆銀行：opmenu-emergency 對 root 的意義；換金鑰週期；dashboard job label；docs/evidence 版控；omnibus 正式值；銀行有沒有 Kafka Streams 應用。
 
 ## 環境狀態
 - lab：專案 `lab`，手冊實跑後的狀態；手動改過：kafka-operators 綁定已改、kc／kb 的 kafka-rest 已停、ops02 /opt/opmenu/items/33 已換新版。四個 `lab-mon-*` 與 `lab-mon-blackbox` 在跑。
