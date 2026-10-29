@@ -28,7 +28,7 @@ cli() {   # confluent CLI 以 svc-ops 憑證登入後執行（用自己的 HOME�
   HOME=$h confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1 || return 1
   HOME=$h confluent "$@"
 }
-bind()   { cli iam rbac role-binding create --principal "User:$1" --role "$2" --resource "$3" --prefix --kafka-cluster "$CID" >/dev/null 2>&1; }
+bind()   { retry 3 5 cli iam rbac role-binding create --principal "User:$1" --role "$2" --resource "$3" --prefix --kafka-cluster "$CID" >/dev/null 2>&1; }
 nbind()  { cli iam rbac role-binding list --principal "User:$1" --kafka-cluster "$CID" -o json 2>/dev/null | grep -c '"role"'; }
 scram_conf() {   # scram_conf <帳號> <密碼檔> → 暫存 client 設定檔路徑
   local c; c=$(mktemp); (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' "$1" "$(cat "$2")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$c"); echo "$c"
@@ -113,7 +113,6 @@ onboard() {
   local sys=${1:-} kind=${2:-}; shift 2 || die "用法：$0 onboard <系統> scram|cert <topic:partitions:天數>…"
   [ -n "$sys" ] && [ "$kind" = scram -o "$kind" = cert ] && [ $# -ge 1 ] || die "用法：$0 onboard <系統> scram|cert <topic:partitions:天數>…"
   CID=$(cluster_id); [ -n "$CID" ] || die "拿不到 cluster id（MDS？）"
-  wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
   topics "$sys" "$@"
   if [ "$kind" = scram ]; then identity_scram "$sys"; else identity_cert "$sys"; fi
   handover "$sys" "$kind"
@@ -142,13 +141,12 @@ retire() {   # retire <系統> scram|cert <topic>…
   local sys=${1:-} kind=${2:-}; shift 2 || die "用法：$0 retire <系統> scram|cert <topic>…"
   [ -n "$sys" ] || die "用法：$0 retire <系統> scram|cert <topic>…"
   local p t b role rtype rname pat n=0 principals
-  wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
   CID=$(cluster_id)
   section "27.6 下線（$sys）：解除 binding、配額；SCRAM 覆寫；憑證檔拿掉；刪 topic"
   if [ "$kind" = scram ]; then principals="app-$sys-a app-$sys-b"; else principals="app-$sys"; fi
   for p in $principals; do
     while IFS='|' read -r role rtype rname pat; do [ -n "$role" ] || continue
-      cli iam rbac role-binding delete --principal "User:$p" --role "$role" --resource "$rtype:$rname" $([ "$pat" = PREFIXED ] && echo --prefix) --kafka-cluster "$CID" --force >/dev/null 2>&1 && n=$((n+1))
+      retry 3 5 cli iam rbac role-binding delete --principal "User:$p" --role "$role" --resource "$rtype:$rname" $([ "$pat" = PREFIXED ] && echo --prefix) --kafka-cluster "$CID" --force >/dev/null 2>&1 && n=$((n+1))
     done < <(cli iam rbac role-binding list --principal "User:$p" --kafka-cluster "$CID" -o json 2>/dev/null | python3 -c 'import json,sys; [print("|".join([b["role"], b.get("resource_type",""), b.get("name",""), b.get("pattern_type","")])) for b in json.load(sys.stdin)]')
     kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$p" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
     if [ "$kind" = scram ]; then

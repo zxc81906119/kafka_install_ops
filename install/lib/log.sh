@@ -47,15 +47,6 @@ finish_step() {
 }
 
 # retry <最多幾次> <間隔秒數> <指令…>：失敗就隔一下再試（例如剛滾動重啟完、MDS 還在暖機時建 role binding）
-# wait_mds_writer [最多等幾秒]：等 MDS 的寫入者就緒（_confluent-metadata-auth 每個 partition 最新的 Status 都是 INITIALIZED、generation 一致）。
-# 8090 回 200 不代表能寫：broker 進出後寫入者重選的那幾秒，寫 role binding 會回 50003。重啟 broker 之後、成批寫 binding 之前呼叫（手把手第 11 章開頭）。
-wait_mds_writer() {
-  local out rc
-  out=$(MDS_READY_BOOTSTRAP=$BROKER_INTERNAL MDS_READY_CLIENT_CONF=$INTERNAL_CLIENT_CONF bash "$INSTALL_DIR/templates/mds-writer-ready.sh" "${1:-300}"); rc=$?
-  if [ "$rc" = 0 ]; then ok "$out"; else fail "$out"; fi
-  return "$rc"
-}
-
 retry() {
   local tries=$1 wait_seconds=$2 attempt; shift 2
   for attempt in $(seq 1 "$tries"); do

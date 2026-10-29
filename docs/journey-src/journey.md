@@ -1629,51 +1629,6 @@ kb04 MDS=200
 
 @role 小安 | ops02 | root
 
-**先確認 MDS 能寫**：下面這張圖說明為什麼「8090 回 200」還不夠。MDS 活著不代表能寫 role binding：每次 broker 重啟或進出，MDS 會重選一個寫入者，重選的那幾秒寫入會回 `50003 … not the current leader`。MDS 把寫入者的狀態記在 `_confluent-metadata-auth` 自己的 Status 紀錄裡（先 `INITIALIZING`、就緒後 `INITIALIZED`，每次重選 generation 加一），所以寫一支小腳本讀這些紀錄，等到每個 partition 都就緒才回 0。之後每次重啟 broker 的步驟最後、每次成批寫 binding 之前都跑它，不靠重試。用 `kafka-internal` 憑證走 9092 讀，不經 MDS：
-
-![mdswriter]
-
-```bash
-cat > ~/conf/mds-writer-ready.sh <<'EOF'
-#!/usr/bin/env bash
-# mds-writer-ready.sh [最多等幾秒，預設 300]：等 MDS 的寫入者就緒才回 0（手把手第 11 章開頭）。
-# 判斷依據是 MDS 自己寫在 _confluent-metadata-auth 的 Status 紀錄：每次 broker 進出，寫入者重選（generationId 加一），
-# 先寫 INITIALIZING、就緒後寫 INITIALIZED。每個 partition 最新的 Status 都是 INITIALIZED、generationId 都一樣，才可以寫 role binding。
-# 8090 回 200 不代表可以寫：寫入者換人的那幾秒，寫入會回 50003（not the current leader）。
-# 用 kafka-internal 憑證讀（INTERNAL 9092，不經 MDS），印一行結果。結束碼：0 就緒、1 等不到。
-max_wait=${1:-300}
-export JAVA_HOME=${JAVA_HOME:-/opt/java/current} KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-bootstrap=${MDS_READY_BOOTSTRAP:-kb01.poc.lab:9092,kb02.poc.lab:9092,kb03.poc.lab:9092,kb04.poc.lab:9092}
-client_conf=${MDS_READY_CLIENT_CONF:-/root/conf/client-internal.properties}
-topic=_confluent-metadata-auth
-status_lines() {   # 整個 topic 讀一次（5 秒沒有新資料就結束），每個 partition 取最新一筆 Status：印「partition 狀態 generation」
-  timeout 60 kafka-console-consumer --bootstrap-server "$bootstrap" --command-config "$client_conf" --topic "$topic" --from-beginning \
-    --timeout-ms 5000 --formatter-property print.partition=true 2>/dev/null |
-    sed -nE 's/^Partition:([0-9]+).*"_type":"Status","status":"([A-Z_]*)","generationId":([0-9]*).*/\1 \2 \3/p' |
-    awk '{last[$1] = $0} END {for (p in last) print last[p]}' | sort -n
-}
-started=$(date +%s)
-while :; do
-  lines=$(status_lines); total=$(grep -c . <<<"$lines"); ready=$(grep -c ' INITIALIZED ' <<<"$lines"); gens=$(awk '{print $3}' <<<"$lines" | sort -u | grep -c .)
-  waited=$(( $(date +%s) - started ))
-  if [ "$total" -gt 0 ] && [ "$ready" = "$total" ] && [ "$gens" = 1 ]; then
-    echo "MDS 寫入者就緒：$ready / $total 個 partition INITIALIZED，generation $(awk 'NR==1{print $3}' <<<"$lines")（等了 ${waited} 秒）"; exit 0
-  fi
-  if [ "$waited" -ge "$max_wait" ]; then
-    echo "MDS 寫入者等了 ${waited} 秒還沒就緒：$(tr '\n' ';' <<<"$lines")（看 /var/log/kafka/metadata-service.log，手把手 28.4）"; exit 1
-  fi
-  sleep 5
-done
-EOF
-chmod 0700 ~/conf/mds-writer-ready.sh && bash ~/conf/mds-writer-ready.sh
-```
-
-```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
-```
-
-> 叢集剛起來時 Status 紀錄可能還沒寫出來，腳本會等（最多 5 分鐘）。等不到就是 MDS 起不來，看 `/var/log/kafka/metadata-service.log`（28.4）。
-
 **先講清楚 super user**：第 10 章的 `super.users` 只有 `kafka-internal`（controller 與 broker 彼此用的憑證），它繞過 RBAC。人用的身分都不是 super user：操作機的 `svc-ops`、緊急用的 `kafka-admin` 都靠 RBAC 綁 `SystemAdmin`，動作受 RBAC 控管、稽核記的是明確的角色。授權由每台 broker 自己的 authorizer 依 binding 判斷（binding 在內部 topic `_confluent-metadata-auth`），MDS 的 REST 或 AD 不通都不影響授權，所以把人用的帳號設成 super user 沒有必要（11.2 會驗證）。
 
 **bootstrap**：叢集剛起來時一條 binding 都沒有，只有 super user 能呼叫 MDS 建 binding。所以第一步用 `kafka-internal` 的憑證登入 MDS，建第一條：`User:svc-ops → SystemAdmin`。這是 `kafka-internal` 憑證唯一一次被人拿來用：
@@ -2520,7 +2475,6 @@ kc01: refs=11 plaintext=0 env=/etc/confluent/service.env
 
 ```bash
 for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 36); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*5))s"; echo "alice login: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -2530,7 +2484,6 @@ kb01 MDS=200 after ~20s
 （4 行，20–50 秒）
 c3 ui=200 after ~80s
 alice login: 200
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 @role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
@@ -2672,11 +2625,10 @@ opmenu-breakglass：3 段 PEM（私鑰＋憑證鏈）
 @role 小安 | ops02 | root
 
 ```bash
-bash ~/conf/mds-writer-ready.sh && export JAVA_HOME=/opt/java/current && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null 2>&1 && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal User:opmenu-breakglass --role SystemAdmin --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal User:opmenu-breakglass --kafka-cluster "$CID" 2>/dev/null | tail -1
+export JAVA_HOME=/opt/java/current && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null 2>&1 && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal User:opmenu-breakglass --role SystemAdmin --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal User:opmenu-breakglass --kafka-cluster "$CID" 2>/dev/null | tail -1
 ```
 
 ```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
   User:opmenu-breakglass | SystemAdmin | Cluster       |      |
 ```
 
@@ -2814,7 +2766,6 @@ ssh kb04.poc.lab 'sudo mv /etc/sudoers.d/cpuser /root/cpuser.sudoers.full; while
 /usr/bin/journalctl -D /etc
 /usr/bin/ls /root
 LIST'
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -2827,7 +2778,6 @@ bash ~/conf/mds-writer-ready.sh
 拒絕 /usr/bin/systemctl restart sshd
 拒絕 /usr/bin/journalctl -D /etc
 拒絕 /usr/bin/ls /root
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 ## 16.5 試跑：選單全部顯示，沒權限的做了被拒
@@ -3082,7 +3032,6 @@ controller、broker 照順序一台一台來（REST Proxy 與 C3 在後面）：
 
 ```bash
 for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -3090,7 +3039,6 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 REST Proxy 照 12.1 一台一台重啟：
@@ -3784,11 +3732,10 @@ Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了�
 這一節建一個專門寫稽核事件的帳號，把權限壓到最小。`confluent-audit` 是 SCRAM 帳號，只能寫與管理 `confluent-audit-log-events` 開頭的 topic（prefix 同時涵蓋 `_sensitive`），不是 super user：
 
 ```bash
-bash ~/conf/mds-writer-ready.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && BS=kb01.poc.lab:9094 && (umask 077; [ -s ~/secrets/confluent-audit.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/confluent-audit.pass) && P=$(cat ~/secrets/confluent-audit.pass) && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name confluent-audit --add-config "SCRAM-SHA-512=[iterations=8192,password=$P]" >/dev/null && unset P && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null 2>&1 && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && for r in DeveloperWrite DeveloperManage; do confluent iam rbac role-binding create --principal User:confluent-audit --role $r --resource Topic:confluent-audit-log-events --prefix --kafka-cluster "$CID" >/dev/null 2>&1; done; confluent iam rbac role-binding list --principal User:confluent-audit --kafka-cluster "$CID" 2>/dev/null | tail -n +3
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && BS=kb01.poc.lab:9094 && (umask 077; [ -s ~/secrets/confluent-audit.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/confluent-audit.pass) && P=$(cat ~/secrets/confluent-audit.pass) && kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name confluent-audit --add-config "SCRAM-SHA-512=[iterations=8192,password=$P]" >/dev/null && unset P && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null 2>&1 && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && for r in DeveloperWrite DeveloperManage; do confluent iam rbac role-binding create --principal User:confluent-audit --role $r --resource Topic:confluent-audit-log-events --prefix --kafka-cluster "$CID" >/dev/null 2>&1; done; confluent iam rbac role-binding list --principal User:confluent-audit --kafka-cluster "$CID" 2>/dev/null | tail -n +3
 ```
 
 ```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
   User:confluent-audit | DeveloperManage | Topic         | confluent-audit-log-events | PREFIXED
   User:confluent-audit | DeveloperWrite  | Topic         | confluent-audit-log-events | PREFIXED
 ```
@@ -3842,7 +3789,6 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04
 
 ```bash
 for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; sleep 20; export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list | grep audit
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -3852,7 +3798,6 @@ kb01 MDS=200
 （4 行）
 confluent-audit-log-events
 confluent-audit-log-events_sensitive
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 ## 18.3 製造事件、讀回來
@@ -4164,7 +4109,6 @@ kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 
 ```bash
 for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(seq 1 36); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done; echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"; echo "alice login after master key rotation: $(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; rm -f ~/secrets/security.properties.bak ~/secrets/master.key.bak
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -4174,7 +4118,6 @@ kb01 MDS=200
 （4 行）
 c3 ui=200
 alice login after master key rotation: 200
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 @role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
@@ -4292,7 +4235,6 @@ changed lines: 7, of which ldap credentials: 7；總行數 151 → 151（要相�
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/secrets/security.properties $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties'; done; for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done; echo "$(hostname) $(systemctl is-active confluent-server)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done; echo "換密碼後 alice 登入 MDS：$(curl -sk -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; echo "kb01 ldap auth errors since restart: $(ssh kb01.poc.lab 'sudo journalctl -u confluent-server --since "$(systemctl show -p ActiveEnterTimestamp --value confluent-server)" --no-pager 2>/dev/null | grep -ci "javax.naming\|LDAP search failed"')"; echo "kb01 bind 欄位仍是密文參照：$(ssh kb01.poc.lab "sudo grep -c '^ldap.java.naming.security.credentials *= *\\\${securepass:' /etc/confluent/kafka/server.properties")"; rm -f ~/secrets/security.properties.bak
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -4303,7 +4245,6 @@ kb01 MDS=200
 換密碼後 alice 登入 MDS：200
 kb01 ldap auth errors since restart: 0
 kb01 bind 欄位仍是密文參照：1
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 > 回滾（換錯、AD 被改回舊密碼）：刪 `.bak` 之前，把 `security.properties.bak` 派送回 10 台、再滾動重啟 controller 和 broker。
@@ -4583,7 +4524,6 @@ cp-server: old=F343BC54 new=F343BC5C
 
 ```bash
 cd ~/pki/next && NEW_INT=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2) NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in kc01 kc02 kc03; do scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-internal.p12 /etc/confluent/ssl/ && rm -f /tmp/kafka-internal.p12 && sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done'; for i in $(seq 1 30); do [ "$(served $h.poc.lab:9093)" = $NEW_INT ] && break; sleep 2; done; echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$([ "$(served $h.poc.lab:9093)" = $NEW_INT ] && echo new || echo OLD)"; done; for h in kb01 kb02 kb03 kb04; do scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in kafka-internal.p12 cp-server.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) 9092=$([ "$(served $h.poc.lab:9092)" = $NEW_INT ] && echo new || echo OLD) 9095=$([ "$(served $h.poc.lab:9095)" = $NEW_SRV ] && echo new || echo OLD)"; done
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -4591,7 +4531,6 @@ kc01 active 9093=new
 （3 行）
 kb01 MDS=200 9092=new 9095=new
 （4 行）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 > 陷阱：controller 的 `systemctl is-active` 變成 active 之後，9093 還要幾秒才開始聽。這時去看出示的憑證會拿到空的，看起來像「還是舊的」。所以上面是等到它出示新序號才往下。
@@ -4765,7 +4704,6 @@ for h in kb01 kb02 kb03 kb04; do
   for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done
   echo "$h MDS=$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
-bash ~/conf/mds-writer-ready.sh || exit 1   # 8090 回 200 之後，MDS 的寫入者還要重選一次（第 11 章開頭）
 ssh c3-01.poc.lab 'for u in prometheus alertmanager confluent-control-center; do sudo systemctl restart $u; done'
 for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 5; done
 echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
@@ -4798,7 +4736,6 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 c3-01 UI=200
 ```
 
@@ -4933,7 +4870,6 @@ cp-server: old=F343BC54 new=F343BC5C
 
 ```bash
 cd ~/pki/next && NEW_INT=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2) NEW_SRV=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2) && served() { openssl s_client -connect $1 -servername ${1%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2; } && for h in kc01 kc02 kc03; do scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-internal.p12 /etc/confluent/ssl/ && rm -f /tmp/kafka-internal.p12 && sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done'; for i in $(seq 1 30); do [ "$(served $h.poc.lab:9093)" = $NEW_INT ] && break; sleep 2; done; echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$([ "$(served $h.poc.lab:9093)" = $NEW_INT ] && echo new || echo OLD)"; done; for h in kb01 kb02 kb03 kb04; do scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in kafka-internal.p12 cp-server.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) 9092=$([ "$(served $h.poc.lab:9092)" = $NEW_INT ] && echo new || echo OLD) 9095=$([ "$(served $h.poc.lab:9095)" = $NEW_SRV ] && echo new || echo OLD)"; done
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -4941,7 +4877,6 @@ kc01 active 9093=new
 （3 行）
 kb01 MDS=200 9092=new 9095=new
 （4 行）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 **21.2.4 REST Proxy 與 C3**
@@ -5095,7 +5030,6 @@ cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pe
 truststore：bank-root-g2
 kc01 active
 （滾動重啟 8 行，全部健康；REST Proxy 在下面另外做）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 c3-01 UI=200
 ```
 
@@ -5240,7 +5174,6 @@ cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pe
 truststore：bank-root-g2 bank-root-g3
 kc01 active
 （滾動重啟 8 行，全部健康；REST Proxy 在下面另外做）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 c3-01 UI=200
 ```
 
@@ -5337,7 +5270,6 @@ kafka-internal: leaf=7E8C05F2（不變） chain=ok
 
 ```bash
 cd ~/pki/next && via() { openssl s_client -connect $1 -servername ${1%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'; } && G3="PoC Bank Root CA G3" && for h in kc01 kc02 kc03; do scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/kafka-internal.p12 /etc/confluent/ssl/ && rm -f /tmp/kafka-internal.p12 && sudo systemctl restart confluent-server; for i in $(seq 1 30); do systemctl is-active -q confluent-server && break; sleep 2; done'; for i in $(seq 1 30); do [ "$(via $h.poc.lab:9093)" = "$G3" ] && break; sleep 2; done; echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$([ "$(via $h.poc.lab:9093)" = "$G3" ] && echo new || echo OLD)"; done; for h in kb01 kb02 kb03 kb04; do scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'for f in kafka-internal.p12 cp-server.p12; do sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/; done; rm -f /tmp/*.p12; sudo systemctl restart confluent-server'; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h MDS=$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) 9092=$([ "$(via $h.poc.lab:9092)" = "$G3" ] && echo new || echo OLD) 9095=$([ "$(via $h.poc.lab:9095)" = "$G3" ] && echo new || echo OLD)"; done
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -5345,7 +5277,6 @@ kc01 active 9093=new
 （3 行）
 kb01 MDS=200 9092=new 9095=new
 （4 行）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 REST Proxy 與 C3（C3 的 `cp-server.key`、`c3-monitoring.key` 沒變，照樣一起放，指令和 21.2.4 一致）：
@@ -5493,7 +5424,6 @@ cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pe
 truststore：bank-root-g3
 kc01 active
 （滾動重啟 8 行，全部健康；REST Proxy 在下面另外做）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 c3-01 UI=200
 ```
 
@@ -5890,11 +5820,10 @@ client-backup.properties：1 處指向 svc-backup；憑證 svc-backup，剩 364 
 > 為什麼 topic 設定不用 RBAC 角色：內建角色裡有 `DescribeConfigs` 的都連帶能建立、刪除或改設定（例如 `DeveloperManage`），沒有唯讀的；`DeveloperRead` 沒有 `DescribeConfigs`，而且讀得到訊息內容。ACL 可以只給這兩個操作。
 
 ```bash
-bash ~/conf/mds-writer-ready.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CID=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && confluent iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster $CID >/dev/null && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --topic '*' >/dev/null && kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --cluster >/dev/null && confluent iam rbac role-binding list --principal User:svc-backup --kafka-cluster $CID | tail -n +3 && echo "ACL：$(kafka-acls $A --list --principal User:svc-backup 2>/dev/null | grep -c 'operation=') 條"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CID=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && confluent iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster $CID >/dev/null && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --topic '*' >/dev/null && kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --cluster >/dev/null && confluent iam rbac role-binding list --principal User:svc-backup --kafka-cluster $CID | tail -n +3 && echo "ACL：$(kafka-acls $A --list --principal User:svc-backup 2>/dev/null | grep -c 'operation=') 條"
 ```
 
 ```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
   User:svc-backup | SecurityAdmin | Cluster       |      |
 ACL：4 條
 ```
@@ -6056,11 +5985,10 @@ orders.backup-demo 還在嗎：0
 先建演練用的三樣東西（topic 帶一個動態設定、帳號帶配額、三條 binding），再備份一次：
 
 ```bash
-bash ~/conf/mds-writer-ready.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"; kafka-topics $A --create --if-not-exists --topic orders.restore-demo --partitions 3 --replication-factor 3 --config retention.ms=3600000 2>/dev/null | grep -v WARNING; (umask 077; [ -s ~/secrets/app-restore.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/app-restore.pass) && kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/app-restore.pass)]" >/dev/null && kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && for r in DeveloperRead DeveloperWrite; do confluent iam rbac role-binding create --principal User:app-restore --role $r --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID >/dev/null; done && confluent iam rbac role-binding create --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID >/dev/null && echo "演練物件：topic、帳號（含配額）、binding $(confluent iam rbac role-binding list --principal User:app-restore --kafka-cluster $CLUSTER_ID | grep -c app-restore) 條" && d=$(bash ~/conf/metadata-backup.sh) && echo "備份：$d" && grep -c "app-restore\|orders.restore-demo" $d/topics.txt $d/rbac.txt $d/users.txt
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"; kafka-topics $A --create --if-not-exists --topic orders.restore-demo --partitions 3 --replication-factor 3 --config retention.ms=3600000 2>/dev/null | grep -v WARNING; (umask 077; [ -s ~/secrets/app-restore.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/app-restore.pass) && kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/app-restore.pass)]" >/dev/null && kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && for r in DeveloperRead DeveloperWrite; do confluent iam rbac role-binding create --principal User:app-restore --role $r --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID >/dev/null; done && confluent iam rbac role-binding create --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID >/dev/null && echo "演練物件：topic、帳號（含配額）、binding $(confluent iam rbac role-binding list --principal User:app-restore --kafka-cluster $CLUSTER_ID | grep -c app-restore) 條" && d=$(bash ~/conf/metadata-backup.sh) && echo "備份：$d" && grep -c "app-restore\|orders.restore-demo" $d/topics.txt $d/rbac.txt $d/users.txt
 ```
 
 ```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 演練物件：topic、帳號（含配額）、binding 3 條
 備份：/root/backup/metadata/20261029-0220
 /root/backup/metadata/20261029-0220/topics.txt:4
@@ -6098,12 +6026,12 @@ if [ "$T" != - ]; then
   kafka-topics $A --create --topic "$T" --partitions "$P" --replication-factor "$R" "${cfg[@]}" >/dev/null && echo "topic $T：partitions=$P rf=$R 動態設定 $(( ${#cfg[@]} / 2 )) 個"
 fi
 if [ "$U" != - ]; then
-  bash ~/conf/mds-writer-ready.sh || exit 1   # 寫 binding 之前：MDS 的寫入者要就緒（第 11 章開頭）
   confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null
   n=0; while IFS='|' read -r principal role rtype rname pattern; do
     principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
     args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID"); [ -n "$rtype" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
-    confluent iam rbac role-binding create "${args[@]}" >/dev/null && n=$((n+1))
+    # MDS 把寫入轉給 master writer；broker 剛重啟過時 writer 會換人，短暫回 50003：每條試三次
+    for try in 1 2 3; do confluent iam rbac role-binding create "${args[@]}" >/dev/null 2>&1 && { n=$((n+1)); break; }; sleep 5; done
   done < <(awk -v u="User:$U" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$B/rbac.txt")
   echo "role binding：$n 條"
   iter=$(grep "SCRAM credential configs for user-principal '$U'" "$B/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
@@ -6733,11 +6661,10 @@ shipping.events: PartitionCount: 3 ReplicationFactor: 3，retention retention.ms
 **直連的系統：A／B 兩個 SCRAM 帳號**（第 11 章的做法，選單 34 一次做完）。密碼各自產生、各自一個 0600 檔；兩個帳號權限一模一樣：`inventory.` 前綴的讀寫、`inventory-` 前綴的 consumer group；配額照申請單，兩個帳號都設：
 
 ```bash
-bash ~/conf/mds-writer-ready.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && for a in app-inventory-a app-inventory-b; do (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$a.pass); kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/$a.pass)]" >/dev/null 2>&1 && kafka-configs $A --alter --entity-type users --entity-name $a --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' >/dev/null 2>&1 && for r in DeveloperWrite DeveloperRead; do confluent iam rbac role-binding create --principal User:$a --role $r --resource Topic:inventory. --prefix --kafka-cluster $CLUSTER_ID >/dev/null; done && confluent iam rbac role-binding create --principal User:$a --role DeveloperRead --resource Group:inventory- --prefix --kafka-cluster $CLUSTER_ID >/dev/null && echo "$a: SCRAM $(kafka-configs $A --describe --entity-type users --entity-name $a 2>/dev/null | grep -o 'SCRAM-SHA-512=iterations=[0-9]*' | head -1)，配額 $(kafka-configs $A --describe --entity-type users --entity-name $a 2>/dev/null | grep -o 'producer_byte_rate=[0-9.]*' | head -1)，binding $(confluent iam rbac role-binding list --principal User:$a --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"') 條"; done
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && for a in app-inventory-a app-inventory-b; do (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$a.pass); kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/$a.pass)]" >/dev/null 2>&1 && kafka-configs $A --alter --entity-type users --entity-name $a --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' >/dev/null 2>&1 && for r in DeveloperWrite DeveloperRead; do confluent iam rbac role-binding create --principal User:$a --role $r --resource Topic:inventory. --prefix --kafka-cluster $CLUSTER_ID >/dev/null; done && confluent iam rbac role-binding create --principal User:$a --role DeveloperRead --resource Group:inventory- --prefix --kafka-cluster $CLUSTER_ID >/dev/null && echo "$a: SCRAM $(kafka-configs $A --describe --entity-type users --entity-name $a 2>/dev/null | grep -o 'SCRAM-SHA-512=iterations=[0-9]*' | head -1)，配額 $(kafka-configs $A --describe --entity-type users --entity-name $a 2>/dev/null | grep -o 'producer_byte_rate=[0-9.]*' | head -1)，binding $(confluent iam rbac role-binding list --principal User:$a --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"') 條"; done
 ```
 
 ```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 app-inventory-a: SCRAM SCRAM-SHA-512=iterations=8192，配額 producer_byte_rate=5242880.0，binding 3 條
 app-inventory-b: SCRAM SCRAM-SHA-512=iterations=8192，配額 producer_byte_rate=5242880.0，binding 3 條
 ```
@@ -6897,15 +6824,14 @@ app-shipping 經 REST 寫入 shipping.events：error_code 200；寫別人的 top
 系統退役時反過來做（選單 37 做前兩步）：解除 binding → SCRAM 密碼覆寫成隨機值（帳號留著，稽核日誌裡的名字才查得到；配額一起拿掉）→ 憑證：從 `requests.txt` 拿掉、私鑰與憑證刪掉、到期不續（REST 的授權靠 binding，拿掉就進不來；REST 白名單裡的 CN 留著無害，下次照 12.1 重啟 REST 時一併拿掉）→ topic 等保留期過了再刪（lab 直接刪）。最後確認：舊密碼登不進、binding 0 條、topic 不在：
 
 ```bash
-bash ~/conf/mds-writer-ready.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && source ~/conf/kraft.env && old=$(cat ~/secrets/app-inventory-a.pass) && for p in app-inventory-a app-inventory-b app-shipping; do for b in $(confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | python3 -c 'import json,sys; [print(b["role"], b.get("resource_type",""), b.get("name",""), b.get("pattern_type","")) for b in json.load(sys.stdin)]' | tr ' ' '|'); do IFS='|' read -r role rtype rname pat <<<"$b"; confluent iam rbac role-binding delete --principal User:$p --role $role --resource $rtype:$rname $([ "$pat" = PREFIXED ] && echo --prefix) --kafka-cluster $CLUSTER_ID --force >/dev/null; done; kafka-configs $A --alter --entity-type users --entity-name $p --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1; done && for a in app-inventory-a app-inventory-b; do kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)]" >/dev/null 2>&1; rm -f ~/secrets/$a.pass; done && cd ~/pki && sed -i '/^app-shipping /d' requests.txt && rm -f keys/app-shipping.key requests/app-shipping.csr incoming/app-shipping.* certs/app-shipping.crt certs/app-shipping.p12 ~/secrets/app-shipping-p12.pass && rm -rf ~/handover/app-inventory-*.txt ~/handover/app-shipping && for t in inventory.stock shipping.events; do kafka-topics $A --delete --topic $t >/dev/null 2>&1; done && c=$(mktemp) && (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-inventory-a" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/root/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$old" "$(cat ~/pki/store.pass)" > $c) && echo "舊密碼登入：$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $c --list >/dev/null 2>&1 && echo 成功 || echo 被拒)；binding：$(for p in app-inventory-a app-inventory-b app-shipping; do confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"'; done | awk '{s+=$1} END{print s+0}') 條；topic：$(kafka-topics $A --list 2>/dev/null | grep -cE '^(inventory|shipping)\.')；pki 殘留：$(ls ~/pki/keys ~/pki/certs | grep -c app-shipping)"; rm -f $c; unset old
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && source ~/conf/kraft.env && old=$(cat ~/secrets/app-inventory-a.pass) && for p in app-inventory-a app-inventory-b app-shipping; do for b in $(confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | python3 -c 'import json,sys; [print(b["role"], b.get("resource_type",""), b.get("name",""), b.get("pattern_type","")) for b in json.load(sys.stdin)]' | tr ' ' '|'); do IFS='|' read -r role rtype rname pat <<<"$b"; for i in 1 2 3; do confluent iam rbac role-binding delete --principal User:$p --role $role --resource $rtype:$rname $([ "$pat" = PREFIXED ] && echo --prefix) --kafka-cluster $CLUSTER_ID --force >/dev/null 2>&1 && break; sleep 5; done; done; kafka-configs $A --alter --entity-type users --entity-name $p --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1; done && for a in app-inventory-a app-inventory-b; do kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)]" >/dev/null 2>&1; rm -f ~/secrets/$a.pass; done && cd ~/pki && sed -i '/^app-shipping /d' requests.txt && rm -f keys/app-shipping.key requests/app-shipping.csr incoming/app-shipping.* certs/app-shipping.crt certs/app-shipping.p12 ~/secrets/app-shipping-p12.pass && rm -rf ~/handover/app-inventory-*.txt ~/handover/app-shipping && for t in inventory.stock shipping.events; do kafka-topics $A --delete --topic $t >/dev/null 2>&1; done && c=$(mktemp) && (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="app-inventory-a" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=/root/pki/certs/truststore.p12\nssl.truststore.password=%s\n' "$old" "$(cat ~/pki/store.pass)" > $c) && echo "舊密碼登入：$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $c --list >/dev/null 2>&1 && echo 成功 || echo 被拒)；binding：$(for p in app-inventory-a app-inventory-b app-shipping; do confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"'; done | awk '{s+=$1} END{print s+0}') 條；topic：$(kafka-topics $A --list 2>/dev/null | grep -cE '^(inventory|shipping)\.')；pki 殘留：$(ls ~/pki/keys ~/pki/certs | grep -c app-shipping)"; rm -f $c; unset old
 ```
 
 ```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 舊密碼登入：被拒；binding：0 條；topic：0；pki 殘留：0
 ```
 
-> 區塊一開頭先跑 `mds-writer-ready.sh`（第 11 章開頭）：broker 剛重啟過時 MDS 的寫入者會重選，這段時間寫 binding 會回 `50003 … not the current leader`。等它說就緒再寫，不靠重試。
+> MDS 把寫入轉給 master writer，writer 剛換過（broker 重啟後）會短暫回 `50003 … not the current leader`：每一條 binding 的刪除都重試三次，不要只做一次就當成功。
 >
 > 正式環境不要急著刪 topic：先只拿掉 binding（沒人寫得進、讀得到），等申請單寫的保留期過了、確認沒有下游還在讀（選單 13 看 consumer lag），再用選單 33 刪。帳號不刪：稽核日誌裡的 principal 才對得上人。
 
@@ -7028,13 +6954,11 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties" && ssh kb04.poc.lab 'sudo systemctl restart confluent-server && echo "kb04：$(systemctl is-active confluent-server)"' && for i in $(seq 1 30); do u=$(kafka-topics $A --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); m=$(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id); [ "$u" = 0 ] && [ "$m" = 200 ] && break; sleep 10; done; echo "等了約 $((i*10)) 秒：under-replicated $u、kb04 MDS $m；broker 在線：$(kafka-broker-api-versions $A 2>/dev/null | grep -oE '^[a-z0-9.]+:9094' | wc -l) / 4"
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
 kb04：active
 等了約 20 秒：under-replicated 0、kb04 MDS 200；broker 在線：4 / 4
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
@@ -7061,7 +6985,6 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x
 | 看到的訊息 | 在哪裡 | 意思 | 處理 |
 |---|---|---|---|
 | `Waiting for all of the authorizer futures to be completed` 之後沒下文（10 分鐘後 `Authorizer did not start up within the timeout`） | broker journal | authorizer 等 MDS 的 writer 初始化；原因要看 `/var/log/kafka/metadata-service.log`：`LDAP search failed … data 52e` 是 `svc-mds-bind` 密碼不對（AD 換了、或 20.4 更新的密文 key 名不對）；AD 不通是 `CommunicationException` | 14.1 陷阱；20.4；11.2 |
-| `50003 … not the current leader`（建／刪 role binding 時） | confluent CLI、選單 34／42 | MDS 的寫入者正在重選（broker 剛重啟或進出），MDS 活著但還不能寫 | `bash ~/conf/mds-writer-ready.sh` 等就緒再做（第 11 章開頭）；一直不就緒看 `metadata-service.log` |
 | `Failed to fetch MDS URLs … Client has already been closed` | C3 日誌 | C3 比 MDS 先起來 | 重啟 C3（14.3） |
 | `TopicAuthorizationException: Not authorized to access topics` | 應用程式／稽核日誌 | 帳號沒有那個 topic 的 role binding 或 ACL | 選單 41 看、42 給 |
 | `SaslAuthenticationException: Authentication failed` | 應用程式 | SCRAM 帳號或密碼錯（換密碼時換到正在用的那個） | 20.6：換閒置帳號、應用程式再切 |
@@ -7204,14 +7127,12 @@ alice 登入 MDS（C3 用同一套）：200
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do t0=$(date +%s); ssh $h.poc.lab 'before=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; after=$(sudo sha256sum /etc/confluent/kafka/server.properties | cut -c1-12); echo "$(hostname) $(rpm -q confluent-server) 設定檔$([ $before = $after ] && echo 沒變 || echo 被改了) exec=$(systemctl show confluent-server -p ExecStart --value | grep -o "/etc/[^ ]*properties")"; sudo systemctl restart confluent-server' || exit 1; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; for j in $(seq 1 60); do u=$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:); [ "$u" = 0 ] && break; sleep 5; done; echo "  MDS 200（約 $((i*5)) 秒）under-replicated=$u，這台 $(( $(date +%s) - t0 )) 秒"; done
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
 kb01 confluent-server-8.3.2-1.noarch 設定檔沒變 exec=/etc/confluent/kafka/server.properties
   MDS 200（約 20 秒）under-replicated=0，這台 73 秒
 （4 台，每台 70–110 秒）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 > 陷阱：重啟前沒做 `daemon-reload`，systemd 會印 `The unit file … changed on disk`。設定還是我們的（drop-in 會疊上去），但下一次 reload 才會真的用新的 unit；所以每台都在重啟前 reload。
@@ -7241,11 +7162,10 @@ kc02 confluent-server-8.3.2-1.noarch Lag=0（這輪開始時 leader=kc01）
 原廠要求 RBAC 環境在升 REST Proxy 之前，先讓 REST Proxy 的身分在 `_confluent-command` 有 ResourceOwner（原本只有 DeveloperRead）：
 
 ```bash
-bash ~/conf/mds-writer-ready.sh && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command --kafka-cluster $CLUSTER_ID | grep -E 'Role|Name' | tr -s ' '
+source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command --kafka-cluster $CLUSTER_ID | grep -E 'Role|Name' | tr -s ' '
 ```
 
 ```out
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 | Role | ResourceOwner |
 | Name | _confluent-command |
 ```
@@ -7432,12 +7352,10 @@ broker 的日誌會多一則 `WARNING: A terminally deprecated method in sun.mis
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-21* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.2.4 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh downgrade $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; sudo systemctl restart confluent-server' || exit 1; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
 kb04 confluent-server-8.2.4-1.noarch /opt/java/jdk-21.0.x+y/bin/java MDS 200（約 15–20 秒）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 演練完馬上把它升回去（和 29.4、29.7 同樣的做法，只動這一台）：
@@ -7446,12 +7364,10 @@ MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && h=kb04 && ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-25* | sort -V | tail -1) /opt/java/current; pkgs=$(rpm -qa "confluent-*" --qf "%{NAME}-8.3.2 "); sudo dnf -q versionlock delete "confluent-*" >/dev/null; sudo dnf -q -y --refresh install $pkgs >/dev/null && sudo dnf -q versionlock add $pkgs >/dev/null || { echo "$(hostname) 換套件失敗" >&2; exit 1; }; sudo systemctl daemon-reload; sudo systemctl restart confluent-server' || exit 1; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server; sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe' | paste -sd' ') MDS 200（約 $((i*5)) 秒）"
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
 kb04 confluent-server-8.3.2-1.noarch /opt/java/jdk-25.0.5+8/bin/java MDS 200（約 15–20 秒）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。回滾驗證完，馬上升回去（下面這一段），再往下做 finalize。
@@ -7641,7 +7557,6 @@ else
 fi
 EOF
 chmod 0700 ~/conf/os-patch-host.sh ~/conf/os-reboot.sh && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kb01 kb02 kb03 kb04; do out=$(ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh); echo "$out"; case $out in *要重開機：是*) bash ~/conf/os-reboot.sh $h;; *confluent-server*) ssh $h.poc.lab 'sudo systemctl restart confluent-server';; esac; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && [ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)" = 0 ] && break; sleep 10; done; echo "  $h MDS=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"; done
-bash ~/conf/mds-writer-ready.sh
 ```
 
 ```out
@@ -7649,7 +7564,6 @@ kb01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務
   kb01 是容器，不能重開機：改重啟平台服務
   kb01 MDS=200
 （4 台；正式環境沒有「是容器」那行，而是重開機後等 ssh 回來，每台多幾分鐘）
-MDS 寫入者就緒：6 / 6 個 partition INITIALIZED，generation …（等了 … 秒）
 ```
 
 ## 30.3 controller 逐台，leader 最後

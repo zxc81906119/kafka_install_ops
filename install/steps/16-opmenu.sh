@@ -44,13 +44,12 @@ section "16.2 role binding（conf/rbac-opmenu.txt：緊急身分 SystemAdmin、�
 confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
   --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1 || die "confluent login 失敗"
 source "$CONF_DIR/kraft.env"   # CLUSTER_ID
-wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
 while read -r principal role resource pattern; do
   [ -n "$principal" ] || continue
   binding_args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID")
   [ "$resource" != - ] && binding_args+=(--resource "$resource")
   [ "$pattern" = PREFIXED ] && binding_args+=(--prefix)
-  if confluent iam rbac role-binding create "${binding_args[@]}" >/dev/null 2>&1 </dev/null; then ok "$principal $role ${resource#-} ${pattern#-}"
+  if retry 3 5 confluent iam rbac role-binding create "${binding_args[@]}" >/dev/null 2>&1 </dev/null; then ok "$principal $role ${resource#-} ${pattern#-}"
   else fail "$principal $role ${resource#-}"; fi
 done < <(grep -v '^#' "$INSTALL_DIR/conf/rbac-opmenu.txt")
 [ "$FAIL_COUNT" = 0 ] || die "16.2 失敗"

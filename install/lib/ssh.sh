@@ -124,8 +124,7 @@ rolling_restart() {
       brokers)     for host in $BROKERS; do
                      result=$(restart_and_wait "$host" confluent-server "https://$(fqdn "$host"):8090/v1/metadata/id")
                      case $result in *after*) ok "$result";; *) fail "$result"; failures=$((failures + 1));; esac
-                   done
-                   wait_mds_writer || failures=$((failures + 1));;   # 8090 回 200 之後，MDS 的寫入者還要重選一次
+                   done;;
       rests)       HEALTH_CURL_OPTIONS=$(rest_app_curl_options)
                    for host in $RESTS; do   # 先請 LB 團隊停用、排空，才重啟；健康了再恢復（手把手 12.1）
                      lb_member "$host" down && lb_drained "$host" || { failures=$((failures + 1)); break; }

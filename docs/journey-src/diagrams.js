@@ -823,20 +823,6 @@ D.certexpiry = () => svg(800, 430, [
   box(10, 378, 770, 40, "客戶沒有 blackbox_exporter 時：只做 ②（操作機腳本）＋ ③（選單）；①是建議，lab 兩層都建、都驗", [], "gray"),
 ].join(""));
 
-// 27 MDS writer readiness (11.0): the 8090 health check says "alive", only the Status records say "can write"
-D.mdswriter = () => svg(800, 330, [
-  box(20, 24, 170, 74, "broker 重啟或進出", ["rolling restart、換 JDK、", "OS 修補、增減 broker"], "gray"),
-  box(215, 24, 170, 74, "8090 回 200", ["MDS 活著，能登入、能讀", "（舊的健康檢查只看到這裡）"], "teal"),
-  box(410, 24, 170, 74, "寫入者重選", ["generationId 加一", "Status：INITIALIZING"], "amber"),
-  box(605, 24, 175, 74, "寫入者就緒", ["每個 partition 最新 Status：", "INITIALIZED、generation 一致"], "blue"),
-  arrow(190, 61, 213, 61), arrow(385, 61, 408, 61), arrow(580, 61, 603, 61),
-  box(215, 116, 365, 64, "這段時間寫 role binding 會失敗", ["50003：not the current leader"], "coral"),
-  box(605, 116, 175, 64, "從這裡開始才寫", ["role binding 建、刪"], "blue"),
-  box(20, 196, 760, 60, "mds-writer-ready.sh", ["用 kafka-internal 讀 _confluent-metadata-auth（9092，不經 MDS），等到就緒才回 0；就緒時約 12 秒"], "teal"),
-  box(20, 268, 370, 50, "放在哪裡：重啟 broker 的步驟最後", ["15、16、17、18、20、21、28、29、30 章"], "gray"),
-  box(410, 268, 370, 50, "以及成批寫 binding 之前", ["11、16、18、23、27、29 章"], "gray"),
-].join(""));
-
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;

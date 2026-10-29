@@ -36,10 +36,9 @@ unset scram_config
 confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
   --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1 || die "confluent login 失敗"
 source "$CONF_DIR/kraft.env"   # CLUSTER_ID
-wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
 for role in DeveloperWrite DeveloperManage; do
   # prefix 綁定同時涵蓋 confluent-audit-log-events 與 confluent-audit-log-events_sensitive
-  if confluent iam rbac role-binding create --principal User:confluent-audit --role $role --resource Topic:confluent-audit-log-events --prefix \
+  if retry 3 5 confluent iam rbac role-binding create --principal User:confluent-audit --role $role --resource Topic:confluent-audit-log-events --prefix \
        --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then ok "confluent-audit $role Topic:confluent-audit-log-events PREFIXED"
   else fail "confluent-audit $role"; fi
 done

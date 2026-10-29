@@ -46,7 +46,7 @@ wait_broker_healthy() {
     [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8090/v1/metadata/id")" = 200 ] && break; sleep 5
   done
   for attempt in $(seq 1 60); do under_replicated=$(under_replicated_count); [ "$under_replicated" = 0 ] && break; sleep 5; done
-  [ "$under_replicated" = 0 ] && wait_mds_writer
+  [ "$under_replicated" = 0 ]
 }
 # controller：quorum 的 replication 狀態裡這台的 Lag（第 4 欄：NodeId DirectoryId LogEndOffset Lag …）回到 0
 wait_controller_caught_up() {
@@ -170,8 +170,7 @@ packages() {
   source "$CONF_DIR/kraft.env"   # CLUSTER_ID
   confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
     --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1 || die "confluent login（svc-ops）失敗"
-  wait_mds_writer || die "MDS 寫入者沒有就緒，不能寫 role binding（看 /var/log/kafka/metadata-service.log）"
-  if confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command \
+  if retry 3 5 confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command \
        --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1; then ok "User:svc-rest ResourceOwner Topic:_confluent-command"; else fail "role binding"; fi
   for host in $RESTS; do change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
   local ops_packages; ops_packages=$(rpm -qa "confluent-*" --qf "%{NAME}-$version ")

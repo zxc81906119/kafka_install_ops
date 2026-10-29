@@ -68,7 +68,7 @@ recover() {   # recover <broker>：重啟那一台（cpuser-ops 允許的寫法�
   ssh "$(fqdn "$b")" 'sudo systemctl restart confluent-server && systemctl is-active confluent-server' >/dev/null 2>&1 || die "$b 重啟失敗"
   for i in $(seq 1 30); do ur=$(under_rep); code=$(mds_code "$b"); [ "$ur" = 0 ] && [ "$code" = 200 ] && break; sleep 10; done
   n=$(wc -w <<<"$(online)")
-  if [ "$ur" = 0 ] && [ "$code" = 200 ]; then ok "約 $((i*10)) 秒：under-replicated 0、$b MDS 200、broker 在線 $n / $(wc -w <<<"$BROKERS")"; wait_mds_writer
+  if [ "$ur" = 0 ] && [ "$code" = 200 ]; then ok "約 $((i*10)) 秒：under-replicated 0、$b MDS 200、broker 在線 $n / $(wc -w <<<"$BROKERS")"
   else fail "等了 $((i*10)) 秒還沒好：under-replicated $ur、MDS $code"; fi
 }
 
