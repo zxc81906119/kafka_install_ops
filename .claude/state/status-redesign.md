@@ -1,49 +1,31 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-29 10:45（lab 使用中：手冊 0→B 從零實跑開始，會拆掉重建整個 lab；紀錄 ~/kafka-lab-runs/run-customer-0-*.log）
+Updated: 2026-10-29 10:55（**lab 使用中**：手冊從第 2 章續跑中，`run-full.sh customer 2`，紀錄 `~/kafka-lab-runs/run-customer-2-end-20261029-1044.log`，結束碼寫進 `~/kafka-lab-runs/run-full-2-B.rc`）
 
 ## 現在在做什麼
-`bash docs/journey-src/tools/run-full.sh customer` 從零跑（開始 10:46，紀錄 `~/kafka-lab-runs/run-customer-0-99-20261028-1046.log`，路徑也在 `~/kafka-lab-runs/current-log.txt`）。
-這輪是最終版文字：cp-server 純 server 憑證＋c3-monitoring（9 張憑證）、移除兩條 raft 告警（19 條規則）。失敗就修、再從頭跑。
+手冊（journey.md）從零實跑，驗今天所有改動。第 0 章（建 lab，13 塊）已過；2.4 因 `kafka_streams.yml` 重複列兩次停過（已修，從第 2 章續跑）。
+失敗就修文件、從失敗那章續跑（`bash docs/journey-src/tools/run-full.sh customer <章>`；從 0 開始會拆 lab）。跑完：逐行看紀錄＋scan-log、修 out 值、重建 docx。
 
-## 已完成（都已 commit，從未 push）
-- 手把手 0–27 章（38 圖）＋ install 01–26 站；基底 OS 9.6／CP 8.2.4／C3 2.5.1／JDK 21 → 遷移 OS 9.8／CP 8.3.2／C3 2.6.1／JDK 25。
-- 腳本版從零跑完（舊文字），結束碼 0，各段驗收 39/39。
-- 2026-10-28：cp-server 改純 server（certs.txt、09／13／14／19／20 站、control-center.tpl、prometheus-generated.yml、手冊第 9／13／20 章、問題清單 6.2、圖）；19 站新增驗收「cp-server 只有 serverAuth 且連 9090 被拒」；第 17 章 raft 指標說明更正、兩條 raft 告警刪除。docx 已重建。
+## 今天（10-29）做完、已 commit（從未 push）
+- 補章：22 憑證到期監控、24 磁碟與容量、27 新應用上線、28 故障排查、30 套件庫主版本保險（各章 log 見 log/2026-10-29-ch*.md）。
+- **腳本版從零重跑通過**（10:36，rc 0）：34 段、7 次驗收全部 42/42；遷移與 OS 9.8 期間持續流量 0 遺失。
+- MDS 事故（20.4 密文 key 名）修正＋CLAUDE.md 陷阱：log/2026-10-29-mds-ldap-cipher-incident.md。
+- **MDS 寫 binding 偶發 50003**：原因＝MDS 內部 producer retries=0，auth topic leader 搬家後第一筆失敗（lab 重現）。使用者定案：只對這個錯誤再送一次（`mds_write`），曾做的「等寫入者就緒」已撤回。log/2026-10-29-mds-50003.md。
+- 手把手 docx 打不開：16.5 有實體 ESC 字元 → 改 `\x1b`，build.js 擋控制字元（使用者確認可開）。
+- C3 Streams／RocksDB 監控：**使用者要加**（10:00 先說精簡，之後改口要加）。已做：第 2 章引進官方 `kafka_streams.yml`（48／79 個檔）。**未做**：lab 實測序列數與 INFO 層級指標、規則檔、告警、手冊 17 章／附錄 B、更正 redesign「C3 維持精簡」那段。參考：docs.confluent.io Kafka Streams Metrics（屬性類 RocksDB 指標是 INFO）。
+- OP menu：MDS token 到期前自動換新（`core_token_fresh`，`tests/test-token-renew.sh`）；91 逐台找活著的 MDS（`tests/test-breakglass-mds.sh`）；證明操作機不直連 AD（blackhole ad01 實測）。
+- 手冊要能在沒有 repo 時照做：附錄 A 搬回開頭成**第 0 章**（0.1–0.9，圖 D.labbuild，run-full 章號 0、"A" 為別名）；選單改為**交付物**（`opmenu/package.sh` → tar＋SHA256SUMS，16.3 複製並核對）。log/2026-10-29-manual-without-repo.md。
 
-## 進行中（2026-10-29 凌晨）
-- **事故（04:03–05:50）**：腳本版第 28 段重啟 kb04 後 MDS 起不來，之後 kb01、kb02 也卡死。原因＝02:49 手動 20.4 用錯密文 key 名（`kb01.server.properties` vs 腳本版的 `kb01.properties`），broker 靠快取撐到重啟才爆；真相在 `/var/log/kafka/metadata-service.log`。已修 lab、手冊 20.4／28、腳本第 15 站命名、CLAUDE.md；詳見 log/2026-10-29-mds-ldap-cipher-incident.md。**第 28 章腳本版第 27 段要重跑驗證**。
-- **第 30 章保險完成**（30.1 主版本比對＋dl01 對 Rocky 10 倉庫的證明；`30-os-patch.sh plan` 主版本不一致即 FAIL；問題清單 3.6）。**補章全部做完**：23.6、20.6、24、28、27、22、30 保險。下一步：腳本版從零重跑（run-customer，34 段）→ 手冊 A→B 從零實跑 → 修 out 值 → 重建 docx。
-- **第 22 章 憑證到期監控完成**（手動 9/9：blackbox 24 端點、promtool 規則測試 SUCCESS、操作機腳本與 timer；`22-cert-expiry.sh files｜check｜schedule`、`bank-sim.sh monitoring-blackbox`、run-customer 第 27 段，共 34 段；log/2026-10-29-ch22-cert-expiry.md）。第 28 章腳本版第 28 段重跑通過。剩：30 章套件庫保險 → 從零重跑（手動 A→B、腳本）。
-- **第 27 章 新應用上線：手動 15/15 通過**（inventory SCRAM A/B、shipping 憑證＋REST 白名單＋12.1 式重啟）；`27-onboard.sh onboard｜verify｜retire`（cert：apps.txt＋重跑第 12 站）、`bank-sim.sh sign-app`、run-customer 第 28 段（共 33 段）、圖 D.onboard；腳本版驗證進行中。log/2026-10-29-ch27-onboard.md。
-- **第 28 章 故障排查速查完成**（手動實跑 7 塊；`28-triage.sh snapshot｜drill｜recover`、`bank-sim.sh broker-stop｜alerts-wait｜alerts-clear`、run-customer 第 27 段，共 32 段；log/2026-10-29-ch28-triage.md）。接著：27 新應用上線 → 22 憑證到期監控（lab 要建）→ 30 章套件庫保險。
-- **第 24 章 磁碟與容量完成**（手動 9/9 塊 `run-full customer 24 24`；`24-disk.sh usage｜alerts｜drill`、`bank-sim.sh monitoring-reload`、run-customer 第 26 段，之後各段 +1；規則 19 → 21 條；問題清單 4.9／11.9；圖 D.disk；log/2026-10-29-ch24-disk.md）。接著：28 故障排查速查 → 27 新應用上線 → 22 憑證到期監控（lab 要建）→ 30 章套件庫保險。
-- **腳本版從零重跑完成（02:02）**：全過、八次驗收 40/40、C3 JDK 25 驗證通過（細節 log/2026-10-28-script-run-and-next.md 最後一節）。第 4 項（從零重跑）**完成**；手冊修正（21.3 換 ca.pem、operators DeveloperRead、11.2／16.5／18.3 數值）由下一輪手冊實跑驗。
-- 補章：**23.6 還原演練完成**（手動 12/12、腳本 drill 通過、run-customer 第 25 段）→ **20.6 SCRAM A/B 完成**（第 11 章/11 站建 -a/-b；手動 20 章 23/23、16 章 15/15；19 站 42/42；16 站加 35 試跑通過）→ 24 → 28 → 27 → 22 → 30 保險。每章手動 → 文件 → 腳本。
-
-## 進行中（2026-10-28 夜）
-- **手冊 A→B 從零實跑完成**（三段，346 塊全過；細節與發現見 log/2026-10-28-script-run-and-next.md 最後一節）。修了 20.3、29.1、21.3／21.4 加銀行 Prometheus 換 ca.pem、operators 改 DeveloperRead Topic:*、11.2／16.5／18.3 實測值；C3 改 JDK 25 已驗。這些修正**還沒再實跑**：由接著的腳本版從零重跑（含 11 段 AD 斷線、expect_versions C3 JDK 25）與下一輪手冊實跑驗。
-
-## 進行中（2026-10-28 傍晚）
-- **章節重構已做完、commit（b333c51）**：手冊 31 章＋附錄 A（建 lab）、B（監控覆蓋率）；install/steps 改名（04/05 拆、07-1/2/3、25-1/2、21/23/25/26/29/30）；run-full/run-chapter 改成章 id（A 先、B 最後、兩端含）；工具 `docs/journey-src/tools/restructure.js`（一次性，留作對照）。新章 22/24/27/28 與 23.6 是「待補」佈位。**尚未實跑**。
-- 問題清單：改寫工具曾把題號（2.x、3.x、11.x）當成手冊節號改掉，已修回並補 5.7（AD 636 只放行 broker）、7.5（UserAdmin 專責團隊）、8.8（svc-ops 私鑰離線保管）、12.1–12.2（DR、容量規劃是否在範圍），附件改第 13 章。
-- 腳本版從零重跑（16:25 起）：基底與憑證換發後驗收都 **40/40**；但在第 17 段被我改到正在跑的 run-customer.sh 害死（bash 邊讀邊跑，找 29-upgrade.sh）。已重新 push install/ 到 ops02，FROM=17 續跑 **19:11 完成**（`~/kafka-lab-runs/script-resume17-1028-1727.log`）：五次驗收全 40/40、0 FAIL，新檔名 21/23/25-1/25-2/26/29/30 與 run-customer 接線都對；super user／AD 斷線演練這一輪沒驗（叢集是舊設定裝的）。
-- 教訓已記 CLAUDE.md：不要改正在跑的腳本。
-
-## 下一步（使用者 2026-10-28 同意照此順序；睡前交代：每章「手動 → 文件（圖先於文字）→ 腳本」三步，章節順序問題先調再測，內容問題直接改）
-1. 目前的腳本版從零重跑（16:25 起，驗 cp-server／c3-monitoring／raft／脫鉤／C3 依賴）跑完 → 逐行看紀錄＋scan-log；27 個 FAIL 是第 5 段預期的「03 等銀行」。
-2. ~~super user 只剩 kafka-internal~~ **已改完 commit，未實跑**（第 11 章 bootstrap／11.3 AD 斷線演練的 out 值是推測的：role-binding list 表格格式、alice HTTP 401、14 個 topic、LDAPS 15 秒，下一輪實跑要對；run-customer 新增第 11 段 ad-drill，段號 12–29）（redesign/README.md 最後一節）：common.tpl、第 10 章；第 11 章 bootstrap 用 kafka-internal 憑證建第一條 binding（svc-ops → SystemAdmin）、rbac.txt 加 svc-ops／kafka-admin SystemAdmin、11.2 說法；新增「停 ad01 → alice 401、kafka-admin 9095 仍可用 → 開回」驗證（放 11 或 19）；10／11 站；README／CLAUDE.md、第 19 章「svc-ops 是 super user」字樣。
-3. ~~章節重構~~ 已做完（見進行中）。
-4. 從零重跑手冊（run-full）與腳本（run-customer），一輪驗 2、3 和 OP menu 全顯示（16 站要先重打包 opmenu，手冊 16.5 新輸出實測）。
-5. 補章（先手動實跑再做腳本，依新結構寫）：23.6 還原演練 → **20.6 應用程式 SCRAM 密碼輪替（A／B）**（使用者 2026-10-28 排入：apps.txt／rbac.txt 改成每個 SCRAM 應用建 -a／-b 同權限兩帳號、第 11 章跟著改；手動演練：-a 跑流量 → 換 -b 密碼 → 應用切 -b → 0 遺失 → 舊密碼被拒；16.5 加選單 35；11／19 站同步）→ 24 磁碟告警與換碟 → 28 故障排查速查 → 27 新應用上線流程；之後第 22 章憑證到期監控（**lab 一定做、一定驗**，只是文件標「選配」＝客戶現場不一定部署；使用者 2026-10-28 說明）。
-6. **第 30 章保險**（使用者 2026-10-28 同意）：30.1／`30-os-patch.sh plan` 加 release 套件目標版本與主版本檢查（混有 RHEL 10 內容時 abort）、說明 `subscription-manager release --set`；問題清單第 3 章加一題；lab 用假的高版號 release 套件驗 plan 會停。
-7. 順手：問題清單加題（跨機房 DR、svc-ops 私鑰離線保管方式、UserAdmin 專門團隊、AD 636 只放行 broker）；kraft.json 哪 8 個 panel 空；第 18 章 __opmenu-host-ops authorize 次數重量；假 omnibus 接收端；可讀性未細改章節（12、13、14、17、20.3／20.4、22–25、0.5.x）與 15.3、18.3 舊稱。
-- 待使用者決定／回覆銀行：`opmenu-emergency` 對 root 的意義；換金鑰週期；dashboard `job="kafka-broker"` 要不要 sed 修；`docs/evidence/` 要不要版控；omnibus 固定值正式值。
-- 已結案（2026-10-28）：repodeploy 是 lab 模擬銀行上架的帳號，不改；cpuser 本來就不在 repo01。
+## 下一步（依序）
+1. 等手冊實跑跑完（大約數小時；16.3 用的選單是 10:44 打包的，**不含 91 逐台找 MDS 的修正**，那個靠單元測試）。修失敗、修 out 值、重建兩份 docx、commit。
+2. 第 28 章新增一節「MDS 的 8090 不能用時」：lab 由「銀行網路團隊」在 kb01–04 用 firewalld 暫拿掉 8090 → 選單登入失敗、91 提示 → 用 `kafka-admin`（SCRAM、9095，`~/secrets/kafka-admin.pass`）做 topic 類操作 → 開回 8090 → 照 20.2 換 kafka-admin 密碼。先手動實跑再寫（91 的提示文字已指向「28.6」）。
+3. C3 Streams／RocksDB 監控（見上「未做」）：手動實測 → 規則（命名照官方 kafka_streams.yml，範圍收窄）→ 告警（背景錯誤、丟棄紀錄、處理停滯）→ 手冊 → 腳本（17 站）。
+4. 從零腳本版再跑一次驗 1–3 的改動（run-customer）。
+- 待使用者決定／回覆銀行：`opmenu-emergency` 對 root 的意義；換金鑰週期；dashboard `job="kafka-broker"` 要不要 sed 修；`docs/evidence/` 要不要版控；omnibus 固定值正式值；銀行有沒有 Kafka Streams 應用。
 
 ## 環境狀態
-- lab：專案 `lab`，**從零重建中**（run-full 會先拆掉整個 lab，只留 `~/kafka-lab/landing`、`~/kafka-lab/bank-os`）。四個 `lab-mon-*` 容器由跑本身處理。
+- lab：專案 `lab`，第 0 章剛重建（10:37）；四個 `lab-mon-*` 與 `lab-mon-blackbox` 由手冊第 17、22 章建立。
 - Docker VM 約 10.7 GB，不要同時跑別的；使用者其他專案的映像／卷不要動。
-- 密碼檔：`~/kafka-lab/secrets.env`、`~/kafka-lab/pvwa/`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
-- Git Bash 的 `python3` 是 Store 空殼：改檔用 node／Edit／sed。補丁腳本放 scratchpad，用 `node` 跑。
-- 背景 monitor 的過期通知可忽略。
+- 密碼檔：`~/kafka-lab/secrets.env`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
+- Git Bash 的 `python3` 是 Store 空殼：改檔用 node（補丁寫成 scratchpad 的 .js 檔，含 `${...}`、反引號、跳脫字元的內容放文字檔再讀進來）。
+- 背景：run-full 續跑（task bjuvptxce）、Monitor b934byui7（30 分鐘到期要重接）。舊 monitor 的過期通知可忽略。
