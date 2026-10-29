@@ -31,7 +31,7 @@
 
 | 什麼 | 放哪 | 什麼時候取 | 落地? |
 |---|---|---|---|
-| 操作者的 AD 密碼 | 操作者自己 | 登入時輸入,換到 MDS token 後丟掉;Kafka 工具用的連線檔放記憶體檔案系統、離開時刪 | 否 |
+| 操作者的 AD 密碼 | 操作者自己 | 登入時輸入;程式裡的變數換到 MDS token 後就清掉,但 Kafka 工具用的連線檔(0600,放記憶體檔案系統)整個 session 都帶著它(LDAP listener 要用),離開時刪;token 自動換新也從這裡讀,不另外保存 | 否 |
 | 操作機 → 各主機 cpuser 的 SSH 私鑰(`OPMENU_SSH_KEY_FILE`,預設 `/secure/ssh/cpuser_ed25519`) | 操作機自己:獨立(加密)file system、root 0400,安裝與維運共用同一把;**不放 CyberArk、不備份**(操作機重建就重新產生,OS 團隊重新佈署公鑰) | 過了權限閘門、要碰主機時檢查檔案在不在(沒掛載就擋下);ssh 直接用這個檔(`-i`、`IdentitiesOnly`、不用 ssh-agent) | 是(在獨立 file system 上,不在系統碟) |
 | 91 緊急模式的 client 憑證(`OPMENU_BREAKGLASS_PEM`,PEM,預設 `~/secrets/opmenu-breakglass.pem`) | 操作機自己:`~/secrets` 底下 0600、owner 是執行者(不符就拒絕);不放 CyberArk | 執行 91 時讀到記憶體檔案系統,用完即刪;操作者本來就是 root,把關只剩必填原因與 EMERGENCY 稽核記錄;身分 `User:opmenu-breakglass` 在 MDS 綁 SystemAdmin | 否 |
 | 34／35 產生的 service account 新密碼 | 操作者自己的交接檔 `OPMENU_HANDOVER_DIR`(預設 `$HOME/opmenu-handover`,操作機上是 `/root/opmenu-handover`,目錄 0700、檔 0600) | 產生時寫入,不顯示在畫面;照應用程式團隊的交付方式交出去後刪除。交接目錄寫不進去就不改密碼 | **是**(暫存,交接後刪) |
@@ -68,7 +68,8 @@
 
 ## 機制
 
-- **身分**:操作者輸入自己的 AD 帳密(`OPMENU_USER_FROM_OS=0`:操作機上人員是 root,不是個人帳號,所以一律自己輸入 AD 帳密);選單立刻向 MDS 換 token,之後 MDS 呼叫用 token、Kafka 工具用 AD 帳密走 LDAP listener。
+- **身分**:操作者輸入自己的 AD 帳密(`OPMENU_USER_FROM_OS=0`:操作機上人員是 root,不是個人帳號,所以一律自己輸入 AD 帳密);選單立刻向 MDS 換 token(`/security/1.0/authenticate`,只有這一次用 basic auth),之後 MDS 呼叫都帶 `Authorization: Bearer`、Kafka 工具用 AD 帳密走 LDAP listener。選單不用 confluent CLI。**操作機本身從不連 AD**:AD 帳密都由 broker(MDS 與 LDAP listener)去驗。
+- **token 換新**:每個動作開始前,token 用了超過 `OPMENU_TOKEN_TTL − OPMENU_TOKEN_RENEW_MARGIN`(預設 3600 − 300 秒)就用本次登入的帳密自動重新 authenticate,記 `TOKEN_RENEWED`;換不到(AD 密碼改了、AD 或 MDS 不通)就不做這個動作、記 `TOKEN_RENEW_FAIL`,請操作者重新登入(`tests/test-token-renew.sh`)。
 - **選單全部顯示**:不依權限過濾;要做什麼直接選,Kafka 類動作以本人身分執行,沒權限的由 Kafka / MDS 依 RBAC 拒絕並記成 DENIED。只有緊急主機模式會隱藏項目。
 - **管理員閘門**:以備用身分執行的項目(`OPMENU_ADMIN_ITEMS`,預設 91)Kafka 檢查的是備用憑證不是本人,所以執行前先用本人的 token 問 MDS 本人有沒有 `OPMENU_ADMIN_AUTHZ`(預設叢集 Alter,即 SystemAdmin / ClusterAdmin);問不到一律拒絕。
 - **主機閘門**:碰主機的介面先向 MDS 確認本人有 `OPMENU_HOST_ACTION_AUTHZ`(預設 Operator 以上),因為主機端的 cpuser 是共用帳號。操作者是 root、讀得到金鑰,所以這是流程控管、不是硬性隔離(見上方「誠實的限制」)。

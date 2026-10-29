@@ -537,3 +537,9 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 ### C3 的監控維持精簡（2026-10-29 定案）
 
 - 使用者：C3 是管理用，不用太在意。C3 的 JMX exporter 維持我方的小規則（`jmx-rules-c3.yml`：JVM、Streams `client_state`／執行緒、Jetty 請求率），不放行 RocksDB 與 Streams 處理細項；附錄 B 裡 Streams／RocksDB dashboard 對 C3 是空的屬預期。告警只留 `ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed` 與共用的 JVM 規則。
+
+### OP menu 與 MDS／AD 的關係、token 自動換新（2026-10-29）
+
+- **操作機不直連 AD**（實測）：操作機加 blackhole 路由擋掉 ad01 → 直接連 636 失敗；alice 經選單登入、11 健康檢查、12 列 topic 照常，錯密碼仍被拒；同時段操作機開出的連線中，到 636／389 的 0 條；對照 kb01 上連 ad01:636 的連線 5 條。AD 帳密只由 broker（MDS `/security/1.0/authenticate`、LDAP listener 9096）去驗。
+- **與 MDS 的認證**：登入時一次 basic auth 換 MDS token，之後都用 Bearer token；Kafka 動作用本人 AD 帳密走 SASL PLAIN（9096）；91 用憑證換 token。選單不用 confluent CLI。
+- **token 換新（使用者定案：到期前自動換新）**：每個動作開始前，token 用了超過 TTL − 300 秒就用本次登入的帳密重新 authenticate（`core_token_fresh`，主 shell 執行），記 `TOKEN_RENEWED`；失敗不執行動作、記 `TOKEN_RENEW_FAIL`、請重新登入。帳密取自 session 原本就有的 Kafka 連線設定（0600、離開即刪），不另外保存。`tests/test-token-renew.sh` 11 項；lab 以 TTL=300 對真 MDS 驗過。

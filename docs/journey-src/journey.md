@@ -2784,7 +2784,7 @@ LIST'
 
 @role 小安（代打 bob、carol、alice） | ops02 | root
 
-**這一節在做什麼**：用三個不同權限的人試跑選單。選單**不依權限過濾**，每個人看到的項目一樣；要做什麼直接選，Kafka 類動作以本人身分執行，沒權限的由 Kafka／MDS 依 RBAC 拒絕並記成 DENIED。只有兩種項目選單自己會先問 MDS：碰主機的（16、18、21、22、23、27，要 Operator 以上）和 91 緊急模式（以備用憑證執行，Kafka 檢查的是備用身分不是本人，所以本人要先是管理員）。好結果：bob、carol、alice 看到同一份選單；bob 建 topic 被 Kafka 拒絕、進 91 被擋，alice 都能做。互動模式就是人員經 PVWA 與 PSMP 登入操作機（root）後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 印選單上的編號：
+**這一節在做什麼**：用三個不同權限的人試跑選單。選單**不依權限過濾**，每個人看到的項目一樣；要做什麼直接選，Kafka 類動作以本人身分執行，沒權限的由 Kafka／MDS 依 RBAC 拒絕並記成 DENIED。選單和 MDS 之間：登入時用本人 AD 帳密向 MDS 換 token（只有這一次用 basic auth，不用 confluent CLI），之後呼叫 MDS 都帶 token；token 用超過 55 分鐘，下一個動作開始前會自動用本次登入的帳密換新（紀錄記 `TOKEN_RENEWED`），換不到就請操作者重新登入。操作機本身從不連 AD：AD 帳密都由 broker（MDS 與 LDAP listener 9096）去驗（2026-10-29 實測：操作機把 AD 的路由黑洞掉，選單照常登入與操作）。只有兩種項目選單自己會先問 MDS：碰主機的（16、18、21、22、23、27，要 Operator 以上）和 91 緊急模式（以備用憑證執行，Kafka 檢查的是備用身分不是本人，所以本人要先是管理員）。好結果：bob、carol、alice 看到同一份選單；bob 建 topic 被 Kafka 拒絕、進 91 被擋，alice 都能做。互動模式就是人員經 PVWA 與 PSMP 登入操作機（root）後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 印選單上的編號：
 
 ```bash
 P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; for u in bob carol alice; do printf '%-6s ' $u; op $u menu | grep '@@MENU@@' | cut -d' ' -f2-; done; unset P

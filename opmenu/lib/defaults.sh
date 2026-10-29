@@ -69,6 +69,7 @@ d OPMENU_HOST_ACTION_AUTHZ 'Topic:__opmenu-host-ops:Describe'   # 主機類動�
 d OPMENU_EMERGENCY_GROUP 'opmenu-emergency'   # MDS 連不上時（AD 登入做不了），這個作業系統群組的人可以進「緊急主機模式」；平常群組裡沒人，事故時由 OS 團隊臨時加入。空 = 關閉
 d OPMENU_EMERGENCY_ITEMS '16 18 21 22 23'     # 緊急主機模式只開放這些項目（磁碟、收集診斷、重啟 broker、重啟 REST／C3、看日誌）；Kafka 類項目都要 AD 身分，不開放
 d OPMENU_TOKEN_TTL       3600       # MDS token 壽命(秒,依 MDS 設定);超過後遇到 401 會提示重新登入而不是密碼錯
+d OPMENU_TOKEN_RENEW_MARGIN 300     # 每個動作開始前,token 用了超過「壽命 − 這個秒數」就自動用本次登入的帳密換新(core_token_fresh)
 # ── 選單一律全部顯示,沒權限的項目做了會被 Kafka / MDS 拒絕(本人身分、RBAC);只有兩種項目選單自己先問 MDS ──
 d OPMENU_HOST_ITEMS      '16 18 21 22 23 27'   # 碰主機的項目(磁碟、診斷、重啟、日誌、滾動重啟):執行前過主機閘門(OPMENU_HOST_ACTION_AUTHZ)
 d OPMENU_ADMIN_ITEMS     '91'                  # 以備用身分執行的項目:Kafka 檢查的是備用憑證不是本人,所以執行前先問 MDS 本人有沒有 OPMENU_ADMIN_AUTHZ

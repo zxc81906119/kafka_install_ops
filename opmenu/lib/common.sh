@@ -113,6 +113,8 @@ _core_run() {
     fi
     core_lock_acquire "$id ${ACT_TITLE[$id]}" || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "lock held"; return 1; }
   fi
+  # token 快到期就先換新(換不到就不做這個動作)
+  core_token_fresh "$id ${ACT_TITLE[$id]}" || return 1
   # 碰主機的項目:先過權限閘門,再確認主機用的私鑰檔在(沒掛載就擋下)
   if core_item_touches_host "$id"; then
     core_host_gate || { core_log DENIED "$id ${ACT_TITLE[$id]}" "host gate"; return 1; }
@@ -144,6 +146,24 @@ _core_run() {
   return $rc
 }
 core_run() { _core_run "$@"; local rc=$?; core_lock_release; return $rc; }
+
+# core_token_fresh <項目>:MDS token 用了超過「OPMENU_TOKEN_TTL − OPMENU_TOKEN_RENEW_MARGIN」就自動換新(每個動作開始前在主 shell 呼叫,
+# 換到的 token 才留得住;項目裡的 be_mds 多半在 $(...) 子 shell 裡跑)。帳密取自本次登入的 Kafka 連線設定 OP_CLIENT_CONF
+# (0600,離開選單即刪),不另外保存。換不到(AD 密碼改了、AD 或 MDS 不通)就不執行這個動作,請操作者重新登入。緊急主機模式沒有 token,不處理。
+core_token_fresh() {
+  [ -n "${OP_TOKEN:-}" ] && [ -n "${OP_TOKEN_AT:-}" ] || return 0
+  local age limit pass token rc
+  age=$(( $(date +%s) - OP_TOKEN_AT )); limit=$(( ${OPMENU_TOKEN_TTL:-3600} - ${OPMENU_TOKEN_RENEW_MARGIN:-300} ))
+  [ "$age" -lt "$limit" ] && return 0
+  pass=$(sed -n 's/^sasl\.jaas\.config=.* password="\(.*\)";$/\1/p' "$OP_CLIENT_CONF" 2>/dev/null)
+  token=$(be_mds_login "$OP_USER" "$pass"); rc=$?; unset pass
+  if [ "$rc" = 0 ] && [ -n "$token" ]; then
+    OP_TOKEN=$token; OP_TOKEN_AT=$(date +%s); export OP_TOKEN OP_TOKEN_AT
+    core_log TOKEN_RENEWED "$1" "token 已用 ${age}s,自動換新"; return 0
+  fi
+  echo "${CR}登入已逾時,自動換新 token 失敗(AD 密碼改了,或 AD／MDS 不通):這個動作沒有執行,請離開後重新登入。${C0}"
+  core_log TOKEN_RENEW_FAIL "$1" "token 已用 ${age}s,rc=$rc"; return 1
+}
 
 # ── 選單一律全部顯示;要做什麼直接選,沒權限的由 Kafka / MDS 在執行時拒絕(Kafka 動作以本人身分執行,權限由 Kafka 端依 RBAC 強制)。
 #    唯一會隱藏項目的情況是緊急主機模式(MDS 連不上,AD 登入做不了):只開放 OPMENU_EMERGENCY_ITEMS ──

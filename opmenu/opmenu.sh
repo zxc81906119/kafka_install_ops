@@ -57,7 +57,7 @@ EOC
   OP_TOKEN_AT=$(date +%s)
   derive || { core_log DERIVE_FAIL login ""; exit 1; }
   unset pass
-  export OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_TOKEN OP_SID
+  export OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_TOKEN OP_TOKEN_AT OP_SID
 }
 
 # 緊急主機模式：MDS 連不上時，AD 身分驗證與權限查詢都做不了。
