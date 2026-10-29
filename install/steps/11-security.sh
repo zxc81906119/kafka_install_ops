@@ -28,7 +28,7 @@ login_as_svc_ops() {
 section "bootstrap：kafka-internal（唯一的 super user）登入 MDS，建第一條 role binding：User:svc-ops → SystemAdmin"
 source "$CONF_DIR/kraft.env"   # CLUSTER_ID
 login_with_cert kafka-internal || die "confluent login（kafka-internal 憑證）失敗"
-if retry 3 5 confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then ok "User:svc-ops SystemAdmin（由 kafka-internal 建立）"
+if mds_write confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then ok "User:svc-ops SystemAdmin（由 kafka-internal 建立）"
 else die "建不了 svc-ops 的第一條 role binding"; fi
 login_as_svc_ops || die "confluent login（svc-ops 憑證）失敗"
 
@@ -77,7 +77,7 @@ while read -r principal role resource pattern; do
   binding_args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID")
   [ "$resource" != - ] && binding_args+=(--resource "$resource")
   [ "$pattern" = PREFIXED ] && binding_args+=(--prefix)
-  if retry 3 5 confluent iam rbac role-binding create "${binding_args[@]}" >/dev/null 2>&1 </dev/null; then ok "$principal $role ${resource#-} ${pattern#-}"
+  if mds_write confluent iam rbac role-binding create "${binding_args[@]}" >/dev/null 2>&1 </dev/null; then ok "$principal $role ${resource#-} ${pattern#-}"
   else fail "$principal $role ${resource#-} ${pattern#-}"; fi
 done < <(grep -v '^#' "$INSTALL_DIR/conf/rbac.txt")
 

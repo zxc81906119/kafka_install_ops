@@ -170,7 +170,7 @@ packages() {
   source "$CONF_DIR/kraft.env"   # CLUSTER_ID
   confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
     --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1 || die "confluent login（svc-ops）失敗"
-  if retry 3 5 confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command \
+  if mds_write confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command \
        --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1; then ok "User:svc-rest ResourceOwner Topic:_confluent-command"; else fail "role binding"; fi
   for host in $RESTS; do change_packages_and_restart "$host" "$version" install || die "停在 $host"; done
   local ops_packages; ops_packages=$(rpm -qa "confluent-*" --qf "%{NAME}-$version ")

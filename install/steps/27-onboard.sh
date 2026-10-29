@@ -28,7 +28,7 @@ cli() {   # confluent CLI 以 svc-ops 憑證登入後執行（用自己的 HOME�
   HOME=$h confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1 || return 1
   HOME=$h confluent "$@"
 }
-bind()   { retry 3 5 cli iam rbac role-binding create --principal "User:$1" --role "$2" --resource "$3" --prefix --kafka-cluster "$CID" >/dev/null 2>&1; }
+bind()   { mds_write cli iam rbac role-binding create --principal "User:$1" --role "$2" --resource "$3" --prefix --kafka-cluster "$CID" >/dev/null 2>&1; }
 nbind()  { cli iam rbac role-binding list --principal "User:$1" --kafka-cluster "$CID" -o json 2>/dev/null | grep -c '"role"'; }
 scram_conf() {   # scram_conf <帳號> <密碼檔> → 暫存 client 設定檔路徑
   local c; c=$(mktemp); (umask 077; printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\nssl.truststore.type=PKCS12\nssl.truststore.location=%s/truststore.p12\nssl.truststore.password=%s\n' "$1" "$(cat "$2")" "$CERTS_DIR" "$(cat "$PKI_DIR/store.pass")" > "$c"); echo "$c"
@@ -146,7 +146,7 @@ retire() {   # retire <系統> scram|cert <topic>…
   if [ "$kind" = scram ]; then principals="app-$sys-a app-$sys-b"; else principals="app-$sys"; fi
   for p in $principals; do
     while IFS='|' read -r role rtype rname pat; do [ -n "$role" ] || continue
-      retry 3 5 cli iam rbac role-binding delete --principal "User:$p" --role "$role" --resource "$rtype:$rname" $([ "$pat" = PREFIXED ] && echo --prefix) --kafka-cluster "$CID" --force >/dev/null 2>&1 && n=$((n+1))
+      mds_write cli iam rbac role-binding delete --principal "User:$p" --role "$role" --resource "$rtype:$rname" $([ "$pat" = PREFIXED ] && echo --prefix) --kafka-cluster "$CID" --force >/dev/null 2>&1 && n=$((n+1))
     done < <(cli iam rbac role-binding list --principal "User:$p" --kafka-cluster "$CID" -o json 2>/dev/null | python3 -c 'import json,sys; [print("|".join([b["role"], b.get("resource_type",""), b.get("name",""), b.get("pattern_type","")])) for b in json.load(sys.stdin)]')
     kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$p" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
     if [ "$kind" = scram ]; then

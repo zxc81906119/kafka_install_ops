@@ -47,6 +47,20 @@ finish_step() {
 }
 
 # retry <最多幾次> <間隔秒數> <指令…>：失敗就隔一下再試（例如剛滾動重啟完、MDS 還在暖機時建 role binding）
+# mds_write <指令…>：寫 MDS（建／刪 role binding）。只有一種錯誤會再送一次，其他錯誤原樣回傳：
+#   MDS 寫 _confluent-metadata-auth 的內部 producer 是 retries=0、leader 資訊最多 5 分鐘才更新。auth topic 的 partition leader 搬家後
+#   （broker 重啟後的自動搬回偏好 broker），第一筆寫入會回 50003「not the current leader」；這次失敗會讓它更新 leader，第二筆就會送對（手把手 28.4）。
+mds_write() {
+  local out rc
+  out=$("$@" 2>&1); rc=$?
+  if [ "$rc" != 0 ] && grep -q 'not the current leader' <<<"$out"; then
+    log "MDS 回 50003（auth topic 的 leader 剛搬家，MDS 內部不重試）：同一個請求再送一次"
+    out=$("$@" 2>&1); rc=$?
+  fi
+  printf '%s\n' "$out"
+  return "$rc"
+}
+
 retry() {
   local tries=$1 wait_seconds=$2 attempt; shift 2
   for attempt in $(seq 1 "$tries"); do
