@@ -30,8 +30,8 @@ Details of the architecture and every component: @README.md
 - One session = one git worktree = one branch. The Docker lab is shared: note "lab 使用中" in the status file.
 
 ## Repository map
-- `docs/journey-src/` — `journey.md` (the hands-on guide, chapters 1–31 plus appendix A = build the lab, appendix B = monitoring coverage and lab tear-down; single `customer` mode)
-  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh customer [from] [to]` (chapter ids 1–31/A/B, both inclusive; run order A, 1…31, B; default A→B) runs the guide's
+- `docs/journey-src/` — `journey.md` (the hands-on guide, chapter 0 = build the lab, chapters 1–31, appendix B = monitoring coverage and lab tear-down; single `customer` mode; it must stay runnable by someone **without this repository**: every lab file is written inline, the OP menu arrives as a delivered tarball made by `opmenu/package.sh`)
+  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh customer [from] [to]` (chapter ids 0–31/B, both inclusive, "A" = old name of 0; run order 0, 1…31, B; default 0→B) runs the guide's
   blocks on the lab (`run-chapter.js` extracts them, `scan-log.sh` flags rc=0 output that is really a failure).
 - `docs/questions-src/questions.md` → `docs/Confluent-請銀行確認的事項.docx` (`node build.js`).
 - `docs/deck-src/install.js` + `install-steps.js` → `docs/Confluent-RPM安裝流程.pptx` (14-page deck for bank managers).

@@ -10,6 +10,438 @@
 -->
 [[toc]]
 
+# 0. 第零站：自己把 lab 建起來（只有練習用的 lab 需要）
+> 這一章只有練習用的 lab 需要。正式環境的主機、AD、CA、套件庫都是銀行準備好的，直接從第 2 章開始。
+
+下面這張圖是這一章要蓋出來的東西：先做映像檔與銀行的 AD、CA、套件庫、LB（0.1–0.5），再用一份 compose 檔起整個 lab（0.6），最後是下載機與日常操作（0.7–0.9）。
+
+![labbuild]
+
+@role Lab 管理員（扮演銀行） | Windows 終端（Git Bash） | 本機
+
+這一章在你的 Windows 筆電上用 Docker 蓋出一整套模擬環境：十幾台假主機，加上扮演銀行的 AD、CA、套件庫、負載平衡。做完這一章之後，你就有一個可以照第 2 章以後逐章練習的環境。需要 Docker Desktop 和 Git Bash。整個 lab 放在家目錄的 `kafka-lab/`，不依賴任何現成的專案；下面每個檔案都是用 heredoc 寫出來的，整段貼到 `EOF` 即可。先開一個 Git Bash，做兩個全域設定（之後所有 Windows 端指令都在這個視窗）：
+
+```bash
+export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} && cd ~/kafka-lab && pwd
+```
+
+```out
+/c/Users/<你>/kafka-lab
+```
+
+> `MSYS_NO_PATHCONV=1` 是讓 Git Bash 不要把 `/out`、`/etc/...` 這類容器內路徑轉成 Windows 路徑。給 Docker 的 Windows 路徑一律用 `$(cygpath -m …)` 產生。
+## 0.1 主機映像檔：模擬「裸機 RHEL 9」
+
+**這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：第 0 章 開頭的兩個全域設定已做、目錄已建。完成的樣子：build 的最後一行是 `naming to … lab-node:96`，接著印出 `Rocky Linux release 9.6`。
+
+和銀行開給我們的主機一樣：沒有 JDK、沒有 Confluent、公開 repo 關閉；安裝與維運用的帳號 `cpuser` 也不在映像裡，第 4 章才由銀行 OS 團隊建立。
+
+> 重點：**Rocky 的 9.6 映像裡預設的 repo 設定指向「最新的 9.x」**（mirrorlist 用 `$releasever` = 9），不動它的話 `dnf install` 裝到的是 9.8 的套件。所以先換成 vault 的 9.6 倉庫（`dl.rockylinux.org/vault/rocky/9.6`），再 `dnf update` 到 9.6 的最新修補，主機才是乾淨的 9.6。映像、下載機、後面 5.1 銀行套件庫的內容都用同一份 vault 設定。映像的 tag 用 `lab-node:96`：舊的 9.8 映像（`lab-node:1`）不會被誤用。
+
+```bash
+cat > images/node/rocky-vault-96.repo <<'EOF'
+[vault96-baseos]
+name=Rocky 9.6 BaseOS (vault)
+baseurl=https://dl.rockylinux.org/vault/rocky/9.6/BaseOS/$basearch/os/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+enabled=1
+
+[vault96-appstream]
+name=Rocky 9.6 AppStream (vault)
+baseurl=https://dl.rockylinux.org/vault/rocky/9.6/AppStream/$basearch/os/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+enabled=1
+
+[vault96-extras]
+name=Rocky 9.6 extras (vault)
+baseurl=https://dl.rockylinux.org/vault/rocky/9.6/extras/$basearch/os/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+enabled=1
+EOF
+cat > images/node/Dockerfile <<'EOF'
+FROM rockylinux/rockylinux:9.6
+COPY rocky-vault-96.repo /etc/yum.repos.d/rocky-vault-96.repo
+RUN rm -f /etc/yum.repos.d/rocky.repo /etc/yum.repos.d/rocky-addons.repo /etc/yum.repos.d/rocky-devel.repo /etc/yum.repos.d/rocky-extras.repo \
+    && dnf -y update \
+    && dnf -y install systemd openssh-server openssh-clients sudo tar gzip openssl procps-ng nmap-ncat hostname iproute less which findutils dnf-plugins-core ca-certificates \
+    && dnf clean all && rm -f /etc/yum.repos.d/*.repo.rpmnew
+RUN printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf \
+    && systemctl enable sshd \
+    && systemctl mask systemd-logind.service getty.target console-getty.service systemd-udevd.service \
+    && sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo
+STOPSIGNAL SIGRTMIN+3
+CMD ["/usr/sbin/init"]
+EOF
+docker build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | tail -1 && docker run --rm lab-node:96 cat /etc/rocky-release
+```
+
+```out
+ => => naming to docker.io/library/lab-node:96
+Rocky Linux release 9.6 (Blue Onyx)
+```
+
+映像裡沒有 cpuser，也沒有 sudo 規則：帳號、sshd 設定、公鑰、安裝期的完整 sudo（對應「變更窗口內由 OS 團隊開放」，正式環境做完要收回）都在 第 4 章 由銀行 OS 團隊的區塊做。
+
+## 0.2 銀行的套件庫 web server（repo01）
+
+**這一節在做什麼**（lab 專用）：建出模擬銀行套件庫的 web server 映像 `lab-web:96`，5.1 節與第 6 章把 OS 套件與 Confluent RPM 放上去。前提：0.1 的 `lab-node:96`（這個映像以它為底）。完成的樣子：build 的最後一行是 `naming to … lab-web:96`。
+
+模擬的是銀行自己管的 httpd：只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
+
+```bash
+cat > images/web/Dockerfile <<'EOF'
+FROM lab-node:96
+RUN dnf -y --enablerepo=vault96-baseos,vault96-appstream install httpd mod_ssl && dnf clean all \
+    && sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo \
+    && useradd -m -s /bin/bash repodeploy && install -d -o repodeploy -g repodeploy -m 0755 /var/www/repo \
+    && rm -f /etc/httpd/conf.d/welcome.conf /etc/httpd/conf.d/ssl.conf \
+    && sed -i 's/^Listen 80$/# Listen 80/' /etc/httpd/conf/httpd.conf \
+    && printf 'Match User repodeploy\n    AllowTcpForwarding no\n    X11Forwarding no\n' > /etc/ssh/sshd_config.d/20-repo.conf \
+    && systemctl enable httpd
+COPY repo.conf /etc/httpd/conf.d/repo.conf
+EOF
+cat > images/web/repo.conf <<'EOF'
+Listen 443 https
+<VirtualHost *:443>
+    ServerName repo01.poc.lab
+    SSLEngine on
+    SSLProtocol -all +TLSv1.2 +TLSv1.3
+    SSLCertificateFile /etc/pki/repo-tls/repo.crt
+    SSLCertificateKeyFile /etc/pki/repo-tls/repo.key
+    DocumentRoot "/var/www/repo"
+    <Directory "/var/www/repo">
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+        <LimitExcept GET HEAD OPTIONS>
+            Require all denied
+        </LimitExcept>
+    </Directory>
+</VirtualHost>
+EOF
+docker build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | tail -1
+```
+
+```out
+ => => naming to docker.io/library/lab-web:96
+```
+
+憑證 `repo.crt`、`repo.key` 等銀行 CA 建好後再簽（0.5）。
+
+## 0.3 銀行的 AD（Samba AD DC）
+
+**這一節在做什麼**（lab 專用）：建出模擬銀行 AD 的映像 `lab-ad:1`，5.3 節在裡面建群組與帳號。前提：無（只要 Docker）。完成的樣子：build 的最後一行是 `naming to … lab-ad:1`。
+
+RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
+
+```bash
+cat > images/ad/Dockerfile <<'EOF'
+FROM debian:12-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends samba samba-ad-dc samba-ad-provision winbind krb5-user ldb-tools ldap-utils openssh-server sudo procps ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/* && rm -f /etc/samba/smb.conf
+RUN install -d -m 0755 /run/sshd \
+    && printf 'PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf
+COPY entrypoint.sh /usr/local/sbin/ad-entrypoint
+RUN chmod 0755 /usr/local/sbin/ad-entrypoint
+VOLUME ["/var/lib/samba", "/etc/samba"]
+ENTRYPOINT ["/usr/local/sbin/ad-entrypoint"]
+EOF
+cat > images/ad/entrypoint.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${AD_REALM:?}" "${AD_DOMAIN:?}" "${AD_ADMIN_PASSWORD:?}"
+if [[ ! -f /var/lib/samba/private/sam.ldb ]]; then
+  echo "[ad] provisioning domain ${AD_REALM}"
+  rm -f /etc/samba/smb.conf
+  samba-tool domain provision --use-rfc2307 --realm="${AD_REALM}" --domain="${AD_DOMAIN}" --server-role=dc \
+    --dns-backend=SAMBA_INTERNAL --adminpass="${AD_ADMIN_PASSWORD}" --option="dns forwarder = 127.0.0.11" \
+    --option="tls enabled = yes" --option="tls keyfile = tls/key.pem" --option="tls certfile = tls/cert.pem" --option="tls cafile = tls/ca.pem"
+fi
+cp -f /var/lib/samba/private/krb5.conf /etc/krb5.conf
+/usr/sbin/sshd
+while true; do
+  echo "[ad] starting samba"
+  samba --foreground --no-process-group --debug-stdout || true
+  echo "[ad] samba exited, restarting in 2s"; sleep 2
+done
+EOF
+docker build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | tail -1
+```
+
+```out
+ => => naming to docker.io/library/lab-ad:1
+```
+
+## 0.4 銀行的負載平衡（nginx L4）
+
+**這一節在做什麼**（lab 專用）：建出模擬銀行負載平衡的 nginx 映像 `lab-lb:1`，5.4 節設定轉發到兩台 REST Proxy。前提：無。完成的樣子：build 的最後一行是 `naming to … lab-lb:1`，接著印出 `4`（0.1–0.4 的四個映像都在）。
+
+```bash
+cat > images/lb/Dockerfile <<'EOF'
+FROM nginx:1.28
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server sudo procps && rm -rf /var/lib/apt/lists/* \
+    && install -d -m 0755 /run/sshd /etc/nginx/stream.d \
+    && printf 'PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf \
+    && printf '\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n' >> /etc/nginx/nginx.conf && rm -f /etc/nginx/conf.d/default.conf \
+    && printf '#!/bin/sh\n/usr/sbin/sshd\nexec nginx -g "daemon off;"\n' > /usr/local/sbin/lb-entrypoint && chmod 0755 /usr/local/sbin/lb-entrypoint
+ENTRYPOINT ["/usr/local/sbin/lb-entrypoint"]
+EOF
+docker build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | tail -1 && docker images --format '{{.Repository}}:{{.Tag}}' | grep -cE '^lab-(node:96|web:96|ad:1|lb:1)$'
+```
+
+```out
+ => => naming to docker.io/library/lab-lb:1
+4
+```
+
+## 0.5 銀行的 CA：根憑證、簽發 CA、簽發程序
+
+@role 銀行 CA 窗口 | Windows 終端 | 本機
+
+**這一節在做什麼**（lab 專用）：建出模擬銀行 CA 的兩層 CA 與簽發腳本 `sign.sh`，5.3 與 9.2 節用它簽憑證。前提：Git Bash 有 `openssl`。完成的樣子：`issuing.crt: OK`、印出根憑證的指紋，之後 `sign.sh` 幫 repo01 簽出 `repo.crt`。
+
+正式環境這是銀行 CA 窗口的行內 PKI。lab 裡：用 openssl 建一個兩層 CA（根 CA 離線保存，簽發 CA 簽日常憑證）：
+
+```bash
+cd ~/kafka-lab/ca && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA 01/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -fingerprint -sha256
+```
+
+```out
+issuing.crt: OK
+sha256 Fingerprint=…
+```
+
+指紋是銀行會另外公布的資訊，之後我方匯入根憑證時用來核對。
+
+簽發程序寫成一支小腳本 `sign.sh`：檢查 CSR（RSA ≥ 2048、有 CN、不是 CA、必須帶 EKU 且只允許 serverAuth／clientAuth），照 CSR 裡的 SAN 和 EKU 簽一年，回傳「憑證 + 簽發 CA」。Git Bash 的 `openssl` 是 Windows 原生程式，看不懂 `/c/Users/...` 這種路徑，所以腳本裡用 `cygpath -m` 轉成 `C:/Users/...`：
+
+```bash
+cat > ~/kafka-lab/ca/sign.sh <<'EOF'
+#!/usr/bin/env bash
+# sign.sh <csr> <out.crt>  - the bank's issuing policy
+set -euo pipefail
+d=$(cd "$(dirname "$0")" && pwd); csr=$1; out=$2
+# Git Bash: openssl is a native Windows build, so hand it Windows-style paths (no-op on Linux)
+command -v cygpath >/dev/null && { d=$(cygpath -m "$d"); csr=$(cygpath -m "$csr"); out=$(cygpath -m "$out"); }
+tmpf() { local t; t=$(mktemp); command -v cygpath >/dev/null && t=$(cygpath -m "$t"); echo "$t"; }
+ext() { openssl req -in "$csr" -noout -text | awk -v h="$1" 'f {gsub(/^ +/, ""); print; exit} index($0, h) {f=1}'; }
+openssl req -in "$csr" -noout -verify >/dev/null 2>&1 || { echo "REJECT: CSR signature invalid"; exit 1; }
+bits=$(openssl req -in "$csr" -noout -text | sed -n 's/.*Public-Key: (\([0-9]*\) bit).*/\1/p'); [ "${bits:-0}" -ge 2048 ] || { echo "REJECT: key < 2048"; exit 1; }
+subj=$(openssl req -in "$csr" -noout -subject -nameopt oneline | sed 's/^subject= *//'); [[ $subj == *"CN = "* ]] || { echo "REJECT: no CN"; exit 1; }
+[[ $(ext "Basic Constraints") == *CA:TRUE* ]] && { echo "REJECT: CA requested"; exit 1; }
+san=$(ext "Subject Alternative Name" | sed 's/IP Address:/IP:/g; s/, /,/g')
+eku=$(ext "Extended Key Usage" | sed 's/TLS Web Server Authentication/serverAuth/; s/TLS Web Client Authentication/clientAuth/; s/, /,/g')
+[ -n "$eku" ] || { echo "REJECT: extended key usage must be requested"; exit 1; }
+[[ $eku =~ ^(serverAuth|clientAuth)(,(serverAuth|clientAuth))?$ ]] || { echo "REJECT: EKU $eku not allowed"; exit 1; }
+e=$(tmpf); { printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$eku"; [ -n "$san" ] && printf 'subjectAltName=%s\n' "$san"; } > "$e"
+openssl x509 -req -in "$csr" -CA "$d/issuing.crt" -CAkey "$d/issuing.key" -CAcreateserial -days 365 -sha256 -extfile "$e" -out "$out.tmp" 2>/dev/null
+rm -f "$e"; cat "$out.tmp" "$d/issuing.crt" > "$out"; rm -f "$out.tmp"
+echo "signed $(basename "$csr") -> $(basename "$out")  ($subj; EKU $eku)"
+EOF
+chmod +x ~/kafka-lab/ca/sign.sh && echo sign.sh ok
+```
+
+用它幫 repo01 簽 HTTPS 憑證（銀行自己的伺服器，私鑰直接放到映像會掛載的目錄）：
+
+```bash
+cd ~/kafka-lab && openssl req -new -newkey rsa:3072 -nodes -keyout images/web/tls/repo.key -out images/web/tls/repo.csr -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/sign.sh images/web/tls/repo.csr images/web/tls/repo.crt && rm -f images/web/tls/repo.csr
+```
+
+```out
+signed repo.csr -> repo.crt  (CN = repo01.poc.lab, O = PoC Bank, C = TW; EKU serverAuth)
+```
+
+## 0.6 主機清單（compose）與密碼檔
+
+@role Lab 管理員（扮演銀行） | Windows 終端 | 本機
+
+**這一節在做什麼**（lab 專用）：用 docker compose 一次定義所有主機與網路，並產生共用的密碼檔。前提：0.1–0.5 的四個映像與 CA 都建好。完成的樣子：`docker ps` 數出 `14` 台容器。
+
+14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
+
+```bash
+cd ~/kafka-lab && [ -f secrets.env ] || { until p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20); [[ $p =~ [A-Z] && $p =~ [a-z] && $p =~ [0-9] ]]; do :; done; (umask 077; printf 'AD_ADMIN_PASSWORD=%s\n' "$p" > secrets.env); unset p; }; cat > compose.yml <<'EOF'
+name: lab
+x-hosts: &hosts
+  - "ops02.poc.lab=172.35.0.10"
+  - "ops02=172.35.0.10"
+  - "ad01.poc.lab=172.35.0.11"
+  - "ad01=172.35.0.11"
+  - "lb01.poc.lab=172.35.0.12"
+  - "lb01=172.35.0.12"
+  - "rest.poc.lab=172.35.0.12"
+  - "c3.poc.lab=172.35.0.12"
+  - "repo01.poc.lab=172.35.0.14"
+  - "repo01=172.35.0.14"
+  - "kc01.poc.lab=172.35.0.21"
+  - "kc01=172.35.0.21"
+  - "kc02.poc.lab=172.35.0.22"
+  - "kc02=172.35.0.22"
+  - "kc03.poc.lab=172.35.0.23"
+  - "kc03=172.35.0.23"
+  - "kb01.poc.lab=172.35.0.31"
+  - "kb01=172.35.0.31"
+  - "kb02.poc.lab=172.35.0.32"
+  - "kb02=172.35.0.32"
+  - "kb03.poc.lab=172.35.0.33"
+  - "kb03=172.35.0.33"
+  - "kb04.poc.lab=172.35.0.34"
+  - "kb04=172.35.0.34"
+  - "rest01.poc.lab=172.35.0.41"
+  - "rest01=172.35.0.41"
+  - "rest02.poc.lab=172.35.0.42"
+  - "rest02=172.35.0.42"
+  - "c3-01.poc.lab=172.35.0.51"
+  - "c3-01=172.35.0.51"
+x-node: &node
+  image: lab-node:96
+  domainname: poc.lab
+  privileged: true
+  cgroup: host
+  stop_signal: SIGRTMIN+3
+  tmpfs: [ /run, /run/lock, "/tmp:exec,mode=1777,size=2g" ]
+  volumes:
+    - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  extra_hosts: *hosts
+  environment: { TZ: Asia/Taipei }
+  ulimits: { nofile: { soft: 128000, hard: 128000 }, nproc: 65536 }
+  restart: unless-stopped
+services:
+  ops02:
+    <<: *node
+    hostname: ops02
+    networks: { labnet: { ipv4_address: 172.35.0.10 } }
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ops-home:/root
+      - ops-secure:/secure/ssh
+  repo01:
+    <<: *node
+    image: lab-web:96
+    hostname: repo01
+    networks: { labnet: { ipv4_address: 172.35.0.14 } }
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ./images/web/tls:/etc/pki/repo-tls:ro
+      - repo-web:/var/www/repo
+  ad01:
+    image: lab-ad:1
+    hostname: ad01
+    domainname: poc.lab
+    privileged: true
+    networks: { labnet: { ipv4_address: 172.35.0.11 } }
+    extra_hosts: *hosts
+    env_file: secrets.env
+    environment: { AD_REALM: CORP.POC.LAB, AD_DOMAIN: CORP, TZ: Asia/Taipei }
+    volumes:
+      - ad-data:/var/lib/samba
+      - ad-etc:/etc/samba
+    restart: unless-stopped
+  lb01:
+    image: lab-lb:1
+    hostname: lb01
+    domainname: poc.lab
+    networks:
+      labnet: { ipv4_address: 172.35.0.12 }
+      frontnet: { ipv4_address: 172.36.0.12 }
+    ports: [ "18082:8082", "19021:9021" ]
+    extra_hosts: *hosts
+    environment: { TZ: Asia/Taipei }
+    restart: unless-stopped
+  kc01: { <<: *node, hostname: kc01, networks: { labnet: { ipv4_address: 172.35.0.21 } } }
+  kc02: { <<: *node, hostname: kc02, networks: { labnet: { ipv4_address: 172.35.0.22 } } }
+  kc03: { <<: *node, hostname: kc03, networks: { labnet: { ipv4_address: 172.35.0.23 } } }
+  kb01: { <<: *node, hostname: kb01, networks: { labnet: { ipv4_address: 172.35.0.31 } } }
+  kb02: { <<: *node, hostname: kb02, networks: { labnet: { ipv4_address: 172.35.0.32 } } }
+  kb03: { <<: *node, hostname: kb03, networks: { labnet: { ipv4_address: 172.35.0.33 } } }
+  kb04: { <<: *node, hostname: kb04, networks: { labnet: { ipv4_address: 172.35.0.34 } } }
+  rest01: { <<: *node, hostname: rest01, networks: { labnet: { ipv4_address: 172.35.0.41 } } }
+  rest02: { <<: *node, hostname: rest02, networks: { labnet: { ipv4_address: 172.35.0.42 } } }
+  c3-01:
+    <<: *node
+    hostname: c3-01
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }
+    networks: { labnet: { ipv4_address: 172.35.0.51 } }
+networks:
+  labnet:
+    internal: true
+    ipam: { config: [ { subnet: 172.35.0.0/24 } ] }
+  frontnet:
+    ipam: { config: [ { subnet: 172.36.0.0/24 } ] }
+volumes:
+  ops-home:
+  ops-secure:
+  repo-web:
+  ad-data:
+  ad-etc:
+EOF
+docker compose -f compose.yml up -d 2>&1 | grep -c Started
+```
+
+```out
+14
+```
+
+`labnet` 是 `internal: true`：主機連不到外網，和銀行一樣。
+
+> 陷阱：數字若是 13，通常是 lb01 第一次沒起來（它要同時接兩個網路），再下一次同樣的 `up -d` 就會補起來。
+
+> 陷阱：若出現 `Pool overlaps with other one on this address space`，表示這台電腦已有其他 Docker 網路用了 172.35 或 172.36 網段（`docker network ls` 逐一 `docker network inspect` 看 Subnet）。把 compose.yml 裡 `subnet:` 和所有 `extra_hosts` 的 IP 一起換成沒人用的網段（例如 172.37.0.0/24）再 `up -d`。
+
+lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓 Windows 的瀏覽器連得到 REST Proxy 與 C3。
+
+## 0.7 下載機
+
+**這一節在做什麼**（lab 專用）：建出第 2 章用的外網下載機 dl01。前提：0.1 的映像。完成的樣子：`internet: 200`（容器裡連得到外網）。
+
+下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 2 章列給銀行的 OS 套件版本才是 9.6 的：
+
+```bash
+docker run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && docker exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
+```
+
+```out
+internet: 200
+```
+
+## 0.8 進入各台機器
+
+**這一節在做什麼**（lab 專用）：整本手冊在 lab 切換主機都用 `docker exec`；正式環境則是人員經 PVWA＋PSMP 進操作機，再從操作機 ssh 到各台。前提：0.6、0.7 的容器都在跑。完成的樣子：三條指令各進得到一台機器的 shell。之後會一直用到的三條（換主機名稱即可）：
+
+```bash
+docker exec -it dl01 bash
+```
+
+```bash
+docker exec -it -w /root lab-ops02-1 bash
+```
+
+```bash
+docker exec -it lab-repo01-1 bash
+```
+
+第一個是下載機（root），第二個是操作機（root），第三個是銀行的主機（root，扮演銀行時用）。
+
+**操作機一律以 root 進**：正式環境人員是在 CyberArk 的 PVWA 網頁選操作機、按連線，由 PSMP 代登進去，進去就是 root；lab 沒有 PVWA、PSMP，用上面第二條 `docker exec` 直接進，就等於「PSMP 代登之後」的狀態。連其他主機不靠 `docker exec`，而是在操作機上用 cpuser 的金鑰 ssh（第 4 章）。
+
+## 0.9 收工與重開
+
+**這一節在做什麼**（lab 專用）：暫停、繼續與重建 lab 的方法。前提：無。完成的樣子：`stop` 之後 `docker ps` 沒有 lab 容器，`start` 之後 14 台回來、Kafka 服務自己起來。
+
+| 要做什麼 | 指令 | 說明 |
+|---|---|---|
+| 暫停 | `cd ~/kafka-lab && docker compose -f compose.yml stop` | 資料都在 volume 裡 |
+| 繼續 | `docker compose -f compose.yml start` | — |
+| Windows 重開機後 | 不用做（`restart: unless-stopped`）；只有下載機要手動 `docker start dl01` | Kafka 服務設了 enable 也會自己起來 |
+| 操作機重開後 | 不用做 | `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見第 4 章） |
+| 全部清掉重來 | `docker compose -f compose.yml down -v && docker rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
+
+> 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：操作機的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 5、9 章會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
+
 # 1. 開場：小安接到的任務
 
 小安剛進公司，主管丟來一句話：「下週去銀行裝 Kafka，你跟著這本走一遍。」
@@ -75,7 +507,7 @@
 | JDK | 21 | 25 | 8.2.x 只支援 Java 17／21，**不支援 25**，所以基底一定是 21；8.3.x 才支援 25（原廠建議版本仍是 21）（29.7） |
 | OS（RHEL 9） | 9.6 | 9.8 | 第 30.5 節：小版本更新；Confluent 與 JDK 被 versionlock、tar 擋住，只動 OS 套件 |
 
-基底的 Confluent、C3、JDK 版本寫在 `install/conf/site.env`（`CP_VERSION`、`C3_VERSION`、`JDK_MAJOR`），目標版本是同一檔的 `*_TARGET_*`。做完遷移後把基底值改成目標值（29.10），之後新增主機照第 8 章才會裝到現行版本。
+版本號直接寫在這本手冊的指令裡：安裝基底是 Confluent Platform 8.2.4、Control Center 2.5.1、JDK 21，遷移目標是 8.3.2、2.6.1、JDK 25。做完遷移後，之後新增或換掉主機要裝**現行版本**（29.10 節）。
 
 **lab 的限制先講清楚**：lab 的主機是 Rocky Linux 9 的容器，不是 RHEL；容器共用 WSL2 的核心，不能真的重開機（30.5 會講怎麼替代）；Rocky 的 9.6 套件來自它的 vault 倉庫，9.8 來自現行倉庫。正式環境是銀行的 RHEL 9.x 與銀行自己的套件庫，版本以銀行實際的為準（問題清單有問）。
 
@@ -118,7 +550,7 @@
 
 | 章 | 時間 | 慢在哪 |
 |---|---|---|
-| 附錄 A 建 lab | 20–30 分 | 建映像檔要連外網下載 |
+| 第 0 章 建 lab | 20–30 分 | 建映像檔要連外網下載 |
 | 2 下載 | 60–90 分 | 兩套各約 3 GB 從外網抓；lab 的 Windows 資料夾讀寫慢 |
 | 3–6 進內網、主機存取、銀行準備、上架 | 30 分 | 搬 6 GB、建索引 |
 | 7–8 JDK、檢查、OS 調校、裝套件 | 30 分 | 11 台逐一 dnf install |
@@ -301,7 +733,7 @@ SHA=f376263fc6d7270185ab6abab9a8c379079e2a92 && mkdir -p /out/monitoring /tmp/jm
 commit f376263fc6d7: 48 個檔，dashboard 32 個
 ```
 
-平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行。**版本號是下載機的 OS repo（停在 9.6，A.7）的內容**：銀行的套件庫之後同步到 9.8 時這幾個會更新（30.5）：
+平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行。**版本號是下載機的 OS repo（停在 9.6，0.7）的內容**：銀行的套件庫之後同步到 9.8 時這幾個會更新（30.5）：
 
 ```bash
 dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u | tee /out/os-packages.txt
@@ -450,7 +882,7 @@ sha256-ok
 
 lab 裡：正式環境才有的三樣東西，這樣模擬：
 - **沒有 PVWA、PSMP**：你用 `docker exec -it -w /root lab-ops02-1 bash` 直接以 root 進操作機，就是「PSMP 代登之後」。平台的密碼與金鑰不放 CyberArk，所以 lab 也不需要模擬保管庫。
-- **沒有 LUKS**：`/secure/ssh` 是 A.6 compose 裡的獨立 docker volume `ops-secure`，只模擬「獨立的 file system」（獨立掛載點、容器重啟還在），沒有加密。
+- **沒有 LUKS**：`/secure/ssh` 是 0.6 compose 裡的獨立 docker volume `ops-secure`，只模擬「獨立的 file system」（獨立掛載點、容器重啟還在），沒有加密。
 - **密碼與金鑰的輪替**都是人手動做（20.3、20.4、20.5、20），沒有任何自動輪替。
 ## 4.1 每台主機建 cpuser（銀行 OS 團隊）
 
@@ -615,7 +1047,7 @@ repodata
 
 數字是 9.6 的 vault 解析出來的套件數（實測 71；「已經在映像裡的套件」不會重抓，所以比完整的相依少）。裝工具那行是用剛下載的檔案裝（`--disablerepo="*"`，不連網）：容器裡因此有 `createrepo_c`，而且狀態等於「裝好這批套件的 9.6 主機」，30.5 會用同樣的方法算出升到 9.8 要的更新集合。
 
-銀行的根憑證（A.5 建的 `ca/root.crt`）放進每台主機的信任清單，並給每台一份指向套件庫的 repo 設定：
+銀行的根憑證（0.5 建的 `ca/root.crt`）放進每台主機的信任清單，並給每台一份指向套件庫的 repo 設定：
 
 ```bash
 ROOT="$(cygpath -m "$HOME/kafka-lab/ca/root.crt")"; for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$ROOT" lab-$h-1:/etc/pki/ca-trust/source/anchors/bank-root.pem && docker exec lab-$h-1 bash -c 'update-ca-trust && cat > /etc/yum.repos.d/bank-os.repo <<EOF
@@ -1182,7 +1614,7 @@ for f in ~/pki/requests/*.csr; do echo "== $(basename $f)"; openssl req -in $f -
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 A.5 建好的 `sign.sh`，9 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和 5.3 節簽給 ad01 的那張混在一起）：
+正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5 建好的 `sign.sh`，9 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和 5.3 節簽給 ad01 的那張混在一起）：
 
 ```bash
 cd ~/kafka-lab && rm -rf ca/exchange/signed ca/exchange/requests && mkdir -p ca/exchange/signed && docker cp lab-ops02-1:/root/pki/requests "$(cygpath -m "$PWD/ca/exchange/")" && for f in ca/exchange/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/signed/$n.crt"; done && for f in ca/exchange/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/incoming/; done && docker exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
@@ -2350,8 +2782,8 @@ metrics in prometheus: 111 kinds
 | 確認指令沒加 `sudo` | `ls /etc/confluent/ssl` Permission denied，以為沒放進去 | 0750 的目錄要 `sudo ls`、`sudo stat` |
 | 相對路徑 | `scp certs/cp-server.p12` 只在特定目錄下才找得到 | 指令裡一律寫 `~/pki/certs/…` |
 | C3 比 MDS 先起來 | 9021 不回應、日誌 `Failed to fetch MDS URLs … Client has already been closed`，而且不會自己好 | drop-in 加 `ExecStartPre` 等 MDS（第 13 章已加）；broker 全部重啟過一輪後若 C3 卡住，`systemctl restart confluent-control-center` |
-| lab 專用：Git Bash 的 openssl 看不懂 `/c/Users/...` | `sign.sh` 靜靜失敗、沒有產出 `.crt` | 路徑先用 `cygpath -m` 轉成 `C:/Users/...`（A.5 的腳本已內建） |
-| lab 專用：Docker 網段撞到別的 lab | `compose up` 報 `Pool overlaps` | 換 compose.yml 的 subnet 與 extra_hosts 的 IP（A.6） |
+| lab 專用：Git Bash 的 openssl 看不懂 `/c/Users/...` | `sign.sh` 靜靜失敗、沒有產出 `.crt` | 路徑先用 `cygpath -m` 轉成 `C:/Users/...`（0.5 的腳本已內建） |
+| lab 專用：Docker 網段撞到別的 lab | `compose up` 報 `Pool overlaps` | 換 compose.yml 的 subnet 與 extra_hosts 的 IP（0.6） |
 | C3 的 `*-generated.yml` 是 root 擁有 | `AccessDeniedException` | 四個 generated 檔給 `cp-control-center:confluent` |
 | dnf 快取太舊 | 剛上架的套件「找不到」 | 加 `--refresh` |
 | lab 專用：建銀行 OS 套件庫（5.1）時先裝工具再下載 | 套件庫少了 `createrepo_c-libs` | 乾淨容器，先下載、再裝工具 |
@@ -2650,15 +3082,17 @@ export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v
 
 @role 小安 | Windows 終端 | 本機
 
-**這一節在做什麼**：把選單套件經第 3 章的離線流程送進操作機，裝到 `/opt/opmenu` 並寫好設定。選單的原始碼是本專案的 `opmenu/`。在外網端打包（檔名帶日期與內容的雜湊，內容不同就不會蓋掉舊的），連同 SHA256SUMS 放進落地區，再照 3.4 送進來（`D=opmenu`）。落地區只留最新一版，下面的 `tar -xzf opmenu-*.tar.gz` 才不會同時解到兩個：
+**這一節在做什麼**：把選單套件經第 3 章的離線流程送進操作機，裝到 `/opt/opmenu` 並寫好設定。選單是我方的**交付物**，和這本手冊一起給：`opmenu-<日期>.<雜湊>.tar.gz` 與它的 `SHA256SUMS` 兩個檔（檔名帶日期與內容的雜湊，內容不同就不會蓋掉舊的）。把它們複製進落地區的 `tools/opmenu/`、核對雜湊，再照 3.4 送進來（`D=opmenu`）。落地區只留最新一版，下面的 `tar -xzf opmenu-*.tar.gz` 才不會同時解到兩個（`<交付物的目錄>` 換成你放這兩個檔的地方）：
 
 ```bash
-cd <放 opmenu/ 原始碼的目錄> && v=$(date +%Y%m%d).$(find opmenu -type f | sort | xargs cat | sha256sum | cut -c1-8) && mkdir -p ~/kafka-lab/landing/tools/opmenu && rm -f ~/kafka-lab/landing/tools/opmenu/opmenu-*.tar.gz && tar -czf ~/kafka-lab/landing/tools/opmenu/opmenu-$v.tar.gz opmenu && (cd ~/kafka-lab/landing/tools/opmenu && sha256sum opmenu-*.tar.gz > SHA256SUMS && cat SHA256SUMS)
+D=<交付物的目錄> && mkdir -p ~/kafka-lab/landing/tools/opmenu && rm -f ~/kafka-lab/landing/tools/opmenu/opmenu-*.tar.gz ~/kafka-lab/landing/tools/opmenu/SHA256SUMS && cp "$D"/opmenu-*.tar.gz "$D"/SHA256SUMS ~/kafka-lab/landing/tools/opmenu/ && cd ~/kafka-lab/landing/tools/opmenu && sha256sum -c SHA256SUMS
 ```
 
 ```out
-3f9c…  opmenu-20261024.1a2b3c4d.tar.gz
+opmenu-20261029.1a2b3c4d.tar.gz: OK
 ```
+
+> 正式環境同樣是這兩個檔，經銀行的檔案交換平台進落地區（第 3 章）。雜湊對不上就不要裝，請我方重送。
 
 再把這一包送進操作機（就是 3.4 的做法，`D=opmenu`；操作機上舊的會先被清掉，不然 `opmenu-*.tar.gz` 會解到舊版）：
 
@@ -4643,7 +5077,7 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 
 ## 21.3 換 CA（三階段）
 
-**這一節在做什麼**：銀行換了根憑證（新私鑰）、或換了簽發 CA 時的做法。前提：21.2 的換發已經做過一次（這一節會把它整個再做一次），第 17 章的監控已接上（銀行 Prometheus 的 `ca.pem` 也要跟著換）。完成的樣子：每個端點出示的憑證 issuer 都是新 CA，舊 CA 簽的憑證連 REST Proxy 被拒。名詞：根憑證（root）是信任的起點，簽發 CA（中繼）用它簽 leaf；lab 裡原本的根是 A.5 建的，21.3 換成的新 CA 叫 G2，21.4 再換成的叫 G3。
+**這一節在做什麼**：銀行換了根憑證（新私鑰）、或換了簽發 CA 時的做法。前提：21.2 的換發已經做過一次（這一節會把它整個再做一次），第 17 章的監控已接上（銀行 Prometheus 的 `ca.pem` 也要跟著換）。完成的樣子：每個端點出示的憑證 issuer 都是新 CA，舊 CA 簽的憑證連 REST Proxy 被拒。名詞：根憑證（root）是信任的起點，簽發 CA（中繼）用它簽 leaf；lab 裡原本的根是 0.5 建的，21.3 換成的新 CA 叫 G2，21.4 再換成的叫 G3。
 
 **不可逆的點**：階段三「拿掉舊根」之後，凡是還出示舊 CA 簽的憑證的，一律被拒，要退回只能重新加回舊根。所以階段二的每個端點（含銀行的 AD、套件庫，以及應用程式的憑證）都確認換好之後，才進階段三。
 
@@ -4659,7 +5093,7 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-（lab 專用）正式環境是銀行 CA 窗口建好新 CA、公布新根的指紋。lab 裡：和 A.5 一樣的做法，名字換成 G2，放在 `ca/g2/`；簽發腳本複製一份（它用自己所在目錄的簽發 CA）：
+（lab 專用）正式環境是銀行 CA 窗口建好新 CA、公布新根的指紋。lab 裡：和 0.5 一樣的做法，名字換成 G2，放在 `ca/g2/`；簽發腳本複製一份（它用自己所在目錄的簽發 CA）：
 
 ```bash
 cd ~/kafka-lab/ca && mkdir -p g2 && cd g2 && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA G2/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA G2/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && cp ../sign.sh sign.sh && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -subject -fingerprint -sha256
@@ -7014,7 +7448,7 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x
 安裝基底（第 1–20 章）裝的是 **Confluent Platform 8.2.4**、**Control Center 2.5.1**、**JDK 21**。這一章是主線的下一步：遷移到 **Confluent Platform 8.3.2**，C3 同時升到 **2.6.1**，並把 **JDK 21 換成 25**。順序和原因：
 
 - **C3 先升**：原廠相容表上 C3 2.5.x 只支援到 CP 8.2.x，2.6.x 才支援到 8.3.x（2.6.x 的範圍是 7.5.15 到 8.3.x，所以 2.6.1 配著 8.2.4 也在支援範圍內）。CP 一升到 8.3，2.5.1 就落在支援範圍外，所以 C3 要在 broker 之前換（29.3）。
-- **JDK 25 在 CP 升完之後才換**：8.2.x 只支援 Java 17／21，8.3.x 才支援 25；注意原廠對 8.3 的**建議**版本仍是 21，25 是「支援」，選 25 要和原廠支援確認（銀行沒有這個要求時，留在 21 就好，只做第一、三段）。C3 留在 JDK 21（原廠沒有寫 C3 2.6 支援 Java 25）。
+- **JDK 25 在 CP 升完之後才換**：8.2.x 只支援 Java 17／21，8.3.x 才支援 25；注意原廠對 8.3 的**建議**版本仍是 21，25 是「支援」，選 25 要和原廠支援確認（銀行沒有這個要求時，留在 21 就好，只做第一、三段）。C3 也一起換成 JDK 25（2026-10-28 定案：全部 Java 節點同一個版本；C3 2.6 的需求是 Java 17 以上，lab 實測 2.6.1 在 25 上正常）。
 - **OS 小版本（9.6 → 9.8）不在這一章**，是第 30 章的 30.5：Confluent 套件被 versionlock 鎖住、JDK 是 tar，OS 更新碰不到它們，所以兩條線可以分開做；本章每一段結束都跑第 19 章的驗收。
 
 > 前提：安裝基底已經裝好並通過第 19 章驗收；目標版本的 RPM 與 JDK 25 已經在第 1、2 章隨落地區進來（`~/landing/rpm-target/`、`~/landing/bank/`），這一章 29.1 才把它們上架。第 21 章的憑證輪替做過沒做過都行，順序沒有相依。
@@ -7415,7 +7849,7 @@ confluent.metadata.version CP-8.3-IV0B
 
 @role 小安 | ops02 | root
 
-**這一節在做什麼**：收尾確認，並把「新基準版本」記下來。三段都驗收過、觀察一段時間之後，用一張表確認每台主機的版本都是預期的（Confluent 與 JDK 是目標版本；C3 的 JDK 一直留在 21）：
+**這一節在做什麼**：收尾確認，並把「新基準版本」記下來。三段都驗收過、觀察一段時間之後，用一張表確認每台主機的版本都是預期的（Confluent 與 JDK 都是目標版本，C3 也是 JDK 25）：
 
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname) java=$(readlink /opt/java/current | sed s#/opt/java/##) confluent=$(rpm -qa "confluent-*" --qf "%{VERSION}\n" | sort -u | paste -sd,) os=$(. /etc/os-release; echo $VERSION_ID)"'; done
@@ -7680,7 +8114,7 @@ ops02 Rocky Linux 9.8 (Blue Onyx)
 under-replicated：0；REST 經 LB=200 C3=200
 ```
 
-再跑一次第 19 章的驗收（19.1–19.3），結果要全數通過。持續流量（`install/tools/load.sh`）在更新期間的數字：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次，從零重跑後以實測為準（尚無實測）；REST 照 12.1 一台一台從 LB 停用再重啟，預期和第 29 章一樣沒有失敗。
+再跑一次第 19 章的驗收（19.1–19.3），結果要全數通過。持續流量（直連應用程式的背景寫入、經 LB 的 REST 呼叫）在更新期間的數字：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次，從零重跑後以實測為準（尚無實測）；REST 照 12.1 一台一台從 LB 停用再重啟，預期和第 29 章一樣沒有失敗。
 
 **lab 做不到的事（要老實說）**：
 - 容器不能重開機，kernel 沒有更新（容器沒有自己的核心）。lab 只驗證「套件更新的指令、順序、versionlock 擋住 Confluent、服務在新的 glibc／systemd 套件下重啟後是健康的」，**沒有驗證**重開機本身：開機順序、`fstab` 掛載、網卡命名、核心模組、`systemctl enable` 過的服務是否自己起來（19.4 的冷開機演練只涵蓋「容器一起停、一起開」，不是 OS 的開機）。
@@ -7798,434 +8232,6 @@ alice 登入 MDS（C3 用同一套）：200
 > 陷阱（lab 實測）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。
 
 最後用瀏覽器登入 C3 看一眼叢集總覽（lab：`https://localhost:19021`，alice）。
-
-# A. 附錄 A：自己把 lab 建起來
-> 這一節只有練習用的 lab 需要。正式環境的主機、AD、CA、套件庫都是銀行準備好的，直接從第 2 章開始。
-
-@role Lab 管理員（扮演銀行） | Windows 終端（Git Bash） | 本機
-
-這一節在你的 Windows 筆電上用 Docker 蓋出一整套模擬環境：十幾台假主機，加上扮演銀行的 AD、CA、套件庫、負載平衡。做完 A 之後，你就有一個可以照第 2 章以後逐章練習的環境。需要 Docker Desktop 和 Git Bash。整個 lab 放在家目錄的 `kafka-lab/`，不依賴任何現成的專案；下面每個檔案都是用 heredoc 寫出來的，整段貼到 `EOF` 即可。先開一個 Git Bash，做兩個全域設定（之後所有 Windows 端指令都在這個視窗）：
-
-```bash
-export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} && cd ~/kafka-lab && pwd
-```
-
-```out
-/c/Users/<你>/kafka-lab
-```
-
-> `MSYS_NO_PATHCONV=1` 是讓 Git Bash 不要把 `/out`、`/etc/...` 這類容器內路徑轉成 Windows 路徑。給 Docker 的 Windows 路徑一律用 `$(cygpath -m …)` 產生。
-## A.1 主機映像檔：模擬「裸機 RHEL 9」
-
-**這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：附錄 A 開頭的兩個全域設定已做、目錄已建。完成的樣子：build 的最後一行是 `naming to … lab-node:96`，接著印出 `Rocky Linux release 9.6`。
-
-和銀行開給我們的主機一樣：沒有 JDK、沒有 Confluent、公開 repo 關閉；安裝與維運用的帳號 `cpuser` 也不在映像裡，第 4 章才由銀行 OS 團隊建立。
-
-> 重點：**Rocky 的 9.6 映像裡預設的 repo 設定指向「最新的 9.x」**（mirrorlist 用 `$releasever` = 9），不動它的話 `dnf install` 裝到的是 9.8 的套件。所以先換成 vault 的 9.6 倉庫（`dl.rockylinux.org/vault/rocky/9.6`），再 `dnf update` 到 9.6 的最新修補，主機才是乾淨的 9.6。映像、下載機、後面 5.1 銀行套件庫的內容都用同一份 vault 設定。映像的 tag 用 `lab-node:96`：舊的 9.8 映像（`lab-node:1`）不會被誤用。
-
-```bash
-cat > images/node/rocky-vault-96.repo <<'EOF'
-[vault96-baseos]
-name=Rocky 9.6 BaseOS (vault)
-baseurl=https://dl.rockylinux.org/vault/rocky/9.6/BaseOS/$basearch/os/
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
-enabled=1
-
-[vault96-appstream]
-name=Rocky 9.6 AppStream (vault)
-baseurl=https://dl.rockylinux.org/vault/rocky/9.6/AppStream/$basearch/os/
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
-enabled=1
-
-[vault96-extras]
-name=Rocky 9.6 extras (vault)
-baseurl=https://dl.rockylinux.org/vault/rocky/9.6/extras/$basearch/os/
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
-enabled=1
-EOF
-cat > images/node/Dockerfile <<'EOF'
-FROM rockylinux/rockylinux:9.6
-COPY rocky-vault-96.repo /etc/yum.repos.d/rocky-vault-96.repo
-RUN rm -f /etc/yum.repos.d/rocky.repo /etc/yum.repos.d/rocky-addons.repo /etc/yum.repos.d/rocky-devel.repo /etc/yum.repos.d/rocky-extras.repo \
-    && dnf -y update \
-    && dnf -y install systemd openssh-server openssh-clients sudo tar gzip openssl procps-ng nmap-ncat hostname iproute less which findutils dnf-plugins-core ca-certificates \
-    && dnf clean all && rm -f /etc/yum.repos.d/*.repo.rpmnew
-RUN printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf \
-    && systemctl enable sshd \
-    && systemctl mask systemd-logind.service getty.target console-getty.service systemd-udevd.service \
-    && sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo
-STOPSIGNAL SIGRTMIN+3
-CMD ["/usr/sbin/init"]
-EOF
-docker build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | tail -1 && docker run --rm lab-node:96 cat /etc/rocky-release
-```
-
-```out
- => => naming to docker.io/library/lab-node:96
-Rocky Linux release 9.6 (Blue Onyx)
-```
-
-映像裡沒有 cpuser，也沒有 sudo 規則：帳號、sshd 設定、公鑰、安裝期的完整 sudo（對應「變更窗口內由 OS 團隊開放」，正式環境做完要收回）都在 第 4 章 由銀行 OS 團隊的區塊做。
-
-## A.2 銀行的套件庫 web server（repo01）
-
-**這一節在做什麼**（lab 專用）：建出模擬銀行套件庫的 web server 映像 `lab-web:96`，5.1 節與第 6 章把 OS 套件與 Confluent RPM 放上去。前提：A.1 的 `lab-node:96`（這個映像以它為底）。完成的樣子：build 的最後一行是 `naming to … lab-web:96`。
-
-模擬的是銀行自己管的 httpd：只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
-
-```bash
-cat > images/web/Dockerfile <<'EOF'
-FROM lab-node:96
-RUN dnf -y --enablerepo=vault96-baseos,vault96-appstream install httpd mod_ssl && dnf clean all \
-    && sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo \
-    && useradd -m -s /bin/bash repodeploy && install -d -o repodeploy -g repodeploy -m 0755 /var/www/repo \
-    && rm -f /etc/httpd/conf.d/welcome.conf /etc/httpd/conf.d/ssl.conf \
-    && sed -i 's/^Listen 80$/# Listen 80/' /etc/httpd/conf/httpd.conf \
-    && printf 'Match User repodeploy\n    AllowTcpForwarding no\n    X11Forwarding no\n' > /etc/ssh/sshd_config.d/20-repo.conf \
-    && systemctl enable httpd
-COPY repo.conf /etc/httpd/conf.d/repo.conf
-EOF
-cat > images/web/repo.conf <<'EOF'
-Listen 443 https
-<VirtualHost *:443>
-    ServerName repo01.poc.lab
-    SSLEngine on
-    SSLProtocol -all +TLSv1.2 +TLSv1.3
-    SSLCertificateFile /etc/pki/repo-tls/repo.crt
-    SSLCertificateKeyFile /etc/pki/repo-tls/repo.key
-    DocumentRoot "/var/www/repo"
-    <Directory "/var/www/repo">
-        Options Indexes FollowSymLinks
-        AllowOverride None
-        Require all granted
-        <LimitExcept GET HEAD OPTIONS>
-            Require all denied
-        </LimitExcept>
-    </Directory>
-</VirtualHost>
-EOF
-docker build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | tail -1
-```
-
-```out
- => => naming to docker.io/library/lab-web:96
-```
-
-憑證 `repo.crt`、`repo.key` 等銀行 CA 建好後再簽（A.5）。
-
-## A.3 銀行的 AD（Samba AD DC）
-
-**這一節在做什麼**（lab 專用）：建出模擬銀行 AD 的映像 `lab-ad:1`，5.3 節在裡面建群組與帳號。前提：無（只要 Docker）。完成的樣子：build 的最後一行是 `naming to … lab-ad:1`。
-
-RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
-
-```bash
-cat > images/ad/Dockerfile <<'EOF'
-FROM debian:12-slim
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends samba samba-ad-dc samba-ad-provision winbind krb5-user ldb-tools ldap-utils openssh-server sudo procps ca-certificates openssl \
-    && rm -rf /var/lib/apt/lists/* && rm -f /etc/samba/smb.conf
-RUN install -d -m 0755 /run/sshd \
-    && printf 'PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf
-COPY entrypoint.sh /usr/local/sbin/ad-entrypoint
-RUN chmod 0755 /usr/local/sbin/ad-entrypoint
-VOLUME ["/var/lib/samba", "/etc/samba"]
-ENTRYPOINT ["/usr/local/sbin/ad-entrypoint"]
-EOF
-cat > images/ad/entrypoint.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-: "${AD_REALM:?}" "${AD_DOMAIN:?}" "${AD_ADMIN_PASSWORD:?}"
-if [[ ! -f /var/lib/samba/private/sam.ldb ]]; then
-  echo "[ad] provisioning domain ${AD_REALM}"
-  rm -f /etc/samba/smb.conf
-  samba-tool domain provision --use-rfc2307 --realm="${AD_REALM}" --domain="${AD_DOMAIN}" --server-role=dc \
-    --dns-backend=SAMBA_INTERNAL --adminpass="${AD_ADMIN_PASSWORD}" --option="dns forwarder = 127.0.0.11" \
-    --option="tls enabled = yes" --option="tls keyfile = tls/key.pem" --option="tls certfile = tls/cert.pem" --option="tls cafile = tls/ca.pem"
-fi
-cp -f /var/lib/samba/private/krb5.conf /etc/krb5.conf
-/usr/sbin/sshd
-while true; do
-  echo "[ad] starting samba"
-  samba --foreground --no-process-group --debug-stdout || true
-  echo "[ad] samba exited, restarting in 2s"; sleep 2
-done
-EOF
-docker build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | tail -1
-```
-
-```out
- => => naming to docker.io/library/lab-ad:1
-```
-
-## A.4 銀行的負載平衡（nginx L4）
-
-**這一節在做什麼**（lab 專用）：建出模擬銀行負載平衡的 nginx 映像 `lab-lb:1`，5.4 節設定轉發到兩台 REST Proxy。前提：無。完成的樣子：build 的最後一行是 `naming to … lab-lb:1`，接著印出 `4`（A.1–A.4 的四個映像都在）。
-
-```bash
-cat > images/lb/Dockerfile <<'EOF'
-FROM nginx:1.28
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server sudo procps && rm -rf /var/lib/apt/lists/* \
-    && install -d -m 0755 /run/sshd /etc/nginx/stream.d \
-    && printf 'PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf \
-    && printf '\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n' >> /etc/nginx/nginx.conf && rm -f /etc/nginx/conf.d/default.conf \
-    && printf '#!/bin/sh\n/usr/sbin/sshd\nexec nginx -g "daemon off;"\n' > /usr/local/sbin/lb-entrypoint && chmod 0755 /usr/local/sbin/lb-entrypoint
-ENTRYPOINT ["/usr/local/sbin/lb-entrypoint"]
-EOF
-docker build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | tail -1 && docker images --format '{{.Repository}}:{{.Tag}}' | grep -cE '^lab-(node:96|web:96|ad:1|lb:1)$'
-```
-
-```out
- => => naming to docker.io/library/lab-lb:1
-4
-```
-
-## A.5 銀行的 CA：根憑證、簽發 CA、簽發程序
-
-@role 銀行 CA 窗口 | Windows 終端 | 本機
-
-**這一節在做什麼**（lab 專用）：建出模擬銀行 CA 的兩層 CA 與簽發腳本 `sign.sh`，5.3 與 9.2 節用它簽憑證。前提：Git Bash 有 `openssl`。完成的樣子：`issuing.crt: OK`、印出根憑證的指紋，之後 `sign.sh` 幫 repo01 簽出 `repo.crt`。
-
-正式環境這是銀行 CA 窗口的行內 PKI。lab 裡：用 openssl 建一個兩層 CA（根 CA 離線保存，簽發 CA 簽日常憑證）：
-
-```bash
-cd ~/kafka-lab/ca && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA 01/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -fingerprint -sha256
-```
-
-```out
-issuing.crt: OK
-sha256 Fingerprint=…
-```
-
-指紋是銀行會另外公布的資訊，之後我方匯入根憑證時用來核對。
-
-簽發程序寫成一支小腳本 `sign.sh`：檢查 CSR（RSA ≥ 2048、有 CN、不是 CA、必須帶 EKU 且只允許 serverAuth／clientAuth），照 CSR 裡的 SAN 和 EKU 簽一年，回傳「憑證 + 簽發 CA」。Git Bash 的 `openssl` 是 Windows 原生程式，看不懂 `/c/Users/...` 這種路徑，所以腳本裡用 `cygpath -m` 轉成 `C:/Users/...`：
-
-```bash
-cat > ~/kafka-lab/ca/sign.sh <<'EOF'
-#!/usr/bin/env bash
-# sign.sh <csr> <out.crt>  - the bank's issuing policy
-set -euo pipefail
-d=$(cd "$(dirname "$0")" && pwd); csr=$1; out=$2
-# Git Bash: openssl is a native Windows build, so hand it Windows-style paths (no-op on Linux)
-command -v cygpath >/dev/null && { d=$(cygpath -m "$d"); csr=$(cygpath -m "$csr"); out=$(cygpath -m "$out"); }
-tmpf() { local t; t=$(mktemp); command -v cygpath >/dev/null && t=$(cygpath -m "$t"); echo "$t"; }
-ext() { openssl req -in "$csr" -noout -text | awk -v h="$1" 'f {gsub(/^ +/, ""); print; exit} index($0, h) {f=1}'; }
-openssl req -in "$csr" -noout -verify >/dev/null 2>&1 || { echo "REJECT: CSR signature invalid"; exit 1; }
-bits=$(openssl req -in "$csr" -noout -text | sed -n 's/.*Public-Key: (\([0-9]*\) bit).*/\1/p'); [ "${bits:-0}" -ge 2048 ] || { echo "REJECT: key < 2048"; exit 1; }
-subj=$(openssl req -in "$csr" -noout -subject -nameopt oneline | sed 's/^subject= *//'); [[ $subj == *"CN = "* ]] || { echo "REJECT: no CN"; exit 1; }
-[[ $(ext "Basic Constraints") == *CA:TRUE* ]] && { echo "REJECT: CA requested"; exit 1; }
-san=$(ext "Subject Alternative Name" | sed 's/IP Address:/IP:/g; s/, /,/g')
-eku=$(ext "Extended Key Usage" | sed 's/TLS Web Server Authentication/serverAuth/; s/TLS Web Client Authentication/clientAuth/; s/, /,/g')
-[ -n "$eku" ] || { echo "REJECT: extended key usage must be requested"; exit 1; }
-[[ $eku =~ ^(serverAuth|clientAuth)(,(serverAuth|clientAuth))?$ ]] || { echo "REJECT: EKU $eku not allowed"; exit 1; }
-e=$(tmpf); { printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$eku"; [ -n "$san" ] && printf 'subjectAltName=%s\n' "$san"; } > "$e"
-openssl x509 -req -in "$csr" -CA "$d/issuing.crt" -CAkey "$d/issuing.key" -CAcreateserial -days 365 -sha256 -extfile "$e" -out "$out.tmp" 2>/dev/null
-rm -f "$e"; cat "$out.tmp" "$d/issuing.crt" > "$out"; rm -f "$out.tmp"
-echo "signed $(basename "$csr") -> $(basename "$out")  ($subj; EKU $eku)"
-EOF
-chmod +x ~/kafka-lab/ca/sign.sh && echo sign.sh ok
-```
-
-用它幫 repo01 簽 HTTPS 憑證（銀行自己的伺服器，私鑰直接放到映像會掛載的目錄）：
-
-```bash
-cd ~/kafka-lab && openssl req -new -newkey rsa:3072 -nodes -keyout images/web/tls/repo.key -out images/web/tls/repo.csr -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/sign.sh images/web/tls/repo.csr images/web/tls/repo.crt && rm -f images/web/tls/repo.csr
-```
-
-```out
-signed repo.csr -> repo.crt  (CN = repo01.poc.lab, O = PoC Bank, C = TW; EKU serverAuth)
-```
-
-## A.6 主機清單（compose）與密碼檔
-
-@role Lab 管理員（扮演銀行） | Windows 終端 | 本機
-
-**這一節在做什麼**（lab 專用）：用 docker compose 一次定義所有主機與網路，並產生共用的密碼檔。前提：A.1–A.5 的四個映像與 CA 都建好。完成的樣子：`docker ps` 數出 `14` 台容器。
-
-14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
-
-```bash
-cd ~/kafka-lab && [ -f secrets.env ] || { until p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20); [[ $p =~ [A-Z] && $p =~ [a-z] && $p =~ [0-9] ]]; do :; done; (umask 077; printf 'AD_ADMIN_PASSWORD=%s\n' "$p" > secrets.env); unset p; }; cat > compose.yml <<'EOF'
-name: lab
-x-hosts: &hosts
-  - "ops02.poc.lab=172.35.0.10"
-  - "ops02=172.35.0.10"
-  - "ad01.poc.lab=172.35.0.11"
-  - "ad01=172.35.0.11"
-  - "lb01.poc.lab=172.35.0.12"
-  - "lb01=172.35.0.12"
-  - "rest.poc.lab=172.35.0.12"
-  - "c3.poc.lab=172.35.0.12"
-  - "repo01.poc.lab=172.35.0.14"
-  - "repo01=172.35.0.14"
-  - "kc01.poc.lab=172.35.0.21"
-  - "kc01=172.35.0.21"
-  - "kc02.poc.lab=172.35.0.22"
-  - "kc02=172.35.0.22"
-  - "kc03.poc.lab=172.35.0.23"
-  - "kc03=172.35.0.23"
-  - "kb01.poc.lab=172.35.0.31"
-  - "kb01=172.35.0.31"
-  - "kb02.poc.lab=172.35.0.32"
-  - "kb02=172.35.0.32"
-  - "kb03.poc.lab=172.35.0.33"
-  - "kb03=172.35.0.33"
-  - "kb04.poc.lab=172.35.0.34"
-  - "kb04=172.35.0.34"
-  - "rest01.poc.lab=172.35.0.41"
-  - "rest01=172.35.0.41"
-  - "rest02.poc.lab=172.35.0.42"
-  - "rest02=172.35.0.42"
-  - "c3-01.poc.lab=172.35.0.51"
-  - "c3-01=172.35.0.51"
-x-node: &node
-  image: lab-node:96
-  domainname: poc.lab
-  privileged: true
-  cgroup: host
-  stop_signal: SIGRTMIN+3
-  tmpfs: [ /run, /run/lock, "/tmp:exec,mode=1777,size=2g" ]
-  volumes:
-    - /sys/fs/cgroup:/sys/fs/cgroup:rw
-  extra_hosts: *hosts
-  environment: { TZ: Asia/Taipei }
-  ulimits: { nofile: { soft: 128000, hard: 128000 }, nproc: 65536 }
-  restart: unless-stopped
-services:
-  ops02:
-    <<: *node
-    hostname: ops02
-    networks: { labnet: { ipv4_address: 172.35.0.10 } }
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ops-home:/root
-      - ops-secure:/secure/ssh
-  repo01:
-    <<: *node
-    image: lab-web:96
-    hostname: repo01
-    networks: { labnet: { ipv4_address: 172.35.0.14 } }
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./images/web/tls:/etc/pki/repo-tls:ro
-      - repo-web:/var/www/repo
-  ad01:
-    image: lab-ad:1
-    hostname: ad01
-    domainname: poc.lab
-    privileged: true
-    networks: { labnet: { ipv4_address: 172.35.0.11 } }
-    extra_hosts: *hosts
-    env_file: secrets.env
-    environment: { AD_REALM: CORP.POC.LAB, AD_DOMAIN: CORP, TZ: Asia/Taipei }
-    volumes:
-      - ad-data:/var/lib/samba
-      - ad-etc:/etc/samba
-    restart: unless-stopped
-  lb01:
-    image: lab-lb:1
-    hostname: lb01
-    domainname: poc.lab
-    networks:
-      labnet: { ipv4_address: 172.35.0.12 }
-      frontnet: { ipv4_address: 172.36.0.12 }
-    ports: [ "18082:8082", "19021:9021" ]
-    extra_hosts: *hosts
-    environment: { TZ: Asia/Taipei }
-    restart: unless-stopped
-  kc01: { <<: *node, hostname: kc01, networks: { labnet: { ipv4_address: 172.35.0.21 } } }
-  kc02: { <<: *node, hostname: kc02, networks: { labnet: { ipv4_address: 172.35.0.22 } } }
-  kc03: { <<: *node, hostname: kc03, networks: { labnet: { ipv4_address: 172.35.0.23 } } }
-  kb01: { <<: *node, hostname: kb01, networks: { labnet: { ipv4_address: 172.35.0.31 } } }
-  kb02: { <<: *node, hostname: kb02, networks: { labnet: { ipv4_address: 172.35.0.32 } } }
-  kb03: { <<: *node, hostname: kb03, networks: { labnet: { ipv4_address: 172.35.0.33 } } }
-  kb04: { <<: *node, hostname: kb04, networks: { labnet: { ipv4_address: 172.35.0.34 } } }
-  rest01: { <<: *node, hostname: rest01, networks: { labnet: { ipv4_address: 172.35.0.41 } } }
-  rest02: { <<: *node, hostname: rest02, networks: { labnet: { ipv4_address: 172.35.0.42 } } }
-  c3-01:
-    <<: *node
-    hostname: c3-01
-    ulimits: { nofile: { soft: 65536, hard: 65536 } }
-    networks: { labnet: { ipv4_address: 172.35.0.51 } }
-networks:
-  labnet:
-    internal: true
-    ipam: { config: [ { subnet: 172.35.0.0/24 } ] }
-  frontnet:
-    ipam: { config: [ { subnet: 172.36.0.0/24 } ] }
-volumes:
-  ops-home:
-  ops-secure:
-  repo-web:
-  ad-data:
-  ad-etc:
-EOF
-docker compose -f compose.yml up -d 2>&1 | grep -c Started
-```
-
-```out
-14
-```
-
-`labnet` 是 `internal: true`：主機連不到外網，和銀行一樣。
-
-> 陷阱：數字若是 13，通常是 lb01 第一次沒起來（它要同時接兩個網路），再下一次同樣的 `up -d` 就會補起來。
-
-> 陷阱：若出現 `Pool overlaps with other one on this address space`，表示這台電腦已有其他 Docker 網路用了 172.35 或 172.36 網段（`docker network ls` 逐一 `docker network inspect` 看 Subnet）。把 compose.yml 裡 `subnet:` 和所有 `extra_hosts` 的 IP 一起換成沒人用的網段（例如 172.37.0.0/24）再 `up -d`。
-
-lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓 Windows 的瀏覽器連得到 REST Proxy 與 C3。
-
-## A.7 下載機
-
-**這一節在做什麼**（lab 專用）：建出第 2 章用的外網下載機 dl01。前提：A.1 的映像。完成的樣子：`internet: 200`（容器裡連得到外網）。
-
-下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 2 章列給銀行的 OS 套件版本才是 9.6 的：
-
-```bash
-docker run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && docker exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
-```
-
-```out
-internet: 200
-```
-
-## A.8 進入各台機器
-
-**這一節在做什麼**（lab 專用）：整本手冊在 lab 切換主機都用 `docker exec`；正式環境則是人員經 PVWA＋PSMP 進操作機，再從操作機 ssh 到各台。前提：A.6、A.7 的容器都在跑。完成的樣子：三條指令各進得到一台機器的 shell。之後會一直用到的三條（換主機名稱即可）：
-
-```bash
-docker exec -it dl01 bash
-```
-
-```bash
-docker exec -it -w /root lab-ops02-1 bash
-```
-
-```bash
-docker exec -it lab-repo01-1 bash
-```
-
-第一個是下載機（root），第二個是操作機（root），第三個是銀行的主機（root，扮演銀行時用）。
-
-**操作機一律以 root 進**：正式環境人員是在 CyberArk 的 PVWA 網頁選操作機、按連線，由 PSMP 代登進去，進去就是 root；lab 沒有 PVWA、PSMP，用上面第二條 `docker exec` 直接進，就等於「PSMP 代登之後」的狀態。連其他主機不靠 `docker exec`，而是在操作機上用 cpuser 的金鑰 ssh（第 4 章）。
-
-## A.9 收工與重開
-
-**這一節在做什麼**（lab 專用）：暫停、繼續與重建 lab 的方法。前提：無。完成的樣子：`stop` 之後 `docker ps` 沒有 lab 容器，`start` 之後 14 台回來、Kafka 服務自己起來。
-
-| 要做什麼 | 指令 | 說明 |
-|---|---|---|
-| 暫停 | `cd ~/kafka-lab && docker compose -f compose.yml stop` | 資料都在 volume 裡 |
-| 繼續 | `docker compose -f compose.yml start` | — |
-| Windows 重開機後 | 不用做（`restart: unless-stopped`）；只有下載機要手動 `docker start dl01` | Kafka 服務設了 enable 也會自己起來 |
-| 操作機重開後 | 不用做 | `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見第 4 章） |
-| 全部清掉重來 | `docker compose -f compose.yml down -v && docker rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
-
-> 陷阱：要重跑附錄 A（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：操作機的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 5、9 章會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
 # B. 附錄 B：監控的覆蓋率，與 lab 監控容器的收尾
 
@@ -8374,7 +8380,7 @@ zookeeper-cluster.json                 11      0
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-驗完把 lab 的四個監控容器收掉（正式環境是銀行的系統，不收）。設定資料夾 `~/kafka-lab/bank-monitoring` 留著；重建 lab（附錄 A `down -v`）之前一定要先收，否則容器還接在 labnet 上，網路刪不掉：
+驗完把 lab 的四個監控容器收掉（正式環境是銀行的系統，不收）。設定資料夾 `~/kafka-lab/bank-monitoring` 留著；重建 lab（第 0 章 `down -v`）之前一定要先收，否則容器還接在 labnet 上，網路刪不掉：
 
 ```bash
 docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null && echo "lab-mon-* 已收掉：$(docker ps -a --format '{{.Names}}' | grep -c '^lab-mon-') 個剩下"

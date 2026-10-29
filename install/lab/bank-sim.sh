@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install/lab/bank-sim.sh — lab 專用：在 Windows Git Bash 扮演「銀行」，做手把手文件裡橘色標籤的事。
-# 正式環境沒有這支；安裝腳本只會印「請銀行做」。lab 依 docs/journey-src/journey.md 附錄 A 建好（~/kafka-lab）。
+# 正式環境沒有這支；安裝腳本只會印「請銀行做」。lab 依 docs/journey-src/journey.md 第 0 章建好（~/kafka-lab）。
 #   bash bank-sim.sh landing-layout 把舊的落地區版面（8.3.2 在 rpm/、8.2.4 在 landing-extra/）整理成 rpm/ = 基底、rpm-target/ = 目標
 #   bash bank-sim.sh push      把 install/ 送到 ops02（root，/root/install）與 dl01（root）
 #   bash bank-sim.sh os-content 5.1 銀行 OS 團隊備 OS 內容（拋棄式容器）：~/kafka-lab/bank-os/9.6（安裝基底的完整套件庫）、9.8-updates（9.6 主機升 9.8 需要的更新）、9.8（兩者合併的套件庫）
@@ -19,7 +19,7 @@ as_root_on() { docker exec "$(container_of "$1")" bash -c "$2"; }   # 在某台�
 as_root_on_ops() {   # 在操作機以 root 跑一段指令（人員經 PSMP 登入操作機就是 root；lab 直接 docker exec 進去）
   docker exec -w /root "$(container_of "$OPS_HOST")" bash -c "$1"; }
 announce() { printf '\n[bank] %s\n' "$*"; }
-NODE_IMAGE=${NODE_IMAGE:-lab-node:96}   # 主機映像（手把手 A.1）；9.6 的 tag 和舊的 9.8 映像分開，才不會誤用舊映像
+NODE_IMAGE=${NODE_IMAGE:-lab-node:96}   # 主機映像（手把手 0.1）；9.6 的 tag 和舊的 9.8 映像分開，才不會誤用舊映像
 OS_DIR=$LAB/bank-os                     # 銀行套件庫的內容（不是我們交付的檔案，所以不在落地區）：9.6（基底）、9.8-updates（更新集合）、9.8（合併後的完整套件庫）
 
 # 落地區版面（遷移主線）：rpm/ = 安裝基底、rpm-target/ = 遷移目標、bank/ = 兩個 JDK、c3/ = 第 31 章帶進來的單一 C3 版本、os/ = 銀行套件庫的內容（lab 才有）。
@@ -50,6 +50,8 @@ push() {
 
 intake() {
   announce "3.2 檔案交換：$LAB/landing → $OPS_HOST:~/landing（唯讀）"
+  # 選單是我方交付物（手把手 16.3）：和手冊一起給的 tar＋SHA256SUMS，lab 由 opmenu/package.sh 產生到落地區
+  bash "$INSTALL/../opmenu/package.sh" "$LAB/landing/tools/opmenu" >/dev/null || { echo "選單打包失敗"; return 1; }
   as_root_on "$OPS_HOST" 'install -d /root/landing'
   docker cp "$(windows_path "$LAB/landing")/." "$(container_of "$OPS_HOST"):/root/landing/"
   as_root_on "$OPS_HOST" 'chmod -R a-w /root/landing && echo "$(find /root/landing -type f | wc -l) files, $(du -sh /root/landing | cut -f1)"'

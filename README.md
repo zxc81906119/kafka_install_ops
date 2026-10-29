@@ -17,7 +17,7 @@ C3 的版本由原廠相容表決定：2.5.x 支援 CP 到 8.2.x，2.6.x 支援�
 
 | 文件 | 給誰 | 來源 |
 |---|---|---|
-| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 1–31 章＋附錄 A 建 lab、附錄 B 監控覆蓋率；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
+| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0 章建 lab、第 1–31 章、附錄 B 監控覆蓋率；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
 | `docs/Confluent-請銀行確認的事項.docx` | 銀行各團隊：待確認事項與我方預設 | `docs/questions-src/questions.md`（`node build.js`） |
 | `docs/Confluent-RPM安裝流程.pptx` | 銀行主管：RPM 安裝流程 14 頁 | `docs/deck-src/install.js`、`install-steps.js` |
 | `redesign/README.md` | 設計決策、教訓、待確認事項的紀錄 | 手寫 |
@@ -64,8 +64,8 @@ redesign/           設計討論紀錄
 
 ## lab
 
-- 照手把手附錄 A 在 `~/kafka-lab/` 自建（compose 專案 `lab`，14 台容器 + 下載機 `dl01`）。不依賴本 repo 的任何檔案。
-- 照文件實跑：`bash docs/journey-src/tools/run-full.sh customer [起始章] [結束章]`（從附錄 A 開始會先拆掉整個 lab，只留落地區 `~/kafka-lab/landing`〔`rpm/` = 基底、`rpm-target/` = 目標、`bank/` = 兩個 JDK〕和 OS 內容的下載快取 `bank-os/`）。
+- 照手把手第 0 章在 `~/kafka-lab/` 自建（compose 專案 `lab`，14 台容器 + 下載機 `dl01`）。不依賴本 repo 的任何檔案。
+- 照文件實跑：`bash docs/journey-src/tools/run-full.sh customer [起始章] [結束章]`（從第 0 章開始會先拆掉整個 lab，只留落地區 `~/kafka-lab/landing`〔`rpm/` = 基底、`rpm-target/` = 目標、`bank/` = 兩個 JDK〕和 OS 內容的下載快取 `bank-os/`）。
 - 照腳本實跑：`bash install/lab/run-customer.sh`（從零跑整條主線：裝 8.2.4／9.6、驗收、遷移到 8.3.2／JDK 25、OS 更新到 9.8、再驗收；升級不再是另一個演練）。
 
 ## 日常維運：操作機上的 OP menu

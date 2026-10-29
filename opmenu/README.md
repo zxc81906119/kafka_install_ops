@@ -108,3 +108,13 @@ bash ~/install/lab/opmenu-hostkey-test.sh # lab:私鑰檔缺少時被擋、sudoe
 ```
 
 lab 實測紀錄見 `redesign/README.md` 第 13 節與 `.claude/state/log/`。
+
+## 交付
+
+手把手第 16.3 節的讀者**不需要這個 git 專案**：選單以交付物送出。交付手冊時在外網端執行
+
+```bash
+bash opmenu/package.sh <輸出目錄>
+```
+
+產出 `opmenu-<日期>.<內容雜湊>.tar.gz` 與 `SHA256SUMS` 兩個檔（不含 `tests/`），和手冊一起交給客戶；客戶照 16.3 複製進落地區、核對雜湊、經第 3 章送進操作機。

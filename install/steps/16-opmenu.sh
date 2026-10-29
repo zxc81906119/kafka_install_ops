@@ -20,7 +20,7 @@ source "$INSTALL_DIR/lib/ssh.sh"
 source "$INSTALL_DIR/lib/render.sh"
 if [ "$OPMENU" != 1 ]; then log "OPMENU=$OPMENU：略過第 16 站"; exit 0; fi
 export JAVA_HOME=/opt/java/current
-OPMENU_PACKAGE_DIR=$LANDING/tools/opmenu      # 手把手 16.3 在外網端打的包，隨落地區送進來
+OPMENU_PACKAGE_DIR=$LANDING/tools/opmenu      # 手把手 16.3：我方交付的 opmenu-*.tar.gz＋SHA256SUMS（opmenu/package.sh 產生），隨落地區送進來
 JOURNAL_LINES=200                             # 選單看日誌固定要這個行數（opmenu/lib/hosts.sh 的 _JOURNAL_LINES）；sudoers 要逐字相符，兩邊一起改
 
 # 以某個 AD 身分非互動執行選單（試跑用）。正式環境維運人員是互動登入，自己輸入 AD 帳密。
