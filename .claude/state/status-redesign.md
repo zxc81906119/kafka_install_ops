@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-29 23:15（lab 使用中：exporter 1.7.0 實測，kb01 已換 1.7.0＋環境變數密碼，其他台仍 1.0.1）
+Updated: 2026-10-30 00:35（**lab 使用中**：手冊從第 0 章完整實跑 run-full.sh customer，紀錄 ~/kafka-lab-runs/run-customer-0-end-<時間>.log，結束碼 ~/kafka-lab-runs/run-full-0-B.rc）
 
 ## 現在在做什麼
 手冊實跑收尾、28.6、C3 Streams／RocksDB 監控都做完並 commit；下一項是腳本版從零再跑一次。
@@ -22,7 +22,7 @@ Updated: 2026-10-29 23:15（lab 使用中：exporter 1.7.0 實測，kb01 已換 
 
 ## 下一步（依序）
 1. ~~腳本版從零再跑一次~~ **通過**（23:00，rc 0；34 段、7×42/42、遷移與 OS 9.8 期間流量 0 遺失；途中修 02 站 SHA256SUMS、16 站 bob 檢查、KafkaProduceLatencyHigh）。
-2. JMX exporter 升 1.7.0＋keystore 密碼改環境變數（使用者定案）。已測：1.7.0 只在 GitHub release（Maven Central 舊座標停在 1.0.1），sha256＋GPG（Doug Hoard，指紋 90E3CDDECF99D81C0309D74CCADDBDF51122242E，keys.openpgp.org）都過；`keyStore.password: ${JMX_KEYSTORE_PASSWORD}` 可用（EnvironmentFile /etc/confluent/jmx-exporter.env 0600，ps 看不到）。逐 topic 指標一度「消失」是 kb01 重啟後還不是 leader，不是版本問題（cache 實驗已還原）。**待做**：leader 回來後公平比對 kb01（1.7.0）與 kb02（1.0.1）的名稱、條數、抓取時間 → 沒差異就改手冊 2.x（GitHub 下載、sha256、GPG 指紋）、17.1、17.3（環境檔＋drop-in）、其他寫死 1.0.1 的地方、腳本 02／17、site.env → 照手冊重跑 2（下載塊）、17、B → 重建 docx、commit。有差異就停下來問使用者。
+2. ~~JMX exporter 升 1.7.0＋keystore 密碼改環境變數~~ **做完**：手冊 2、3、17、B 照打全過（10 台 1.7.0、env=600、B.1 覆蓋率不變）；腳本 02／17 站已改（下一次腳本版從零跑會驗）。
 3. **必做（使用者：很在乎手冊正確性）**：1、2 都 commit 後，用最新手冊從第 0 章完整跑到 B（run-full.sh customer，會拆 lab 重建）；失敗就修手冊、從該章續跑；跑完用 cmp-out（數字正規化）＋ cmp-num（保留數字）逐塊比對 out，修值、重建 docx、commit，給使用者完整報告。
 - 待使用者決定／回覆銀行：換金鑰週期；dashboard job label；docs/evidence 版控；omnibus 正式值；銀行有沒有 Kafka Streams 應用。
 

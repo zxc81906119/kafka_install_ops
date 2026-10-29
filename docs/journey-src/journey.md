@@ -788,7 +788,7 @@ cd /out && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "too
 ```
 
 ```out
-72 SHA256SUMS
+73 SHA256SUMS
 ```
 
 22 個 RPM（基底 11、目標 11）、1 個 jar、2 把公鑰、48 個官方監控檔（含 `COMMIT`）（JDK 是銀行的檔案，有自己的 sha256，不列在這裡）。這份 `SHA256SUMS` 之後每一關都會再用一次。下載機的工作到此結束。
@@ -820,7 +820,7 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/
 ```
 
 ```out
-83
+84
 6.9G	/root/landing
 ```
 
@@ -837,7 +837,7 @@ cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) f
 ```
 
 ```out
-72 files OK
+73 files OK
 ```
 
 接著再驗一次原廠簽章。`rpm -K` 只認 rpm 資料庫裡的公鑰，所以先把隨包送進來的公鑰匯入（22 個 RPM 都要是 `digests signatures OK`）：
@@ -3501,10 +3501,10 @@ for f in controller broker rest c3; do printf '%-11s %4d 行  httpServer=%s lowe
 
 ```out
 官方規則版本：f376263fc6d7
-controller   158 行  httpServer=1 lowercaseOutputName=1
-broker       436 行  httpServer=1 lowercaseOutputName=1
-rest          54 行  httpServer=1 lowercaseOutputName=1
-c3           133 行  httpServer=1 lowercaseOutputName=1
+controller   159 行  httpServer=1 lowercaseOutputName=1
+broker       437 行  httpServer=1 lowercaseOutputName=1
+rest          55 行  httpServer=1 lowercaseOutputName=1
+c3           134 行  httpServer=1 lowercaseOutputName=1
 ```
 
 官方規則版本記在 `COMMIT`，換版本（重新下載官方檔）要重做這一步並重新驗證 dashboard。
@@ -3524,16 +3524,16 @@ JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) &&
 ```
 
 ```out
-kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 158 lines env=600
-kc02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 158 lines env=600
-kc03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 158 lines env=600
-kb01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
-kb02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
-kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
-kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
-rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 54 lines env=600
-rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 54 lines env=600
-c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 133 lines env=600
+kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 159 lines env=600
+kc02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 159 lines env=600
+kc03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 159 lines env=600
+kb01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
+kb02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
+kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
+kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
+rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 55 lines env=600
+rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 55 lines env=600
+c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 134 lines env=600
 ```
 
 > 陷阱：落地區的檔案是唯讀的（第 3 章 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
