@@ -3403,7 +3403,7 @@ kb04: full sudo back (change window)
 | controller（kc01–03） | Confluent 官方 `kafka_controller.yml` | KRaft：controller 指標（`ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount` …）、JVM（raft 指標在三台 controller 的叢集裡沒有，見 B.2）|
 | broker（kb01–04） | Confluent 官方 `kafka_broker.yml` | topic／partition／replica、request 延遲、ISR、網路與 request handler 執行緒、quota、JVM（序列數隨 topic 與 partition 數成長，3 個 partition 的 lab 約 2.2 萬條） |
 | REST Proxy（rest01–02） | Confluent 官方 `confluent_rest.yml` | Jetty 與每個 REST endpoint 的請求率、錯誤率、延遲，JVM |
-| Control Center（c3-01） | **我方自己寫的小規則**（官方沒有給 C3 的 exporter 設定） | JVM、Kafka Streams 狀態（`client_state`、執行緒數）、Jetty 請求率。C3 的 JVM 另外有上萬條 MBean（每個 REST endpoint、每個 RocksDB store 一串），全是雜訊，所以只放行上面幾項 |
+| Control Center（c3-01） | **我方的開頭幾條＋官方 `kafka_streams.yml` 的規則**（官方沒有給 C3 本身的 exporter 設定） | JVM、Kafka Streams（client、thread、task、處理節點）、RocksDB state store（`AlertHistoryStore`、`commander`）、Jetty 請求率，約 2,100 條，名稱和官方 Streams／RocksDB dashboard 對得上。不收 C3 自己的 consumer／producer 與每個 REST endpoint（上萬條） |
 
 ## 17.1 抓取密碼與設定檔
 
@@ -3449,35 +3449,48 @@ Dashboard 是照 Confluent 官方 exporter 規則產生的指標名稱寫的，�
 
 兩個細節：官方檔第一行是 YAML 文件分隔線 `---`，接在標頭後面會變成第二份文件，所以拿掉；官方檔自己帶 `startDelaySeconds: 120`（controller、broker 重啟後前兩分鐘 7071 回 200 但沒有指標）。
 
-C3 沒有官方規則，我們寫一份小的（`rules-c3.yml`）。整段貼到 EOF；最後每個角色一行，`httpServer=1`、`lowercaseOutputName=1` 代表標頭和規則都接上了：
+C3 本身沒有官方規則，但它是一個 Kafka Streams 應用程式：只收 `kafka.streams:*`，規則用官方的 `kafka_streams.yml`（2.4 節帶進來的），前面放我們自己的幾條（`rules-c3.yml`）。原因：C3 的 `stream-metrics`、`stream-thread-metrics` MBean 多帶一個 `process-id`，官方規則會把那個 UUID 拼進指標名稱（每次重啟名稱就變，告警寫不了），所以 `client-state`、`thread-state` 由我們先命名；`stream-topic-metrics` 有四個 key，官方規則會把 `processor-node-id` 塞進 `task_id`。exporter 用第一條比對到的規則，所以順序要對。整段貼到 EOF；最後每個角色一行，`httpServer=1`、`lowercaseOutputName=1` 代表標頭和規則都接上了：
 
 ```bash
 cd ~/monitoring && rm -f alert-rules.yml ca.pem prometheus-scrape.yml rules-kafka.yml rules-rest.yml rules-jvm.yml scrape.pass
 R=~/landing/monitoring/jmx-monitoring-stacks/shared-assets/jmx-exporter && echo "官方規則版本：$(cut -c1-12 ~/landing/monitoring/jmx-monitoring-stacks/COMMIT)" && for x in controller:kafka-internal:kafka_controller broker:cp-server:kafka_broker rest:cp-server:confluent_rest; do role=${x%%:*}; rest=${x#*:}; ks=${rest%%:*}; rules=${rest#*:}; (umask 077; { cat ~/monitoring/jmx-header-$ks.yml; sed '1{/^---$/d}' $R/$rules.yml; } > ~/monitoring/jmx-$role.yml); done
 cat > ~/monitoring/rules-c3.yml <<'EOF'
-# Control Center: Confluent has no official exporter rules for it, so this is our own, deliberately small.
-# C3 is a Kafka Streams application with a Jetty/Jersey front end; its JVM exposes thousands of MBeans (one per REST endpoint,
-# per RocksDB store, per client), most of them noise. Only what an alert can use is kept:
-#   jvm_*, process_*   built in (heap, GC, threads, open file descriptors)
-#   Kafka Streams state: client_state (0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR), alive / failed threads
+# Control Center: a Kafka Streams application (Confluent has no exporter rules for C3 itself).
+# Kafka Streams and RocksDB: Confluent's official kafka_streams.yml rules are appended below this head (same metric names as the
+# official kafka-stream.json / kafka-streams-rocksdb.json dashboards); only kafka.streams:* is collected, not C3's own consumers/producers.
+# About 2,000 series in the lab (C3 2.6.1: 13 stream threads, 12 tasks, state stores AlertHistoryStore and commander).
+# Our rules come first (the exporter uses the first rule that matches):
+#   client-state, recording-level, thread-state: C3's stream-metrics and stream-thread-metrics beans also carry process-id; the official rules would put that UUID into the
+#     metric name (a new name after every restart), so they are named here: client-state 0 CREATED, 1 REBALANCING, 2 RUNNING,
+#     3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR; thread-state 4 RUNNING, 6 DEAD
+#   stream-topic-metrics has four keys; the official rules would put processor-node-id into task_id
 #   Jetty: request rate and error rate in front of C3's UI and API
 lowercaseOutputName: true
 lowercaseOutputLabelNames: true
 startDelaySeconds: 0
 includeObjectNames:
-  - "kafka.streams:type=stream-metrics,*"
+  - "kafka.streams:*"
   - "kafka.rest:type=jetty-metrics"
+excludeObjectNames:
+  - "kafka.streams:type=kafka-metrics-count"
 rules:
-  # the beans carry different extra keys (application-id, process-id) in no fixed order, so only pick out client-id
-  - pattern: 'kafka.streams<.*client-id=([^,>]+).*><>(client-state|alive-stream-threads|failed-stream-threads): (.+)'
+  - pattern: 'kafka.streams<type=stream-metrics.*client-id=([^,>]+).*><>(client-state|recording-level): (.+)'
     name: kafka_streams_stream_metrics_$2
     type: GAUGE
     labels: { client_id: "$1" }
+  - pattern: 'kafka.streams<type=stream-thread-metrics.*thread-id=([^,>]+).*><>(thread-state): (.+)'
+    name: kafka_streams_stream_thread_metrics_$2
+    type: GAUGE
+    labels: { thread_id: "$1" }
+  - pattern: 'kafka.streams<type=stream-topic-metrics, thread-id=(.+), task-id=(.+), processor-node-id=(.+), topic=(.+)><>(.+):'
+    name: kafka_streams_stream_topic_metrics_$5
+    type: GAUGE
+    labels: { thread_id: "$1", task_id: "$2", processor_node_id: "$3", topic: "$4" }
   - pattern: 'kafka.rest<type=jetty-metrics><>(request-rate|request-error-rate): (.+)'
     name: kafka_rest_jetty_metrics_$1
     type: GAUGE
 EOF
-(umask 077; cat ~/monitoring/jmx-header-cp-server.yml ~/monitoring/rules-c3.yml > ~/monitoring/jmx-c3.yml)
+(umask 077; { cat ~/monitoring/jmx-header-cp-server.yml ~/monitoring/rules-c3.yml; sed -n '/^rules:/,$p' $R/kafka_streams.yml | tail -n +2; } > ~/monitoring/jmx-c3.yml)
 for f in controller broker rest c3; do printf '%-11s %4d 行  httpServer=%s lowercaseOutputName=%s
 ' $f $(wc -l < ~/monitoring/jmx-$f.yml) $(grep -c '^httpServer:' ~/monitoring/jmx-$f.yml) $(grep -c '^lowercaseOutputName: true' ~/monitoring/jmx-$f.yml); done
 ```
@@ -3487,7 +3500,7 @@ for f in controller broker rest c3; do printf '%-11s %4d 行  httpServer=%s lowe
 controller   158 行  httpServer=1 lowercaseOutputName=1
 broker       436 行  httpServer=1 lowercaseOutputName=1
 rest          54 行  httpServer=1 lowercaseOutputName=1
-c3            36 行  httpServer=1 lowercaseOutputName=1
+c3           133 行  httpServer=1 lowercaseOutputName=1
 ```
 
 官方規則版本記在 `COMMIT`，換版本（重新下載官方檔）要重做這一步並重新驗證 dashboard。
@@ -3516,7 +3529,7 @@ kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
 kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
 rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 54 lines
 rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 54 lines
-c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 36 lines
+c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 133 lines
 ```
 
 > 陷阱：落地區的檔案是唯讀的（第 3 章 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
@@ -3615,7 +3628,7 @@ CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kc01 kc02 kc03 kb01 
 kc01    anon=401 metrics=1067
 kb01    anon=401 metrics=12017
 rest01  anon=401 metrics=1498
-c3-01   anon=401 metrics=101
+c3-01   anon=401 metrics=2115
 （10 行，匿名都是 401；controller 約 1,000、REST 約 1,500、C3 約 100 個 kafka_／jvm_ 指標，broker 依 partition 數而定）
 ```
 
@@ -3680,13 +3693,14 @@ echo "scrape-confluent.yml: $(grep -c job_name ~/monitoring/to-bank/prometheus/s
 scrape-confluent.yml: 4 個 job
 ```
 
-**告警規則**：19 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，對應 omnibus 規格裡的 ProblemImpact 欄位）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
+**告警規則**：22 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，對應 omnibus 規格裡的 ProblemImpact 欄位）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
 
 - 官方 `broker-alerts.yml` 有兩條「Broker IO Activity」用的是一個永遠小於 1 的 control-plane 指標，等於測試規則，不收；改用 request handler 的一分鐘平均閒置率。
 - 官方的 `UncleanLeaderElectionsPerSec` 在 exporter 裡是累計次數，`> 0` 一旦發生過就永遠成立，改成看 10 分鐘內的增量。
 - 官方的 `high_load` 要 node exporter，我們沒有；主機層的 CPU、磁碟請用銀行既有的主機監控。
 - controller 的規則（`ActiveControllerCount`、offline partitions）限定 `job="kafka-controller"`；`for` 從 10 秒放寬到 1 分鐘，不然 controller 重啟會叫人。
-- KRaft 另加：metadata 落後、metadata 錯誤、leader 頻繁更換（「沒有 leader」由 `KafkaActiveControllerCountNotOne` 涵蓋）。REST Proxy、C3 各加兩條，都只用 lab 驗過存在的指標。
+- KRaft 另加：metadata 落後、metadata 錯誤、leader 頻繁更換（「沒有 leader」由 `KafkaActiveControllerCountNotOne` 涵蓋）。REST Proxy 加兩條，C3 加五條（Streams 停了、thread 掛了、thread 不再 poll、RocksDB 背景錯誤、丟棄紀錄），都只用 lab 驗過存在的指標。
+- 照 `max by (instance)` 聚合的規則都多帶 `hostname`（`by (instance, hostname)`），不然 summary 裡的 `{{ $labels.hostname }}` 會是空的。
 
 整段貼到 EOF：
 
@@ -3764,7 +3778,7 @@ groups:
           description: "Replicas left the ISR of {{ $labels.env }} in the last 15 minutes and none rejoined. A follower cannot keep up: check broker disks, network and replica.lag.time.max.ms."
       # source: ours (the official rules for this are a test rule on a control-plane metric that is always below 1); the one-minute rate of the request handler pool is a real 0..1 idle ratio
       - alert: KafkaRequestHandlerBusy
-        expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate{job="kafka-broker"}) < 0.3
+        expr: avg by (instance, hostname) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate{job="kafka-broker"}) < 0.3
         for: 10m
         labels: { severity: warning, impact: SERVICE }
         annotations:
@@ -3772,7 +3786,7 @@ groups:
           description: "Request handler threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes ({{ $value | humanizePercentage }} idle). The broker is close to saturation: look at request rate, disk latency, num.io.threads."
       # source: confluent (network processor idle ratio)
       - alert: KafkaNetworkProcessorBusy
-        expr: avg by (instance) (kafka_network_socketserver_networkprocessoravgidlepercent{job="kafka-broker"}) < 0.3
+        expr: avg by (instance, hostname) (kafka_network_socketserver_networkprocessoravgidlepercent{job="kafka-broker"}) < 0.3
         for: 10m
         labels: { severity: warning, impact: SERVICE }
         annotations:
@@ -3780,7 +3794,7 @@ groups:
           description: "Network processor threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes. Check connection counts and num.network.threads."
       # source: confluent (request latency); ours: Produce p99, 500 ms
       - alert: KafkaProduceLatencyHigh
-        expr: max by (instance) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500
+        expr: max by (instance, hostname) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500
         for: 10m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
@@ -3791,14 +3805,14 @@ groups:
     rules:
       # source: ours (earlier lab work): controller applies the metadata log late
       - alert: KRaftControllerMetadataLag
-        expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
+        expr: max by (instance, hostname) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
         for: 5m
         labels: { severity: warning, impact: SERVICE }
         annotations:
           summary: "{{ $labels.hostname }}: metadata log applied {{ $value }} ms late"
           description: "{{ $labels.instance }} applies the KRaft metadata log {{ $value }} ms behind the leader for 5 minutes: the quorum is not keeping up (disk or network)."
       - alert: KRaftMetadataErrors
-        expr: max by (instance) (kafka_controller_kafkacontroller_metadataerrorcount{job="kafka-controller"}) > 0
+        expr: max by (instance, hostname) (kafka_controller_kafkacontroller_metadataerrorcount{job="kafka-controller"}) > 0
         for: 1m
         labels: { severity: critical, impact: SERVICE }
         annotations:
@@ -3815,14 +3829,14 @@ groups:
     rules:
       # source: ours: the REST Proxy exports one error-rate series per endpoint (kafka_rest_jersey_metrics_<endpoint>_request_error_rate); sum them
       - alert: RestProxyErrors
-        expr: sum by (instance) ({__name__=~"kafka_rest_jersey_metrics_.*_request_error_rate", job="rest-proxy"}) > 1
+        expr: sum by (instance, hostname) ({__name__=~"kafka_rest_jersey_metrics_.*_request_error_rate", job="rest-proxy"}) > 1
         for: 10m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: REST Proxy returns errors"
           description: "REST Proxy {{ $labels.instance }} has returned more than 1 error response per second for 10 minutes (4xx and 5xx together). Check client certificates and the broker connection."
       - alert: RestProxyThreadPoolBusy
-        expr: max by (instance) (kafka_rest_jetty_metrics_thread_pool_usage{job="rest-proxy"}) > 0.9
+        expr: max by (instance, hostname) (kafka_rest_jetty_metrics_thread_pool_usage{job="rest-proxy"}) > 0.9
         for: 10m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
@@ -3833,19 +3847,43 @@ groups:
     rules:
       # source: ours: C3 is a Kafka Streams application; client-state 0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR
       - alert: ControlCenterStreamsNotRunning
-        expr: max by (instance) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
+        expr: max by (instance, hostname) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
         for: 5m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stopped processing"
           description: "A Kafka Streams client inside Control Center {{ $labels.instance }} is in state {{ $value }} (4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR) for 5 minutes: the C3 screens show stale data. Read journalctl -u confluent-control-center."
       - alert: ControlCenterStreamThreadsFailed
-        expr: max by (instance) (kafka_streams_stream_metrics_failed_stream_threads{job="control-center"}) > 0
+        expr: max by (instance, hostname) (kafka_streams_stream_metrics{job="control-center", failed_stream_threads!=""}) > 0
         for: 1m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stream thread failed"
           description: "Control Center {{ $labels.instance }} lost {{ $value }} stream threads. Restart it after reading the log."
+      # source: ours: an idle stream thread still polls about 10 times a second (lab), so a poll rate of 0 means the thread is stuck
+      - alert: ControlCenterStreamsStalled
+        expr: min by (instance, hostname) (kafka_streams_stream_thread_metrics_poll_rate{job="control-center"}) == 0
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center stream thread stopped polling"
+          description: "At least one Kafka Streams thread inside Control Center {{ $labels.instance }} has not polled for 10 minutes: the C3 screens stop updating. Read journalctl -u confluent-control-center, then restart it."
+      # source: ours: RocksDB property metric (recording level INFO); the counter only grows, so any increase is an error
+      - alert: ControlCenterRocksDBBackgroundErrors
+        expr: max by (instance, hostname, rocksdb_state_id) (delta(kafka_streams_stream_state_metrics_background_errors{job="control-center"}[15m])) > 0
+        for: 0m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center state store {{ $labels.rocksdb_state_id }} had RocksDB errors"
+          description: "RocksDB background errors (flush or compaction) in state store {{ $labels.rocksdb_state_id }} of Control Center {{ $labels.instance }} in the last 15 minutes. Check the disk of c3-01 (full or read-only) and the C3 log."
+      # source: ours: task-level dropped-records (recording level INFO): records C3 could not process (deserialization, expired windows)
+      - alert: ControlCenterDroppedRecords
+        expr: sum by (instance, hostname) (kafka_streams_stream_task_metrics_dropped_records_rate{job="control-center"}) > 0
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center is dropping records"
+          description: "Control Center {{ $labels.instance }} has been dropping {{ $value }} records per second for 10 minutes: some monitoring data will be missing from the C3 screens. Read the C3 log for the reason."
 
   - name: jvm
     rules:
@@ -3869,7 +3907,7 @@ echo "confluent-alerts.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/pro
 ```
 
 ```out
-confluent-alerts.yml: 19 條規則
+confluent-alerts.yml: 22 條規則
 ```
 
 **Alertmanager 設定**：兩個 webhook receiver 示範兩種格式，銀行留一種、刪另一種。
@@ -4086,7 +4124,7 @@ kafka-broker      up 4 / 4
 kafka-controller  up 3 / 3
 rest-proxy        up 2 / 2
 合計 up 10 / 10
-告警規則 19 條，載入有錯 0 條
+告警規則 22 條，載入有錯 0 條
 Prometheus 看到的 Alertmanager: ['http://lab-mon-alertmanager:9093/api/v2/alerts']
 Grafana dashboard: 32 個
 {"details":{"application":"Prometheus","features":{"rulerApiEnabled":false}},"message":"Successfully queried the Prometheus API.","status":"OK"}
@@ -5210,7 +5248,7 @@ EOF
 chmod 0700 ~/conf/rolling-restart.sh && echo rolling-restart.sh ok
 ```
 
-我方的信任清單：truststore 加一個 alias `bank-root-g2`；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
+我方的信任清單：truststore 加一個 alias `bank-root-g2`；17.5 交給銀行的 `to-bank/prometheus/ca.pem` 也一起換（之後重新交付 `to-bank/` 才不會把舊根帶回去，Prometheus 會全部抓不到）；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -5226,7 +5264,7 @@ Prometheus target up：10 / 10（約 70 秒）
 @role 小安 | ops02 | root
 
 ```bash
-cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g2 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
+cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g2 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
 ```
 
 ```out
@@ -5506,7 +5544,7 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 
 @role 小安 | ops02 | root
 
-truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem 只留新根，派送、滾動重啟：
+truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem、`to-bank/prometheus/ca.pem` 只留新根，派送、滾動重啟：
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -5522,7 +5560,7 @@ Prometheus target up：10 / 10（約 70 秒）
 @role 小安 | ops02 | root
 
 ```bash
-cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && keytool -delete -alias bank-root -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass && echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
+cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && keytool -delete -alias bank-root -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass && echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
 ```
 
 ```out
@@ -5666,7 +5704,7 @@ Prometheus target up：10 / 10（約 70 秒）
 @role 小安 | ops02 | root
 
 ```bash
-cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g3 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
+cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g3 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
 ```
 
 ```out
@@ -5916,7 +5954,7 @@ Prometheus target up：10 / 10（約 70 秒）
 @role 小安 | ops02 | root
 
 ```bash
-cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && keytool -delete -alias bank-root-g2 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass && echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
+cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && keytool -delete -alias bank-root-g2 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass && echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
 ```
 
 ```out
@@ -6176,7 +6214,7 @@ print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".j
 ```out
 SUCCESS
 cert-expiry target up 24 / 24
-告警規則 22 條（cert-expiry、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+告警規則 25 條（cert-expiry、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
 ```
 
 每個端點真的探到了什麼：剩幾天、哪一張（Grafana 做一張表就是同一個查詢）：
@@ -6705,7 +6743,7 @@ print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".j
 ```
 
 ```out
-告警規則 24 條（cert-expiry、kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+告警規則 27 條（cert-expiry、kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
 ```
 
 > lab 沒有 node_exporter，`KafkaDataDiskFillingUp` 的查詢永遠是空的，規則載入正常但不會響；`KafkaLogDirOffline` 的指標四台 broker 都有（24.1 查過是 0）。磁碟真的壞掉沒辦法在 lab 演，這一條靠規則載入與指標存在來確認。
@@ -7368,7 +7406,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 | 人員登不進 MDS／選單（HTTP 401；AD 636 不通） | `openssl s_client -connect ad01.poc.lab:636`；broker 日誌 `LdapException`；`svc-mds-bind` 密碼是否被 AD 換了 | AD 不通：應用程式（SCRAM／憑證）不受影響，等 AD；非得動平台用 `kafka-admin` 緊急帳號（11.2）；密碼換了：更新密文、滾動重啟（15 章） | 11.2 |
 | 憑證過期或快過期（client 看到 `certificate has expired`、`SSLHandshakeException`） | 選單 17（各端點實際出示的憑證到期日）；`openssl s_client … \| openssl x509 -enddate` | 21 章換發（leaf／CA／鏈三種）；truststore 裡的 CA 也會過期 | 21、22 |
 | REST Proxy 經 LB 失敗（`RestProxyErrors`；client 回 502／503） | 單台 `curl https://rest0N:8082/v3/clusters` 分出 LB 還是 REST；LB 的 pool member 狀態；client 憑證對不對（REST 只收憑證） | 單台壞：選單 22 重啟那台；LB：請 LB 團隊（12.1） | 12.1 |
-| C3 畫面空白或是舊資料（`ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed`） | `journalctl -u confluent-control-center`；是不是 broker 剛全部重啟過（C3 比 MDS 先起來會卡住，14.3） | 選單 22 重啟 C3；它的內建 Prometheus 滿了會讓畫面慢（13 章 `METRICS_RETENTION_DAYS`） | 13、14.3 |
+| C3 畫面空白或是舊資料（`ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed`、`ControlCenterStreamsStalled`；`ControlCenterRocksDBBackgroundErrors` 先看 c3-01 的磁碟） | `journalctl -u confluent-control-center`；是不是 broker 剛全部重啟過（C3 比 MDS 先起來會卡住，14.3） | 選單 22 重啟 C3；它的內建 Prometheus 滿了會讓畫面慢（13 章 `METRICS_RETENTION_DAYS`） | 13、14.3 |
 | 磁碟滿或快滿（`KafkaDataDiskFillingUp`、`KafkaLogDirOffline`） | 24.1：哪台、哪個 topic | 24.3：縮 retention、搬 partition、擴容 | 24 |
 | MDS 起不來（broker `active` 但 8090／9094 不開；10 分鐘後 `Authorizer did not start up within the timeout` 自殺、systemd 再拉起） | journal 停在 `Waiting for all of the authorizer futures`；**真正的原因在 `/var/log/kafka/metadata-service.log`**（MDS 的 log4j2 appender 另外寫檔）：`LDAP search failed … error code 49 … data 52e` = `svc-mds-bind` 密碼和 AD 不一致（20.4 換密碼時密文 key 名對不上也會這樣） | 對齊密碼（20.4 的更新方式）、派送、重啟；全部 broker 都卡住就四台一起停、一起起 | 14.1、20.4 |
 | 應用程式被拒（`TopicAuthorizationException`、`SaslAuthenticationException`） | 選單 41 看該帳號的權限；選單 45 查稽核日誌誰被拒 | 權限：選單 42；密碼錯：20.6 換閒置帳號再切 | 18、20.6 |
@@ -8545,7 +8583,7 @@ confluent-rbac.json                    10      7
 debezium-connectors.json               34      0  
 flink-jobmanager.json                  27      0  
 flink-taskmanager.json                 52      0  
-globalktable.json                      24      4  
+globalktable.json                      24     14  
 kafka-cluster-kraft.json               80     67  
 kafka-cluster.json                     87     64  
 kafka-connect-cluster.json             54      0  
@@ -8553,8 +8591,8 @@ kafka-consumer.json                    25      3
 kafka-lag-exporter.json                 9      3  
 kafka-producer.json                    32      3  
 kafka-quotas.json                       6      0  
-kafka-stream.json                      27      0  
-kafka-streams-rocksdb.json             40      0  
+kafka-stream.json                      27     26  
+kafka-streams-rocksdb.json             40     39  
 kafka-topics-kraft.json                13     13  
 kafka-topics.json                      12     10  
 kafka-transaction-coordinator.json     10      0  
@@ -8567,10 +8605,10 @@ rest-proxy.json                        10     10
 schema-registry-cluster.json           12      0  
 tiered-storage.json                     8      3  
 zookeeper-cluster.json                 11      0  
-合計 32 個 dashboard、816 個 panel、221 個有資料
+合計 32 個 dashboard、816 個 panel、296 個有資料
 ```
 
-怎麼讀這張表（這是**安裝基底**——Confluent Server 8.2.4、C3 2.5.1——在 3 台 controller、4 台 broker、2 台 REST Proxy、1 台 C3 的完整 lab 上實測的結果，當時第 18 章的稽核還沒開。exporter 規則版本無關，但哪些 MBean 有資料以實際為準，遷移完成後（29.10）再跑一次 17.7、B.1 對照；**Tiered Storage 沒開，要在正式叢集上補驗**）：
+怎麼讀這張表（2026-10-29 在**遷移完成後**的 lab 實測——Confluent Server 8.3.2、C3 2.6.1，3 台 controller、4 台 broker、2 台 REST Proxy、1 台 C3，第 18 章的稽核已開。和安裝基底 8.2.4／C3 2.5.1 時量的比，只有 C3 Streams 那三張變了（17.2 改收 Kafka Streams），其餘各列相同；**Tiered Storage 沒開，要在正式叢集上補驗**）：
 
 | dashboard（檔名） | 有資料／總數 | 判讀 |
 |---|---|---|
@@ -8586,7 +8624,7 @@ zookeeper-cluster.json                 11      0
 | `cluster-linking.json`、`tiered-storage.json` | 12／19、3／8 | 沒開這兩個功能，有值的是不分功能的計數（多數是 0） |
 | `kafka-quotas.json` | 0／6 | **未驗證**。要有 quota 設定才有 `kafka_server_produce_byte_rate`；lab 這次的測試叢集沒設 quota（正式叢集依 `conf/apps.txt` 設了，應該有值） |
 | `confluent-rbac.json` | 7／10 | **大部分可用**。MDS 與 RBAC 開著，授權相關的計數有值；其餘 3 個沒有查明原因 |
-| `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 0／27、4／24、0／40 | **空**。這幾張看應用程式的 Kafka Streams。C3 本身是 Streams 應用，但我們只放行它的 `client_state` 與執行緒數，沒有放 RocksDB／處理率，所以這幾張對 C3 也是空的。C3 是管理工具，監控只看它活著、Streams 在跑（2026-10-29 定案，不擴充 C3 的指標；真要看 RocksDB 得改 `rules-c3.yml`，序列數會到好幾千） |
+| `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 26／27、14／24、39／40 | **C3 自己的 Kafka Streams**（17.2：C3 收 `kafka.streams:*`，套官方 `kafka_streams.yml` 規則，約 2,100 條序列）。選 `job=control-center` 就看到 C3 的 thread、task、RocksDB store（`AlertHistoryStore`、`commander`）。空的兩個 panel 用 `task_created_total`、`number_file_errors_total`：JMX exporter 1.x 會把 gauge 名稱結尾的 `_total` 拿掉（OpenMetrics 規定 `_total` 只給 counter），官方 dashboard 還用舊名。globalktable 空的 10 個是 C3 沒有用到的 GlobalKTable、cache 類指標。銀行自己的 Streams 應用程式接上同一份規則，這幾張也能看 |
 | `kafka-connect-cluster.json`、`confluent-oracle-cdc.json`、`mongo.json`、`debezium-connectors.json`、`replicator.json` | 全 0 | **空**。沒有 Connect |
 | `ksqldb-cluster.json`、`schema-registry-cluster.json` | 0／38、0／12 | **空**。沒有 ksqlDB、Schema Registry |
 | `flink-jobmanager.json`、`flink-taskmanager.json`、`librdkafka-application.json`、`OTel_kafkametrics.json`、`zookeeper-cluster.json` | 全 0 | **空**。沒有 Flink、librdkafka 應用、OTel kafkametrics 來源、ZooKeeper |

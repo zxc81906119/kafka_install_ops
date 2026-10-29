@@ -534,9 +534,13 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - **第 30 章保險**：30.1 比對套件庫 release 套件的主版本；lab 用 dl01 對 Rocky 10 公開倉庫證明會停（問題清單 3.6）。
 - **教訓（2026-10-29 事故）**：20.4 用錯 Secret Protection 的密文 key 名（`kb01.server.properties` vs 腳本版的 `kb01.properties`），broker 靠群組快取撐到重啟才爆成 `Waiting for all of the authorizer futures` → 10 分鐘自殺循環，連鎖讓整個 MDS 層卡死。真相只在 `/var/log/kafka/metadata-service.log`。已統一命名（第 15 站依角色 `<主機>.server.properties` 等）、20.4 改從設定檔的參照讀 key 名、28 章指到正確的日誌。
 
-### C3 的監控維持精簡（2026-10-29 定案）
+### C3 的監控：收 Kafka Streams 與 RocksDB（2026-10-29 定案，取代當天稍早的「維持精簡」）
 
-- 使用者：C3 是管理用，不用太在意。C3 的 JMX exporter 維持我方的小規則（`jmx-rules-c3.yml`：JVM、Streams `client_state`／執行緒、Jetty 請求率），不放行 RocksDB 與 Streams 處理細項；附錄 B 裡 Streams／RocksDB dashboard 對 C3 是空的屬預期。告警只留 `ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed` 與共用的 JVM 規則。
+- 使用者先說 C3 是管理用不用太在意，之後改口：照官網與其他資料加上建議的監控。
+- exporter：只收 `kafka.streams:*`（加 Jetty），規則＝我方開頭幾條＋官方 `kafka_streams.yml` 的 rules（名稱對得上官方 `kafka-stream.json`、`kafka-streams-rocksdb.json`）。不收 C3 自己的 consumer／producer、REST endpoint（上萬條）。lab 實測（C3 2.6.1）約 2,100 條：RocksDB 1,092（`AlertHistoryStore`、`commander`）、thread 403、task 247；以前寫的「好幾千條」不對。
+- 官方規則對 C3 的兩個坑（lab 實證）：`stream-metrics`、`stream-thread-metrics` 多帶 `process-id`，官方規則把 UUID 拼進名稱（`kafka_streams_stream_metrics_process_id_<uuid>_..._client_state`，每次重啟換名）→ `client-state`、`recording-level`、`thread-state` 由我方先命名；`stream-topic-metrics` 四個 key，官方把 `processor-node-id` 塞進 `task_id` → 我方一條。
+- 告警（control-center 群組 5 條）：StreamsNotRunning（client_state ≥ 4）、StreamThreadsFailed（改用官方的 `failed_stream_threads` label）、**StreamsStalled**（thread 的 poll_rate = 0 十分鐘；閒置也約每秒 10 次）、**RocksDBBackgroundErrors**（15 分鐘內增加）、**DroppedRecords**（task 的丟棄率 > 0 十分鐘）。用的都是 recording level INFO 的指標（官方文件：RocksDB 屬性類指標、dropped-records 是 INFO）。
+- 順帶修：`max by (instance)` 聚合的規則都改 `by (instance, hostname)`，否則 summary 的 hostname 是空的。
 
 ### OP menu 與 MDS／AD 的關係、token 自動換新（2026-10-29）
 

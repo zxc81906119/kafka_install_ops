@@ -244,6 +244,10 @@ trust_sync() {
   if [ -d /etc/opmenu/ssl ]; then
     install -m 0644 "$CERTS_DIR/truststore.p12" /etc/opmenu/ssl/truststore.p12 && install -m 0644 "$CERTS_DIR/bank-root.pem" /etc/opmenu/ssl/ca.pem && ok "OP menu 的 truststore、ca.pem 已同步"
   fi
+  # 17.5 交給銀行的 to-bank/prometheus/ca.pem 也要跟著換：之後重新交付 to-bank/ 時才不會把舊根帶回去（Prometheus 會全部抓不到）
+  if [ -d "$MONITORING_DIR/to-bank/prometheus" ]; then
+    install -m 0644 "$CERTS_DIR/bank-root.pem" "$MONITORING_DIR/to-bank/prometheus/ca.pem" && ok "to-bank/prometheus/ca.pem 已同步（$root_count 張根）"
+  fi
   [ "$FAIL_COUNT" = 0 ] || die "派送失敗，不重啟"
   rolling_restart controllers brokers rests || die "滾動重啟有主機沒健康"
   ssh_run "$C3_HOST" 'for unit in prometheus alertmanager; do sudo systemctl restart $unit; done'

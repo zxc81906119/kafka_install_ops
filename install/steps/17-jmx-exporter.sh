@@ -54,10 +54,12 @@ for role_spec in controller:kafka-internal:kafka_controller broker:cp-server:kaf
   (umask 077; { cat "$MONITORING_DIR/jmx-header-$keystore.yml"; sed '1{/^---$/d}' "$OFFICIAL_RULES/$official_rules.yml"; } > "$MONITORING_DIR/jmx-$role.yml")
   log "$role：標頭 $keystore + 官方 $official_rules.yml → $(wc -l < "$MONITORING_DIR/jmx-$role.yml") 行"
 done
-# C3 沒有官方規則：我們自己的小規則（JVM 之外只放 Kafka Streams 狀態與 Jetty 請求率）
+# C3 沒有官方規則：我們的 rules-c3.yml（收 kafka.streams:* 與 Jetty；client-state 等帶 process-id 的 MBean 先自己命名）
+# 後面接官方 kafka_streams.yml 的 rules（名稱和官方 Streams／RocksDB dashboard 對得上）；不收 C3 自己的 consumer／producer
+[ -s "$OFFICIAL_RULES/kafka_streams.yml" ] || die "缺官方規則檔 kafka_streams.yml（第 2 章要帶進來）"
 cp "$TEMPLATE_DIR/jmx-rules-c3.yml" "$MONITORING_DIR/rules-c3.yml"
-(umask 077; cat "$MONITORING_DIR/jmx-header-cp-server.yml" "$MONITORING_DIR/rules-c3.yml" > "$MONITORING_DIR/jmx-c3.yml")
-log "c3：標頭 cp-server + 我們的 rules-c3.yml → $(wc -l < "$MONITORING_DIR/jmx-c3.yml") 行"
+(umask 077; { cat "$MONITORING_DIR/jmx-header-cp-server.yml" "$MONITORING_DIR/rules-c3.yml"; sed -n '/^rules:/,$p' "$OFFICIAL_RULES/kafka_streams.yml" | tail -n +2; } > "$MONITORING_DIR/jmx-c3.yml")
+log "c3：標頭 cp-server + 我們的 rules-c3.yml + 官方 kafka_streams.yml 的 rules → $(wc -l < "$MONITORING_DIR/jmx-c3.yml") 行"
 ok "4 份設定：jmx-controller.yml、jmx-broker.yml、jmx-rest.yml、jmx-c3.yml"
 
 section "17.3 派送 jar 與設定、drop-in 掛上 javaagent（7071 在7.3 節已開）"

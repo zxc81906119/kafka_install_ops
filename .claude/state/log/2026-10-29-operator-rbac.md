@@ -19,3 +19,10 @@
 - 第二輪 out 比對（數字不正規化，scratchpad cmp-num.js）：B.2 漏收 lab-mon-blackbox、17.7 舊值、21.2.3 檔數 18、25.2.3 把 NOT_LEADER 重試警告算成錯誤、27.4 bank-root.pem 變 700（改 install -m 0600）、3.2／16.3 數量。
 - build.js 新增：``` 沒成對或少了某一章就停（這次 25.2.3 多插一個 ``` 讓 run-chapter 找不到第 28 章）。
 - 我的疏失：檢查 kafka-admin 設定檔時把 truststore 密碼印到聊天（lab，只保護公開的根憑證）；之後檢查設定檔一律濾掉含 password 的行。
+
+## C3 Kafka Streams／RocksDB 監控（手動實測 → 手冊 → 腳本）
+- lab 實測：只收 kafka.streams:* 約 2,100 條（RocksDB 1,092、thread 403、task 247；store AlertHistoryStore、commander；13 條 thread、12 個 task）。
+- 官方 kafka_streams.yml 對 C3 拆錯：process-id 進了名稱（client_state、recording_level、thread_state）、stream-topic-metrics 的 task_id → rules-c3.yml 先命名，再接官方 rules。
+- 告警 control-center 5 條（新增 Stalled、RocksDBBackgroundErrors、DroppedRecords；ThreadsFailed 改用官方 failed_stream_threads label）；promtool 假資料測試 SUCCESS（scratch，不是交付物）。`by (instance)` 全改 `by (instance, hostname)`。
+- 告警條數：17 → 22、22.2 → 25、24 → 27；照手冊重跑 17、22、24、B 全過。B.1：kafka-stream 26/27、rocksdb 39/40、globalktable 14/24，合計 296/816。
+- 順帶：lab 重起監控時 Prometheus 全部 down＝to-bank/prometheus/ca.pem 還是第一代根；21.x 的四處與 21-cert-rotate.sh 現在都會同步它。

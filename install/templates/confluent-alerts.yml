@@ -70,7 +70,7 @@ groups:
           description: "Replicas left the ISR of {{ $labels.env }} in the last 15 minutes and none rejoined. A follower cannot keep up: check broker disks, network and replica.lag.time.max.ms."
       # source: ours (the official rules for this are a test rule on a control-plane metric that is always below 1); the one-minute rate of the request handler pool is a real 0..1 idle ratio
       - alert: KafkaRequestHandlerBusy
-        expr: avg by (instance) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate{job="kafka-broker"}) < 0.3
+        expr: avg by (instance, hostname) (kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate{job="kafka-broker"}) < 0.3
         for: 10m
         labels: { severity: warning, impact: SERVICE }
         annotations:
@@ -78,7 +78,7 @@ groups:
           description: "Request handler threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes ({{ $value | humanizePercentage }} idle). The broker is close to saturation: look at request rate, disk latency, num.io.threads."
       # source: confluent (network processor idle ratio)
       - alert: KafkaNetworkProcessorBusy
-        expr: avg by (instance) (kafka_network_socketserver_networkprocessoravgidlepercent{job="kafka-broker"}) < 0.3
+        expr: avg by (instance, hostname) (kafka_network_socketserver_networkprocessoravgidlepercent{job="kafka-broker"}) < 0.3
         for: 10m
         labels: { severity: warning, impact: SERVICE }
         annotations:
@@ -86,7 +86,7 @@ groups:
           description: "Network processor threads on {{ $labels.instance }} have been less than 30% idle for 10 minutes. Check connection counts and num.network.threads."
       # source: confluent (request latency); ours: Produce p99, 500 ms
       - alert: KafkaProduceLatencyHigh
-        expr: max by (instance) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500
+        expr: max by (instance, hostname) (kafka_network_requestmetrics_totaltimems{job="kafka-broker",request="Produce",quantile="0.99"}) > 500
         for: 10m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
@@ -97,14 +97,14 @@ groups:
     rules:
       # source: ours (earlier lab work): controller applies the metadata log late
       - alert: KRaftControllerMetadataLag
-        expr: max by (instance) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
+        expr: max by (instance, hostname) (kafka_controller_kafkacontroller_lastappliedrecordlagms{job="kafka-controller"}) > 30000
         for: 5m
         labels: { severity: warning, impact: SERVICE }
         annotations:
           summary: "{{ $labels.hostname }}: metadata log applied {{ $value }} ms late"
           description: "{{ $labels.instance }} applies the KRaft metadata log {{ $value }} ms behind the leader for 5 minutes: the quorum is not keeping up (disk or network)."
       - alert: KRaftMetadataErrors
-        expr: max by (instance) (kafka_controller_kafkacontroller_metadataerrorcount{job="kafka-controller"}) > 0
+        expr: max by (instance, hostname) (kafka_controller_kafkacontroller_metadataerrorcount{job="kafka-controller"}) > 0
         for: 1m
         labels: { severity: critical, impact: SERVICE }
         annotations:
@@ -121,14 +121,14 @@ groups:
     rules:
       # source: ours: the REST Proxy exports one error-rate series per endpoint (kafka_rest_jersey_metrics_<endpoint>_request_error_rate); sum them
       - alert: RestProxyErrors
-        expr: sum by (instance) ({__name__=~"kafka_rest_jersey_metrics_.*_request_error_rate", job="rest-proxy"}) > 1
+        expr: sum by (instance, hostname) ({__name__=~"kafka_rest_jersey_metrics_.*_request_error_rate", job="rest-proxy"}) > 1
         for: 10m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: REST Proxy returns errors"
           description: "REST Proxy {{ $labels.instance }} has returned more than 1 error response per second for 10 minutes (4xx and 5xx together). Check client certificates and the broker connection."
       - alert: RestProxyThreadPoolBusy
-        expr: max by (instance) (kafka_rest_jetty_metrics_thread_pool_usage{job="rest-proxy"}) > 0.9
+        expr: max by (instance, hostname) (kafka_rest_jetty_metrics_thread_pool_usage{job="rest-proxy"}) > 0.9
         for: 10m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
@@ -139,19 +139,43 @@ groups:
     rules:
       # source: ours: C3 is a Kafka Streams application; client-state 0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR
       - alert: ControlCenterStreamsNotRunning
-        expr: max by (instance) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
+        expr: max by (instance, hostname) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
         for: 5m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stopped processing"
           description: "A Kafka Streams client inside Control Center {{ $labels.instance }} is in state {{ $value }} (4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR) for 5 minutes: the C3 screens show stale data. Read journalctl -u confluent-control-center."
       - alert: ControlCenterStreamThreadsFailed
-        expr: max by (instance) (kafka_streams_stream_metrics_failed_stream_threads{job="control-center"}) > 0
+        expr: max by (instance, hostname) (kafka_streams_stream_metrics{job="control-center", failed_stream_threads!=""}) > 0
         for: 1m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stream thread failed"
           description: "Control Center {{ $labels.instance }} lost {{ $value }} stream threads. Restart it after reading the log."
+      # source: ours: an idle stream thread still polls about 10 times a second (lab), so a poll rate of 0 means the thread is stuck
+      - alert: ControlCenterStreamsStalled
+        expr: min by (instance, hostname) (kafka_streams_stream_thread_metrics_poll_rate{job="control-center"}) == 0
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center stream thread stopped polling"
+          description: "At least one Kafka Streams thread inside Control Center {{ $labels.instance }} has not polled for 10 minutes: the C3 screens stop updating. Read journalctl -u confluent-control-center, then restart it."
+      # source: ours: RocksDB property metric (recording level INFO); the counter only grows, so any increase is an error
+      - alert: ControlCenterRocksDBBackgroundErrors
+        expr: max by (instance, hostname, rocksdb_state_id) (delta(kafka_streams_stream_state_metrics_background_errors{job="control-center"}[15m])) > 0
+        for: 0m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center state store {{ $labels.rocksdb_state_id }} had RocksDB errors"
+          description: "RocksDB background errors (flush or compaction) in state store {{ $labels.rocksdb_state_id }} of Control Center {{ $labels.instance }} in the last 15 minutes. Check the disk of c3-01 (full or read-only) and the C3 log."
+      # source: ours: task-level dropped-records (recording level INFO): records C3 could not process (deserialization, expired windows)
+      - alert: ControlCenterDroppedRecords
+        expr: sum by (instance, hostname) (kafka_streams_stream_task_metrics_dropped_records_rate{job="control-center"}) > 0
+        for: 10m
+        labels: { severity: warning, impact: APPLICATION }
+        annotations:
+          summary: "{{ $labels.hostname }}: Control Center is dropping records"
+          description: "Control Center {{ $labels.instance }} has been dropping {{ $value }} records per second for 10 minutes: some monitoring data will be missing from the C3 screens. Read the C3 log for the reason."
 
   - name: jvm
     rules:
