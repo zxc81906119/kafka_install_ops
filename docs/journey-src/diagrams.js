@@ -876,7 +876,7 @@ D.rbacmodel = () => svg(800, 610, [
 D.mdsdown = () => svg(800, 470, [
   region(20, 30, 250, 330, '操作機 ops02（root）', 'gray'),
   box(36, 62, 218, 62, '選單：AD 登入', ['要先向 MDS 換 token'], 'coral'),
-  box(36, 150, 218, 74, '選單：緊急主機模式', ['OS 團隊臨時把 root 加進', 'opmenu-emergency，重新登入'], 'amber'),
+  box(36, 150, 218, 74, '選單：緊急主機模式', ['AD 登入失敗就自動進入（不看群組）', '必填原因，記 EMERGENCY_HOST'], 'amber'),
   box(36, 258, 218, 74, 'kafka-admin（SCRAM）', ['密碼在 ~/secrets/kafka-admin.pass', '用過當天照 20.2 換'], 'teal'),
   region(530, 30, 250, 330, 'broker kb01–kb04', 'blue'),
   box(546, 62, 218, 62, 'MDS 8090', ['token、role binding、AD 登入'], 'coral', { dash: true }),
@@ -887,7 +887,7 @@ D.mdsdown = () => svg(800, 470, [
   arrow(254, 295, 544, 295, '不經 MDS、不經 AD'),
   ctext(400, 120, '✕', { size: 28, bold: true, fill: '#993C1D' }),
   box(20, 380, 370, 74, '做不到的（要等 MDS 回來）', ['改 role binding、AD 人員登入選單與 C3、', '91 緊急憑證（也要向 MDS 換 token）'], 'coral'),
-  box(410, 380, 370, 74, '恢復', ['① 網路團隊開回 8090 ② OS 團隊把 root 移出群組', '③ 照 20.2 換 kafka-admin 密碼 ④ 對稽核紀錄結案'], 'gray'),
+  box(410, 380, 370, 74, '恢復', ['① 網路團隊開回 8090 ② 確認選單 AD 登入正常', '③ 照 20.2 換 kafka-admin 密碼 ④ 對稽核紀錄結案'], 'gray'),
 ].join(''));
 
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)

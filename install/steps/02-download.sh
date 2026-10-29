@@ -84,12 +84,19 @@ other_dependencies=$(rpm -qpR "$DOWNLOAD_DIR"/rpm/*.rpm "$DOWNLOAD_DIR"/rpm-targ
 if [ "$other_dependencies" = "bash glibc" ]; then ok "非 Confluent 相依只有 bash、glibc"
 else warn "非 Confluent 相依：$other_dependencies（預期只有 bash glibc，請確認）"; fi
 
-section "2.4 監控用的 jar（Maven Central 的 sha1 核對）、Confluent 官方監控規則與 dashboard、給銀行的 OS 套件清單"
+section "2.4 監控用的 jar（GitHub release，sha256＋GPG 核對）、Confluent 官方監控規則與 dashboard、給銀行的 OS 套件清單"
+# 1.1 以後的 jar 只在 GitHub release（Maven Central 的 io.prometheus.jmx 停在 1.0.1）；核對 release 附的 sha256 與 GPG 簽章（site.env 的指紋）
 JAR_NAME=jmx_prometheus_javaagent-$JMX_EXPORTER_VERSION.jar
-JAR_URL=https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/$JMX_EXPORTER_VERSION/$JAR_NAME
+JAR_URL=https://github.com/prometheus/jmx_exporter/releases/download/$JMX_EXPORTER_VERSION/$JAR_NAME
+find "$DOWNLOAD_DIR/tools" -maxdepth 1 -name 'jmx_prometheus_javaagent-*.jar' ! -name "$JAR_NAME" -delete   # 舊版留著，第 17 站會抓到兩個
 [ -f "$DOWNLOAD_DIR/tools/$JAR_NAME" ] || curl -fsSL -o "$DOWNLOAD_DIR/tools/$JAR_NAME" "$JAR_URL" || die "抓不到 $JAR_NAME"
-if [ "$(sha1sum "$DOWNLOAD_DIR/tools/$JAR_NAME" | cut -d' ' -f1)" = "$(curl -fsSL "$JAR_URL.sha1")" ]; then ok "$JAR_NAME sha1 符合 Maven Central"
-else die "$JAR_NAME sha1 不符"; fi
+curl -fsSL -o "/tmp/$JAR_NAME.sha256" "$JAR_URL.sha256" && curl -fsSL -o "/tmp/$JAR_NAME.asc" "$JAR_URL.asc" || die "抓不到 $JAR_NAME 的 .sha256／.asc"
+if [ "$(sha256sum "$DOWNLOAD_DIR/tools/$JAR_NAME" | cut -d' ' -f1)" = "$(cut -c1-64 "/tmp/$JAR_NAME.sha256")" ]; then ok "$JAR_NAME sha256 符合 release"
+else rm -f "/tmp/$JAR_NAME".*; die "$JAR_NAME sha256 不符"; fi
+if curl -fsSL "https://keys.openpgp.org/vks/v1/by-fingerprint/$JMX_EXPORTER_GPG_FPR" | gpg --import 2>/dev/null &&
+   gpg --status-fd 1 --verify "/tmp/$JAR_NAME.asc" "$DOWNLOAD_DIR/tools/$JAR_NAME" 2>/dev/null | grep -q "VALIDSIG $JMX_EXPORTER_GPG_FPR"; then ok "$JAR_NAME GPG 簽章（$JMX_EXPORTER_GPG_FPR）"
+else rm -f "/tmp/$JAR_NAME".*; die "$JAR_NAME GPG 簽章驗不過"; fi
+rm -f "/tmp/$JAR_NAME".*
 # Confluent 官方的 JMX 規則、告警規則、Grafana dashboard（jmx-monitoring-stacks，Apache-2.0）：固定在 site.env 的 commit，只取要用的路徑
 MONITORING_DIR_OUT=$DOWNLOAD_DIR/monitoring/jmx-monitoring-stacks
 if [ "$(cat "$MONITORING_DIR_OUT/COMMIT" 2>/dev/null)" = "$MONITORING_STACKS_COMMIT" ]; then ok "jmx-monitoring-stacks 已在落地區（commit ${MONITORING_STACKS_COMMIT:0:12}），不重抓"

@@ -713,17 +713,20 @@ glibc-2.34-168.el9_6.24.x86_64
 
 @role 小安 | dl01 | root
 
-第 17 章的監控需要 JMX exporter（Prometheus 用的 Java agent jar）和 Confluent 官方的規則檔，這兩樣都不是 RPM，要另外抓。先抓 jar，用 Maven Central 公布的 sha1 核對：
+第 17 章的監控需要 JMX exporter（Prometheus 用的 Java agent jar）和 Confluent 官方的規則檔，這兩樣都不是 RPM，要另外抓。先抓 jar（1.7.0，從 GitHub release），核對 release 附的 sha256 與 GPG 簽章；舊版的 jar 先刪掉，第 17 章才不會同時抓到兩個：
 
 ```bash
-curl -fsSL -o /out/tools/jmx_prometheus_javaagent-1.0.1.jar https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/1.0.1/jmx_prometheus_javaagent-1.0.1.jar && [ "$(sha1sum /out/tools/jmx_prometheus_javaagent-1.0.1.jar | cut -d' ' -f1)" = "$(curl -fsSL https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/1.0.1/jmx_prometheus_javaagent-1.0.1.jar.sha1)" ] && echo jar-sha1-ok
+V=1.7.0 && J=jmx_prometheus_javaagent-$V.jar && B=https://github.com/prometheus/jmx_exporter/releases/download/$V && FPR=90E3CDDECF99D81C0309D74CCADDBDF51122242E && rm -f /out/tools/jmx_prometheus_javaagent-*.jar && curl -fsSL -o /out/tools/$J $B/$J && curl -fsSL -o /tmp/$J.sha256 $B/$J.sha256 && curl -fsSL -o /tmp/$J.asc $B/$J.asc && [ "$(sha256sum /out/tools/$J | cut -d' ' -f1)" = "$(cut -c1-64 /tmp/$J.sha256)" ] && echo jar-sha256-ok && curl -fsSL "https://keys.openpgp.org/vks/v1/by-fingerprint/$FPR" | gpg --import 2>/dev/null && gpg --status-fd 1 --verify /tmp/$J.asc /out/tools/$J 2>/dev/null | grep -q "VALIDSIG $FPR" && echo "jar-gpg-ok（簽章金鑰 $FPR）"; r=$?; rm -f /tmp/$J.sha256 /tmp/$J.asc; [ $r = 0 ]
 ```
 
 ```out
-jar-sha1-ok
+jar-sha256-ok
+jar-gpg-ok（簽章金鑰 90E3CDDECF99D81C0309D74CCADDBDF51122242E）
 ```
 
-Confluent 官方的監控檔（exporter 規則、告警規則、Grafana dashboard）在 GitHub 的 confluentinc/jmx-monitoring-stacks（Apache-2.0）。**固定在一個 commit**（`f376263f…`，2026-05-28），不跟 main 走：第 17 章的 dashboard 與規則是照這一版的指標名稱寫的。只取要用的路徑（32 個 dashboard、告警規則、controller／broker／REST 三份 exporter 規則），jar 不拿（用上面 Maven Central 驗過的那個）。`COMMIT` 檔記下版本，之後每一關的 `SHA256SUMS` 也會涵蓋它們：
+> 1.1 版以後的 jar 只放在 GitHub release（Maven Central 的 `io.prometheus.jmx` 停在 1.0.1）。release 附 `.sha256` 與 `.asc`：sha256 對不上、或簽章不是這把金鑰（專案維護者 Doug Hoard，指紋 `90E3 CDDE CF99 D81C 0309 D74C CADD BDF5 1122 242E`，公鑰從 keys.openpgp.org 依指紋取）就不要帶進行內。銀行資安要核對來源時，給他們這個指紋。
+
+Confluent 官方的監控檔（exporter 規則、告警規則、Grafana dashboard）在 GitHub 的 confluentinc/jmx-monitoring-stacks（Apache-2.0）。**固定在一個 commit**（`f376263f…`，2026-05-28），不跟 main 走：第 17 章的 dashboard 與規則是照這一版的指標名稱寫的。只取要用的路徑（32 個 dashboard、告警規則、controller／broker／REST 三份 exporter 規則），jar 不拿（用上面驗過的那個）。`COMMIT` 檔記下版本，之後每一關的 `SHA256SUMS` 也會涵蓋它們：
 
 ```bash
 SHA=f376263fc6d7270185ab6abab9a8c379079e2a92 && mkdir -p /out/monitoring /tmp/jms-x && curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$SHA.tar.gz" | tar -xz -C /tmp/jms-x --wildcards '*/LICENSE' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' '*/jmxexporter-prometheus-grafana/assets/prometheus/*' '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' '*/shared-assets/jmx-exporter/kafka_streams.yml' && rm -rf /out/monitoring/jmx-monitoring-stacks && mv /tmp/jms-x/jmx-monitoring-stacks-* /out/monitoring/jmx-monitoring-stacks && echo "$SHA" > /out/monitoring/jmx-monitoring-stacks/COMMIT && rm -rf /tmp/jms-x && echo "commit ${SHA:0:12}: $(find /out/monitoring -type f | wc -l) 個檔，dashboard $(ls /out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l) 個"
@@ -3090,7 +3093,7 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 
 | 誰 | 做什麼 |
 |---|---|
-| 銀行 OS 團隊 | 各主機 cpuser 的 sudo 改成兩段式（16.4）；緊急主機模式的 OS 群組 `opmenu-emergency`（平常沒有成員） |
+| 銀行 OS 團隊 | 各主機 cpuser 的 sudo 改成兩段式（16.4） |
 | 小安 | 準備緊急憑證檔、裝選單、派送設定、綁緊急身分的權限、試跑 |
 
 選單取緊急憑證的方式：緊急憑證放在操作機的 `~/secrets/opmenu-breakglass.pem`（0600，只有 root 讀得到），91 直接讀這個檔，沒有從別處取出貼上的動作。操作者本來就是 root，所以 91 的把關是「必填原因、記為 EMERGENCY 的稽核記錄」，不是讓人拿不到憑證。
@@ -3409,18 +3412,19 @@ kb04: full sudo back (change window)
 
 @role 小安 | ops02 | root
 
-exporter 的設定檔只存抓取密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼則只能明文寫在這個 YAML 裡（exporter 不支援 Secret Protection），所以檔案一律 root:confluent 0640。
+exporter 的設定檔只存抓取密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼也不寫進 YAML：exporter（1.4 起）讀得到 `${環境變數}`，YAML 裡寫 `${JMX_KEYSTORE_PASSWORD}`，值放在每台的 `/etc/confluent/jmx-exporter.env`（root 0600），由 systemd drop-in 的 `EnvironmentFile` 帶進服務（`ps` 看不到；只有 root 與服務本身讀得到）。YAML 仍是 root:confluent 0640。
 
 keystore 依角色不同：controller 沒有 `cp-server.p12`，用 `kafka-internal.p12`；broker、REST Proxy、C3 用 `cp-server.p12`。這一步只產生兩份**標頭**（HTTPS 與帳密），規則在 17.2 接上去：
 
 ```bash
 install -d -m 0700 ~/monitoring && (umask 077; [ -s ~/secrets/jmx-scrape.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/jmx-scrape.pass; [ -s ~/secrets/jmx-scrape.salt ] || openssl rand -hex 16 > ~/secrets/jmx-scrape.salt) && SALT=$(cat ~/secrets/jmx-scrape.salt) && HASH=$(printf '%s:%s' "$SALT" "$(cat ~/secrets/jmx-scrape.pass)" | sha256sum | cut -d' ' -f1 | sed 's/^0*//') && for ks in cp-server kafka-internal; do (umask 077; cat > ~/monitoring/jmx-header-$ks.yml <<EOF
-# Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256 (no plaintext scrape password here)
+# Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256. No plaintext password in this file:
+# the keystore password comes from JMX_KEYSTORE_PASSWORD (systemd EnvironmentFile /etc/confluent/jmx-exporter.env, root 0600)
 httpServer:
   ssl:
     keyStore:
       filename: /etc/confluent/ssl/$ks.p12
-      password: $(cat ~/pki/store.pass)
+      password: \${JMX_KEYSTORE_PASSWORD}
       type: PKCS12
     certificate:
       alias: $ks
@@ -3431,12 +3435,12 @@ httpServer:
       algorithm: SHA-256
       salt: $SALT
 EOF
-); done; unset SALT HASH; echo "headers: $(ls ~/monitoring | grep '^jmx-header' | tr '
-' ' ')"
+); done; unset SALT HASH; (umask 077; printf 'JMX_KEYSTORE_PASSWORD=%s\n' "$(cat ~/pki/store.pass)" > ~/monitoring/jmx-exporter.env) && echo "headers: $(ls ~/monitoring | grep '^jmx-header' | tr '
+' ' ')；jmx-exporter.env $(stat -c %a ~/monitoring/jmx-exporter.env)；YAML 裡的 keystore 密碼：$(grep -h 'password:' ~/monitoring/jmx-header-*.yml | sort -u | sed 's/^ *//')"
 ```
 
 ```out
-headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml 
+headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml ；jmx-exporter.env 600；YAML 裡的 keystore 密碼：password: ${JMX_KEYSTORE_PASSWORD}
 ```
 
 > 陷阱：exporter 比對雜湊時用 Java 的 `BigInteger.toString(16)`，開頭的 0 會被吃掉。雜湊剛好以 0 開頭（機率 1/16）時，帳密永遠 401；所以上面多了 `sed 's/^0*//'` 把前導 0 去掉再寫進 YAML。
@@ -3511,25 +3515,25 @@ c3           133 行  httpServer=1 lowercaseOutputName=1
 
 @role 小安 | ops02 | root
 
-每台放三樣東西：jar 到 `/opt/jmx-exporter/`、設定檔到各元件的目錄、第四個 drop-in 把 `-javaagent` 放進環境變數。環境變數依角色不同：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在 7.3 節的防火牆已經開了（C3 的 7071 也在）。
+每台放四樣東西：jar 到 `/opt/jmx-exporter/`（舊版的 jar 先刪）、設定檔到各元件的目錄、keystore 密碼的環境檔 `/etc/confluent/jmx-exporter.env`（root 0600）、第四個 drop-in 用 `EnvironmentFile` 讀那個檔，並把 `-javaagent` 放進環境變數。環境變數依角色不同：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在 7.3 節的防火牆已經開了（C3 的 7071 也在）。
 
 一條指令對 10 台做完；每行要看到 `javaagent:` 的 jar 路徑，行數要和 17.2 產生的設定檔相同：
 
 ```bash
-JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in kc*) role=controller; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; kb*) role=broker; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; rest*) role=rest; cfg=/etc/confluent/kafka-rest/jmx-exporter.yml; u=confluent-kafka-rest; var=KAFKAREST_OPTS;; c3*) role=c3; cfg=/etc/confluent/control-center/jmx-exporter.yml; u=confluent-control-center; var=CONTROL_CENTER_OPTS;; esac; cp ~/monitoring/jmx-$role.yml /tmp/jmx-$h.yml && scp -q ~/landing/tools/$JAR /tmp/jmx-$h.yml $h.poc.lab:/tmp/ && rm -f /tmp/jmx-$h.yml && ssh $h.poc.lab "sudo install -d -m 0755 /opt/jmx-exporter && sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-$h.yml $cfg && rm -f /tmp/$JAR /tmp/jmx-$h.yml && printf '[Service]\nEnvironment=\"$var=-javaagent:/opt/jmx-exporter/$JAR=7071:$cfg\"\n' | sudo tee /etc/systemd/system/$u.service.d/40-jmx.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1) \$(sudo wc -l $cfg | cut -d' ' -f1) lines\""; done
+JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do case $h in kc*) role=controller; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; kb*) role=broker; cfg=/etc/confluent/kafka/jmx-exporter.yml; u=confluent-server; var=KAFKA_OPTS;; rest*) role=rest; cfg=/etc/confluent/kafka-rest/jmx-exporter.yml; u=confluent-kafka-rest; var=KAFKAREST_OPTS;; c3*) role=c3; cfg=/etc/confluent/control-center/jmx-exporter.yml; u=confluent-control-center; var=CONTROL_CENTER_OPTS;; esac; cp ~/monitoring/jmx-$role.yml /tmp/jmx-$h.yml && (umask 077; cp ~/monitoring/jmx-exporter.env /tmp/jmx-$h.env) && scp -q ~/landing/tools/$JAR /tmp/jmx-$h.yml /tmp/jmx-$h.env $h.poc.lab:/tmp/ && rm -f /tmp/jmx-$h.yml /tmp/jmx-$h.env && ssh $h.poc.lab "sudo install -d -m 0755 /opt/jmx-exporter && sudo rm -f /opt/jmx-exporter/jmx_prometheus_javaagent-*.jar && sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR && sudo install -o root -g confluent -m 0640 /tmp/jmx-$h.yml $cfg && sudo install -o root -g root -m 0600 /tmp/jmx-$h.env /etc/confluent/jmx-exporter.env && rm -f /tmp/$JAR /tmp/jmx-$h.yml /tmp/jmx-$h.env && printf '[Service]\nEnvironmentFile=/etc/confluent/jmx-exporter.env\nEnvironment=\"$var=-javaagent:/opt/jmx-exporter/$JAR=7071:$cfg\"\n' | sudo tee /etc/systemd/system/$u.service.d/40-jmx.conf >/dev/null && sudo systemctl daemon-reload && echo \"\$(hostname): \$(systemctl show $u -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1) \$(sudo wc -l $cfg | cut -d' ' -f1) lines env=\$(sudo stat -c %a /etc/confluent/jmx-exporter.env)\""; done
 ```
 
 ```out
-kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 158 lines
-kc02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 158 lines
-kc03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 158 lines
-kb01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
-kb02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
-kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
-kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 436 lines
-rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 54 lines
-rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 54 lines
-c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.0.1.jar 133 lines
+kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 158 lines env=600
+kc02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 158 lines env=600
+kc03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 158 lines env=600
+kb01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
+kb02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
+kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
+kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 436 lines env=600
+rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 54 lines env=600
+rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 54 lines env=600
+c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 133 lines env=600
 ```
 
 > 陷阱：落地區的檔案是唯讀的（第 3 章 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
@@ -7446,6 +7450,7 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(
 
 ```out
 firing：無；pending：無
+（pending 那一欄每次不同：lab 的 controller heap 小，常看到 JvmHeapHigh；也可能是無）
 ```
 
 （lab 的 `JvmHeapHigh` 常常 pending：lab 給 controller 的 heap 小，kc02 的 heap 在 80–90% 徘徊、偶爾過 90% 但撐不到 `for` 的 10 分鐘；正式環境 heap 在第 10 章的 drop-in 依主機規格（請銀行確認的事項 4.1）給足就不會。pending 不會送到 Alertmanager。）
@@ -7495,6 +7500,7 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(
 
 ```out
 等了約 320 秒：firing：ConfluentTargetDown(kb04.poc.lab), KafkaUnderReplicatedPartitions(lab)；pending：CertificateProbeFailed
+（pending 那一欄每次不同：CertificateProbeFailed、JvmHeapHigh 都可能出現，也可能是無）
 ```
 
 `CertificateProbeFailed` 是第 22 章 blackbox 探 kb04 的 TLS 失敗，它的 `for` 是 10 分鐘，所以這時還是 pending；broker 停超過 10 分鐘它也會 firing，說的是同一件事（看 `ConfluentTargetDown` 就知道是服務停了，不是憑證壞了）。
@@ -7577,10 +7583,10 @@ kb04: success
 
 @role 維運人員 bob | ops02 | root
 
-8090 不通、9095 還通；選單登入失敗，畫面直接指向這一節：
+8090 不通、9095 還通；選單的 AD 登入失敗，畫面指向這一節，並直接進入緊急主機模式（11 不在開放的項目裡，所以這裡只看前四行）。`~/conf/opmenu-try.sh` 是 16.5 建的 lab 試跑小腳本，沒有它這一段會停下：
 
 ```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kb01 kb02 kb03 kb04; do printf '%s 8090=%s 9095=%s\n' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)" "$(timeout 5 bash -c "</dev/tcp/$h.poc.lab/9095" 2>/dev/null && echo 通 || echo 不通)"; done; bash ~/conf/opmenu-try.sh bob 11 | head -4 | cut -c1-120
+test -x ~/conf/opmenu-try.sh && { CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kb01 kb02 kb03 kb04; do printf '%s 8090=%s 9095=%s\n' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)" "$(timeout 5 bash -c "</dev/tcp/$h.poc.lab/9095" 2>/dev/null && echo 通 || echo 不通)"; done; bash ~/conf/opmenu-try.sh bob 11 | head -4 | cut -c1-120; }
 ```
 
 ```out
@@ -7590,28 +7596,15 @@ kb03 8090=000 9095=通
 kb04 8090=000 9095=通
 MDS 全部連不上:https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090
 無法連到 MDS（Kafka 的權限服務），AD 登入做不了。
-Kafka 類的緊急操作（topic、設定、SCRAM 帳號）改用手把手 28.6 的 kafka-admin（SCRAM,9095,不經 MDS 與 AD）；用過當天照 20.2 換密碼。
-緊急主機模式只開放給作業系統群組 opmenu-emergency 的人（平常 root 不在群組、緊急模式關著；事故時由 OS 團隊依程序把 root 臨時加進群組，事後移
+Kafka 類的緊急操作（topic、設定、SCRAM 帳號）改用手把手 28.6 的 kafka-admin（SCRAM,9095,不經 MDS 
+已進入緊急主機模式：只能做 16 18 21 22 23（看日誌、磁碟、收集診斷、重啟服務）；每一步
+（每行只印前 120 個字元）
 ```
 
-**主機類：緊急主機模式**。平常 `opmenu-emergency` 沒有成員；事故時依銀行程序請 OS 團隊把 root 臨時加進去（群組不存在就先建）：
-
-@role 銀行 OS 團隊 | ops02 | root
+**主機類：緊急主機模式**。不看任何群組（2026-10-29 定案：操作者都是經 PSMP 登入的 root，作業系統群組擋不住，root 能自己加入），只開放 16、18、21、22、23，必填原因，身分記成「未經 AD 驗證」、每一步記 EMERGENCY_HOST；Kafka 類項目會被擋下。追溯靠這些紀錄加上 CyberArk 登入紀錄與 PSMP 錄影：
 
 ```bash
-groupadd -f opmenu-emergency && gpasswd -a root opmenu-emergency >/dev/null && getent group opmenu-emergency
-```
-
-```out
-opmenu-emergency:x:1501:root
-```
-
-@role 維運人員 bob | ops02 | root
-
-群組要**重新登入**才生效（正式環境是重新經 PSMP 登入；lab 用 `su - root` 代替）。緊急主機模式只開放 16、18、21、22、23，身分記成「未經 AD 驗證」；Kafka 類項目會被擋下：
-
-```bash
-su - root -c 'bash ~/conf/opmenu-try.sh bob 23 kb04.poc.lab:confluent-server 3 | grep -q "kb04 kafka-server-start" && echo "23 看 kb04 日誌：OK"; bash ~/conf/opmenu-try.sh bob 31 orders.em 1 | tail -1'; tail -3 /var/log/opmenu/opmenu.log | cut -d'|' -f3,5,7
+bash ~/conf/opmenu-try.sh bob 23 kb04.poc.lab:confluent-server 3 | grep -q "kb04 kafka-server-start" && echo "23 看 kb04 日誌：OK"; bash ~/conf/opmenu-try.sh bob 31 orders.em 1 | tail -1; tail -3 /var/log/opmenu/opmenu.log | cut -d'|' -f3,5,7
 ```
 
 ```out
@@ -7643,7 +7636,7 @@ retention.ms=86400000
 
 > 誰在什麼時候用了 `kafka-admin`，Kafka 稽核日誌（第 18 章）記成 `User:kafka-admin`；要和 CyberArk 登入紀錄、PSMP 錄影對起來才知道是哪個人。
 
-**恢復**：網路團隊開回 8090；OS 團隊把 root 移出群組；確認選單照常登入；最後照 20.2 換 `kafka-admin` 的密碼（同一行指令）。
+**恢復**：網路團隊開回 8090；確認選單照常登入（AD 登入成功就不會再進緊急主機模式）；最後照 20.2 換 `kafka-admin` 的密碼（同一行指令）。
 
 @role 銀行網路團隊（lab 由 Windows 終端代打） | Windows 終端 | 本機
 
@@ -7658,20 +7651,10 @@ kb03: success
 kb04: success
 ```
 
-@role 銀行 OS 團隊 | ops02 | root
-
-```bash
-gpasswd -d root opmenu-emergency >/dev/null && echo "opmenu-emergency 成員：$(getent group opmenu-emergency | cut -d: -f4)（空）"
-```
-
-```out
-opmenu-emergency 成員：（空）
-```
-
 @role 小安 | ops02 | root
 
 ```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kb01 kb02 kb03 kb04; do printf '%s 8090=%s  ' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)"; done; echo; su - root -c 'bash ~/conf/opmenu-try.sh bob 11' | grep -E '^-- (你的 MDS token|broker 在線:)'
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kb01 kb02 kb03 kb04; do printf '%s 8090=%s  ' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)"; done; echo; bash ~/conf/opmenu-try.sh bob 11 | grep -E '^-- (你的 MDS token|broker 在線:)'
 ```
 
 ```out
@@ -8644,7 +8627,7 @@ docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-web
 lab-mon-* 已收掉：0 個剩下
 ```
 
-> 兩件事要跟銀行講清楚：(1) exporter 的 YAML 裡有 keystore 的明文密碼，所以是 root:confluent 0640，不能再放寬；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3（畫面）或另外接 lag exporter；Grafana 的 `kafka-consumer.json`、`kafka-lag-exporter.json` 要有對應來源才有資料。
+> 兩件事要跟銀行講清楚：(1) exporter 的 YAML 沒有明文密碼（keystore 密碼在 root 0600 的 `/etc/confluent/jmx-exporter.env`，YAML 只有抓取密碼的加鹽雜湊），YAML 維持 root:confluent 0640；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3（畫面）或另外接 lag exporter；Grafana 的 `kafka-consumer.json`、`kafka-lag-exporter.json` 要有對應來源才有資料。
 >
 > 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用 22 章的 syslog 告警；稽核事件看第 18 章。
 >

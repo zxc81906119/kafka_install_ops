@@ -45,7 +45,6 @@
 5. 各主機 cpuser 的 sudoers 永久規則 `/etc/sudoers.d/cpuser-ops`(安裝、升級時才另開全權 `/etc/sudoers.d/cpuser`),**逐一列出**,見下方「sudoers」。
 6. 操作機的 `/secure/ssh`(獨立加密 file system)已掛載,`cpuser_ed25519` 為 root:root 0400;各主機 cpuser 的 `authorized_keys` 有對應公鑰(`from=` 只允許操作機)。
 7. 緊急憑證:把 breakglass PEM(私鑰 + 憑證鏈)放到操作機 `~/secrets/opmenu-breakglass.pem`(0600,root 才讀得到);換發時舊的另存 `.prev`。人員進操作機走 PVWA 網頁＋PSMP(進去是 root),這是唯一和 CyberArk 有關的部分。
-7a. 建作業系統群組 `opmenu-emergency`(平常沒有成員),寫好事故時誰加人、事後誰移出的程序。操作者都是 root,所以「加人」就是把 root 加進群組:群組成了緊急主機模式的開關。
 8. 其餘檔案不用改。
 
 ## 項目
@@ -73,7 +72,7 @@
 - **選單全部顯示**:不依權限過濾;要做什麼直接選,Kafka 類動作以本人身分執行,沒權限的由 Kafka / MDS 依 RBAC 拒絕並記成 DENIED。只有緊急主機模式會隱藏項目。
 - **管理員閘門**:以備用身分執行的項目(`OPMENU_ADMIN_ITEMS`,預設 91)Kafka 檢查的是備用憑證不是本人,所以執行前先用本人的 token 問 MDS 本人有沒有 `OPMENU_ADMIN_AUTHZ`(預設叢集 Alter,即 SystemAdmin / ClusterAdmin);問不到一律拒絕。
 - **主機閘門**:碰主機的介面先向 MDS 確認本人有 `OPMENU_HOST_ACTION_AUTHZ`(預設 Operator 以上),因為主機端的 cpuser 是共用帳號。操作者是 root、讀得到金鑰,所以這是流程控管、不是硬性隔離(見上方「誠實的限制」)。
-- **緊急主機模式**:MDS 連不上時,作業系統群組 `OPMENU_EMERGENCY_GROUP`(預設 opmenu-emergency,平常空)的人可以進入(操作者都是 root,所以平常 root 不在群組、緊急模式關著;事故時 OS 團隊臨時把 root 加進群組,事後移出),只開放 `OPMENU_EMERGENCY_ITEMS`(16 18 21 22 23);必填原因,操作者標成「未經 AD 驗證」,紀錄 EMERGENCY_HOST;21 的叢集檢查做不了時改成警告＋確認。
+- **緊急主機模式**:MDS 連不上時直接進入,不看任何群組(2026-10-29 定案:操作者都是 root,作業系統群組擋不住;`OPMENU_EMERGENCY_HOST=0` 可關閉),只開放 `OPMENU_EMERGENCY_ITEMS`(16 18 21 22 23);必填原因,操作者標成「未經 AD 驗證」,紀錄 EMERGENCY_HOST;21 的叢集檢查做不了時改成警告＋確認。
 - **服務帳號 A／B**(`OPMENU_SVC_PAIR`,預設 `-a -b`):34 一次建兩個同權限的帳號,應用程式先用 -a;35 只換沒在用的那個,應用程式切過去後下次再換另一個,換密碼不停機;37 兩個一起下架。
 - **17 憑證到期**:看各端點實際出示的憑證(`OPMENU_TLS_ENDPOINTS`,openssl s_client),不讀主機上的檔案;換發後沒重啟會看得出來。
 - **確認**:變更類顯示將做什麼與影響,輸入 `yes` 才執行。

@@ -1,10 +1,11 @@
-# Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256 (no plaintext scrape password here)
+# Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256. No plaintext password in this file:
+# the keystore password comes from JMX_KEYSTORE_PASSWORD (systemd EnvironmentFile /etc/confluent/jmx-exporter.env, root 0600)
 # 這一段接在 Confluent 官方的規則檔前面（官方檔自己帶 lowercaseOutputName 等設定，所以這裡只放 httpServer）
 httpServer:
   ssl:
     keyStore:
       filename: /etc/confluent/ssl/${KS}.p12
-      password: ${STORE_PASSWORD}
+      password: @JMX_KEYSTORE_PASSWORD@
       type: PKCS12
     certificate:
       alias: ${KS}

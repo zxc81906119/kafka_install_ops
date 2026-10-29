@@ -32,18 +32,21 @@ install -d -m 0700 "$MONITORING_DIR"
 (umask 077
  [ -s "$SCRAPE_PASSWORD_FILE" ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$SCRAPE_PASSWORD_FILE"
  [ -s "$SCRAPE_SALT_FILE" ] || openssl rand -hex 16 > "$SCRAPE_SALT_FILE")
-export SALT HASH STORE_PASSWORD KS
+export SALT HASH KS
 SALT=$(cat "$SCRAPE_SALT_FILE")
 # exporter 比對時算 sha256("<鹽>:<密碼>")，再用 Java 的 BigInteger.toString(16) 轉十六進位：開頭的 0 會被吃掉，
 # 所以這裡也要去掉前導 0，否則雜湊剛好以 0 開頭時（機率 1/16）帳密永遠 401
 HASH=$(printf '%s:%s' "$SALT" "$(cat "$SCRAPE_PASSWORD_FILE")" | sha256sum | cut -d' ' -f1 | sed 's/^0*//')
-STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 # 兩種標頭：controller 沒有 cp-server.p12，用 kafka-internal.p12；broker、REST、C3 用 cp-server.p12
+# keystore 密碼不寫進 YAML：寫 ${JMX_KEYSTORE_PASSWORD}（exporter 1.4 起支援），值在每台 /etc/confluent/jmx-exporter.env（root 0600），drop-in 用 EnvironmentFile 帶進去。
+# 範本裡用佔位字串，渲染後才換成 ${…}（render_template 會把沒換掉的 ${…} 當錯誤）
 for KS in cp-server kafka-internal; do
-  render_template "$TEMPLATE_DIR/jmx-header.yml" "$MONITORING_DIR/jmx-header-$KS.yml" KS STORE_PASSWORD HASH SALT || die "render jmx-header"
+  render_template "$TEMPLATE_DIR/jmx-header.yml" "$MONITORING_DIR/jmx-header-$KS.yml" KS HASH SALT || die "render jmx-header"
+  sed -i 's/@JMX_KEYSTORE_PASSWORD@/${JMX_KEYSTORE_PASSWORD}/' "$MONITORING_DIR/jmx-header-$KS.yml"
 done
-unset STORE_PASSWORD SALT HASH
-ok "標頭 jmx-header-cp-server.yml、jmx-header-kafka-internal.yml"
+unset SALT HASH
+(umask 077; printf 'JMX_KEYSTORE_PASSWORD=%s\n' "$(cat "$PKI_DIR/store.pass")" > "$MONITORING_DIR/jmx-exporter.env")
+ok "標頭 jmx-header-cp-server.yml、jmx-header-kafka-internal.yml（keystore 密碼：$(grep -h 'password:' "$MONITORING_DIR"/jmx-header-*.yml | sort -u | sed 's/^ *//')）；jmx-exporter.env $(stat -c %a "$MONITORING_DIR/jmx-exporter.env")"
 
 section "17.2 每台的 exporter 設定 = 標頭 + Confluent 官方規則（commit $(cut -c1-12 "$OFFICIAL/COMMIT")）"
 OFFICIAL_RULES=$OFFICIAL/shared-assets/jmx-exporter
@@ -71,23 +74,25 @@ for host in $KAFKA_HOSTS $RESTS $C3_HOST; do
     c3*)   role=c3;         config_path=/etc/confluent/control-center/jmx-exporter.yml; opts_var=CONTROL_CENTER_OPTS;;
   esac
   # 落地區的檔是唯讀的，scp 會把唯讀帶過去；上次失敗留下的檔會擋住這次 scp，先刪
-  ssh_run "$host" "rm -f /tmp/$EXPORTER_JAR_NAME /tmp/jmx-$host.yml" >/dev/null 2>&1
-  cp "$MONITORING_DIR/jmx-$role.yml" "/tmp/jmx-$host.yml"
-  copy_to_tmp "$host" "$EXPORTER_JAR" "/tmp/jmx-$host.yml" || { fail "$host: scp"; rm -f "/tmp/jmx-$host.yml"; continue; }
-  rm -f "/tmp/jmx-$host.yml"
+  ssh_run "$host" "rm -f /tmp/$EXPORTER_JAR_NAME /tmp/jmx-$host.yml /tmp/jmx-$host.env" >/dev/null 2>&1
+  cp "$MONITORING_DIR/jmx-$role.yml" "/tmp/jmx-$host.yml"; (umask 077; cp "$MONITORING_DIR/jmx-exporter.env" "/tmp/jmx-$host.env")
+  copy_to_tmp "$host" "$EXPORTER_JAR" "/tmp/jmx-$host.yml" "/tmp/jmx-$host.env" || { fail "$host: scp"; rm -f "/tmp/jmx-$host.yml" "/tmp/jmx-$host.env"; continue; }
+  rm -f "/tmp/jmx-$host.yml" "/tmp/jmx-$host.env"
   result=$(ssh_script "$host" HOST="$host" JAR="$EXPORTER_JAR_NAME" CONFIG="$config_path" UNIT="$(unit_of "$host")" OPTS_VAR="$opts_var" <<'EOF'
 sudo install -d -m 0755 /opt/jmx-exporter
+sudo rm -f /opt/jmx-exporter/jmx_prometheus_javaagent-*.jar
 sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR
 sudo install -o root -g confluent -m 0640 /tmp/jmx-$HOST.yml "$CONFIG"
-rm -f /tmp/$JAR /tmp/jmx-$HOST.yml
-printf '[Service]\nEnvironment="%s=-javaagent:/opt/jmx-exporter/%s=7071:%s"\n' "$OPTS_VAR" "$JAR" "$CONFIG" \
+sudo install -o root -g root -m 0600 /tmp/jmx-$HOST.env /etc/confluent/jmx-exporter.env
+rm -f /tmp/$JAR /tmp/jmx-$HOST.yml /tmp/jmx-$HOST.env
+printf '[Service]\nEnvironmentFile=/etc/confluent/jmx-exporter.env\nEnvironment="%s=-javaagent:/opt/jmx-exporter/%s=7071:%s"\n' "$OPTS_VAR" "$JAR" "$CONFIG" \
   | sudo tee /etc/systemd/system/$UNIT.service.d/40-jmx.conf >/dev/null
 sudo systemctl daemon-reload
 agent=$(systemctl show $UNIT -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1)
-echo "$agent $(sudo wc -l "$CONFIG" | cut -d' ' -f1) lines"
+echo "$agent $(sudo wc -l "$CONFIG" | cut -d' ' -f1) lines env=$(sudo stat -c %a /etc/confluent/jmx-exporter.env)"
 EOF
 )
-  case $result in "javaagent:/opt/jmx-exporter/$EXPORTER_JAR_NAME"*) ok "$host: $result";; *) fail "$host: $result";; esac
+  case $result in "javaagent:/opt/jmx-exporter/$EXPORTER_JAR_NAME"*" env=600") ok "$host: $result";; *) fail "$host: $result";; esac
 done
 [ "$FAIL_COUNT" = 0 ] || die "派送失敗，不重啟"
 

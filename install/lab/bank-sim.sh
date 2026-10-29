@@ -281,16 +281,6 @@ mds_block() {   # 28.6（lab）：網路團隊在每台 broker 擋掉操作機�
   for h in $BROKERS; do echo "$h: $(docker exec "$(container_of "$h")" firewall-cmd "$op=$rule")"; done
 }
 
-emergency_group() {   # 28.6（lab）：OS 團隊依程序把操作機的 root 臨時加進／移出 opmenu-emergency（選單的緊急主機模式）；add|remove
-  case ${1:-} in
-    add)    announce "28.6 OS 團隊：root 臨時加進 opmenu-emergency（群組不存在就先建）"
-            as_root_on_ops 'groupadd -f opmenu-emergency && gpasswd -a root opmenu-emergency >/dev/null && getent group opmenu-emergency';;
-    remove) announce "28.6 OS 團隊：root 移出 opmenu-emergency"
-            as_root_on_ops 'gpasswd -d root opmenu-emergency >/dev/null 2>&1; echo "opmenu-emergency 成員：$(getent group opmenu-emergency | cut -d: -f4)（空）"';;
-    *) echo "用法：bank-sim.sh emergency-group add|remove"; return 1;;
-  esac
-}
-
 broker_stop() {   # 28.3（lab）：主機團隊／意外：把一台 broker 的服務停掉（容器裡以 root 停，不經 cpuser）
   local b=${1:-}; [ -n "$b" ] || { echo "用法：bank-sim.sh broker-stop <broker>"; return 1; }
   announce "28.3 $b 的 confluent-server 停掉（模擬主機或服務掛了）"
@@ -396,6 +386,5 @@ case ${1:-} in push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboo
   ad-drill) ad_drill;;
   broker-stop) broker_stop "${2:-}";;
   mds-block) mds_block "${2:-}";;
-  emergency-group) emergency_group "${2:-}";;
   alerts-wait) alerts_wait "${2:-}";;
-  alerts-clear) alerts_clear;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop monitoring-reload（24.2）monitoring-blackbox（22.2）broker-stop alerts-wait alerts-clear（28.3）mds-block on|off emergency-group add|remove（28.6）sign-app（27.3）coldboot（19.4）sign-next lb-watch"; exit 1;; esac
+  alerts-clear) alerts_clear;; *) sed -n '2,15p' "$0"; echo "  延伸：monitoring（17.6）monitoring-stop monitoring-reload（24.2）monitoring-blackbox（22.2）broker-stop alerts-wait alerts-clear（28.3）mds-block on|off（28.6）sign-app（27.3）coldboot（19.4）sign-next lb-watch"; exit 1;; esac

@@ -174,8 +174,8 @@ stage 27 "22 憑證到期監控：files（銀行 monitoring-blackbox：exporter�
 }
 stage 28 "28 故障排查：快照全綠 → 銀行停 kb04 → 症狀 → 告警 firing → 重啟 → 歸零、告警解除；28.6 擋掉 8090 → 緊急主機模式、kafka-admin → 開回、換 kafka-admin 密碼" && {
   step_on_ops 28-triage.sh snapshot && $BANK broker-stop kb04 && step_on_ops 28-triage.sh drill kb04 && $BANK alerts-wait && step_on_ops 28-triage.sh recover kb04 && $BANK alerts-clear && step_on_ops 28-triage.sh snapshot || exit 1
-  $BANK mds-block on && $BANK emergency-group add && step_on_ops 28-triage.sh mds-down; rc=$?
-  $BANK mds-block off; $BANK emergency-group remove   # 演練失敗也要開回、移出群組
+  $BANK mds-block on && step_on_ops 28-triage.sh mds-down; rc=$?
+  $BANK mds-block off   # 演練失敗也要開回
   [ $rc = 0 ] && step_on_ops 28-triage.sh mds-back || exit 1
 }
 stage 29 "27 新應用上線：inventory（SCRAM A／B）、shipping（憑證，銀行簽）→ 驗證 → 下線" && {

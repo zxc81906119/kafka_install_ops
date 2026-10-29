@@ -61,18 +61,13 @@ EOC
 }
 
 # 緊急主機模式：MDS 連不上時，AD 身分驗證與權限查詢都做不了。
-# 只開放給作業系統群組 OPMENU_EMERGENCY_GROUP 的人（授權改看這個群組），只能做 OPMENU_EMERGENCY_ITEMS 這幾個主機類項目，
-# 必填原因；操作者標成「未經 AD 驗證」，每一筆紀錄都看得出是緊急模式（紀錄也送 syslog 時，共用帳號改不到）。
+# 不看任何群組：操作者都是經 PSMP 登入的 root，作業系統群組擋不住（root 能自己加入），所以 2026-10-29 定案直接開放（OPMENU_EMERGENCY_HOST=0 可關）。
+# 只能做 OPMENU_EMERGENCY_ITEMS 這幾個主機類項目，必填原因；操作者標成「未經 AD 驗證」，每一筆紀錄都看得出是緊急模式（紀錄也送 syslog 時，共用帳號改不到）。
 emergency_login() {
   core_log MDS_DOWN login ""
   echo "${CR}無法連到 MDS（Kafka 的權限服務），AD 登入做不了。${C0}"
   echo "Kafka 類的緊急操作（topic、設定、SCRAM 帳號）改用手把手 28.6 的 kafka-admin（SCRAM,9095,不經 MDS 與 AD）；用過當天照 20.2 換密碼。"
-  if [ -z "${OPMENU_EMERGENCY_GROUP:-}" ]; then echo "請確認 cluster 狀態或通知管理員。"; exit 1; fi
-  if ! id -nG | tr ' ' '\n' | grep -qx "$OPMENU_EMERGENCY_GROUP"; then
-    echo "緊急主機模式只開放給作業系統群組 $OPMENU_EMERGENCY_GROUP 的人（平常 root 不在群組、緊急模式關著；事故時由 OS 團隊依程序把 root 臨時加進群組，事後移出）。"
-    core_log DENIED "emergency host mode" "os user not in $OPMENU_EMERGENCY_GROUP"
-    exit 1
-  fi
+  if [ "${OPMENU_EMERGENCY_HOST:-1}" != 1 ]; then echo "緊急主機模式已關閉（OPMENU_EMERGENCY_HOST=0）：請確認 cluster 狀態或通知管理員。"; core_log DENIED "emergency host mode" "disabled"; exit 1; fi
   local reason="${OPMENU_REASON:-}"
   [ -n "$reason" ] || read -r -p "緊急主機模式：請輸入原因（事故單號或說明）: " reason
   if [ ${#reason} -lt 4 ]; then echo "原因太短，不進入緊急主機模式"; exit 1; fi

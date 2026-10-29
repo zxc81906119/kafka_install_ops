@@ -7,7 +7,7 @@
 | Confluent Platform（Confluent Server，KRaft） | 8.2.4 | 8.3.2 | controller ×3、broker ×4 |
 | REST Proxy | 8.2.4 | 8.3.2 | ×2，前置 L4 負載平衡 |
 | Control Center（內建 Prometheus／Alertmanager，只供 C3 畫面用） | 2.5.1 | 2.6.1 | ×1 |
-| 監控：JMX exporter（4 種程序）＋ 銀行的 Prometheus、Alertmanager、Grafana | exporter 1.0.1；Confluent 官方 jmx-monitoring-stacks 固定 commit | 同左 | 我方交付設定，銀行提供三套系統 |
+| 監控：JMX exporter（4 種程序）＋ 銀行的 Prometheus、Alertmanager、Grafana | exporter 1.7.0（GitHub release，sha256＋GPG 核對）；Confluent 官方 jmx-monitoring-stacks 固定 commit | 同左 | 我方交付設定，銀行提供三套系統 |
 | JDK（銀行以 tar 提供，裝到 `/opt/java/<dir>` + `/opt/java/current`） | 21 | 25（8.2.x 不支援 Java 25，所以基底只能是 21；8.3.x 支援 25，原廠建議版本仍是 21） | 所有 Java 節點（含 C3） |
 | 作業系統（RHEL 9） | 9.6 | 9.8（小版本更新） | 所有主機 |
 

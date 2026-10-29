@@ -7,8 +7,8 @@
 #   bash steps/28-triage.sh snapshot            28.2 quorum leader、broker 在線、under-replicated／offline、每台 MDS、REST 經 LB、C3（全綠 rc 0，否則 rc 1）
 #   bash steps/28-triage.sh drill <broker>      28.3 broker 已被銀行停掉（lab：bank-sim.sh broker-stop）：確認症狀（在線少一台、under-replicated > 0、那台 MDS 連不上、REST／C3 照常）
 #   bash steps/28-triage.sh recover <broker>    28.3 ssh 過去 systemctl restart（cpuser-ops 允許的寫法），等 under-replicated 歸零、MDS 回 200
-#   bash steps/28-triage.sh mds-down            28.6 8090 已被擋（lab：bank-sim.sh mds-block on、emergency-group add）：選單指向 28.6、緊急主機模式、kafka-admin 做 topic 操作
-#   bash steps/28-triage.sh mds-back            28.6 8090 開回、root 移出群組之後：MDS 200、選單照常，照 20.2 換 kafka-admin 密碼
+#   bash steps/28-triage.sh mds-down            28.6 8090 已被擋（lab：bank-sim.sh mds-block on）：選單指向 28.6、緊急主機模式、kafka-admin 做 topic 操作
+#   bash steps/28-triage.sh mds-back            28.6 8090 開回之後：MDS 200、選單照常，照 20.2 換 kafka-admin 密碼
 #
 # 告警（ConfluentTargetDown、KafkaUnderReplicatedPartitions）在銀行 Prometheus 看：lab 用 bank-sim.sh alerts-wait／alerts-clear。
 set -uo pipefail
@@ -85,7 +85,7 @@ ka_login() { kafka-topics --bootstrap-server "$BROKER_CLIENT" --command-config "
 menu_as() { local u=$1; shift; [ -s "$SECRETS_DIR/ad-test-users.pass" ] || return 2
   env OPMENU_USER="$u" OPMENU_PASS="$(cat "$SECRETS_DIR/ad-test-users.pass")" OPMENU_YES=1 OPMENU_REASON="28.6 演練" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
 
-mds_down() {   # 8090 已被擋（lab：bank-sim.sh mds-block on；緊急主機模式要 bank-sim.sh emergency-group add）
+mds_down() {   # 8090 已被擋（lab：bank-sim.sh mds-block on）
   local h codes="" out t
   section "28.6 MDS 連不上：選單、緊急主機模式、kafka-admin"
   for h in $BROKERS; do codes+="$h=$(mds_code "$h") "; done
@@ -96,10 +96,7 @@ mds_down() {   # 8090 已被擋（lab：bank-sim.sh mds-block on；緊急主機�
     2) warn "沒有測試人員密碼檔，略過選單檢查";;
     *) grep -q '28.6 的 kafka-admin' <<<"$out" && ok "選單登入失敗，並指向 28.6" || fail "選單沒有指向 28.6：$(head -3 <<<"$out" | tr '\n' ' ')";;
   esac
-  if id -nG root | tr ' ' '\n' | grep -qx opmenu-emergency; then   # 群組要重新登入才生效：su - 取新的群組
-    out=$(su - root -c "bash $INSTALL_DIR/steps/28-triage.sh menu-emergency" 2>&1)
-    grep -q 'EMERGENCY_OK' <<<"$out" && ok "緊急主機模式：23 看日誌可以、31 建 topic 被擋" || fail "緊急主機模式：$(tail -2 <<<"$out" | tr '\n' ' ')"
-  else warn "root 不在 opmenu-emergency，略過緊急主機模式（lab：bank-sim.sh emergency-group add）"; fi
+  menu_emergency | grep -q EMERGENCY_OK && ok "緊急主機模式（不看群組）：23 看日誌可以、31 建 topic 被擋" || fail "緊急主機模式不如預期"
   t=$(mktemp -d); ka_conf "$t/ka.properties" "$SECRETS_DIR/kafka-admin.pass"
   local A=(--bootstrap-server "$BROKER_CLIENT" --command-config "$t/ka.properties")
   log "kafka-admin：topic $(kafka-topics "${A[@]}" --list 2>/dev/null | wc -l) 個；under-replicated $(kafka-topics "${A[@]}" --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)"
@@ -110,13 +107,13 @@ mds_down() {   # 8090 已被擋（lab：bank-sim.sh mds-block on；緊急主機�
   rm -rf "$t"
 }
 
-menu_emergency() {   # mds_down 以 su - 呼叫（新的登入才帶 opmenu-emergency 群組）；印 EMERGENCY_OK 代表符合預期
+menu_emergency() {   # MDS 連不上時選單直接進緊急主機模式（2026-10-29 起不看群組）；印 EMERGENCY_OK 代表符合預期
   local a b
   a=$(menu_as bob 23 "$(fqdn "${BROKERS%% *}"):confluent-server" 3); b=$(menu_as bob 31 orders.em 1)
   grep -q '已進入緊急主機模式' <<<"$a" && grep -q 'kafka-server-start' <<<"$a" && grep -q '在緊急主機模式不開放' <<<"$b" && echo EMERGENCY_OK
 }
 
-mds_back() {   # 8090 開回、root 已移出群組之後：確認恢復，照 20.2 換 kafka-admin 密碼（用過就換）
+mds_back() {   # 8090 開回之後：確認恢復，照 20.2 換 kafka-admin 密碼（用過就換）
   local h codes="" t out
   section "28.6 恢復：MDS、選單、換 kafka-admin 密碼"
   for i in $(seq 1 12); do codes=""; for h in $BROKERS; do codes+="$h=$(mds_code "$h") "; done; grep -q -v '=200' <<<"$(tr ' ' '\n' <<<"$codes" | grep .)" || break; sleep 5; done

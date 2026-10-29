@@ -567,3 +567,8 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 原本 1.0.1（約 2024 年，沒有特別理由）。1.7.0（2026-10-06）修 SSL 下 JVM 關閉卡住、HTTP server 安全邊界、認證快取、缺屬性 NPE，支援 PEM；1.6.0 加 basic auth 防時序攻擊；1.4.0 起 YAML 可用環境變數。使用者選 1.7.0。
 - exporter YAML 的 keystore 明文密碼改從環境變數讀（systemd drop-in 的 EnvironmentFile，0600 root）。文件只寫 PEM 私鑰密碼支援 `${ENV}`、keystore 密碼省略時讀 `javax.net.ssl.keyStorePassword`（系統屬性會出現在 ps，不用）；release notes 說 1.4.0 起 keystore 密碼可用環境變數 → lab 先試 `keyStore.password: ${VAR}`，不行再比較 PEM 方案。
 - 驗證：重跑第 17 章（指標名稱、數量）與附錄 B 覆蓋率。
+
+### 緊急主機模式不再看作業系統群組（2026-10-29 定案）
+- 使用者：MDS／AD 不通時，非 AD 相關的選單項目直接開放，不管群組。原因：操作者都是經 PSMP 登入的 root，`opmenu-emergency` 只能加「root」（等於所有人），root 也能自己加入，擋不住人。
+- 選單：`OPMENU_EMERGENCY_GROUP` 拿掉，改 `OPMENU_EMERGENCY_HOST`（預設 1 開放、0 關閉）；仍只開放 16 18 21 22 23、必填原因、記 EMERGENCY_HOST、身分標「未經 AD 驗證」。
+- 手冊 28.6 拿掉 OS 團隊加入／移出群組與重新登入；第 16 章表格拿掉群組；請銀行確認事項 9.1 改為告知（不接受可設 0 關閉）。腳本：bank-sim 的 emergency-group、28-triage 的群組判斷與 su - 都拿掉；lab 的 opmenu-emergency-test.sh 刪除（由 28-triage mds-down 取代）。

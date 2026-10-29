@@ -191,7 +191,7 @@ core_admin_gate() {
 # ── 主機類動作的權限閘門:主機端的 cpuser 是共用帳號,sudo 分不出是誰,所以碰主機前用本人的 token 問 MDS;任何錯誤一律視為拒絕。
 #    注意:操作者在操作機上是 root,這道閘門是流程控管、不是硬性隔離(root 可以直接用金鑰 ssh);追溯靠 CyberArk 的登入紀錄與 PSMP 錄影 ──
 core_host_gate() {
-  [ "${OP_EMERGENCY_HOST:-0}" = 1 ] && return 0   # 緊急主機模式：授權在登入時看過作業系統群組 OPMENU_EMERGENCY_GROUP
+  [ "${OP_EMERGENCY_HOST:-0}" = 1 ] && return 0   # 緊急主機模式：MDS 連不上，問不到權限；只開放 OPMENU_EMERGENCY_ITEMS，必填原因、記 EMERGENCY_HOST
   [ -n "${OPMENU_HOST_ACTION_AUTHZ:-}" ] || return 0
   [ "${OP_HOST_OK:-0}" = 1 ] && return 0
   local rt rn op body out
