@@ -549,3 +549,11 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - MDS 內建在 broker：authorizer 沒就緒的 broker 只開 9092，對 client 的 9094／9095／9096 都不開（10-29 事故實測），所以「所有 MDS 都卡住」時任何身分都進不去。
 - 部分失效時：91（緊急憑證換 MDS token）原本只帶第一台 MDS → 改成逐台問 `/v1/metadata/id`、用第一台回 200 的；全部連不上就停下並指向 kafka-admin 程序（`tests/test-breakglass-mds.sh`）。
 - `kafka-admin`（SCRAM、9095、SystemAdmin）是唯一不經 MDS 也不經 AD 的管理身分（授權由 broker 本機的 binding 快取判斷）。使用者定案：**維持手動、不進選單**；手冊第 28 章加「MDS 的 8090 不能用時」一節（lab 擋 8090 實測後補），用完照 20.2 換密碼。
+
+### 維運群組的 topic 權限改回 DeveloperManage（2026-10-29 定案）
+- 10-28 為了不讓維運建 topic 改成 `DeveloperRead Topic:*`，10-29 手冊實跑發現選單 11 健康檢查、21／27 重啟前檢查全被 Kafka 拒絕：`kafka-topics --describe` 對每個 topic 都要 DescribeConfigs（加 `--under-replicated-partitions` 也一樣，authorizer 日誌實證），DeveloperRead 沒有；而且 DeveloperRead 有 Read，維運反而讀得到所有訊息。
+- MDS 的角色定義（8.3.2 實測）：有 Topic DescribeConfigs 的只有 DeveloperManage、ClusterAdmin、ResourceOwner、SystemAdmin，全都連帶能建、刪 topic；CP 不能自訂角色。
+- 考慮過：ACL 單獨補 DescribeConfigs（lab 實測可行，使用者：非不得已不用 ACL）；選單改用 Java 呼叫 describeTopics（只要 Describe，使用者不要選單多一支 Java）；改讀 JMX 指標。
+- 定案：`Group:kafka-operators` = Operator（cluster）＋ DeveloperManage `Topic:*` ＋ DeveloperRead `Group:*`（13／15／18／33 要 Group Describe，最小的角色是 DeveloperRead）。維運能建、刪 topic，讀不到訊息。
+- 順帶修：選單 33 刪 topic 前的 consumer 檢查失敗時原本當成「沒有 consumer」照刪，改成檢查失敗就拒絕。
+- 手冊 11.3 新增 RBAC 全貌（範圍、子 cluster、資源、10 個角色的實際操作，指令從 MDS 讀）。

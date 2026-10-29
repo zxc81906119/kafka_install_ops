@@ -502,7 +502,7 @@ D.rbac = () => svg(800, 470, [
   box(410, 38, 180, 54, 'SystemAdmin', ['Group:kafka-admins'], 'blue'), box(630, 38, 150, 54, '整個叢集', [], 'gray'),
   arrow(170, 65, 213, 65), arrow(355, 65, 408, 65), arrow(590, 65, 628, 65),
   box(20, 108, 150, 54, 'bob', ['AD 帳密'], 'gray'), box(215, 108, 140, 54, 'kafka-operators', [], 'amber'),
-  box(410, 108, 180, 54, 'Operator', ['Group:kafka-operators'], 'blue'), box(630, 108, 150, 54, '整個叢集', [], 'gray'),
+  box(410, 104, 180, 62, 'Operator', ['＋DeveloperManage Topic:*', 'Group:kafka-operators'], 'blue'), box(630, 108, 150, 54, '整個叢集；Topic *', ['建、刪 topic，讀不到訊息'], 'gray'),
   arrow(170, 135, 213, 135), arrow(355, 135, 408, 135), arrow(590, 135, 628, 135),
   box(20, 178, 150, 54, 'carol', ['AD 帳密'], 'gray'), box(215, 178, 140, 54, 'kafka-devs', [], 'amber'),
   box(410, 178, 180, 54, 'DeveloperRead', ['Group:kafka-devs'], 'blue'), box(630, 178, 150, 54, 'Topic orders.*', ['Group dev-*（前綴）'], 'gray'),
@@ -839,6 +839,38 @@ D.certexpiry = () => svg(800, 430, [
   box(270, 302, 510, 60, "告警響了做什麼", ["< 60 天：排變更單，照第 21 章換發（leaf 21.2／CA 21.3／鏈 21.4）；< 14 天：立刻", "過期的後果：broker 之間、REST、C3、應用程式全部連不上"], "coral"),
   box(10, 378, 770, 40, "客戶沒有 blackbox_exporter 時：只做 ②（操作機腳本）＋ ③（選單）；①是建議，lab 兩層都建、都驗", [], "gray"),
 ].join(""));
+
+// 11.3 RBAC model: scopes (Kafka cluster + sub-clusters), resource types, the two kinds of roles
+D.rbacmodel = () => svg(800, 610, [
+  ctext(240, 20, '範圍（scope）與資源', { bold: true, fill: '#444441', size: 13 }), ctext(635, 20, '角色（CP 內建 10 個，不能自訂）', { bold: true, fill: '#444441', size: 13 }),
+  region(20, 34, 440, 486, 'MDS：權限的唯一來源（kb01–kb04 的 8090）', 'gray'),
+  region(36, 62, 408, 196, 'Kafka cluster（scope：kafka-cluster＝CLUSTER_ID）', 'blue'),
+  box(52, 94, 180, 70, 'Cluster', ['叢集本身：建 topic、改設定、', 'idempotent 寫入'], 'blue'),
+  box(248, 94, 180, 70, 'Topic', ['讀、寫、建、刪、看設定'], 'blue'),
+  box(52, 176, 180, 70, 'Group', ['consumer group：加入、', '提交 offset、刪除'], 'blue'),
+  box(248, 176, 180, 70, 'TransactionalId', ['交易式 producer'], 'blue'),
+  region(36, 272, 408, 196, '掛在 Kafka cluster 下的子 cluster（本平台沒有裝）', 'gray'),
+  box(52, 304, 120, 80, 'Schema Registry', ['schema-registry-', 'cluster：Subject'], 'gray', { dash: true }),
+  box(182, 304, 120, 80, 'Connect', ['connect-cluster：', 'Connector'], 'gray', { dash: true }),
+  box(312, 304, 120, 80, 'ksqlDB', ['ksql-cluster：', 'KsqlCluster'], 'gray', { dash: true }),
+  note(52, 410, '綁子 cluster 要多給它的 id（--schema-registry-cluster 等）'),
+  note(52, 430, 'REST Proxy、C3 不是子 cluster：它們代使用者呼叫 Kafka，'),
+  note(52, 448, '用的就是 Kafka cluster 上的權限。'),
+  note(36, 500, 'binding 存在 _confluent-metadata-auth，每台 broker 有快取：MDS 掛了照樣授權', 11),
+  region(484, 34, 296, 250, '綁整個 cluster（不能指定資源）', 'purple'),
+  box(498, 64, 130, 46, 'SystemAdmin', ['全部'], 'purple'), box(638, 64, 130, 46, 'ClusterAdmin', ['叢集與 topic 管理'], 'purple'),
+  box(498, 120, 130, 46, 'UserAdmin', ['管 role binding'], 'purple'), box(638, 120, 130, 46, 'SecurityAdmin', ['只能看 binding'], 'purple'),
+  box(498, 176, 130, 46, 'AuditAdmin', ['稽核日誌設定'], 'purple'), box(638, 176, 130, 46, 'Operator', ['看 topic、管 connector'], 'purple'),
+  note(498, 248, '都沒有讀、寫訊息的權限（SystemAdmin 除外）', 11),
+  region(484, 300, 296, 220, '綁資源（LITERAL 或 PREFIXED）', 'teal'),
+  box(498, 330, 130, 52, 'ResourceOwner', ['全部＋再授權給別人'], 'teal'), box(638, 330, 130, 52, 'DeveloperManage', ['建、刪、看設定'], 'teal'),
+  box(498, 392, 130, 52, 'DeveloperRead', ['讀（topic、group）'], 'teal'), box(638, 392, 130, 52, 'DeveloperWrite', ['寫（topic、交易）'], 'teal'),
+  note(498, 470, '例：Topic:orders.（PREFIXED）＝ orders. 開頭的', 11),
+  note(498, 488, '所有 topic；Topic:*（LITERAL）＝全部 topic', 11),
+  arrow(484, 160, 446, 160, 'scope', { lx: 465, ly: 150 }),
+  arrow(484, 410, 430, 212, '資源', { via: [[460, 410], [460, 212]], lx: 472, ly: 300 }),
+  box(20, 534, 760, 60, '一條 role binding ＝ 誰 ＋ 角色 ＋ 範圍 ＋ 資源', ['誰＝User:<名字> 或 Group:<AD 群組>；資源只有綁資源的角色要給。權限是加總的，沒有「拒絕」型的 binding'], 'amber'),
+].join(''));
 
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });

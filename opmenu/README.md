@@ -61,7 +61,7 @@
 
 | 群組 | 角色 | 原因 |
 |---|---|---|
-| 維運(例 kafka-operators) | `Operator`(cluster)＋ `DeveloperRead` on `Topic:*` | 11 健康檢查、21/27 重啟前的 under-replicated 檢查用 `kafka-topics --describe`,它對每個 topic 都要 DescribeConfigs;只有 Operator 或 DeveloperRead 會被拒。DeveloperManage 也給了建刪 topic 的能力,若銀行不接受,改給 ClusterAdmin 或由 SystemAdmin 執行這幾項 |
+| 維運(例 kafka-operators) | `Operator`(cluster)＋ `DeveloperManage` on `Topic:*` ＋ `DeveloperRead` on `Group:*` | 11 健康檢查、21/27 重啟前的 under-replicated 檢查用 `kafka-topics --describe`,它對每個 topic 都要 DescribeConfigs;只有 Operator 或 DeveloperRead 會被拒(2026-10-28 改成 DeveloperRead 後實測被拒,10-29 改回)。內建角色裡有 DescribeConfigs 的都連帶能建刪 topic(ClusterAdmin 也是),CP 不能自訂角色;DeveloperManage 沒有 Read,讀不到訊息內容。銀行若不接受維運能建刪 topic,只能用 ACL 單獨補 Topic:* 的 DescribeConfigs |
 | 開發(例 kafka-devs) | `DeveloperRead`/`DeveloperManage` on 自己的 prefix | 12、14 要 DescribeConfigs 才看得到明細;只有 DeveloperRead 時 12 會列名稱並註明無法顯示明細 |
 | 管理(例 kafka-admins) | `SystemAdmin` | 第 3、4 層與 91 |
 | 稽核 | `DeveloperRead` on audit topic 與 `audit-` consumer group prefix | 43、45 |

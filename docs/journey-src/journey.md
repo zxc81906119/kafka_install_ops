@@ -1413,7 +1413,8 @@ net.ipv4.tcp_wmem = 4096 65536 2097152";; *) extra="";; esac; sudo install -d -m
 
 ```out
 kc01: errors=0
-kb01: errors=2    （容器限制：net.core.rmem_max / wmem_max；VM 上是 0）
+（kc01–kc03、rest01、rest02、c3-01 都是 errors=0）
+kb01: errors=2    （kb01–kb04 都是 2：容器限制 net.core.rmem_max / wmem_max；VM 上是 0）
 …
 ```
 
@@ -2053,7 +2054,7 @@ kb04 MDS=200
 
 ![tokenflow]
 
-下面這張圖畫出一個人的權限怎麼從 AD 群組一路接到 Kafka 資源。
+下面這張圖畫出一個人的權限怎麼從 AD 群組一路接到 Kafka 資源（RBAC 全部的角色、範圍與資源見 11.3）。
 
 ![rbac]
 
@@ -2070,9 +2071,14 @@ export JAVA_HOME=/opt/java/current && source ~/conf/kraft.env && confluent login
 ```
 
 ```out
-  Principal    |    Role     | ResourceType | Name | PatternType  
----------------+-------------+--------------+------+--------------
-  User:svc-ops | SystemAdmin |              |      |              
++---------------+--------------+
+| Principal     | User:svc-ops |
+| Role          | SystemAdmin  |
+| Resource Type | Cluster      |
++---------------+--------------+
+   Principal   |    Role     | Resource Type | Name | Pattern Type  
+---------------+-------------+---------------+------+---------------
+  User:svc-ops | SystemAdmin | Cluster       |      |               
 ```
 
 操作機的管理 client：用 `svc-ops` 憑證向 MDS 換 token，走 TOKEN listener；它的權限就是上面那條 binding。
@@ -2269,6 +2275,65 @@ CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-use
 ```out
 AD 開回後 alice 登入 MDS：HTTP 200
 ```
+
+## 11.3 RBAC 全貌：範圍、角色、資源
+
+![rbacmodel]
+
+**這一節在做什麼**：把 Confluent RBAC 的結構一次講完，之後每一章新增 binding 時回來對照。它分三層：
+
+- **範圍（scope）**：最外層是 Kafka cluster（MDS 裡叫 `kafka-cluster`，值是 `CLUSTER_ID`）。Schema Registry、Connect、ksqlDB 各自是掛在它底下的子 cluster，有自己的 id；本平台沒有裝這三樣，所以所有 binding 都只指定 `--kafka-cluster`。REST Proxy 與 C3 不是子 cluster，它們用的就是 Kafka cluster 上的權限。
+- **資源**：Kafka cluster 裡有四種：`Cluster`（叢集本身）、`Topic`、`Group`（consumer group）、`TransactionalId`。子 cluster 各有自己的資源（Schema Registry 的 `Subject`、Connect 的 `Connector`、ksqlDB 的 `KsqlCluster`）。
+- **角色**：CP 內建 10 個，**不能自訂**。分兩種：綁整個 cluster 的（SystemAdmin、ClusterAdmin、UserAdmin、SecurityAdmin、AuditAdmin、Operator），binding 不能指定資源；綁資源的（ResourceOwner、DeveloperManage、DeveloperRead、DeveloperWrite），binding 一定要給資源 pattern：`LITERAL`（名字完全相同；`*` 代表全部）或 `PREFIXED`（名字開頭相同）。
+
+@role 小安 | ops02 | root
+
+每個角色到底給了哪些操作，以 MDS 自己的定義為準（版本升級時可能變，換版後重跑這一行）。這裡只印 Kafka cluster 的四種資源與 `SecurityMetadata`（role binding 本身）：
+
+```bash
+export JAVA_HOME=/opt/java/current && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null && confluent iam rbac role list -o json | python3 -c '
+import json, sys
+keep = ["Cluster", "Topic", "Group", "TransactionalId", "SecurityMetadata"]
+for r in sorted(json.load(sys.stdin), key=lambda r: (r["accessPolicy"]["scopeType"], r["name"])):
+    p = r["accessPolicy"]
+    ops = {o["resourceType"]: ",".join(o.get("operations", [])) or "-" for o in p.get("allowedOperations", []) if o.get("resourceType") in keep}
+    print("%-16s %-9s %s" % (r["name"], p["scopeType"], "  ".join("%s=%s" % (k, ops[k]) for k in keep if k in ops) or "(scope 內全部)"))
+'
+```
+
+```out
+AuditAdmin       Cluster   Cluster=DescribeConfigs,AlterConfigs
+ClusterAdmin     Cluster   Cluster=Alter,Describe,Create,AlterConfigs,DescribeConfigs  Topic=Delete,Alter,Describe,Create,AlterConfigs,DescribeConfigs
+Operator         Cluster   Topic=Describe
+SecurityAdmin    Cluster   SecurityMetadata=Describe
+SystemAdmin      Cluster   (scope 內全部)
+UserAdmin        Cluster   Cluster=Alter,Describe  SecurityMetadata=Describe,Alter
+DeveloperManage  Resource  Cluster=Create,DescribeConfigs  Topic=Delete,Describe,Create,DescribeConfigs  Group=Describe,Delete,DescribeConfigs  TransactionalId=Describe
+DeveloperRead    Resource  Cluster=-  Topic=Read,Describe  Group=Read,Describe  TransactionalId=Describe
+DeveloperWrite   Resource  Cluster=IdempotentWrite  Topic=Write,Describe  Group=-  TransactionalId=Write,Describe
+ResourceOwner    Resource  Cluster=Describe,Alter,IdempotentWrite,AlterAccess,Create,DescribeConfigs,AlterConfigs,DescribeAccess  Topic=Delete,Read,Write,Describe,Alter,ControlCenterTriggerWrite,AlterAccess,Create,DescribeConfigs,AlterConfigs,DescribeAccess  Group=Read,Describe,Delete,ControlCenterTriggerWrite,AlterAccess,DescribeConfigs,AlterConfigs,DescribeAccess  TransactionalId=Write,Describe,AlterAccess,DescribeAccess
+```
+
+（8.3.2 實測，2026-10-29；操作的排列順序每次可能不同。）整理成表，最後一欄是本平台誰綁了這個角色：
+
+| 角色 | 綁在 | Topic | Group | Cluster | 本平台誰綁 |
+|---|---|---|---|---|---|
+| SystemAdmin | 整個 cluster | 全部 | 全部 | 全部（含 role binding） | `Group:kafka-admins`、`svc-ops`、`kafka-admin`（SCRAM）、`svc-c3`、`opmenu-breakglass` |
+| ClusterAdmin | 整個 cluster | 建、刪、改設定、看（**不能讀寫**） | — | 改設定、建 | 沒用 |
+| UserAdmin | 整個 cluster | — | — | 管 role binding | 沒用（改權限由 SystemAdmin 做） |
+| SecurityAdmin | 整個 cluster | — | — | 只能看 role binding | `svc-backup`（23.2） |
+| AuditAdmin | 整個 cluster | — | — | 改稽核日誌設定 | 沒用 |
+| Operator | 整個 cluster | 看（Describe） | — | — | `Group:kafka-operators` |
+| ResourceOwner | 資源 | 全部，還能再授權給別人 | 全部 | — | `svc-rest` 在 `_confluent-command`（29 章） |
+| DeveloperManage | 資源 | 建、刪、看設定（**不能讀寫**） | 看、刪 | — | `Group:kafka-operators` 在 `Topic:*`；`Group:kafka-devs`、app-orders 在 `orders.` |
+| DeveloperRead | 資源 | 讀、看 | 加入、提交 offset、看 | — | 各應用程式在自己的 prefix；`Group:kafka-operators` 在 `Group:*` |
+| DeveloperWrite | 資源 | 寫、看 | — | idempotent 寫入 | 各應用程式在自己的 prefix |
+
+三件常被誤會的事：
+
+- **只要 DescribeConfigs，沒有唯讀的角色**：表裡能看 topic 設定的（DeveloperManage、ClusterAdmin、ResourceOwner、SystemAdmin）都連帶能建、刪 topic；而 `kafka-topics --describe` 對每個 topic 都要 DescribeConfigs（加 `--under-replicated-partitions` 也一樣）。所以維運群組是 `DeveloperManage Topic:*`（16.2）：能建、刪，但**讀不到訊息內容**。要更窄只能用 ACL（第 23 章 svc-backup 的做法）。
+- **管理類角色多半讀不到訊息**：ClusterAdmin、Operator、DeveloperManage 都沒有 Topic 的 Read；讀訊息只有 DeveloperRead、ResourceOwner、SystemAdmin。
+- **權限是加總的**：一個人所屬的每個 AD 群組上的 binding 全部合起來；RBAC 沒有「拒絕」型的 binding，要收回只能刪 binding。
 
 # 12. 第十二站：REST Proxy
 
@@ -3067,16 +3132,16 @@ export JAVA_HOME=/opt/java/current && confluent login --url https://kb01.poc.lab
 維運群組要能跑健康檢查與重啟前的檢查（`kafka-topics --describe` 對每個 topic 都要 DescribeConfigs），只有 Operator 不夠；開發群組在自己的 prefix 上也要 DescribeConfigs 才看得到 topic 明細：
 
 ```bash
-export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Topic:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Group:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-devs --role DeveloperManage --resource Topic:orders. --prefix --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal Group:kafka-operators --kafka-cluster "$CID" 2>/dev/null | tail -n +3
+export JAVA_HOME=/opt/java/current && CID=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4) && confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperManage --resource 'Topic:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Group:*' --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding create --principal Group:kafka-devs --role DeveloperManage --resource Topic:orders. --prefix --kafka-cluster "$CID" >/dev/null 2>&1; confluent iam rbac role-binding list --principal Group:kafka-operators --kafka-cluster "$CID" 2>/dev/null | tail -n +3
 ```
 
 ```out
-  Group:kafka-operators | DeveloperRead   | Topic         | *    | LITERAL
+  Group:kafka-operators | DeveloperManage | Topic         | *    | LITERAL
   Group:kafka-operators | DeveloperRead   | Group         | *    | LITERAL
   Group:kafka-operators | Operator        | Cluster       |      |
 ```
 
-> 維運群組只給 `DeveloperRead Topic:*`：健康檢查與重啟前的檢查要的 Describe／DescribeConfigs 它就有；建、刪 topic 不在裡面，那是 kafka-admins 的事（2026-10-28 實測 DeveloperManage 會讓維運群組能建 topic，已收回）。
+> 為什麼是 `DeveloperManage Topic:*`：`kafka-topics --describe` 對每個 topic 都要 DescribeConfigs（加 `--under-replicated-partitions` 也一樣，authorizer 日誌看得到），而 RBAC 內建角色裡有 DescribeConfigs 的都連帶能建、刪 topic（MDS 的角色定義：`DeveloperManage` = Create、Delete、Describe、DescribeConfigs；`DeveloperRead` = Describe、Read；`Operator` = Describe），CP 也不能自訂角色。所以維運群組**能建、刪 topic**，但**讀不到訊息內容**（`DeveloperManage` 沒有 Read）。2026-10-28 曾改成 `DeveloperRead`，結果 11 健康檢查、21／27 重啟前檢查都被 Kafka 拒絕，而且反而讀得到所有 topic 的訊息，2026-10-29 改回。銀行若不接受維運能建刪 topic，只能用 ACL 單獨補 DescribeConfigs（第 23 章 svc-backup 的做法）。
 
 ## 16.3 裝選單
 
@@ -3232,7 +3297,7 @@ alice  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 4
 
 三個人看到的一樣。43、45（匯出、查詢稽核紀錄）做了會不會成功，看那個人有沒有 audit topic 的讀取權限：alice（SystemAdmin）有，bob、carol 沒有；要給稽核單位用，就把他們的 AD 群組綁 `Topic:confluent-audit-log-events`（prefix）與 `Group:audit-`（prefix）的 DeveloperRead。
 
-bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；23 只列含 error／warn 字樣的行，INFO 裡有 errors 字眼也會被列出）、重啟 kb04；建 topic 會被 Kafka 拒絕、91 會被管理員閘門擋下。alice（SystemAdmin）：建 topic、91 緊急模式、刪 topic。
+bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；23 只列含 error／warn 字樣的行，INFO 裡有 errors 字眼也會被列出）、重啟 kb04；建、刪 topic 可以（`DeveloperManage`，見 16.2），但讀不到訊息內容；改權限（42）會被 MDS 拒絕、91 會被管理員閘門擋下。alice（SystemAdmin）：建 topic、91 緊急模式、刪 topic。
 
 @role 小安（代打 bob、carol、alice） | ops02 | root
 
@@ -3246,7 +3311,7 @@ person=$1; shift
 password=$(cat ~/secrets/ad-test-users.pass)
 env OPMENU_USER=$person OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON=第16站試跑 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' | grep -v '^SLF4J'
 EOF
-chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; } && op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 31 orders.x 1 | tail -1; op bob 91 kafka-topics --list | tail -1; op alice 31 orders.optest 1 | tail -1; unset P
+chmod 0700 ~/conf/opmenu-try.sh && P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; } && op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'; op bob 42 add kafka-devs DeveloperRead Topic orders. | tail -1; op bob 91 kafka-topics --list | tail -1; op alice 31 orders.optest 1 | tail -1; unset P
 ```
 
 ```out
@@ -5101,7 +5166,7 @@ cd ~/kafka-lab/ca && mkdir -p g2 && cd g2 && openssl genrsa -out root.key 4096 2
 
 ```out
 issuing.crt: OK
-subject=CN = PoC Bank Root CA G2, O = PoC Bank, C = TW
+subject=CN=PoC Bank Root CA G2, O=PoC Bank, C=TW
 sha256 Fingerprint=…
 ```
 
@@ -6071,8 +6136,17 @@ ls ~/monitoring/to-bank/prometheus/
 ```
 
 ```out
-blackbox.yml  ca.pem  cert-expiry-rules-test.yml  confluent-alerts-cert.yml  confluent-alerts-disk.yml  confluent-alerts.yml  scrape-blackbox.yml  scrape-confluent.yml  scrape.pass
+blackbox.yml
+ca.pem
+cert-expiry-rules-test.yml
+confluent-alerts-cert.yml
+confluent-alerts.yml
+scrape-blackbox.yml
+scrape-confluent.yml
+scrape.pass
 ```
+
+（第 24 章做完後會再多一個 `confluent-alerts-disk.yml`。）
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -6102,7 +6176,7 @@ print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".j
 ```out
 SUCCESS
 cert-expiry target up 24 / 24
-告警規則 24 條（cert-expiry、kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+告警規則 22 條（cert-expiry、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
 ```
 
 每個端點真的探到了什麼：剩幾天、哪一張（Grafana 做一張表就是同一個查詢）：
@@ -6162,10 +6236,10 @@ app-legacy-billing.crt（CN=app-legacy-billing）到期 2027-10-28，剩 364 天
 rc=0
 ```
 
-閾值和過期的分支也要試過才算：拿一個暫存目錄放一張 5 天到期的自簽憑證和一張已過期的（`-not_after` 要 OpenSSL 3.4 以上；RHEL 9 現行版本有），跑同一支腳本，看 rc 與 syslog：
+閾值和過期的分支也要試過才算：拿一個暫存目錄放一張 5 天到期的自簽憑證和一張已過期的，跑同一支腳本，看 rc 與 syslog。已過期的那張用 `openssl ca -startdate／-enddate` 指定起訖日（`openssl req -x509` 的 `-not_after` 要 OpenSSL 3.4 以上，OS 9.6 是 3.2.2；暫存的 CA 檔放在子目錄 `ca/`，腳本不會掃到）。任何一張沒做出來，整段就停下，不會只測到一張：
 
 ```bash
-T=$(mktemp -d) && openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k.key -subj "/CN=soon-test" -days 5 -out $T/soon.crt 2>/dev/null && openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k2.key -subj "/CN=expired-test" -not_before 20260101000000Z -not_after 20260110000000Z -out $T/expired.crt 2>/dev/null; bash ~/conf/cert-expiry.sh $T; echo "rc=$?"; rm -rf $T; echo "syslog 最近三筆如下"; journalctl -t confluent-cert -n 3 --no-pager -o cat
+T=$(mktemp -d) && mkdir $T/ca && openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k.key -subj "/CN=soon-test" -days 5 -out $T/soon.crt 2>/dev/null && openssl req -new -newkey rsa:2048 -nodes -keyout $T/ca/k2.key -subj "/CN=expired-test" -out $T/ca/e.csr 2>/dev/null && : > $T/ca/index.txt && echo 01 > $T/ca/serial && printf '[ca]\ndefault_ca=c\n[c]\ndir=%s/ca\ndatabase=$dir/index.txt\nnew_certs_dir=$dir\nserial=$dir/serial\ndefault_md=sha256\npolicy=p\n[p]\ncommonName=supplied\n' $T > $T/ca/ca.cnf && openssl ca -batch -config $T/ca/ca.cnf -selfsign -keyfile $T/ca/k2.key -in $T/ca/e.csr -startdate 20260101000000Z -enddate 20260110000000Z -notext -out $T/expired.crt 2>/dev/null && { bash ~/conf/cert-expiry.sh $T; echo "rc=$?"; rm -rf $T; echo "syslog 最近三筆如下"; journalctl -t confluent-cert -n 3 --no-pager -o cat; }
 ```
 
 ```out
@@ -6631,7 +6705,7 @@ print(\"告警規則 %d 條（%s），載入有錯 %d 條\" % (len(r), \"、\".j
 ```
 
 ```out
-告警規則 21 條（kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+告警規則 24 條（cert-expiry、kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
 ```
 
 > lab 沒有 node_exporter，`KafkaDataDiskFillingUp` 的查詢永遠是空的，規則載入正常但不會響；`KafkaLogDirOffline` 的指標四台 broker 都有（24.1 查過是 0）。磁碟真的壞掉沒辦法在 lab 演，這一條靠規則載入與指標存在來確認。
@@ -7110,7 +7184,7 @@ cd ~/pki && grep -q '^app-shipping ' requests.txt || echo 'app-shipping       cl
 ```
 
 ```out
-app-shipping: csr ok；subject=CN = app-shipping, O = PoC Bank, C = TW
+app-shipping: csr ok；subject=CN=app-shipping, O=PoC Bank, C=TW
 ```
 
 @role 銀行 CA 窗口（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
@@ -7123,7 +7197,7 @@ cd ~/kafka-lab && docker exec lab-ops02-1 cat /etc/pki/ca-trust/source/anchors/b
 
 ```out
 signed app-shipping.csr -> app-shipping.crt
-用 ca 簽
+用 ca/g2 簽
 ```
 
 @role 維運人員 | ops02 | root
@@ -7330,7 +7404,7 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(
 ```
 
 ```out
-firing：無；pending：JvmHeapHigh
+firing：無；pending：無
 ```
 
 （lab 的 `JvmHeapHigh` 常常 pending：lab 給 controller 的 heap 小，kc02 的 heap 在 80–90% 徘徊、偶爾過 90% 但撐不到 `for` 的 10 分鐘；正式環境 heap 在第 10 章的 drop-in 依主機規格（請銀行確認的事項 4.1）給足就不會。pending 不會送到 Alertmanager。）
@@ -7379,8 +7453,10 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(
 ```
 
 ```out
-等了約 300 秒：firing：ConfluentTargetDown(kb04.poc.lab), KafkaUnderReplicatedPartitions(lab)；pending：JvmHeapHigh
+等了約 320 秒：firing：ConfluentTargetDown(kb04.poc.lab), KafkaUnderReplicatedPartitions(lab)；pending：CertificateProbeFailed
 ```
+
+`CertificateProbeFailed` 是第 22 章 blackbox 探 kb04 的 TLS 失敗，它的 `for` 是 10 分鐘，所以這時還是 pending；broker 停超過 10 分鐘它也會 firing，說的是同一件事（看 `ConfluentTargetDown` 就知道是服務停了，不是憑證壞了）。
 
 @role 維運人員 | ops02 | root
 
@@ -7982,10 +8058,11 @@ EOF
 cat > ~/conf/os-reboot.sh <<'EOF'
 #!/usr/bin/env bash
 # os-reboot.sh <主機>：重開機並等 ssh 回來。主機是容器（lab）時 systemctl reboot 不能用，改重啟該主機的平台服務
+# 只重啟 enabled 的 unit（和真的開機一樣）：kc／kb 裝了 confluent-server 也會帶進 confluent-kafka-rest，它是 disabled，不能被叫起來
 h=$1
 if ssh $h.poc.lab 'systemd-detect-virt -cq'; then
   echo "  $h 是容器，不能重開機：改重啟平台服務"
-  ssh $h.poc.lab 'for u in confluent-server confluent-kafka-rest confluent-control-center; do systemctl cat $u >/dev/null 2>&1 || continue; [ $u = confluent-control-center ] && sudo systemctl restart prometheus alertmanager; sudo systemctl restart $u; done'
+  ssh $h.poc.lab 'for u in confluent-server confluent-kafka-rest confluent-control-center; do systemctl is-enabled -q $u 2>/dev/null || continue; [ $u = confluent-control-center ] && sudo systemctl restart prometheus alertmanager; sudo systemctl restart $u; done'
 else
   ssh $h.poc.lab 'sudo systemctl reboot' 2>/dev/null; sleep 20
   for i in $(seq 1 60); do ssh -o ConnectTimeout=5 $h.poc.lab true 2>/dev/null && break; sleep 5; done
@@ -8104,7 +8181,7 @@ LB：rest01 rest02
 **驗證**：每台的 OS 版本是 9.8、versionlock 數量沒變、服務是 active；叢集沒有 under-replicated；REST 經 LB 與 C3 都回 200：
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname) $(. /etc/os-release; echo $PRETTY_NAME) 鎖 $(sudo dnf -q versionlock list | grep -c confluent)／裝 $(rpm -qa "confluent-*" | wc -l) $(for u in confluent-server confluent-kafka-rest confluent-control-center; do systemctl cat $u >/dev/null 2>&1 && echo "$u=$(systemctl is-active $u)"; done | paste -sd" ")"'; done; echo "ops02 $(. /etc/os-release; echo $PRETTY_NAME)"; echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)；REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname) $(. /etc/os-release; echo $PRETTY_NAME) 鎖 $(sudo dnf -q versionlock list | grep -c confluent)／裝 $(rpm -qa "confluent-*" | wc -l) $(for u in confluent-server confluent-kafka-rest confluent-control-center; do { systemctl is-enabled -q $u || systemctl is-active -q $u; } 2>/dev/null && echo "$u=$(systemctl is-active $u)"; done | paste -sd" ")"'; done; echo "ops02 $(. /etc/os-release; echo $PRETTY_NAME)"; echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)；REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
 ```
 
 ```out
