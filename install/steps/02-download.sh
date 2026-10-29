@@ -133,7 +133,8 @@ if [ "$FETCH_JDK" = 1 ]; then
 fi
 
 section "2.6 整批的雜湊清單（之後每一關都用它核對）"
-(cd "$DOWNLOAD_DIR" && find rpm rpm-target tools gpg-keys monitoring -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+# 選單（tools/opmenu/）是另外交付的，有自己的 SHA256SUMS，16.3 單獨核對；不列進這份（重新打包後檔名會變）
+(cd "$DOWNLOAD_DIR" && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
 ok "SHA256SUMS：$(wc -l < "$DOWNLOAD_DIR/SHA256SUMS") 個檔（JDK 是銀行的檔案，有自己的 .sha256，不列在這裡）"
 log "下載機的工作到此結束。接下來：掃描、開單、送進操作機 → 操作機跑 steps/03-intake.sh"
 finish_step
