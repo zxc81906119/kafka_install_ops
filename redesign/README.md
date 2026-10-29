@@ -533,3 +533,7 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - **第 22 章 憑證到期監控（選配）**：銀行 Prometheus 的 blackbox_exporter `tls` 模組探 24 個端點（mTLS 的 listener 也會出示 server 憑證，不需 client 憑證）＋三條規則＋`promtool test rules`；操作機每天 `cert-expiry.sh` 讀 `~/pki/certs`（含 client 憑證）寫 syslog。客戶沒有 blackbox 就只做第二層＋選單 17（問題清單 11.10）。
 - **第 30 章保險**：30.1 比對套件庫 release 套件的主版本；lab 用 dl01 對 Rocky 10 公開倉庫證明會停（問題清單 3.6）。
 - **教訓（2026-10-29 事故）**：20.4 用錯 Secret Protection 的密文 key 名（`kb01.server.properties` vs 腳本版的 `kb01.properties`），broker 靠群組快取撐到重啟才爆成 `Waiting for all of the authorizer futures` → 10 分鐘自殺循環，連鎖讓整個 MDS 層卡死。真相只在 `/var/log/kafka/metadata-service.log`。已統一命名（第 15 站依角色 `<主機>.server.properties` 等）、20.4 改從設定檔的參照讀 key 名、28 章指到正確的日誌。
+
+### C3 的監控維持精簡（2026-10-29 定案）
+
+- 使用者：C3 是管理用，不用太在意。C3 的 JMX exporter 維持我方的小規則（`jmx-rules-c3.yml`：JVM、Streams `client_state`／執行緒、Jetty 請求率），不放行 RocksDB 與 Streams 處理細項；附錄 B 裡 Streams／RocksDB dashboard 對 C3 是空的屬預期。告警只留 `ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed` 與共用的 JVM 規則。

@@ -8365,7 +8365,7 @@ zookeeper-cluster.json                 11      0
 | `cluster-linking.json`、`tiered-storage.json` | 12／19、3／8 | 沒開這兩個功能，有值的是不分功能的計數（多數是 0） |
 | `kafka-quotas.json` | 0／6 | **未驗證**。要有 quota 設定才有 `kafka_server_produce_byte_rate`；lab 這次的測試叢集沒設 quota（正式叢集依 `conf/apps.txt` 設了，應該有值） |
 | `confluent-rbac.json` | 7／10 | **大部分可用**。MDS 與 RBAC 開著，授權相關的計數有值；其餘 3 個沒有查明原因 |
-| `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 0／27、4／24、0／40 | **空**。這幾張看應用程式的 Kafka Streams。C3 本身是 Streams 應用，但我們只放行它的 `client_state` 與執行緒數，沒有放 RocksDB／處理率，所以這幾張對 C3 也是空的（想看 C3 的 RocksDB 要改 `rules-c3.yml`，序列數會到好幾千） |
+| `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 0／27、4／24、0／40 | **空**。這幾張看應用程式的 Kafka Streams。C3 本身是 Streams 應用，但我們只放行它的 `client_state` 與執行緒數，沒有放 RocksDB／處理率，所以這幾張對 C3 也是空的。C3 是管理工具，監控只看它活著、Streams 在跑（2026-10-29 定案，不擴充 C3 的指標；真要看 RocksDB 得改 `rules-c3.yml`，序列數會到好幾千） |
 | `kafka-connect-cluster.json`、`confluent-oracle-cdc.json`、`mongo.json`、`debezium-connectors.json`、`replicator.json` | 全 0 | **空**。沒有 Connect |
 | `ksqldb-cluster.json`、`schema-registry-cluster.json` | 0／38、0／12 | **空**。沒有 ksqlDB、Schema Registry |
 | `flink-jobmanager.json`、`flink-taskmanager.json`、`librdkafka-application.json`、`OTel_kafkametrics.json`、`zookeeper-cluster.json` | 全 0 | **空**。沒有 Flink、librdkafka 應用、OTel kafkametrics 來源、ZooKeeper |
