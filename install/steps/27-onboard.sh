@@ -60,7 +60,9 @@ identity_cert() {   # identity_cert <系統>：CSR → 等銀行簽 → 檢查�
   local sys=$1 n="app-$sys" leaf k1 k2 cn chain r
   section "27.3 憑證身分（$n）"
   cd "$PKI_DIR" || die "沒有 $PKI_DIR"
-  if [ ! -s "incoming/$n.crt" ]; then
+  # incoming 的憑證要配得上這台的私鑰才算數：沒有私鑰就是別處留下的舊檔，重新產生 CSR
+  if [ ! -s "incoming/$n.crt" ] || [ ! -s "keys/$n.key" ]; then
+    rm -f incoming/$n.*
     grep -q "^$n " requests.txt || printf '%-18s clientAuth             -\n' "$n" >> requests.txt
     [ -s "keys/$n.key" ] || (umask 077; openssl genrsa -out "keys/$n.key" 2048 2>/dev/null)
     openssl req -new -key "keys/$n.key" -sha256 -subj "/CN=$n/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=clientAuth" -out "requests/$n.csr" || die "CSR 失敗"

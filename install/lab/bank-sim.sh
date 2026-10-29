@@ -174,7 +174,7 @@ prepare() {
 
 sign() {
   announce "9.2 CA 窗口：簽 ops02 ~/pki/requests/*.csr → ~/pki/incoming/"
-  mkdir -p "$LAB/ca/exchange/signed"; rm -rf "$LAB/ca/exchange/requests"
+  rm -rf "$LAB/ca/exchange/signed" "$LAB/ca/exchange/requests"; mkdir -p "$LAB/ca/exchange/signed"   # 只送回這次簽的：上一輪留下的舊憑證不能混進去
   docker cp "$(container_of "$OPS_HOST"):/root/pki/requests" "$(windows_path "$LAB/ca/exchange/")"
   for f in "$LAB"/ca/exchange/requests/*.csr; do n=$(basename "$f" .csr); bash "$LAB/ca/sign.sh" "$f" "$LAB/ca/exchange/signed/$n.crt"; done
   for f in "$LAB"/ca/exchange/signed/*.crt; do docker cp "$(windows_path "$f")" "$(container_of "$OPS_HOST"):/root/pki/incoming/"; done
@@ -302,7 +302,7 @@ sign_app() {   # 27.3（lab）：CA 窗口只簽一張新應用程式的 CSR（~
   for c in "$LAB/ca" "$LAB/ca/g2"; do [ -f "$c/issuing.crt" ] && openssl verify -CAfile "$(windows_path "$LAB/ca/exchange/anchor.pem")" "$(windows_path "$c/issuing.crt")" >/dev/null 2>&1 && d=$c; done
   [ -n "$d" ] || { echo "沒有一個 CA 目錄的中繼憑證能被平台信任"; return 1; }
   announce "27.3 CA 窗口：用 $(basename "$d") 簽 ~/pki/requests/$n.csr → ~/pki/incoming/$n.crt"
-  mkdir -p "$LAB/ca/exchange/requests" "$LAB/ca/exchange/signed"
+  mkdir -p "$LAB/ca/exchange/requests" "$LAB/ca/exchange/signed"; rm -f "$LAB/ca/exchange/requests/$n.csr" "$LAB/ca/exchange/signed/$n.crt"
   docker cp "$(container_of "$OPS_HOST"):/root/pki/requests/$n.csr" "$(windows_path "$LAB/ca/exchange/requests/$n.csr")" || return 1
   bash "$d/sign.sh" "$LAB/ca/exchange/requests/$n.csr" "$LAB/ca/exchange/signed/$n.crt" || return 1
   docker cp "$(windows_path "$LAB/ca/exchange/signed/$n.crt")" "$(container_of "$OPS_HOST"):/root/pki/incoming/"
