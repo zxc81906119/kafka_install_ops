@@ -6030,7 +6030,8 @@ if [ "$U" != - ]; then
   n=0; while IFS='|' read -r principal role rtype rname pattern; do
     principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
     args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID"); [ -n "$rtype" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
-    confluent iam rbac role-binding create "${args[@]}" >/dev/null && n=$((n+1))
+    # MDS 把寫入轉給 master writer；broker 剛重啟過時 writer 會換人，短暫回 50003：每條試三次
+    for try in 1 2 3; do confluent iam rbac role-binding create "${args[@]}" >/dev/null 2>&1 && { n=$((n+1)); break; }; sleep 5; done
   done < <(awk -v u="User:$U" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$B/rbac.txt")
   echo "role binding：$n 條"
   iter=$(grep "SCRAM credential configs for user-principal '$U'" "$B/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
