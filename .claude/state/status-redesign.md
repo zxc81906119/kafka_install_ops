@@ -25,7 +25,7 @@ Updated: 2026-10-30 09:30（lab 空著：手冊完整實跑後的狀態，8.3.2�
 2. ~~JMX exporter 升 1.7.0＋keystore 密碼改環境變數~~ **做完**：手冊 2、3、17、B 照打全過（10 台 1.7.0、env=600、B.1 覆蓋率不變）；腳本 02／17 站已改（下一次腳本版從零跑會驗）。
 3. ~~手冊從第 0 章完整實跑~~ **通過**（2026-10-30；log/2026-10-30-full-manual-run.md）。
 4. 下一次腳本版從零跑時驗：exporter 1.7.0（02／17 站）、緊急主機模式不看群組（28-triage）。
-- 待使用者決定／回覆銀行：換金鑰週期；dashboard job label；docs/evidence 版控；omnibus 正式值。（已答：銀行目前沒有 Kafka Streams 應用。）
+- 待使用者決定／回覆銀行：換金鑰週期；omnibus 正式值。（已答：銀行沒有 Kafka Streams 應用；dashboard job label 維持官方名稱、不改官方檔；docs/evidence 不進版控。）
 
 ## 環境狀態
 - lab：專案 `lab`，手冊實跑後的狀態；手動改過：kafka-operators 綁定已改、kc／kb 的 kafka-rest 已停、ops02 /opt/opmenu 的 items/33、opmenu.sh、lib/common.sh 已換新版；kafka-admin 密碼今天換過兩次（已存回 ~/secrets/kafka-admin.pass）。監控容器已由 B.2 收掉（要用時照 17.6、22.2 或 bank-sim monitoring／monitoring-blackbox 起回來）。

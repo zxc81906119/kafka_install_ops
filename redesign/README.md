@@ -573,3 +573,8 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 使用者：MDS／AD 不通時，非 AD 相關的選單項目直接開放，不管群組。原因：操作者都是經 PSMP 登入的 root，`opmenu-emergency` 只能加「root」（等於所有人），root 也能自己加入，擋不住人。
 - 選單：`OPMENU_EMERGENCY_GROUP` 拿掉，改 `OPMENU_EMERGENCY_HOST`（預設 1 開放、0 關閉）；仍只開放 16 18 21 22 23、必填原因、記 EMERGENCY_HOST、身分標「未經 AD 驗證」。
 - 手冊 28.6 拿掉 OS 團隊加入／移出群組與重新登入；第 16 章表格拿掉群組；請銀行確認事項 9.1 改為告知（不接受可設 0 關閉）。腳本：bank-sim 的 emergency-group、28-triage 的群組判斷與 su - 都拿掉；lab 的 opmenu-emergency-test.sh 刪除（由 28-triage mds-down 取代）。
+
+### dashboard job label、docs/evidence（2026-10-30 定案）
+- scrape job 名稱維持 `kafka-controller`、`kafka-broker`、`rest-proxy`、`control-center`（加上 `cert-expiry`），`env`、`hostname` 兩個 label：官方 dashboard 寫死這些名稱（`job="kafka-broker"` 250 處、`job="kafka-controller"` 32 處），銀行要沿用，不能照自己的命名規則改。
+- 官方 dashboard 不改：專用 controller 的 KRaft 叢集裡，`job="kafka-broker"` 查 controller 才有的指標（主力 `kafka-cluster-kraft.json` 只有 Offline Partitions Count 一格；舊版 ZooKeeper 時代的三張也有）會是空的，由告警 `KafkaOfflinePartitions` 涵蓋，附錄 B 已說明。不打補丁，換官方版本時也不用重做。
+- `docs/evidence/`（實測截圖）不進版控，已移出並加進 `.gitignore`；檔案留在本機。

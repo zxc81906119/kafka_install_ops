@@ -21,3 +21,6 @@ node_modules/
 # Office lock files
 ~$*
 
+
+# 實測截圖等證據只留本機，不進版控（2026-10-30 使用者決定）
+docs/evidence/
