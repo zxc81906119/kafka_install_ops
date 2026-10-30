@@ -1,9 +1,9 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-30 00:35（**lab 使用中**：手冊從第 0 章完整實跑 run-full.sh customer，紀錄 ~/kafka-lab-runs/run-customer-0-end-<時間>.log，結束碼 ~/kafka-lab-runs/run-full-0-B.rc）
+Updated: 2026-10-30 09:30（lab 空著：手冊完整實跑後的狀態，8.3.2／JDK 25／OS 9.8／C3 2.6.1，監控容器已由 B.2 收掉）
 
 ## 現在在做什麼
-手冊實跑收尾、28.6、C3 Streams／RocksDB 監控都做完並 commit；下一項是腳本版從零再跑一次。
+10-29、10-30 的工作都做完並 commit：**手冊從第 0 章完整實跑通過**（407 塊）。沒有進行中的工作。
 
 ## 今天（10-29）做完
 - 補章 22、24、27、28、30 保險；腳本版從零通過（34 段、7×42/42）；MDS 50003（mds_write）；docx 控制字元；選單 token 換新、91 逐台找 MDS；手冊不依賴 repo（第 0 章、選單交付物）。
@@ -23,7 +23,8 @@ Updated: 2026-10-30 00:35（**lab 使用中**：手冊從第 0 章完整實跑 r
 ## 下一步（依序）
 1. ~~腳本版從零再跑一次~~ **通過**（23:00，rc 0；34 段、7×42/42、遷移與 OS 9.8 期間流量 0 遺失；途中修 02 站 SHA256SUMS、16 站 bob 檢查、KafkaProduceLatencyHigh）。
 2. ~~JMX exporter 升 1.7.0＋keystore 密碼改環境變數~~ **做完**：手冊 2、3、17、B 照打全過（10 台 1.7.0、env=600、B.1 覆蓋率不變）；腳本 02／17 站已改（下一次腳本版從零跑會驗）。
-3. **必做（使用者：很在乎手冊正確性）**：1、2 都 commit 後，用最新手冊從第 0 章完整跑到 B（run-full.sh customer，會拆 lab 重建）；失敗就修手冊、從該章續跑；跑完用 cmp-out（數字正規化）＋ cmp-num（保留數字）逐塊比對 out，修值、重建 docx、commit，給使用者完整報告。
+3. ~~手冊從第 0 章完整實跑~~ **通過**（2026-10-30；log/2026-10-30-full-manual-run.md）。
+4. 下一次腳本版從零跑時驗：exporter 1.7.0（02／17 站）、緊急主機模式不看群組（28-triage）。
 - 待使用者決定／回覆銀行：換金鑰週期；dashboard job label；docs/evidence 版控；omnibus 正式值；銀行有沒有 Kafka Streams 應用。
 
 ## 環境狀態

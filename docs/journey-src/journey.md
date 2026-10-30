@@ -820,7 +820,7 @@ docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/
 ```
 
 ```out
-84
+83
 6.9G	/root/landing
 ```
 
@@ -3336,7 +3336,7 @@ Oct 25 09:57:24 kb04 kafka-server-start[2266]: [2026-10-25 09:57:24,799] INFO Up
 Oct 25 09:58:24 kb04 kafka-server-start[2266]: [2026-10-25 09:58:24,782] INFO Updated lag of 0 group …
 已重啟 kb04.poc.lab 的 confluent-server
 kb04 MDS=200 after ~20s
-91 緊急模式列出的 topic：15
+91 緊急模式列出的 topic：14
 將執行:刪除 topic orders.optest,資料不可復原
 ```
 
@@ -6448,11 +6448,11 @@ chmod 0700 ~/conf/metadata-backup.sh && d=$(bash ~/conf/metadata-backup.sh) && e
 acls.txt              6 行
 broker-configs.txt    2 行
 features.txt          8 行
-rbac.txt             35 行
+rbac.txt             47 行
 topic-configs.txt    66 行
 topics.txt          160 行
-users.txt             7 行
-RBAC 的 principal：11 個；SHA256SUMS：7 個檔
+users.txt            11 行
+RBAC 的 principal：15 個；SHA256SUMS：7 個檔
 密碼字樣：0
 ```
 
@@ -7628,7 +7628,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 ```
 
 ```out
-topic 數：18；under-replicated：0；offline：0
+topic 數：14；under-replicated：0；offline：0
 建立 orders.mds-down：OK
 retention.ms=86400000
 刪除 orders.mds-down：OK
@@ -8114,7 +8114,7 @@ c3-01 java=jdk-25.0.5+8 confluent=2.6.1 os=9.6
 | 情境 | 例子 | 更新量 | 重開機 |
 |---|---|---|---|
 | 每月修補 | 9.6 內的安全更新 | 幾個到幾十個套件 | 偶爾（核心、glibc、systemd 更新時） |
-| **小版本更新**（主線，30.5） | RHEL 9.6 → 9.8 | 一百多個套件（lab 實測 148 個，含 glibc、systemd、openssh、openssl） | 一定（glibc、systemd、核心都換） |
+| **小版本更新**（主線，30.5） | RHEL 9.6 → 9.8 | 一百多個套件（lab 實測 120–126 個，依主機而異，含 glibc、systemd、openssh、openssl） | 一定（glibc、systemd、核心都換） |
 
 主線裡這一章接在第 29 章之後：Confluent 已是 8.3.2、JDK 已是 25，現在把 OS 從安裝基底的 **9.6 更新到 9.8**。30.0 是銀行的事（把套件庫同步到 9.8），30.1–30.4 是更新本身，30.5 是驗證、重開機的限制、回滾與「別的小版本怎麼套用」。
 
@@ -8150,11 +8150,11 @@ echo "9.8 更新集合：$(ls /out/9.8-updates/Packages | wc -l) 個 RPM、$(du 
 ```
 
 ```out
-9.8 更新集合：152 個 RPM、78 MB（約 160 秒）；合併後的套件庫 223 個 RPM
-repo01 /os/：223 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
+9.8 更新集合：154 個 RPM、79 MB（約 220 秒）；合併後的套件庫 225 個 RPM
+repo01 /os/：225 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
 ```
 
-> 說明：更新集合是 152 個 RPM（148 個要更新的套件加上相依），只有 78 MB，因為這批主機的套件只有最小安裝加上平台要用的工具；真正的 RHEL 主機裝的東西多，數字會大很多，請銀行的 OS 團隊用同樣的方法（在代表性的主機上 `dnf update --downloadonly`）估算。套件庫合併後同時有 9.6 和 9.8 的版本，dnf 會挑最新的。
+> 說明：更新集合是 154 個 RPM（124 個要更新的套件加上相依，2026-10-30 從 Rocky 9.8 鏡像實測；鏡像更新後數字會變），只有 79 MB，因為這批主機的套件只有最小安裝加上平台要用的工具；真正的 RHEL 主機裝的東西多，數字會大很多，請銀行的 OS 團隊用同樣的方法（在代表性的主機上 `dnf update --downloadonly`）估算。套件庫合併後同時有 9.6 和 9.8 的版本，dnf 會挑最新的。
 
 > 陷阱：dnf 會快取套件庫的中繼資料 48 小時，剛同步完主機可能還看到舊的清單。30.1 之後的指令都帶 `--refresh`。
 
@@ -8170,9 +8170,9 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 
 ```out
 under-replicated：0
-kc01：OS 9.6，套件庫的 release 套件 9.8；可更新 148 個（平台相關：glibc openssh-server rocky-release systemd）；其中 confluent-* 0 個；鎖住 9 個 confluent 套件
+kc01：OS 9.6，套件庫的 release 套件 9.8；可更新 124 個（平台相關：glibc openssh-server openssl-libs rocky-release systemd）；其中 confluent-* 0 個；鎖住 9 個 confluent 套件
   主版本一致（9.x → 9.8）
-Upgrade  148 Packages
+Upgrade  124 Packages
 （kb01、rest01、c3-01、ops02 同上，數字依各台裝的套件而不同；confluent-* 一律 0 個）
 ```
 
@@ -8232,7 +8232,7 @@ chmod 0700 ~/conf/os-patch-host.sh ~/conf/os-reboot.sh && export JAVA_HOME=/opt/
 ```
 
 ```out
-kb01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+kb01 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
   kb01 是容器，不能重開機：改重啟平台服務
   kb01 MDS=200
 （4 台；正式環境沒有「是容器」那行，而是重開機後等 ssh 回來，每台多幾分鐘）
@@ -8247,11 +8247,11 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 ```
 
 ```out
-kc02 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+kc02 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
   kc02 Lag=0
-kc03 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+kc03 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
   kc03 Lag=0
-kc01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+kc01 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
   kc01 Lag=0（leader，最後做）
 ```
 
@@ -8266,11 +8266,11 @@ for h in rest01 rest02; do ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh | te
 ```
 
 ```out
-rest01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
-rest02 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
-c3-01 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：2.6.1
+rest01 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+rest02 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+c3-01 更新 126 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：2.6.1
   REST 經 LB=200 C3=200
-ops02 更新 148 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+ops02 更新 120 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
 ```
 
 REST Proxy 的套件上面已經更新（JVM 不受影響）；重啟（或要重開機的話重開機）照 12.1 一台一台來。小版本更新時兩台一定是「要重開機：是」，這五步要做（`-r` 在 lab 的容器上自動改成重啟服務）；每月修補兩台都是「要重開機：否、要重啟的平台服務：無」時可以略過：
