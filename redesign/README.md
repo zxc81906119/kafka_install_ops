@@ -541,6 +541,7 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 官方規則對 C3 的兩個坑（lab 實證）：`stream-metrics`、`stream-thread-metrics` 多帶 `process-id`，官方規則把 UUID 拼進名稱（`kafka_streams_stream_metrics_process_id_<uuid>_..._client_state`，每次重啟換名）→ `client-state`、`recording-level`、`thread-state` 由我方先命名；`stream-topic-metrics` 四個 key，官方把 `processor-node-id` 塞進 `task_id` → 我方一條。
 - 告警（control-center 群組 5 條）：StreamsNotRunning（client_state ≥ 4）、StreamThreadsFailed（改用官方的 `failed_stream_threads` label）、**StreamsStalled**（thread 的 poll_rate = 0 十分鐘；閒置也約每秒 10 次）、**RocksDBBackgroundErrors**（15 分鐘內增加）、**DroppedRecords**（task 的丟棄率 > 0 十分鐘）。用的都是 recording level INFO 的指標（官方文件：RocksDB 屬性類指標、dropped-records 是 INFO）。
 - 順帶修：`max by (instance)` 聚合的規則都改 `by (instance, hostname)`，否則 summary 的 hostname 是空的。
+- 2026-10-30 使用者確認：銀行目前沒有自己的 Kafka Streams 應用，Streams／RocksDB 的 dashboard 與告警只用在 C3。之後若有，應用程式的 exporter 掛同一份官方 `kafka_streams.yml` 規則即可（但要避開 C3 那幾個帶 process-id 的坑，見上）。
 
 ### OP menu 與 MDS／AD 的關係、token 自動換新（2026-10-29）
 
