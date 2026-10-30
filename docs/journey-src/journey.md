@@ -2249,7 +2249,7 @@ ad01 已停
 @role 小安 | ops02 | root
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-users.pass); echo "alice 登入 MDS：HTTP $(curl -s -m 20 --cacert $CA -u "alice:$P" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; unset P; T=$(mktemp -d); grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $T/c.properties; printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="%s";\n' "$(cat ~/secrets/kafka-admin.pass)" >> $T/c.properties; echo "kafka-admin 從 9095 列 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list 2>/dev/null | grep -c .) 個"; rm -rf $T
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml; CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; P=$(cat ~/secrets/ad-test-users.pass); echo "alice 登入 MDS：HTTP $(curl -s -m 20 --cacert $CA -u "alice:$P" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"; unset P; T=$(mktemp -d); grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $T/c.properties; printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="%s";\n' "$(cat ~/secrets/kafka-admin.pass)" >> $T/c.properties; echo "kafka-admin 從 9095 列 topic：$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $T/c.properties --list 2>/dev/null | grep -vc -e '^Error' -e '^$') 個"; rm -rf $T
 ```
 
 ```out

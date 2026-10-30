@@ -13,3 +13,5 @@
 - Docker Desktop 後端當掉（`sailor-ingest.sock rename … cannot be accessed`）：停 Docker 與 WSL，把 `%LOCALAPPDATA%\Docker\run` 改名再啟動。絕不 Reset to factory defaults。
 - 使用者決定：26.4 也包成腳本（26-license.sh reset），《請銀行確認的事項》加 12.4 license 題。
 - 腳本版：`26-license.sh reset`（確認 = 輸入現在的 cluster id；不互動 `RESET_CONFIRM=`），第 7 步呼叫 `23-metadata-backup.sh restore-all`。lab 一次通過（17:27–17:35），錯的確認 rc=1 不動叢集，接著 19-acceptance 42/42。
+- svc-mds-bind：使用者一度選 A／B，隨即改回**單一帳號**（銀行通常只給一個服務帳號）；redesign 10-28 那句「沿用 A/B」已更正（89a7446）。
+- OP menu 自檢（27 項）：44 快照的 ACL 格式已和每日備份不同、沒有 rbac.txt 不能還原；43／45、13／15 重疊；缺 license 到期、配額。使用者選：修 44、合併 43+45 與 13+15、補 license＋配額（等腳本版跑完）。

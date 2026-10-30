@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-30 17:45（lab 沒有在跑的工作；lab 是「重置後」的乾淨叢集，見環境狀態）
+Updated: 2026-10-30 20:40（lab 空閒；下一步動 lab 時再標使用中）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。
@@ -14,12 +14,18 @@ Updated: 2026-10-30 17:45（lab 沒有在跑的工作；lab 是「重置後」�
 
 ## 下一步（候選）
 1. ~~26.4 包成腳本~~ **做完**：`26-license.sh reset`（輸入現在的 cluster id 確認）＋`23-metadata-backup.sh restore-all`；lab 實跑通過（約 8 分鐘，ACL 4、binding 33），錯的確認被拒，之後第 19 站 42/42。
-2. 腳本版從零再跑一次（10-30 那一輪在第 18 段中斷、已放棄）：驗 exporter 1.7.0（02／17 站）、緊急主機模式不看群組（28-triage）、23 站新 ACL 格式。
+2. ~~腳本版從零再跑一次~~ **做完**（20:31，34 段 rc=0，驗收 6 次 42/42；log/2026-10-30-script-full-run.md）。找到 11.2 ad-drill 假通過（腳本版當時還沒有 app-orders.properties，錯誤行被算成 1 個 topic），bank-sim.sh 與手冊 11.2 已修、重跑通過。
 3. ~~銀行確認事項加 license 題~~ **做完**：12.4（docx 已重建）。
 - 待銀行回覆：換金鑰週期；omnibus 正式值。
 
+## 接下來做（使用者 2026-10-30 選定：OP menu 調整，三步：lab 實測 → 手冊第 16 章 → opmenu／16 站）
+- 修 44 快照：ACL 改新格式（同 23.3）、加 rbac.txt（讓 23.6／26.4 能還原）、註解章號 25→23。
+- 合併 43＋45（audit 篩選後可選存檔）、13＋15（consumer group 的 lag＋成員數）；號碼重排要連手冊、權限對照表一起改。
+- 補：17 加 license 到期日；新增「查看／調整配額」。
+- 不做：partition 數、備份狀態、12＋14 合併。
+
 ## 環境狀態
-- lab：專案 `lab`，由腳本版（中斷於第 18 段）建出，CP 8.2.4（遷移中途）、C3 2.6.1、JDK 21、OS 9.6；之後做過兩次 26.4 重置（新的 cluster id，舊的 kraft.env 另存在 ops02 `~/conf/kraft.env.before-reset-*`）。手冊第 23 章的 `~/conf` 程式與 `cluster-restore-all.sh` 已裝；第 16 章手冊的 `opmenu-try.sh` 沒有（19.4 那一行因此找不到檔）。下一輪從零跑前不需要保留。
+- lab：專案 `lab`，由腳本版 10-30 17:45 從零建出並跑完整條主線：OS 9.8、CP 8.3.2、C3 2.6.1、JDK 25；license trial 到 2026-11-29。
 - Docker VM 約 10.7 GB，不要同時跑別的。絕不按 Docker Desktop 的 Reset to factory defaults（會清掉 volume `ops-secure`）。
 - 密碼檔：`~/kafka-lab/secrets.env`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
 - Git Bash 的 `python3` 是 Store 空殼：改檔用 node；跑手冊片段時 `export MSYS_NO_PATHCONV=1`。
