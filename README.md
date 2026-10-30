@@ -84,6 +84,6 @@ redesign/           設計討論紀錄
 
 ## 已知限制
 
-- 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。Confluent Server 的 raft 指標（`kafka_server_raft_metrics_*`）只有單台 controller 的環境抓得到；三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）一條都沒有，所以不能用來告警，quorum 健康改用 `ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount`；官方 `kraft.json` dashboard 在三台 controller 叢集只有 10／18 個 panel 有值（靠 raft 指標的是空的）。另外官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 B.1 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章尚未在完整 lab 從零跑過（見 .claude/state/status-redesign.md）。
+- 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。Confluent Server 的 raft 指標（`kafka_server_raft_metrics_*`）只有單台 controller 的環境抓得到；三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）一條都沒有，所以不能用來告警，quorum 健康改用 `ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount`；官方 `kraft.json` dashboard 在三台 controller 叢集只有 10／18 個 panel 有值（靠 raft 指標的是空的）。另外官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 B.1 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章已在完整 lab 從零跑過（2026-10-30，手冊第 0 章到附錄 B 全部照打實跑）。
 - CyberArk PAM 本身（PVWA 登入、PSMP 代登與錄影）與放私鑰的加密 file system（LUKS）無法在 lab 模擬：lab 直接以 root 進操作機，`/secure/ssh` 用獨立的 docker volume 代替（獨立掛載點，沒有加密）；只驗證我方拿到值之後的程序。
 - MDS token 金鑰不排輪替（公鑰檔放兩把沒有用，無法零中斷切換）；只在私鑰外洩時用 `install/lab/mds-token-key-rotate.sh` 驗過的程序換。

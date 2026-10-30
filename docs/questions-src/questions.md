@@ -1,5 +1,5 @@
 <!--meta
-{"kicker":"Confluent Platform 企業版 · 離線安裝與遷移（8.2 → 8.3）","title":"請銀行確認的事項","subtitle":"安裝前要先有答案的問題，以及沒有答案時我們的做法","header":"Confluent Platform 安裝與遷移 · 請銀行確認的事項","author":"zxc81906119","facts":[["適用版本","安裝基底：Confluent Platform 8.2.4、Control Center 2.5.1、JDK 21、RHEL 9.6；遷移目標：8.3.2、2.6.1、JDK 25、RHEL 9.8（以銀行實際的小版本為準）"],["驗證環境","RHEL 9 相容環境（Rocky Linux 9）模擬 11 台主機，離線安裝全程實跑"],["已知前提","主機不接 AD、只有固定帳號；CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登、CPM 輪替 root 與 svc-mds-bind），沒有 CCP、Conjur"],["文件日期","2026-10-24"]]}
+{"kicker":"Confluent Platform 企業版 · 離線安裝與遷移（8.2 → 8.3）","title":"請銀行確認的事項","subtitle":"安裝前要先有答案的問題，以及沒有答案時我們的做法","header":"Confluent Platform 安裝與遷移 · 請銀行確認的事項","author":"zxc81906119","facts":[["適用版本","安裝基底：Confluent Platform 8.2.4、Control Center 2.5.1、JDK 21、RHEL 9.6；遷移目標：8.3.2、2.6.1、JDK 25、RHEL 9.8（以銀行實際的小版本為準）"],["驗證環境","RHEL 9 相容環境（Rocky Linux 9）模擬 11 台主機，離線安裝全程實跑"],["已知前提","主機不接 AD、只有固定帳號；CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登進操作機），沒有 CCP、Conjur；平台不用 CPM 自動輪替，root 由銀行管、svc-mds-bind 由人手動換"],["文件日期","2026-10-30"]]}
 -->
 [[toc]]
 
