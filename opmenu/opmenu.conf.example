@@ -39,6 +39,10 @@ OPMENU_TOPIC_PATTERN='^[a-z][a-z0-9]+\.[a-z0-9.-]+$'
 OPMENU_SVC_PATTERN='^[a-z][a-z0-9-]+$'
 # OPMENU_REPLICATION=3             # 建 topic 的 replication factor;預設 3,broker 少於 3 台時自動降到 broker 數
 OPMENU_IDLE_TIMEOUT=900
+# OPMENU_AUDIT_SENSITIVE_TOPIC=confluent-audit-log-events_sensitive   # 43 選「敏感」時讀的 topic(稽核路由的敏感目的地);空 = 不分
 OPMENU_AUDIT_GROUP_PREFIX='audit-' # 43 讀 audit 用的 consumer group prefix(audit 群組要有它的 DeveloperRead)
+OPMENU_INTERNAL_GROUP_PATTERN='^(_|ConfluentTelemetryReporterSampler|console-consumer-|<C3 的 confluent.controlcenter.name>)'   # 13 查全部時不列的平台內部 group;換成實際的 C3 名稱
+# OPMENU_QUOTA_KEYS='producer_byte_rate consumer_byte_rate request_percentage'   # 15 顯示、38 可調整的配額項目
+# OPMENU_LICENSE_WARN_DAYS=90       # 17 license 剩不到幾天標警告
 # OPMENU_CHANGE_WINDOW='Mon-Fri 22:00-06:00;Sat,Sun 00:00-23:59'   # 變更類項目的時窗;空 = 不限制
 OPMENU_LOG=/var/log/opmenu/opmenu.log   # 程式目錄唯讀,紀錄與匯出檔放這裡(目錄要讓 opmenu 群組可寫);OPMENU_SYSLOG=1 另送 syslog

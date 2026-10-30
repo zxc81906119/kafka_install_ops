@@ -578,3 +578,13 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - scrape job 名稱維持 `kafka-controller`、`kafka-broker`、`rest-proxy`、`control-center`（加上 `cert-expiry`），`env`、`hostname` 兩個 label：官方 dashboard 寫死這些名稱（`job="kafka-broker"` 250 處、`job="kafka-controller"` 32 處），銀行要沿用，不能照自己的命名規則改。
 - 官方 dashboard 不改：專用 controller 的 KRaft 叢集裡，`job="kafka-broker"` 查 controller 才有的指標（主力 `kafka-cluster-kraft.json` 只有 Offline Partitions Count 一格；舊版 ZooKeeper 時代的三張也有）會是空的，由告警 `KafkaOfflinePartitions` 涵蓋，附錄 B 已說明。不打補丁，換官方版本時也不用重做。
 - `docs/evidence/`（實測截圖）不進版控，已移出並加進 `.gitignore`；檔案留在本機。
+
+### OP menu 項目調整（2026-10-30 定案）
+- 使用者自檢後選定：修 44 快照、合併 43＋45 與 13＋15、補 license 與配額；不做 partition 數、備份狀態、12＋14 合併。
+- 13 改為「consumer group（lag 與成員數）」：每個 group 的合計 lag 與在線成員數（0 個 = 應用程式沒在跑）；查全部時不列 `OPMENU_INTERNAL_GROUP_PATTERN` 的平台內部 group（C3 遙測、工具的臨時 group、C3 自己的 group），不然遙測 group 動輒十幾萬的 lag 會被看成應用程式落後。
+- 15 改為「查看配額」（第 1 層），新增 38「調整配額」（第 3 層：並行鎖、變更時窗、確認；值填 `-` 拿掉）。兩個都要叢集層級 DescribeConfigs／AlterConfigs，維運（Operator＋DeveloperManage）看不到，實測被拒。
+- 43 合併成「查詢與匯出 audit」：依主體、結果篩選，最後問要不要存檔（非互動用第 4 個參數 `save`）；45 拿掉。時間改成操作機本地時間。原本 43／45 只讀 `OPMENU_AUDIT_TOPIC`（手冊第 18 章說兩個都讀，是錯的）。
+- 17 加 license 到期日：本人讀得到 `_confluent-command` 就即時讀（同 26.1）；讀不到（維運通常沒有）改顯示 26.2 每日檢查在 syslog 的最後一筆。
+- 44 快照補 `rbac.txt`、ACL 改成和 23.3 一樣一條一行，7 個檔和每日備份逐位元組相同（lab 實測 sha256 全部相同），23.6、26.4 的還原程式可以直接拿快照還原。為此每日備份的 `rbac.txt` 也去掉 CLI 表格的對齊空白、binding 排序；ACL、帳號、role binding 一律 `LC_ALL=C` 排序（ops02 是 C.UTF-8，銀行的 RHEL 多半是 en_US.UTF-8，排序結果會不同）。
+- 順手修掉的既有 bug：44 的權限清單 CSV 每個 principal 的每個 role 都少了最後一個資源（`printf '%s' | sed` 沒有結尾換行，`read` 丟掉最後一行；lab 13 筆 → 33 筆）；23.6 單一帳號還原遇到叢集層級 binding 會帶錯的 `--resource Cluster:`（改成看資源名稱）；11.2 AD 斷線演練的 kafka-admin 檢查在腳本版是假通過（見 log/2026-10-30-script-full-run.md）。
+- 43 加選項（使用者 2026-10-30 選定）：一般、敏感（`OPMENU_AUDIT_SENSITIVE_TOPIC`，預設 `<一般>_sensitive`）、兩個都看（依事件時間合併）；非互動第 5 個參數 `normal|sensitive|all`。稽核群組綁 audit topic 的 prefix 就兩個都讀得到。哪些 topic 算敏感由銀行定（lab 的 `payments.*` 只是例子，請銀行確認事項 9.5）。

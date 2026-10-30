@@ -306,7 +306,7 @@ D.audit = () => svg(800, 260, [
   arrow(460, 60, 538, 55), arrow(460, 82, 538, 125),
   box(20, 150, 170, 62, "排除", ["User:kafka-internal", "User:svc-c3(雜訊)"], "gray"),
   box(260, 150, 200, 62, "密碼", ["confluent-audit 的 SCRAM 密碼", "進 Secret Protection"], "gray"),
-  box(540, 180, 240, 50, "誰讀", ["稽核群組 / OP menu 43、45 / SIEM"], "gray"),
+  box(540, 180, 240, 50, "誰讀", ["稽核群組 / OP menu 43 / SIEM"], "gray"),
   arrow(660, 150, 660, 178, null, { dash: true }),
 ].join(""));
 

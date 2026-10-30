@@ -81,8 +81,32 @@ k_cluster_counts() { # 印 "<under-replicated> <offline> <在線 broker 數>";�
   if [ $rc -eq 0 ]; then live=$(printf '%s\n' "$o" | grep -c '^[A-Za-z0-9._-]*:[0-9]* (id: '); else live=0; fi
   echo "$urp $off $live"
 }
-k_audit_fetch() { # k_audit_fetch <分鐘> <輸出檔>:讀 audit topic,用事件時間留下最近 N 分鐘的事件
-  local mins="$1" f="$2" since; since=$(( ($(date +%s) - mins*60) * 1000 ))
-  be_kafka kafka-console-consumer --topic "$OPMENU_AUDIT_TOPIC" --from-beginning --timeout-ms 15000 --group "${OPMENU_AUDIT_GROUP_PREFIX}$OP_USER-$$-$RANDOM" --consumer-property enable.auto.commit=false 2>/dev/null \
-    | awk -v s="$since" '{ if (match($0, /"time":"[0-9T:.-]+Z?"/)) { t=substr($0, RSTART+8, RLENGTH-9); gsub(/[-:TZ]/, " ", t); split(t, a, " "); ts=mktime(a[1]" "a[2]" "a[3]" "a[4]" "a[5]" "int(a[6]), 1)*1000; if (ts >= s) print } }' > "$f" || true
+k_license_claims() { # 生效中的 license(JWT)存在 _confluent-command:以本人身分讀出最後一個,印 payload 的 JSON(手把手 26.1);讀不到回傳 1
+  local jwt payload
+  jwt=$(be_kafka kafka-console-consumer --topic _confluent-command --from-beginning --timeout-ms 20000 2>/dev/null |
+        grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' | tail -1)
+  [ -n "$jwt" ] || return 1
+  payload=$(printf '%s' "$jwt" | cut -d. -f2 | tr '_-' '/+')
+  while [ $(( ${#payload} % 4 )) != 0 ]; do payload="$payload="; done
+  printf '%s' "$payload" | base64 -d 2>/dev/null
 }
+k_quota_lines() { # k_quota_lines [帳號]:每個有配額的帳號一行「帳號 項目=值 …」(項目照 OPMENU_QUOTA_KEYS 的順序,1.048576E7 這種寫法換成整數);工具失敗回傳非 0
+  local args=(--describe --entity-type users) out rc; [ -n "${1:-}" ] && args+=(--entity-name "$1")
+  out=$(be_kafka kafka-configs "${args[@]}"); rc=$?
+  [ $rc -eq 0 ] || { printf '%s\n' "$out" | grep -m3 -iE 'exception|error'; return $rc; }
+  printf '%s\n' "$out" | awk -v keys="$OPMENU_QUOTA_KEYS" '
+    /^Quota configs for/ {
+      who = "(預設)"; if (match($0, /'"'"'[^'"'"']+'"'"'/)) who = substr($0, RSTART+1, RLENGTH-2)
+      s = $0; sub(/.* are /, "", s); n = split(s, kv, /, */); delete val
+      for (i = 1; i <= n; i++) { split(kv[i], p, "="); val[p[1]] = sprintf("%.0f", p[2]) }
+      line = sprintf("%-28s", who); m = split(keys, k, " ")
+      for (i = 1; i <= m; i++) if (k[i] in val) line = line " " k[i] "=" val[k[i]]
+      print line }' | LC_ALL=C sort
+}
+k_audit_fetch() { # k_audit_fetch <分鐘> <輸出檔> [topic…]:讀 audit topic(預設 OPMENU_AUDIT_TOPIC),用事件時間留下最近 N 分鐘的事件;多個 topic 依時間合併
+  local mins="$1" f="$2" since t; shift 2; since=$(( ($(date +%s) - mins*60) * 1000 ))
+  for t in "${@:-$OPMENU_AUDIT_TOPIC}"; do
+    be_kafka kafka-console-consumer --topic "$t" --from-beginning --timeout-ms 15000 --group "${OPMENU_AUDIT_GROUP_PREFIX}$OP_USER-$$-$RANDOM" --consumer-property enable.auto.commit=false 2>/dev/null
+  done | awk -v s="$since" '{ if (match($0, /"time":"[0-9T:.-]+Z?"/)) { t=substr($0, RSTART+8, RLENGTH-9); gsub(/[-:TZ]/, " ", t); split(t, a, " "); ts=mktime(a[1]" "a[2]" "a[3]" "a[4]" "a[5]" "int(a[6]), 1)*1000; if (ts >= s) print ts "\t" $0 } }' | sort -n -s -k1,1 | cut -f2- > "$f" || true
+}
+

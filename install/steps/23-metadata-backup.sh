@@ -63,16 +63,16 @@ run_backup() {
   section "23.3 匯出到 $out"
   # save <檔名> <指令…>：輸出存檔；失敗或空的就記下來，錯誤訊息留在 <檔名>.err
   save() { file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
-  # 比對兩天的備份靠 sha256：features 的 Epoch 每次不同、ACL 與帳號清單的順序不固定，所以拿掉與排序
+  # 比對兩天的備份靠 sha256：features 的 Epoch 每次不同、ACL、帳號清單、role binding 的順序不固定，所以拿掉與排序（LC_ALL=C；OP menu 44 的快照同格式）
   features() { kafka-features "${backup[@]}" describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
-  acls() { kafka-acls "${backup[@]}" --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | sort; }
-  scram_and_quotas() { kafka-configs "${backup[@]}" --describe --entity-type users | sort; }
+  acls() { kafka-acls "${backup[@]}" --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | LC_ALL=C sort; }
+  scram_and_quotas() { kafka-configs "${backup[@]}" --describe --entity-type users | LC_ALL=C sort; }
   rbac() {
     local role principal cid; cid=$(cluster_id)
     for principal in $(for role in $(cli_as svc-backup iam rbac role list -o json | grep -o '"name": *"[A-Za-z]*"' | cut -d'"' -f4); do
                          cli_as svc-backup iam rbac role-binding list --role "$role" --kafka-cluster "$cid" -o json 2>/dev/null; done |
-                       grep -o '"principal": *"[^"]*"' | cut -d'"' -f4 | sort -u); do
-      echo "== $principal"; cli_as svc-backup iam rbac role-binding list --principal "$principal" --kafka-cluster "$cid" | tail -n +3
+                       grep -o '"principal": *"[^"]*"' | cut -d'"' -f4 | LC_ALL=C sort -u); do
+      echo "== $principal"; cli_as svc-backup iam rbac role-binding list --principal "$principal" --kafka-cluster "$cid" | tail -n +3 | sed 's/ *| */|/g; s/^ *//; s/ *$//' | LC_ALL=C sort
     done
   }
   save topics.txt         kafka-topics "${backup[@]}" --describe
@@ -132,7 +132,7 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
     local n=0 principal role rtype rname pattern args iter quota cid; cid=$(cluster_id)
     while IFS='|' read -r principal role rtype rname pattern; do
       principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
-      args=(--principal "$principal" --role "$role" --kafka-cluster "$cid"); [ -n "$rtype" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
+      args=(--principal "$principal" --role "$role" --kafka-cluster "$cid"); [ -n "$rname" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
       mds_write cli_as svc-ops iam rbac role-binding create "${args[@]}" >/dev/null 2>&1 && n=$((n+1))
     done < <(awk -v u="User:$user" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$dir/rbac.txt")
     ok "role binding：$n 條"

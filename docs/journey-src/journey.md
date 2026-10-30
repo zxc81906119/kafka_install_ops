@@ -3210,6 +3210,7 @@ OPMENU_BREAKGLASS_PEM=/root/secrets/opmenu-breakglass.pem
 OPMENU_LOG=/var/log/opmenu/opmenu.log
 OPMENU_SYSLOG=0
 OPMENU_ALLOW_ENV_OVERRIDE=1
+OPMENU_INTERNAL_GROUP_PATTERN='^(_|ConfluentTelemetryReporterSampler|console-consumer-|poc-cluster)'
 EOF
 chmod 0644 /etc/opmenu/opmenu.conf && /opt/opmenu/opmenu.sh --list | awk -F'\t' '{print $1, $5}' | head -8
 ```
@@ -3218,11 +3219,11 @@ chmod 0644 /etc/opmenu/opmenu.conf && /opt/opmenu/opmenu.sh --list | awk -F'\t' 
 10 查看 leader 與 partition 分布(balance report)
 11 cluster 與身分鏈健康檢查
 12 列出 topic 與 partition 狀態
-13 查看 consumer lag
+13 查看 consumer group(lag 與成員數)
 14 查看某個 topic 的設定
-15 查看 application 連線狀況
+15 查看配額(quota)
 16 查看磁碟與 data directory 用量
-17 查看 certificate 到期日
+17 查看 certificate 與 license 到期日
 ```
 
 ## 16.4 各主機 cpuser 的 sudo 改成兩段式
@@ -3293,12 +3294,12 @@ P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_US
 ```
 
 ```out
-bob    10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 44 45 91
-carol  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 44 45 91
-alice  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 41 42 43 44 45 91
+bob    10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 38 41 42 43 44 91
+carol  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 38 41 42 43 44 91
+alice  10 11 12 13 14 15 16 17 18 19 21 22 23 27 31 32 33 34 35 36 37 38 41 42 43 44 91
 ```
 
-三個人看到的一樣。43、45（匯出、查詢稽核紀錄）做了會不會成功，看那個人有沒有 audit topic 的讀取權限：alice（SystemAdmin）有，bob、carol 沒有；要給稽核單位用，就把他們的 AD 群組綁 `Topic:confluent-audit-log-events`（prefix）與 `Group:audit-`（prefix）的 DeveloperRead。
+三個人看到的一樣。43（查詢稽核紀錄，篩選後可存檔交給稽核）做了會不會成功，看那個人有沒有 audit topic 的讀取權限：alice（SystemAdmin）有，bob、carol 沒有（第 18 章裝好稽核日誌後示範）；要給稽核單位用，就把他們的 AD 群組綁 `Topic:confluent-audit-log-events`（prefix）與 `Group:audit-`（prefix）的 DeveloperRead。
 
 bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；23 只列含 error／warn 字樣的行，INFO 裡有 errors 字眼也會被列出）、重啟 kb04；建、刪 topic 可以（`DeveloperManage`，見 16.2），但讀不到訊息內容；改權限（42）會被 MDS 拒絕、91 會被管理員閘門擋下。alice（SystemAdmin）：建 topic、91 緊急模式、刪 topic。
 
@@ -3354,6 +3355,27 @@ P=$(cat ~/secrets/ad-test-users.pass); env OPMENU_USER=alice OPMENU_PASS="$P" OP
 下一步：請應用程式改用 app-payments-b 與新密碼；下次輪替時換 app-payments-a
 交接檔已 shred
 ```
+
+@role 維運人員 bob、alice；lab 由小安代打 | ops02 | root
+
+值班常看的三項：13 每個 consumer group 的合計 lag 和**在線成員數**（0 個成員 = 應用程式沒在跑，lag 會一直長）；15 每個帳號的配額；17 除了各端點的憑證，也列 license 的到期日。調配額用 38（第 3 層，受並行鎖與變更時窗管制）：先顯示目前的值，值填 `-` 是拿掉那一項。配額要叢集層級的 `DescribeConfigs`／`AlterConfigs`，所以維運的 bob 看不到、也改不了，管理的 alice 可以。license 存在 `_confluent-command`，讀得到的人（alice）即時讀；讀不到的人，17 改顯示操作機每天檢查（26.2）記進 syslog 的最後一筆。這裡先開一個 60 秒的 consumer，讓 13 看得到在線成員：
+
+```bash
+P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 </dev/null | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; (JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml timeout 60 kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events --group orders-optest >/dev/null 2>&1 &); sleep 20; op bob 13 orders-optest | grep '^=='; op bob 15 "" | tail -1; op alice 15 app-orders-b | tail -1; op alice 38 app-orders-b producer_byte_rate=4194304,request_percentage=- | grep -E '^(目前|將執行|改後)'; op alice 38 app-orders-b producer_byte_rate=5242880,request_percentage=50 | grep '^改後'; op alice 17 | grep '^license'; unset P
+```
+
+```out
+== orders-optest                  合計 lag 0,在線成員 1 個
+Kafka 拒絕:你的群組沒有這項權限,請依變更單申請。
+app-orders-b                 producer_byte_rate=5242880 consumer_byte_rate=10485760 request_percentage=50
+目前:app-orders-b                 producer_byte_rate=5242880 consumer_byte_rate=10485760 request_percentage=50
+將執行:帳號 app-orders-b 的配額:設定 producer_byte_rate=4194304;拿掉 request_percentage
+改後:app-orders-b                 producer_byte_rate=4194304 consumer_byte_rate=10485760
+改後:app-orders-b                 producer_byte_rate=5242880 consumer_byte_rate=10485760 request_percentage=50
+license：trial，到期 2026-11-29，剩 29 天  ⚠（不到 90 天，手把手 26.3）
+```
+
+> 13 查全部時不列平台內部的 group（`OPMENU_INTERNAL_GROUP_PATTERN`：C3 遙測、工具的臨時 group，以及 C3 自己的 group，lab 的 C3 名稱是 `poc-cluster`，寫在 16.3 的 `opmenu.conf`）；這些 group 沒有在線成員、lag 動輒十幾萬，混在裡面會被誤認成應用程式落後。
 
 ## 16.6 收尾檢查
 
@@ -4265,7 +4287,7 @@ Confluent Server 內建稽核：誰、用什麼身分、對哪個 topic 做了�
 | 誰 | 做什麼 |
 |---|---|
 | 小安 | 建寫入帳號與權限、改 controller／broker 的設定（加密、派送）、滾動重啟、製造允許與拒絕的事件來驗證 |
-| 銀行稽核 | 之後用 OP menu 的 43／45，或自己的 SIEM 讀這兩個 topic |
+| 銀行稽核 | 之後用 OP menu 的 43（查詢、篩選後存檔），或自己的 SIEM 讀這兩個 topic |
 
 ## 18.1 專用的寫入帳號
 
@@ -4397,7 +4419,25 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
   （… 第 16 站 OP menu 問 MDS 留下的授權事件）
 ```
 
-> 三件事值得看清楚：(1) 敏感 topic 的事件在 `_sensitive`：alice 的 produce（允許）和 app-orders 想讀時的 Metadata（describe 被拒）。(2) **一般 topic 的 produce／consume 不會被記**：app-orders 讀 orders.events 沒有出現在任何 topic，因為 Confluent 預設只記「管理類」與「授權類」事件（例如上面 MDS 的 Authorize，那是第 16 章 OP menu 問權限留下的），produce／consume 只在路由裡明確列出的 topic 才記。要記全部就把 `crn:///kafka=*/topic=*` 的 produce／consume 也寫進 routes，量會很大。(3) `kafka-internal`、`svc-c3` 完全不出現。OP menu 的 43（匯出）、45（查詢）讀的就是這兩個 topic。
+> 三件事值得看清楚：(1) 敏感 topic 的事件在 `_sensitive`：alice 的 produce（允許）和 app-orders 想讀時的 Metadata（describe 被拒）。(2) **一般 topic 的 produce／consume 不會被記**：app-orders 讀 orders.events 沒有出現在任何 topic，因為 Confluent 預設只記「管理類」與「授權類」事件（例如上面 MDS 的 Authorize，那是第 16 章 OP menu 問權限留下的），produce／consume 只在路由裡明確列出的 topic 才記。要記全部就把 `crn:///kafka=*/topic=*` 的 produce／consume 也寫進 routes，量會很大。(3) `kafka-internal`、`svc-c3` 完全不出現。
+
+@role 稽核單位（lab：alice 代打；carol 沒有讀取權限） | ops02 | root
+
+稽核單位平常用 OP menu 的 43：先選看哪一個稽核 topic，再依主體、結果篩最近 N 分鐘的事件，畫面顯示最後 50 筆（時間換成本地時間），要交出去就存成檔案（`/var/log/opmenu/audit-<時間>-<操作者>.jsonl`，0600）。三個選擇：**一般**（`confluent-audit-log-events`：管理類、授權類事件，預設）、**敏感**（`_sensitive`：18.2 路由規則點名的敏感 topic 的讀寫）、**兩個都看**（依時間合併）。非互動時第 5 個參數是 `normal`、`sensitive` 或 `all`。讀取權限一個 prefix 綁定就涵蓋兩個 topic。下面篩出第 16 站 bob 被擋下的兩件事（42 改權限、91 緊急模式）並存檔；再看敏感 topic 裡 app-orders-a 想讀 `payments.events` 被拒的事件；carol 沒有稽核 topic 的讀取權限，被 Kafka 拒絕：
+
+```bash
+P=$(cat ~/secrets/ad-test-users.pass); op() { local u="$1"; shift; env OPMENU_USER="$u" OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 </dev/null | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'; }; op alice 43 240 bob DENIED save | grep -E '符合|DENIED$|已匯出' | sed -E 's/audit-[0-9]{8}-[0-9]{6}/audit-<時間>/'; op alice 43 240 app-orders-a - - sensitive | grep -E '符合|payments' | sed -n '1p;$p'; op carol 43 240 | tail -1; unset P
+```
+
+```out
+最近 240 分鐘符合 2 筆(confluent-audit-log-events)(主體 User:bob)(結果 DENIED);顯示最後 50 筆:
+2026-10-30 18:20:52 User:bob         mds.Authorize        AlterAccess    orders.                    DENIED
+2026-10-30 18:20:52 User:bob         mds.Authorize        Alter          kafka-cluster              DENIED
+已匯出 2 筆:/var/log/opmenu/audit-<時間>-alice.jsonl
+最近 240 分鐘符合 8 筆(confluent-audit-log-events_sensitive)(主體 User:app-orders-a);顯示最後 50 筆:
+2026-10-30 20:29:14 User:app-orders-a kafka.Metadata       Describe       payments.events            DENIED
+Kafka 拒絕:你的群組沒有這項權限,請依變更單申請。
+```
 
 ## 18.4 要跟稽核單位說清楚的事
 
@@ -4405,7 +4445,7 @@ for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1
 |---|---|
 | 寫入者 | `confluent-audit`（SCRAM，只有 audit topic 的 Write／Manage），不是 super user；密碼在 Secret Protection 裡 |
 | 保留 | 預設 topic 90 天、`_sensitive` 365 天，都是 topic 的 retention；要更久就外送 SIEM |
-| 誰能讀 | 綁了 audit topic DeveloperRead 的群組（lab 是 SystemAdmin 直接讀）；稽核群組用 OP menu 43／45 匯出與查詢 |
+| 誰能讀 | 綁了 audit topic DeveloperRead 的群組（lab 是 SystemAdmin 直接讀）；稽核群組用 OP menu 43 查詢與匯出 |
 | 量 | `kafka-internal`、`svc-c3` 已排除；只有路由列出的 topic 才記 produce／consume，要擴大範圍前先估磁碟 |
 | 改規則 | 改 `common.tpl` 的 router JSON → 重新加密派送 → 滾動重啟（和這一章一樣） |
 | 可靠度 | 兩個 audit topic 都是 replication factor 3（lab 確認：`kafka-topics --describe`），`min.insync.replicas=1`：稽核寫入不因少一台 broker 而停；原廠建議稽核量大或要求隔離時，送到**專用的稽核叢集**（`confluent.security.event.logger.exporter.kafka.bootstrap.servers` 指過去） |
@@ -6410,11 +6450,11 @@ A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --co
 out=$BACKUP_ROOT/$(date +%Y%m%d-%H%M); install -d -m 0700 "$out"; failed=""
 # save <檔名> <指令…>：輸出存檔；失敗或空的就記下來，錯誤訊息留在 <檔名>.err
 save() { local file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
-# 比對兩天的備份靠 sha256：會變的雜訊（features 的 Epoch）拿掉、ACL 與帳號清單的順序不固定所以排序
+# 比對兩天的備份靠 sha256：會變的雜訊（features 的 Epoch）拿掉、ACL、帳號清單、role binding 的順序不固定所以排序（LC_ALL=C；OP menu 44 的快照也照這個格式，sha256 可互相比對）
 features() { kafka-features $A describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
 # ACL 一條一行：資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY（26.4 的 cluster-restore-all.sh 照這個格式建回來）
-acls() { kafka-acls $A --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | sort; }
-scram_and_quotas() { kafka-configs $A --describe --entity-type users | sort; }
+acls() { kafka-acls $A --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | LC_ALL=C sort; }
+scram_and_quotas() { kafka-configs $A --describe --entity-type users | LC_ALL=C sort; }
 save topics.txt         kafka-topics $A --describe
 save topic-configs.txt  kafka-configs $A --describe --entity-type topics
 save users.txt          scram_and_quotas      # SCRAM 只有機制與迭代次數，沒有密碼；配額
@@ -6431,8 +6471,8 @@ rbac() {
   local role principal
   for principal in $(for role in $(cli iam rbac role list -o json | grep -o '"name": *"[A-Za-z]*"' | cut -d'"' -f4); do
                        cli iam rbac role-binding list --role "$role" --kafka-cluster "$cluster_id" -o json 2>/dev/null; done |
-                     grep -o '"principal": *"[^"]*"' | cut -d'"' -f4 | sort -u); do
-    echo "== $principal"; cli iam rbac role-binding list --principal "$principal" --kafka-cluster "$cluster_id" | tail -n +3
+                     grep -o '"principal": *"[^"]*"' | cut -d'"' -f4 | LC_ALL=C sort -u); do
+    echo "== $principal"; cli iam rbac role-binding list --principal "$principal" --kafka-cluster "$cluster_id" | tail -n +3 | sed 's/ *| */|/g; s/^ *//; s/ *$//' | LC_ALL=C sort
   done
 }
 save rbac.txt rbac
@@ -6518,9 +6558,28 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 orders.backup-demo 還在嗎：0
 ```
 
-> features 的 `Epoch` 每次都不同、ACL 與帳號清單（`users.txt`）列出的順序不固定，腳本已經拿掉與排序，否則常會顯示「有變」。
+> features 的 `Epoch` 每次都不同、ACL、帳號清單（`users.txt`）與 role binding 列出的順序不固定，腳本已經拿掉與排序（一律 `LC_ALL=C`，不受操作機語系影響；`rbac.txt` 另外去掉表格的對齊空白，欄位用 `|` 分開），否則常會顯示「有變」。
 
-> 變更前的快照也可以由維運人員從 OP menu 44 匯出（`44 snapshot`）：以本人 AD 身分執行、檔名與內容和這裡一樣（另多一份權限清單 CSV），放在選單的輸出目錄，可以拿來和每日備份比對。
+變更前的快照也可以由維運人員從 OP menu 44 匯出（`44 snapshot`）：以本人 AD 身分執行（要 SecurityAdmin 或 UserAdmin），放在選單的輸出目錄，檔名與內容和這裡一樣（另多一份權限清單 CSV），所以 23.6、26.4 的還原程式也能直接拿它來還原。`rbac.txt` 由選單直接問 MDS 產生，每日備份則用 confluent CLI 列；兩邊都去掉表格的對齊空白、每個 principal 底下的 binding 用 `LC_ALL=C` 排序，所以逐位元組相同。做完上面的備份，馬上拍一次快照比對：
+
+@role 維運人員 alice（lab 由小安代打） | ops02 | root
+
+```bash
+P=$(cat ~/secrets/ad-test-users.pass); env OPMENU_USER=alice OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run 44 snapshot 2>&1 </dev/null | tail -1 | sed 's/\x1b\[[0-9;]*m//g; s/[0-9]\{8\}-[0-9]\{6\}/<時間>/'; unset P; b=$(ls -d ~/backup/metadata/20* | tail -1); s=$(ls -dt /var/log/opmenu/snapshot-* | head -1); for f in $(cd $b && ls *.txt); do printf '%-18s %s\n' $f "$([ "$(sha256sum < $b/$f)" = "$(sha256sum < $s/$f)" ] && echo 相同 || echo 不同)"; done
+```
+
+```out
+已匯出變更前快照(33 筆權限,7 個清單):/var/log/opmenu/snapshot-<時間>-alice
+acls.txt           相同
+broker-configs.txt 相同
+features.txt       相同
+rbac.txt           相同
+topic-configs.txt  相同
+topics.txt         相同
+users.txt          相同
+```
+
+> `topics.txt`、`topic-configs.txt` 和 23.5 一樣，中間有 leader 或 ISR 變動時會顯示「不同」，那不代表快照錯了；其他五個檔應該都相同。
 
 還原時拿這些檔當依據逐項重建：topic（`kafka-topics --create`，照 `topics.txt` 的 partition 數、RF 與 `topic-configs.txt` 的設定）、role binding（照 `rbac.txt` 用 `confluent iam rbac role-binding create`）、配額（`kafka-configs --alter`）。這些都由有權限的人在變更時段做，不寫成自動還原。
 
@@ -6582,7 +6641,7 @@ if [ "$U" != - ]; then
   confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null
   n=0; while IFS='|' read -r principal role rtype rname pattern; do
     principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
-    args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID"); [ -n "$rtype" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
+    args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID"); [ -n "$rname" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
     # 只有 50003（auth topic 的 leader 剛搬家，MDS 內部 producer 不重試）才再送一次；其他錯誤照實算失敗（28.4）
     if out=$(confluent iam rbac role-binding create "${args[@]}" 2>&1) || { grep -q "not the current leader" <<<"$out" && confluent iam rbac role-binding create "${args[@]}" >/dev/null 2>&1; }; then n=$((n+1)); fi
   done < <(awk -v u="User:$U" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$B/rbac.txt")
@@ -7589,7 +7648,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 | C3 畫面空白或是舊資料（`ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed`、`ControlCenterStreamsStalled`；`ControlCenterRocksDBBackgroundErrors` 先看 c3-01 的磁碟） | `journalctl -u confluent-control-center`；是不是 broker 剛全部重啟過（C3 比 MDS 先起來會卡住，14.3） | 選單 22 重啟 C3；它的內建 Prometheus 滿了會讓畫面慢（13 章 `METRICS_RETENTION_DAYS`） | 13、14.3 |
 | 磁碟滿或快滿（`KafkaDataDiskFillingUp`、`KafkaLogDirOffline`） | 24.1：哪台、哪個 topic | 24.3：縮 retention、搬 partition、擴容 | 24 |
 | MDS 起不來（broker `active` 但 8090／9094 不開；10 分鐘後 `Authorizer did not start up within the timeout` 自殺、systemd 再拉起） | journal 停在 `Waiting for all of the authorizer futures`；**真正的原因在 `/var/log/kafka/metadata-service.log`**（MDS 的 log4j2 appender 另外寫檔）：`LDAP search failed … error code 49 … data 52e` = `svc-mds-bind` 密碼和 AD 不一致（20.4 換密碼時密文 key 名對不上也會這樣） | 對齊密碼（20.4 的更新方式）、派送、重啟；全部 broker 都卡住就四台一起停、一起起 | 14.1、20.4 |
-| 應用程式被拒（`TopicAuthorizationException`、`SaslAuthenticationException`） | 選單 41 看該帳號的權限；選單 45 查稽核日誌誰被拒 | 權限：選單 42；密碼錯：20.6 換閒置帳號再切 | 18、20.6 |
+| 應用程式被拒（`TopicAuthorizationException`、`SaslAuthenticationException`） | 選單 41 看該帳號的權限；選單 43 查稽核日誌誰被拒 | 權限：選單 42；密碼錯：20.6 換閒置帳號再切 | 18、20.6 |
 | 服務起不來、起來又死（`Scheduled restart job`） | 三件事：`is-active`、`systemctl show -p ExecStart` 指向我們的設定、日誌最後 20 行 ERROR | 設定被改壞：從 29.2 的備份或操作機 `~/conf` 重派（10–13 章的派送可重跑） | 14.2 |
 
 ## 28.2 一分鐘快照：出事先跑這一段

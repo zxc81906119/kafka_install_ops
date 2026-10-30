@@ -123,6 +123,24 @@ SECOND_SCRAM_APP=$(awk '{print $2}' <<<"$SCRAM_APPS"); SECOND_SCRAM_APP=${SECOND
 rotate_out=$(run_menu_as alice 35 "$SECOND_SCRAM_APP" "$SECOND_SCRAM_APP-a" | tail -3)
 if grep -q "下一步：請應用程式改用 $SECOND_SCRAM_APP-b" <<<"$rotate_out"; then ok "35 換了閒置的 $SECOND_SCRAM_APP-b，應用程式用的 -a 不受影響"; else fail "35：$rotate_out"; fi
 shred -u "$HOME"/opmenu-handover/"$SECOND_SCRAM_APP"-b-*.pass 2>/dev/null && log "35 的交接檔已 shred（lab 不交付）"
+# 13：在線成員數。開一個 60 秒的 consumer（svc-ops 的管理連線：這時還沒有應用程式的 client 設定，第 19 站才產生）
+(timeout 60 kafka-console-consumer --bootstrap-server "$BROKER_TOKEN" --consumer.config "$ADMIN_CLIENT_CONF" --topic orders.events --group orders-optest >/dev/null 2>&1 &)
+sleep 20
+group_out=$(run_menu_as bob 13 orders-optest | grep '^==')
+if grep -q '在線成員 1 個' <<<"$group_out"; then ok "13 consumer group：$group_out"; else fail "13 應看到 orders-optest 有 1 個在線成員：$group_out"; fi
+# 15／38：配額要叢集層級 DescribeConfigs／AlterConfigs：bob（維運）看不到，alice（管理）改了再改回
+if grep -q "拒絕" <<<"$(run_menu_as bob 15 "" | tail -1)"; then ok "bob（維運）看配額（15）被 Kafka 拒絕"; else fail "bob 看配額應被拒"; fi
+quota_account=$FIRST_SCRAM_APP-b
+quota_before=$(run_menu_as alice 15 "$quota_account" | tail -1)
+producer_before=$(grep -o 'producer_byte_rate=[0-9]*' <<<"$quota_before" | cut -d= -f2)
+if [ -n "$producer_before" ]; then ok "15 配額：$quota_before"; else fail "15 看不到 $quota_account 的配額：$quota_before"; fi
+quota_changed=$(run_menu_as alice 38 "$quota_account" producer_byte_rate=4194304 | grep '^改後')
+quota_back=$(run_menu_as alice 38 "$quota_account" "producer_byte_rate=${producer_before:-5242880}" | grep '^改後')
+if grep -q 'producer_byte_rate=4194304' <<<"$quota_changed" && grep -q "producer_byte_rate=${producer_before:-x} " <<<"$quota_back "; then ok "38 改配額再改回（$quota_account producer_byte_rate 4194304 → $producer_before）"
+else fail "38：$quota_changed / $quota_back"; fi
+# 17：license 到期日（alice 讀得到 _confluent-command）
+license_line=$(run_menu_as alice 17 | grep '^license')
+if grep -q '到期 [0-9-]*，剩' <<<"$license_line"; then ok "17 $license_line"; else fail "17 沒有 license 到期日：$license_line"; fi
 
 # 健康檢查、重啟、緊急模式要動主機（ssh 用 $SSH_KEY）或用緊急憑證（讀 ~/secrets/opmenu-breakglass.pem、要人填原因），非互動試跑做不了
 warn "重啟、看日誌要由維運人員互動登入試跑（手把手 16.5）；緊急模式要互動填原因"

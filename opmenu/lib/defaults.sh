@@ -55,11 +55,16 @@ d OPMENU_HANDOVER_DIR    "$HOME/opmenu-handover"                       # 新密�
 d OPMENU_REPLICATION     3                                              # 建 topic 的 replication factor(標準值);沒填且 broker 少於 3 台時,登入後自動降到 broker 數
 d OPMENU_EMERGENCY_TOOLS 'kafka-topics kafka-configs kafka-consumer-groups kafka-acls kafka-metadata-quorum'   # 91 允許的工具
 d OPMENU_AUDIT_TOPIC     confluent-audit-log-events                     # 43 匯出的 audit topic
+d OPMENU_AUDIT_SENSITIVE_TOPIC "${OPMENU_AUDIT_TOPIC}_sensitive"         # 43 選「敏感」時讀的 topic(稽核路由把敏感 topic 的讀寫送到這裡,手把手 18.2);空 = 沒有分敏感 topic
 d OPMENU_AUDIT_GROUP_PREFIX 'audit-'                                     # 43 讀 audit topic 用的 consumer group prefix(audit 群組要有這個 prefix 的 DeveloperRead)
+d OPMENU_QUOTA_KEYS      'producer_byte_rate consumer_byte_rate request_percentage'   # 15 顯示、38 可調整的配額項目
+d OPMENU_LICENSE_WARN_DAYS 90                                           # 17 license 剩不到幾天標警告(同手把手 26.1)
+d OPMENU_LICENSE_SYSLOG_TAG confluent-license                           # 17 讀不到 license 時,改顯示操作機每日檢查(手把手 26.2)寫進 syslog 的最後一筆
 
 # ── 安全(正式環境請維持預設)──
 d OPMENU_PROTECTED_TOPIC_PATTERN '^(_|__|confluent-audit-log-events$|confluent-)'   # 受保護的 topic:內部、audit、平台用;32/33 等變更項目不處理
 d OPMENU_GROUP_PATTERN   '^[A-Za-z0-9._-]{1,200}$'                      # consumer group 名稱允許的字元
+d OPMENU_INTERNAL_GROUP_PATTERN '^(_|ConfluentTelemetryReporterSampler|console-consumer-)'   # 13 查全部時略過的平台內部 group(遙測、工具的臨時 group);C3 的 group 以 confluent.controlcenter.name 開頭,在 opmenu.conf 補上
 d OPMENU_ROLES_ALLOWED   'DeveloperRead DeveloperWrite DeveloperManage ResourceOwner Operator ClusterAdmin'   # 42 可指派的 role(SystemAdmin、UserAdmin、SecurityAdmin 不經選單)
 d OPMENU_EMERGENCY_ACTIONS 'kafka-topics=--list,--describe,--create,--alter,--delete kafka-configs=--describe,--alter kafka-consumer-groups=--list,--describe,--reset-offsets kafka-acls=--list kafka-metadata-quorum=describe'   # 91 每個工具允許的動作
 d OPMENU_ALLOW_ENV_OVERRIDE 0        # 1 = 接受 OPMENU_USER/PASS/YES/REASON 等環境變數(只給自動化測試用);正式環境 0

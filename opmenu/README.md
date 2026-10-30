@@ -51,10 +51,10 @@
 
 | 層 | 編號 | 控管 |
 |---|---|---|
-| 1 值班查看 | 10 leader 與 partition 分布、11 cluster 與身分鏈健康檢查、12 topic 狀態、13 consumer lag、14 topic 設定、15 application 連線、16 磁碟用量、17 certificate 到期日、18 收集 diagnostics、19 生效中的設定 | 唯讀;16、18 碰主機,需 HOST 權限 |
+| 1 值班查看 | 10 leader 與 partition 分布、11 cluster 與身分鏈健康檢查、12 topic 狀態、13 consumer group（lag 與在線成員數；查全部時不列 `OPMENU_INTERNAL_GROUP_PATTERN` 的平台內部 group）、14 topic 設定、15 配額、16 磁碟用量、17 certificate 與 license 到期日、18 收集 diagnostics、19 生效中的設定 | 唯讀;16、18 碰主機,需 HOST 權限;15 要叢集層級 DescribeConfigs(ClusterAdmin 以上);17 的 license 要 `_confluent-command` 的讀取權限,讀不到改顯示每日檢查(手把手 26.2)在 syslog 的最後一筆 |
 | 2 服務操作 | 21 重啟 broker(先檢查 under-replicated / offline)、22 重啟 REST Proxy 或 C3（REST：設了 `OPMENU_LB_HOST` 時，那台還有從 LB 進來的連線就拒絕，要先請 LB 團隊停用，手把手 12.1）、23 看日誌、27 滾動重啟 | HOST 權限(Operator 以上);21、22、27 需確認 |
-| 3 變更作業 | 31 建 topic、32 改 retention、33 刪 topic、34 新增 service account、35 更換密碼、36 重設 consumer 位置、37 下架 service account | ADMIN 權限;需確認;受並行鎖與變更時窗 |
-| 4 授權與緊急 | 41 查看權限、42 指派或移除權限、43 匯出 audit、44 匯出權限清單（加 snapshot 為變更前完整快照，格式同每日備份）、45 查詢 audit、91 緊急模式 | 41/42/44/91 ADMIN、43/45 AUDIT;91 必填原因、逐條記錄 |
+| 3 變更作業 | 31 建 topic、32 改 retention、33 刪 topic、34 新增 service account、35 更換密碼、36 重設 consumer 位置、37 下架 service account、38 調整配額（`OPMENU_QUOTA_KEYS` 三項，值填 `-` 拿掉） | ADMIN 權限;需確認;受並行鎖與變更時窗 |
+| 4 授權與緊急 | 41 查看權限、42 指派或移除權限、43 查詢與匯出 audit（選一般 `OPMENU_AUDIT_TOPIC`、敏感 `OPMENU_AUDIT_SENSITIVE_TOPIC` 或兩個都看，依主體、結果篩選，最後問要不要存檔）、44 匯出權限清單（加 snapshot 為變更前完整快照：檔名與內容和每日備份逐位元組相同，含 `rbac.txt`，手把手 23.6、26.4 可直接拿來還原）、91 緊急模式 | 41/42/44/91 ADMIN、43 AUDIT;91 必填原因、逐條記錄 |
 
 ## 各 AD 群組需要的 RBAC(2026-10-22 lab 實測)
 
@@ -63,7 +63,7 @@
 | 維運(例 kafka-operators) | `Operator`(cluster)＋ `DeveloperManage` on `Topic:*` ＋ `DeveloperRead` on `Group:*` | 11 健康檢查、21/27 重啟前的 under-replicated 檢查用 `kafka-topics --describe`,它對每個 topic 都要 DescribeConfigs;只有 Operator 或 DeveloperRead 會被拒(2026-10-28 改成 DeveloperRead 後實測被拒,10-29 改回)。內建角色裡有 DescribeConfigs 的都連帶能建刪 topic(ClusterAdmin 也是),CP 不能自訂角色;DeveloperManage 沒有 Read,讀不到訊息內容。銀行若不接受維運能建刪 topic,只能用 ACL 單獨補 Topic:* 的 DescribeConfigs |
 | 開發(例 kafka-devs) | `DeveloperRead`/`DeveloperManage` on 自己的 prefix | 12、14 要 DescribeConfigs 才看得到明細;只有 DeveloperRead 時 12 會列名稱並註明無法顯示明細 |
 | 管理(例 kafka-admins) | `SystemAdmin` | 第 3、4 層與 91 |
-| 稽核 | `DeveloperRead` on audit topic 與 `audit-` consumer group prefix | 43、45 |
+| 稽核 | `DeveloperRead` on audit topic 與 `audit-` consumer group prefix | 43 |
 
 ## 機制
 
