@@ -6412,7 +6412,8 @@ out=$BACKUP_ROOT/$(date +%Y%m%d-%H%M); install -d -m 0700 "$out"; failed=""
 save() { local file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
 # 比對兩天的備份靠 sha256：會變的雜訊（features 的 Epoch）拿掉、ACL 與帳號清單的順序不固定所以排序
 features() { kafka-features $A describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
-acls() { kafka-acls $A --list | grep . | sort; }
+# ACL 一條一行：資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY（26.4 的 cluster-restore-all.sh 照這個格式建回來）
+acls() { kafka-acls $A --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | sort; }
 scram_and_quotas() { kafka-configs $A --describe --entity-type users | sort; }
 save topics.txt         kafka-topics $A --describe
 save topic-configs.txt  kafka-configs $A --describe --entity-type topics
@@ -6445,7 +6446,7 @@ chmod 0700 ~/conf/metadata-backup.sh && d=$(bash ~/conf/metadata-backup.sh) && e
 
 ```out
 /root/backup/metadata/20261025-0102
-acls.txt              6 行
+acls.txt              4 行
 broker-configs.txt    2 行
 features.txt          8 行
 rbac.txt             47 行
@@ -6565,6 +6566,7 @@ cat > ~/conf/metadata-restore.sh <<'EOF'
 # 從 23.3 的備份目錄重建一個 topic、一個 principal 的 role binding、一個 SCRAM 帳號（含配額）
 # 用法：metadata-restore.sh <備份目錄> <topic 名稱|-> <帳號|->   （- = 這一項不做）
 # 密碼不在備份裡：帳號的密碼讀 ~/secrets/<帳號>.pass（0600）
+set -f   # 關掉萬用字元展開：rbac.txt 裡有 Topic:* 這種名稱
 B=$1; T=${2:--}; U=${3:--}
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"
@@ -6618,7 +6620,7 @@ app-restore 寫一筆：ok；讀回：1
 演練物件已清掉
 ```
 
-> 正式環境誤刪時：先用 23.5 的比對找出「少了什麼」，再對每一樣跑 `metadata-restore.sh`（topic 和帳號可以分開給 `-`）。ACL 不在這支裡：照 `acls.txt` 用 `kafka-acls --add` 重建。帳號的密碼還原後和刪前相同（都來自 `~/secrets`），應用程式不用改設定。
+> 正式環境誤刪時：先用 23.5 的比對找出「少了什麼」，再對每一樣跑 `metadata-restore.sh`（topic 和帳號可以分開給 `-`）。ACL 不在這支裡：`acls.txt` 一條一行（資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY），照那一行用 `kafka-acls --add` 重建（26.4 的 `cluster-restore-all.sh` 第 5 段就是這樣讀的）。帳號的密碼還原後和刪前相同（都來自 `~/secrets`），應用程式不用改設定。
 
 # 24. 第二十四站：磁碟與容量
 
@@ -7168,6 +7170,179 @@ syslog：快到期：license trial 到期 2026-11-23，剩 29 天
 4. 用 26.1 確認：類型不再是 `trial`、到期日是合約的日期。
 
 > 每年續約就是重做一次：換掉 `license.jwt`、重新產生、加密、滾動重啟。26.2 的告警在到期前 90 天開始，給採購流程留時間。
+
+## 26.4 試用期到期：申請延長，或重置測試環境的叢集
+
+![clusterreset]
+
+**這一節在做什麼**：試用期（30 天，從叢集第一次啟動算起）快到了、正式 license 還沒買到時怎麼辦。**第一選擇是請原廠延長評估**：請銀行或我方的 Confluent 業務窗口申請臨時的評估 license，拿到後照 26.3 換上，不用重置、不丟資料。原廠來不及給、而且這是**測試或評估環境**時，才用這一節的「重置」：清空叢集、用新的 cluster id 重新格式化（試用期重新算 30 天），再從 23.3 的備份把 topic、權限、帳號建回來。
+
+> 先講清楚授權：試用 license 是給評估用的。重置只用在採購前的測試／評估環境，**做之前先取得原廠同意（留 email）**；正式環境、以及採購後長期存在的 UAT／SIT 都要有 license（買的時候一起談），不能用重置延長試用。
+
+**會清空的**：訊息內容、consumer 讀到的位置（重置後依應用程式的 `auto.offset.reset` 從頭或從尾開始）、**稽核 topic 裡的舊紀錄**（要留就先用選單 43 匯出）、C3 的 Streams 狀態（自動重建）。RBAC、SCRAM 帳號、配額、ACL 也會清空，由第 7 步從備份建回來；**SCRAM 用 `~/secrets` 裡原本的密碼，應用程式不用換密碼、不用改設定**。**不受影響的**：OS、套件、JDK、憑證、Secret Protection、各台設定檔與 drop-in、監控設定——第 10 章之後的設定都在，只是資料歸零。
+
+**前提**：停服務、清資料要**安裝期的 sudo**（交付後的 `cpuser-ops` 不允許），請 OS 團隊照變更單臨時開、做完收回；23.3 的備份腳本已就緒；通知應用程式團隊停機時段（重置期間整個叢集不能用，lab 實測約 15 分鐘）。
+
+這一節的指令只在需要時才做，整本照打實跑時不執行（會清空叢集，後面的章節就沒得跑了）；每一塊都在 lab 照原文實跑過（2026-10-30）。
+
+@role 小安 | ops02 | root | 只在需要時做（會清空叢集，整本實跑不執行）
+
+第 1 步：用 23.3 的腳本備份一次，記下這份備份的路徑；同時確認每個 SCRAM 帳號在 `~/secrets` 都有密碼檔（沒有的帳號重置後要另外發新密碼給應用程式團隊）：
+
+```bash
+d=$(bash ~/conf/metadata-backup.sh) && echo "$d" > ~/conf/reset-from.txt && echo "重置前的備份：$d" && echo "topic $(grep -c '^Topic:' $d/topics.txt) 個；principal $(grep -c '^== ' $d/rbac.txt) 個；SCRAM 帳號 $(grep -c 'SCRAM credential configs' $d/users.txt) 個；ACL $(grep -c '|' $d/acls.txt) 條" && miss=$(grep -o "SCRAM credential configs for user-principal '[^']*'" $d/users.txt | cut -d"'" -f2 | while read -r u; do [ -s ~/secrets/$u.pass ] || echo $u; done | tr '\n' ' ') && echo "缺密碼檔的 SCRAM 帳號：${miss:-無}"
+```
+
+```out
+重置前的備份：/root/backup/metadata/20261030-1637
+topic 18 個；principal 15 個；SCRAM 帳號 6 個；ACL 4 條
+缺密碼檔的 SCRAM 帳號：無
+```
+
+第 2 步：停掉所有服務（C3 → REST Proxy → broker → controller）。Java 程式收到停止訊號時以 143 結束，systemd 會標成 `failed`，所以順手 `reset-failed`，結果應該全部是 `inactive`：
+
+```bash
+ssh c3-01.poc.lab 'sudo systemctl stop confluent-control-center; sudo systemctl reset-failed confluent-control-center' && for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl stop confluent-kafka-rest; sudo systemctl reset-failed confluent-kafka-rest'; done && for h in kb01 kb02 kb03 kb04 kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl stop confluent-server; sudo systemctl reset-failed confluent-server'; done && for h in c3-01 rest01 rest02 kb01 kb02 kb03 kb04 kc01 kc02 kc03; do ssh $h.poc.lab 'printf "%-7s %s\n" "$(hostname)" "$(for u in confluent-server confluent-kafka-rest confluent-control-center; do systemctl is-enabled -q $u 2>/dev/null && echo "$u=$(systemctl is-active $u)"; done | paste -sd" ")"'; done
+```
+
+```out
+c3-01   confluent-control-center=inactive
+rest01  confluent-kafka-rest=inactive
+rest02  confluent-kafka-rest=inactive
+kb01    confluent-server=inactive
+（kb02–kb04、kc01–kc03 同樣是 confluent-server=inactive）
+```
+
+第 3 步：清空 controller 與 broker 的資料目錄，以及 C3 的 Streams 狀態（`/var/lib/confluent/control-center/` 底下數字開頭的目錄；`prometheus`、`alertmanager` 是 C3 畫面的歷史，留著）。用 `find … -delete`：`rm -rf data/*` 刪不到隱藏檔 `.kafka_cleanshutdown`，而萬用字元由 cpuser 的 shell 展開時讀不到 0750 的目錄、什麼都不刪也不報錯：
+
+```bash
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo find /var/lib/kafka/data -mindepth 1 -delete; echo "$(hostname)：/var/lib/kafka/data 剩 $(sudo find /var/lib/kafka/data -mindepth 1 | wc -l) 個"'; done && ssh c3-01.poc.lab 'sudo find /var/lib/confluent/control-center -mindepth 1 -maxdepth 1 -name "[0-9]*" -exec rm -rf {} +; echo "c3-01：Streams 狀態目錄剩 $(sudo find /var/lib/confluent/control-center -mindepth 1 -maxdepth 1 -name "[0-9]*" | wc -l) 個（prometheus、alertmanager 留著）"'
+```
+
+```out
+kc01：/var/lib/kafka/data 剩 0 個
+（kc02、kc03、kb01–kb04 同樣剩 0 個）
+c3-01：Streams 狀態目錄剩 0 個（prometheus、alertmanager 留著）
+```
+
+第 4 步：新的 cluster id、新的 controller directory id（舊的 `kraft.env` 另存），重新格式化。做過第 15 章之後 `server.properties` 裡是密文，格式化要帶 master key（和 25.1、25.2 同一個寫法）；controller 一起寫入 `kafka-admin`（沿用原本的密碼檔）：
+
+```bash
+export JAVA_HOME=/opt/java/current && cp -p ~/conf/kraft.env ~/conf/kraft.env.before-reset-$(date +%Y%m%d-%H%M) && (umask 077; { echo "CLUSTER_ID=$(kafka-storage random-uuid)"; for c in kc01 kc02 kc03; do echo "DIR_ID_$c=$(kafka-storage random-uuid)"; done; } > ~/conf/kraft.env) && source ~/conf/kraft.env && IC="1@kc01.poc.lab:9093:$DIR_ID_kc01,2@kc02.poc.lab:9093:$DIR_ID_kc02,3@kc03.poc.lab:9093:$DIR_ID_kc03" && for h in kc01 kc02 kc03; do scp -q ~/secrets/kafka-admin.pass $h.poc.lab:/tmp/ka.pass && ssh $h.poc.lab "sudo bash -c 'P=\$(cat /tmp/ka.pass); rm -f /tmp/ka.pass; set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --initial-controllers $IC --add-scram \"SCRAM-SHA-512=[name=kafka-admin,password=\$P]\" 2>&1 | grep -v -i scram | tail -1'; printf '%-5s cluster.id=%s\n' \$(hostname) \"\$(sudo sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)\""; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab "sudo bash -c 'set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1'; printf '%-5s cluster.id=%s\n' \$(hostname) \"\$(sudo sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)\""; done; echo "新的 cluster id：$CLUSTER_ID（舊的：$(grep CLUSTER_ID $(ls -t ~/conf/kraft.env.before-reset-* | head -1) | cut -d= -f2)）"
+```
+
+```out
+Formatting dynamic metadata voter directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
+kc01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx
+…
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
+kb01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx
+…
+新的 cluster id：xxxxxxxxxxxxxxxxxxxxxx（舊的：yyyyyyyyyyyyyyyyyyyyyy）
+```
+
+（metadata 版本字串跟著安裝的版本走：8.2.4 是 4.2-IV1A，遷移到 8.3.2 之後是 4.3-IV0B。）
+
+第 5 步：啟動 controller、確認 quorum；再啟動 broker，等四台的 MDS 都回 200，MDS 看到的要是新的 cluster id：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in kc01 kc02 kc03; do ssh $h.poc.lab 'sudo systemctl start confluent-server'; done && for i in $(seq 1 30); do q=$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null); grep -q '^LeaderId: *[0-9]' <<<"$q" && break; sleep 5; done && grep -E "^(ClusterId|LeaderId|CurrentVoters)" <<<"$q" | sed -E 's/("directoryId"|"endpoints")[^}]*//g' && for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo systemctl start confluent-server'; done && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && for i in $(seq 1 60); do n=0; for h in kb01 kb02 kb03 kb04; do [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && n=$((n+1)); done; [ $n = 4 ] && break; sleep 5; done && echo "broker 的 MDS 回 200：$n / 4（約 $((i*5)) 秒）；MDS 看到的 cluster id：$(curl -s --cacert $CA https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)"
+```
+
+```out
+ClusterId:              xxxxxxxxxxxxxxxxxxxxxx
+LeaderId:               2
+CurrentVoters:          [{"id": 1, }, {"id": 2, }, {"id": 3, }]
+broker 的 MDS 回 200：4 / 4（約 45 秒）；MDS 看到的 cluster id：xxxxxxxxxxxxxxxxxxxxxx
+```
+
+第 6 步：叢集剛起來一條 binding 都沒有，和第 11 章一樣，用 `kafka-internal` 的憑證建第一條 `User:svc-ops → SystemAdmin`：
+
+```bash
+export JAVA_HOME=/opt/java/current && source ~/conf/kraft.env && confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/kafka-internal.crt --client-key-path ~/pki/keys/kafka-internal.key >/dev/null && confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$CLUSTER_ID" >/dev/null && confluent iam rbac role-binding list --principal User:svc-ops --kafka-cluster "$CLUSTER_ID" | tail -n +3
+```
+
+```out
+  User:svc-ops | SystemAdmin | Cluster       |      |
+```
+
+第 7 步：從第 1 步的備份全部建回來。寫成一支小腳本 `cluster-restore-all.sh`：應用程式 topic（名稱有「.」、不是底線開頭，也就是命名規範 `<系統>.<名稱>` 的；內部 topic、稽核 topic、C3 的 topic 由平台自己重建）連同 partition 數、RF、動態設定；**全部** role binding（AD 群組、憑證身分、應用程式）；SCRAM 帳號（迭代次數照備份、密碼讀 `~/secrets`）；配額；ACL；broker 動態設定。和 23.6 的 `metadata-restore.sh` 不同的是範圍：那支一次還原一個 topic、一個帳號，這支全部。**整段貼到 EOF**：
+
+```bash
+cat > ~/conf/cluster-restore-all.sh <<'EOF'
+#!/usr/bin/env bash
+# 叢集重置（26.4）之後，從 23.3 的備份把應用程式 topic、全部 role binding、SCRAM 帳號（密碼用 ~/secrets 原本的）、配額、ACL、broker 動態設定建回來
+# 用法：cluster-restore-all.sh <備份目錄>
+# 不還原的：底線開頭的內部 topic、稽核 topic、C3 的內部 topic（平台自己重建）；訊息內容與 consumer 讀到的位置（備份裡本來就沒有）
+set -f   # 關掉萬用字元展開：備份裡有 Topic:* 這種名稱，不能被 shell 換成檔名
+B=$1; [ -d "$B" ] || { echo "用法：cluster-restore-all.sh <備份目錄>"; exit 1; }
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"
+source ~/conf/kraft.env
+bad=0
+# 1. 應用程式 topic：名稱有「.」、不是底線開頭（命名規範 <系統>.<名稱>）；partition 數、RF、動態設定照備份
+nt=0; for t in $(grep -oP '^Topic: \K[^\t]+' "$B/topics.txt" | grep '\.' | grep -v '^_'); do
+  read -r P R <<<"$(grep -P "^Topic: $t\t" "$B/topics.txt" | head -1 | sed 's/.*PartitionCount: \([0-9]*\).*ReplicationFactor: \([0-9]*\).*/\1 \2/')"
+  cfg=(); while read -r kv; do [ -n "$kv" ] && cfg+=(--config "$kv"); done < <(awk -v t="$t" '$0 == "Dynamic configs for topic " t " are:"{p=1;next} /^Dynamic configs/{p=0} p{print $1}' "$B/topic-configs.txt")
+  if kafka-topics $A --create --if-not-exists --topic "$t" --partitions "$P" --replication-factor "$R" "${cfg[@]}" >/dev/null 2>&1; then nt=$((nt+1)); else echo "topic $t 失敗"; bad=1; fi
+done; echo "topic：$nt 個"
+# 2. role binding：備份裡每個 principal 的每一行；Cluster 層級的不帶 --resource；只有 50003 才再送一次（28.4）
+confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key >/dev/null || { echo "svc-ops 登不進 MDS（第 6 步做了嗎？）"; exit 1; }
+nb=0; while IFS='|' read -r principal role rtype rname pattern; do
+  principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
+  [ -n "$principal" ] && [ -n "$role" ] || continue
+  args=(--principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID"); [ -n "$rname" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
+  if out=$(confluent iam rbac role-binding create "${args[@]}" 2>&1) || { grep -q "not the current leader" <<<"$out" && confluent iam rbac role-binding create "${args[@]}" >/dev/null 2>&1; }; then nb=$((nb+1)); else echo "binding 失敗：$principal $role $rtype:$rname"; bad=1; fi
+done < <(grep -v '^== ' "$B/rbac.txt"); echo "role binding：$nb 條"
+# 3. SCRAM 帳號：迭代次數照備份、密碼讀 ~/secrets/<帳號>.pass（應用程式不用換密碼）；沒有密碼檔的列出來，要另外發新密碼
+ns=0; miss=""; for u in $(grep -o "SCRAM credential configs for user-principal '[^']*'" "$B/users.txt" | cut -d"'" -f2); do
+  iter=$(grep "SCRAM credential configs for user-principal '$u'" "$B/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
+  [ -s ~/secrets/$u.pass ] || { miss="$miss $u"; continue; }
+  if kafka-configs $A --alter --entity-type users --entity-name "$u" --add-config "SCRAM-SHA-512=[${iter:-iterations=8192},password=$(cat ~/secrets/$u.pass)]" >/dev/null 2>&1; then ns=$((ns+1)); else echo "SCRAM $u 失敗"; bad=1; fi   # 出錯時 kafka-configs 會印出密碼，所以輸出丟掉
+done; echo "SCRAM 帳號：$ns 個；沒有密碼檔：${miss:- 無}"
+# 4. 配額（有些是只用憑證的帳號，沒有 SCRAM 也有配額）
+nq=0; while read -r u q; do kafka-configs $A --alter --entity-type users --entity-name "$u" --add-config "$q" >/dev/null 2>&1 && nq=$((nq+1)) || { echo "配額 $u 失敗"; bad=1; }; done < <(grep "^Quota configs for user-principal" "$B/users.txt" | sed "s/^Quota configs for user-principal '\([^']*\)' are /\1 /; s/\.0\b//g; s/, /,/g"); echo "配額：$nq 個帳號"
+# 5. ACL：23.3 的 acls.txt 一行一條：資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY
+na=0; while IFS='|' read -r rtype name pat principal host op perm; do
+  [ -n "$op" ] || continue
+  r=(); case $rtype in TOPIC) r=(--topic "$name");; GROUP) r=(--group "$name");; CLUSTER) r=(--cluster);; TRANSACTIONAL_ID) r=(--transactional-id "$name");; *) echo "不認得的資源類型 $rtype"; bad=1; continue;; esac
+  [ "$pat" = PREFIXED ] && r+=(--resource-pattern-type prefixed)
+  o=$(awk -v s="$op" 'BEGIN{n=split(tolower(s),a,"_"); for(i=1;i<=n;i++) printf "%s", toupper(substr(a[i],1,1)) substr(a[i],2)}')
+  if [ "$perm" = DENY ]; then who=(--deny-principal "$principal"); [ "$host" != '*' ] && who+=(--deny-host "$host"); else who=(--allow-principal "$principal"); [ "$host" != '*' ] && who+=(--allow-host "$host"); fi
+  if kafka-acls $A --add "${who[@]}" --operation "$o" "${r[@]}" >/dev/null 2>&1; then na=$((na+1)); else echo "ACL 失敗：$rtype:$name $principal $op"; bad=1; fi
+done < "$B/acls.txt"; echo "ACL：$na 條"
+# 6. broker 動態設定（叢集層級的預設值）
+nd=0; for kv in $(awk '/^Default configs for brokers/{p=1;next} p{print $1}' "$B/broker-configs.txt"); do kafka-configs $A --alter --entity-type brokers --entity-default --add-config "$kv" >/dev/null 2>&1 && nd=$((nd+1)) || { echo "broker 設定 $kv 失敗"; bad=1; }; done; echo "broker 動態設定：$nd 個"
+exit $bad
+EOF
+chmod 0700 ~/conf/cluster-restore-all.sh && bash ~/conf/cluster-restore-all.sh "$(cat ~/conf/reset-from.txt)" 2>&1 | grep -v '^SLF4J'
+```
+
+```out
+topic：5 個
+role binding：33 條
+SCRAM 帳號：6 個；沒有密碼檔： 無
+配額：5 個帳號
+ACL：4 條
+broker 動態設定：1 個
+```
+
+> 陷阱（lab 實測）：備份的 `rbac.txt` 裡有 `Topic:*` 這種名稱，腳本開頭的 `set -f` 不能拿掉：少了它，`*` 會被 shell 換成當前目錄的檔名，那條 binding 就建錯（23.6 的 `metadata-restore.sh` 也加了）。
+
+第 8 步：啟動 REST Proxy 與 C3，確認經 LB 的 REST 與 C3 都回 200，並用 26.1 的讀法看 license：類型 `trial`、到期日是今天加 30 天：
+
+```bash
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && for h in rest01 rest02; do ssh $h.poc.lab 'sudo systemctl start confluent-kafka-rest'; done && ssh c3-01.poc.lab 'sudo systemctl start confluent-control-center' && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && for i in $(seq 1 60); do r=$(curl -s -o /dev/null -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters); c=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/); [ "$r" = 200 ] && [ "$c" = 200 ] && break; sleep 5; done && echo "REST 經 LB=$r C3=$c（約 $((i*5)) 秒）" && jwt=$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9094 --consumer.config ~/conf/client-admin.properties --topic _confluent-command --from-beginning --timeout-ms 20000 2>/dev/null | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' | tail -1) && p=$(cut -d. -f2 <<<"$jwt" | tr '_-' '/+'); while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done; exp=$(base64 -d <<<"$p" 2>/dev/null | grep -o '"exp":[0-9]*' | cut -d: -f2); typ=$(base64 -d <<<"$p" 2>/dev/null | grep -o '"licenseType":"[^"]*"' | cut -d'"' -f4); echo "license：${typ:-?}，到期 $(date -d @$exp '+%F %T')，剩 $(( (exp - $(date +%s)) / 86400 )) 天"
+```
+
+```out
+REST 經 LB=200 C3=200（約 55 秒）
+license：trial，到期 2026-11-29 16:42:33，剩 29 天
+```
+
+最後照第 19 章驗收（19.1–19.3：健康、安全、應用程式寫讀）。lab 實測：健康 22／22、安全 16／16，app-orders 用原本的密碼直連寫讀、app-legacy-billing 經 LB 寫入、alice 經 AD 群組讀得到，都過。做完請 OS 團隊收回安裝期的 sudo。
+
+> 26.2 的每日檢查會在新的試用期剩不到 90 天時就開始告警（試用本來就只有 30 天），這是預期的；它要提醒的是「正式 license 還沒到」。
 
 # 27. 第二十七站：新應用上線
 

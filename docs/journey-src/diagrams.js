@@ -890,6 +890,34 @@ D.mdsdown = () => svg(800, 470, [
   box(410, 380, 370, 74, '恢復', ['① 網路團隊開回 8090 ② 確認選單 AD 登入正常', '③ 照 20.2 換 kafka-admin 密碼 ④ 對稽核紀錄結案'], 'gray'),
 ].join(''));
 
+// 26.4 resetting a test cluster when the trial runs out: what is wiped, what is kept, the order of the steps
+D.clusterreset = () => svg(800, 470, [
+  box(20, 20, 760, 56, '先問原廠：延長評估 license（26.3 換上，不用重置）', ['重置只用在測試／評估環境，而且先取得原廠同意；正式環境一定要正式 license'], 'amber'),
+  num(32, 108, '1'), box(48, 92, 140, 62, '備份', ['23.3 的中繼資料', '確認密碼檔都在'], 'teal'),
+  num(212, 108, '2'), box(228, 92, 140, 62, '停服務、清資料', ['C3→REST→broker→', 'controller'], 'coral'),
+  num(392, 108, '3'), box(408, 92, 160, 62, '新 cluster id', ['帶 master key 格式化', '試用期重新算 30 天'], 'blue'),
+  num(592, 108, '4'), box(608, 92, 172, 62, '啟動、第一條權限', ['quorum、MDS 200', 'svc-ops SystemAdmin'], 'blue'),
+  arrow(188, 123, 226, 123), arrow(368, 123, 406, 123), arrow(568, 123, 606, 123),
+  num(32, 194, '5'), box(48, 178, 320, 62, '從備份全部還原', ['應用程式 topic、全部 role binding、SCRAM（原密碼）', '配額、ACL、broker 動態設定'], 'teal'),
+  num(392, 194, '6'), box(408, 178, 372, 62, '啟動 REST Proxy、C3，照第 19 章驗收', ['應用程式不用換密碼、不用改設定', 'license 變成新的 trial'], 'teal'),
+  arrow(694, 154, 694, 172, null), arrow(694, 172, 208, 172, null, { via: [] }), arrow(208, 172, 208, 176),
+  arrow(368, 209, 406, 209),
+  region(20, 262, 370, 194, '清空（要重建或接受遺失）', 'coral'),
+  note(36, 296, '・訊息內容、consumer 讀到的位置（從頭或從尾開始）'),
+  note(36, 320, '・RBAC、SCRAM、ACL、配額 → 第 5 步由備份還原'),
+  note(36, 344, '・稽核 topic 裡的舊紀錄（重置前先用選單 43 匯出）'),
+  note(36, 368, '・C3 的 Streams 狀態（自動重建）'),
+  note(36, 392, '・內部 topic、cluster id、試用期'),
+  note(36, 424, '需要安裝期的 sudo：請 OS 團隊照變更單臨時開', 11),
+  region(410, 262, 370, 194, '保留（不用重做）', 'teal'),
+  note(426, 296, '・OS、套件、JDK、版本鎖定'),
+  note(426, 320, '・憑證、keystore、truststore'),
+  note(426, 344, '・Secret Protection（密文、master key）'),
+  note(426, 368, '・各台設定檔、systemd drop-in、監控設定'),
+  note(426, 392, '・操作機 ~/secrets 的密碼、ssh 金鑰'),
+  note(426, 424, '第 10 章之後的設定都在：只是資料歸零', 11),
+].join(''));
+
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
 module.exports = D;

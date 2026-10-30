@@ -64,7 +64,7 @@ run_backup() {
   save() { file=$1; shift; if "$@" > "$out/$file" 2> "$out/$file.err" && [ -s "$out/$file" ]; then rm -f "$out/$file.err"; else failed="$failed $file"; fi; }
   # 比對兩天的備份靠 sha256：features 的 Epoch 每次不同、ACL 與帳號清單的順序不固定，所以拿掉與排序
   features() { kafka-features "${backup[@]}" describe | sed 's/[[:space:]]*Epoch: [0-9]*//'; }
-  acls() { kafka-acls "${backup[@]}" --list | grep . | sort; }
+  acls() { kafka-acls "${backup[@]}" --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | sort; }
   scram_and_quotas() { kafka-configs "${backup[@]}" --describe --entity-type users | sort; }
   rbac() {
     local role principal cid; cid=$(cluster_id)

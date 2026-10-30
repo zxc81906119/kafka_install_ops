@@ -18,10 +18,12 @@ const re=/\n((#{1,3}) [^\n]+)|@role ([^\n]+)|```bash\n([\s\S]*?)```/g; let m, ro
 const groups=[];
 while((m=re.exec(sec))){
   if(m[1]){ head=m[1]; continue; }
-  if(m[3]){ const p=m[3].split("|").map(x=>x.trim()); role={who:p[0],host:p[1],user:p[2]}; continue; }
+  if(m[3]){ const p=m[3].split("|").map(x=>x.trim()); role={who:p[0],host:p[1],user:p[2],note:p[3]||""}; continue; }
   const code=m[4]; n++;
   if(!role) throw new Error(`block ${n} (${head.trim()}) has no @role before it`);
   if(role.host==="—" ||/\s-it\s/.test(code)) { groups.push({key:"skip",blocks:[{n,head,why:"interactive"}]}); continue; }
+  // @role 的第四欄寫了「整本實跑不執行」：只在需要時才做的破壞性程序（例如 26.4 清空叢集），已另外在 lab 照原文手動實跑過
+  if(/整本實跑不執行/.test(role.note||"")) { groups.push({key:"skip",blocks:[{n,head,why:"on-demand, destructive"}]}); continue; }
   let ex=null, key="local";
   if(!/Windows/.test(role.host)) {
     const c= role.host==="dl01" ? "dl01" : `lab-${role.host}-1`;

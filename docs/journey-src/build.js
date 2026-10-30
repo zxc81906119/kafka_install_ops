@@ -55,13 +55,14 @@ function block(lines, kind) {
 }
 
 function role(text) {
-  const [who, where, user] = text.split('|').map(s => s.trim());
+  const [who, where, user, note] = text.split('|').map(s => s.trim());
   const bank = /銀行|行內|OS 團隊|AD 團隊|CA|套件庫/.test(who);
   const bg = bank ? C.bankBg : C.usBg, ink = bank ? C.bankInk : C.usInk;
   const parts = [new TextRun({ text: ` ${bank ? '銀行' : '我方'} `, bold: true, color: 'FFFFFF', size: 18, shading: { type: ShadingType.CLEAR, fill: ink, color: 'auto' } }),
     new TextRun({ text: `  ${who}`, bold: true, color: ink, size: 20 })];
   if (where) parts.push(new TextRun({ text: `　在 ${where}`, color: ink, size: 20 }));
   if (user) parts.push(new TextRun({ text: `　身分 ${user}`, color: ink, size: 20 }));
+  if (note) parts.push(new TextRun({ text: `　（${note}）`, bold: true, color: C.warnBar || ink, size: 20 }));   // 第四欄：例如「只在需要時做…」
   return new Paragraph({
     shading: { type: ShadingType.CLEAR, fill: bg, color: 'auto' },
     spacing: { before: 160, after: 80 }, keepNext: true,
