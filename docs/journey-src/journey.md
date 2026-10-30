@@ -8140,10 +8140,10 @@ lab 沒有銀行的套件庫同步，就自己做：在一個乾淨的 9.6 容�
 cd ~/kafka-lab && docker run --rm -v "$(cygpath -m "$PWD/bank-os"):/out" lab-node:96 bash -c '
 set -e
 t0=$(date +%s)
-dnf -q -y --disablerepo="*" install /out/9.6/Packages/*.rpm >/dev/null
+dnf -q -y --disablerepo="*" install /out/9.6/Packages/*.rpm >/tmp/i.log 2>&1 || { echo "裝 9.6 套件失敗："; tail -5 /tmp/i.log; exit 1; }
 printf "[r98-baseos]\nname=Rocky 9.8 BaseOS\nbaseurl=https://dl.rockylinux.org/pub/rocky/9.8/BaseOS/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n[r98-appstream]\nname=Rocky 9.8 AppStream\nbaseurl=https://dl.rockylinux.org/pub/rocky/9.8/AppStream/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n[r98-extras]\nname=Rocky 9.8 extras\nbaseurl=https://dl.rockylinux.org/pub/rocky/9.8/extras/\$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9\nenabled=1\n" > /etc/yum.repos.d/rocky-98.repo
 mkdir -p /out/9.8-updates/Packages /tmp/dl
-dnf -q -y --disablerepo="*" --enablerepo=r98-baseos,r98-appstream,r98-extras update --downloadonly --downloaddir /tmp/dl >/dev/null 2>&1
+dnf -q -y --disablerepo="*" --enablerepo=r98-baseos,r98-appstream,r98-extras update --downloadonly --downloaddir /tmp/dl >/tmp/u.log 2>&1 || { echo "抓 9.8 的更新失敗（多半是連不到 dl.rockylinux.org，稍後重跑這一段）："; tail -5 /tmp/u.log; exit 1; }
 cp -a /tmp/dl/. /out/9.8-updates/Packages/ && createrepo_c -q /out/9.8-updates
 mkdir -p /out/9.8/Packages && cp -a /out/9.6/Packages/. /out/9.8/Packages/ && cp -a /out/9.8-updates/Packages/. /out/9.8/Packages/ && createrepo_c -q /out/9.8
 echo "9.8 更新集合：$(ls /out/9.8-updates/Packages | wc -l) 個 RPM、$(du -sm /out/9.8-updates | cut -f1) MB（$(( $(date +%s) - t0 )) 秒）；合併後的套件庫 $(ls /out/9.8/Packages | wc -l) 個 RPM"' && docker exec lab-repo01-1 bash -c 'rm -rf /var/www/repo/os/*' && docker cp "$(cygpath -m "$PWD/bank-os/9.8")/." lab-repo01-1:/var/www/repo/os/ && docker exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; echo "repo01 /os/：$(ls /var/www/repo/os/Packages | wc -l) 個 RPM；rocky-release：$(ls /var/www/repo/os/Packages | grep rocky-release)"'
