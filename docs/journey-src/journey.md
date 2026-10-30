@@ -872,7 +872,7 @@ sha256-ok
 
 ![access]
 
-**這一章在做什麼**：先由銀行 OS 團隊在每台主機建好安裝帳號 `cpuser`，小安在操作機產生 SSH 金鑰對，OS 團隊把公鑰放進每台主機，最後驗證「只有操作機能用這把金鑰登入」。這一節把「人怎麼進操作機」和「操作機怎麼連各主機」分開（完整設計見《CyberArk 登入與主機存取設計》）：
+**這一章在做什麼**：先由銀行 OS 團隊在每台主機建好安裝帳號 `cpuser`，小安在操作機產生 SSH 金鑰對，OS 團隊把公鑰放進每台主機，最後驗證「只有操作機能用這把金鑰登入」。這一節把「人怎麼進操作機」和「操作機怎麼連各主機」分開：
 
 | 項目 | 做法 |
 |---|---|
@@ -3087,7 +3087,7 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 
 **這一章在做什麼**：裝一個給維運人員用的文字選單（OP menu），讓他們用自己的 AD 帳號做日常作業（看狀態、重啟、看日誌、建 topic、查權限），不用記指令。前提：第 11 章的 RBAC 與 AD 群組已經建好，第 9 章的 `opmenu-breakglass` 憑證已簽發，第 4 章 的 cpuser 金鑰可用。名詞：選單裡每個項目有編號（例如 21 重啟、23 看日誌、91 緊急模式）；「緊急模式」就是平常用不到、用於 MDS 故障時的備用路徑（break-glass）。
 
-平台交給維運之後，日常作業不該靠人記指令。小安帶了一個文字選單：維運人員經 CyberArk 登入操作機（進去是 root），執行選單、輸入自己的 AD 帳密，選單只顯示他有權限的項目，每一步留紀錄。重啟、看日誌這類要碰主機的動作，選單用 第 4 章 那把金鑰（`/secure/ssh/cpuser_ed25519`）以 cpuser ssh 過去做：金鑰就是檔案，**不再從 PVWA 取出貼進選單**；主機上不放任何代理程式，只靠 sudoers 限制 cpuser 能跑的指令（16.4：每個服務、每種寫法逐一列出）。
+平台交給維運之後，日常作業不該靠人記指令。小安帶了一個文字選單：維運人員經 CyberArk 登入操作機（進去是 root），執行選單、輸入自己的 AD 帳密，選單把所有項目都列出來，做了沒有權限的會被 Kafka／MDS 拒絕（依本人的 AD 群組），每一步留紀錄。重啟、看日誌這類要碰主機的動作，選單用 第 4 章 那把金鑰（`/secure/ssh/cpuser_ed25519`）以 cpuser ssh 過去做：金鑰就是檔案，**不再從 PVWA 取出貼進選單**；主機上不放任何代理程式，只靠 sudoers 限制 cpuser 能跑的指令（16.4：每個服務、每種寫法逐一列出）。
 
 > **誠實的限制**：操作者在操作機上是 root，root 讀得到金鑰。所以選單「碰主機前先問 MDS：本人有沒有 Operator 以上的權限」是**流程控管，不是硬性隔離**（root 可以直接用金鑰 ssh，繞過選單）。追溯靠 CyberArk 的登入紀錄與 PSMP 錄影（誰在什麼時間進了 root），再加上選單紀錄和主機上 cpuser 的操作紀錄。**Kafka 類動作不受這個限制**：權限與稽核由 Kafka 端依本人 AD 身分強制，繞不過。
 
@@ -5157,7 +5157,7 @@ rest02 8082=new
 
 @role 小安 | ops02 | root
 
-舊的整份留到 `~/pki/old-<日期時間>/`，新的放回正本位置。操作機自己用的 `svc-ops`、`kafka-internal`（管理 client、quorum 查詢）換成新的之後馬上試一次；緊急身分 `opmenu-breakglass` 要更新保管庫裡那份；`app-legacy-billing` 是應用程式的憑證，**交給應用程式團隊在他們的時段換**（舊的到期前都還有效）：
+舊的整份留到 `~/pki/old-<日期時間>/`，新的放回正本位置。操作機自己用的 `svc-ops`、`kafka-internal`（管理 client、quorum 查詢）換成新的之後馬上試一次；緊急身分 `opmenu-breakglass` 要換掉操作機上的 `~/secrets/opmenu-breakglass.pem`（新私鑰＋新憑證鏈，root 0600；選單 91 直接讀這個檔）；`app-legacy-billing` 是應用程式的憑證，**交給應用程式團隊在他們的時段換**（舊的到期前都還有效）：
 
 ```bash
 cd ~/pki && OLD=old-$(date +%Y%m%d-%H%M) && install -d -m 0700 $OLD/keys $OLD/certs && for n in $(awk '{print $1}' requests.txt); do mv keys/$n.key $OLD/keys/; mv certs/$n.crt certs/$n.p12 $OLD/certs/; install -m 0600 next/keys/$n.key keys/; install -m 0644 next/certs/$n.crt certs/; install -m 0600 next/certs/$n.p12 certs/; done && rm -rf next && export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2>/dev/null | wc -l) 個 topic" && echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')" && echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(curl -s --cert certs/app-legacy-billing.crt --key keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)；舊的（還在效期內）：REST=$(curl -s --cert $OLD/certs/app-legacy-billing.crt --key $OLD/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters)"
@@ -7747,7 +7747,7 @@ kc01:0 kc02:0 kc03:0 kb01:0 kb02:0 kb03:0 kb04:0
 
 @role 小安 | ops02 | root
 
-**這一節在做什麼**：升級前留一份可以還原的備份。每台的 `/etc/confluent` 與 systemd drop-in、features 狀態、操作機的套件清單，打包回操作機（0700）。master key（`service.env`）不放進備份：master key 的正本在 CyberArk，備份檔就不必當成機敏資料保管。回滾、或 finalize 之後真的要退，都從這裡拿：
+**這一節在做什麼**：升級前留一份可以還原的備份。每台的 `/etc/confluent` 與 systemd drop-in、features 狀態、操作機的套件清單，打包回操作機（0700）。master key（`service.env`）不放進備份：master key 只放在操作機的 `~/secrets`（root 0600，備份由銀行的備份機制處理並加密）與各主機的 `service.env`，不放 CyberArk；這份備份不含它，就不必當成機敏資料保管。回滾、或 finalize 之後真的要退，都從這裡拿：
 
 ```bash
 export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && B=~/upgrade-backup/$(date +%Y%m%d-%H%M) && install -d -m 0700 $B && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent $(ls -d etc/systemd/system/confluent-*.service.d 2>/dev/null)' > $B/$h.tar.gz && printf '%s %s  ' $h "$(du -h $B/$h.tar.gz | cut -f1)"; done; echo; kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe > $B/features.txt 2>/dev/null; rpm -qa 'confluent-*' | sort > $B/ops02-packages.txt; echo "$B"
