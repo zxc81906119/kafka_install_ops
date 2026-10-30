@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-30 17:15（lab 沒有在跑的工作；lab 是「重置後」的乾淨叢集，見環境狀態）
+Updated: 2026-10-30 17:45（lab 沒有在跑的工作；lab 是「重置後」的乾淨叢集，見環境狀態）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。
@@ -13,9 +13,9 @@ Updated: 2026-10-30 17:15（lab 沒有在跑的工作；lab 是「重置後」�
 - 23.3 `acls.txt` 改成一條一行（`TYPE|name|pattern|principal|host|op|perm`，舊格式排序後無法還原）；手冊與 `install/steps/23-metadata-backup.sh` 都改；23.6 `metadata-restore.sh` 加 `set -f`（`Topic:*`）。
 
 ## 下一步（候選）
-1. 26.4 包成腳本（三步規則的第三步；破壞性，要明確確認才執行）— 還沒做。
+1. ~~26.4 包成腳本~~ **做完**：`26-license.sh reset`（輸入現在的 cluster id 確認）＋`23-metadata-backup.sh restore-all`；lab 實跑通過（約 8 分鐘，ACL 4、binding 33），錯的確認被拒，之後第 19 站 42/42。
 2. 腳本版從零再跑一次（10-30 那一輪在第 18 段中斷、已放棄）：驗 exporter 1.7.0（02／17 站）、緊急主機模式不看群組（28-triage）、23 站新 ACL 格式。
-3. 待使用者決定：《請銀行確認的事項》要不要加一題 license 涵蓋範圍與試用風險。
+3. ~~銀行確認事項加 license 題~~ **做完**：12.4（docx 已重建）。
 - 待銀行回覆：換金鑰週期；omnibus 正式值。
 
 ## 環境狀態

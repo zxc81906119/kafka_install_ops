@@ -11,3 +11,5 @@
   - 23.3 舊的 `acls.txt`（`grep . | sort`）把資源標頭和權限行拆開，無法還原 → 改一條一行。
   - 停 Java 服務會以 143 結束、systemd 標 failed → `reset-failed`。
 - Docker Desktop 後端當掉（`sailor-ingest.sock rename … cannot be accessed`）：停 Docker 與 WSL，把 `%LOCALAPPDATA%\Docker\run` 改名再啟動。絕不 Reset to factory defaults。
+- 使用者決定：26.4 也包成腳本（26-license.sh reset），《請銀行確認的事項》加 12.4 license 題。
+- 腳本版：`26-license.sh reset`（確認 = 輸入現在的 cluster id；不互動 `RESET_CONFIRM=`），第 7 步呼叫 `23-metadata-backup.sh restore-all`。lab 一次通過（17:27–17:35），錯的確認 rc=1 不動叢集，接著 19-acceptance 42/42。

@@ -10,6 +10,7 @@
 #   bash steps/23-metadata-backup.sh schedule   操作機的 systemd timer：每天 02:00 跑 run（以 root 身分）
 #   bash steps/23-metadata-backup.sh compare    比對最近兩次的備份，哪些檔有變
 #   bash steps/23-metadata-backup.sh restore <備份目錄> <topic|-> <帳號|->   23.6 從備份重建一個 topic、一個 principal 的 binding、一個 SCRAM 帳號（密碼讀 ~/secrets/<帳號>.pass）
+#   bash steps/23-metadata-backup.sh restore-all <備份目錄>   26.4 叢集重置後全部建回來（應用程式 topic、全部 binding、SCRAM、配額、ACL、broker 動態設定）
 #   bash steps/23-metadata-backup.sh drill      23.6 還原演練：建演練物件 → 備份 → 誤刪 → restore → 寫讀一筆 → 清掉
 #
 # 各台的 /etc/confluent 由銀行的主機備份系統備；私鑰、密碼、master key 在事件發生時交 CyberArk，不在這支。
@@ -145,6 +146,55 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
   fi
 }
 
+# 26.4 叢集重置之後全部建回來：應用程式 topic（名稱有「.」、不是底線開頭）、全部 role binding、SCRAM 帳號（密碼讀 ~/secrets）、配額、ACL、broker 動態設定。
+#   內部 topic、稽核 topic、C3 的 topic 由平台自己重建；訊息內容與 consumer 讀到的位置本來就不在備份裡。
+restore_all() {   # restore_all <備份目錄>
+  local dir=$1 cid t partitions rf kv cfg n
+  local admin=(--bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF")
+  [ -d "$dir" ] || die "沒有備份目錄 $dir"
+  set -f   # rbac.txt 裡有 Topic:* 這種名稱，不能被 shell 換成檔名
+  cid=$(cluster_id)
+  section "26.4 從 $dir 全部建回來（cluster $cid）"
+  n=0; for t in $(grep -oP '^Topic: \K[^\t]+' "$dir/topics.txt" | grep '\.' | grep -v '^_'); do
+    read -r partitions rf <<<"$(grep -P "^Topic: $t\t" "$dir/topics.txt" | head -1 | sed 's/.*PartitionCount: \([0-9]*\).*ReplicationFactor: \([0-9]*\).*/\1 \2/')"
+    cfg=(); while read -r kv; do [ -n "$kv" ] && cfg+=(--config "$kv"); done < <(awk -v t="$t" '$0 == "Dynamic configs for topic " t " are:"{p=1;next} /^Dynamic configs/{p=0} p{print $1}' "$dir/topic-configs.txt")
+    if kafka-topics "${admin[@]}" --create --if-not-exists --topic "$t" --partitions "$partitions" --replication-factor "$rf" "${cfg[@]}" >/dev/null 2>&1; then n=$((n+1)); else fail "topic $t"; fi
+  done; ok "topic：$n 個"
+  local principal role rtype rname pattern args
+  n=0; while IFS='|' read -r principal role rtype rname pattern; do
+    principal=$(echo $principal); role=$(echo $role); rtype=$(echo $rtype); rname=$(echo $rname); pattern=$(echo $pattern)
+    [ -n "$principal" ] && [ -n "$role" ] || continue
+    args=(--principal "$principal" --role "$role" --kafka-cluster "$cid"); [ -n "$rname" ] && args+=(--resource "$rtype:$rname"); [ "$pattern" = PREFIXED ] && args+=(--prefix)
+    if mds_write cli_as svc-ops iam rbac role-binding create "${args[@]}" >/dev/null 2>&1; then n=$((n+1)); else fail "binding $principal $role $rtype:$rname"; fi
+  done < <(grep -v '^== ' "$dir/rbac.txt"); ok "role binding：$n 條"
+  local user iter missing=""
+  n=0; for user in $(grep -o "SCRAM credential configs for user-principal '[^']*'" "$dir/users.txt" | cut -d"'" -f2); do
+    iter=$(grep "SCRAM credential configs for user-principal '$user'" "$dir/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
+    [ -s "$SECRETS_DIR/$user.pass" ] || { missing="$missing $user"; continue; }
+    # 出錯時 kafka-configs 會印出密碼，所以輸出丟掉
+    if kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config "SCRAM-SHA-512=[${iter:-iterations=8192},password=$(cat "$SECRETS_DIR/$user.pass")]" >/dev/null 2>&1; then n=$((n+1)); else fail "SCRAM $user"; fi
+  done; ok "SCRAM 帳號：$n 個"; [ -z "$missing" ] || fail "沒有密碼檔、沒建回來的 SCRAM 帳號：$missing（要另外發新密碼）"
+  local quota
+  n=0; while read -r user quota; do
+    if kafka-configs "${admin[@]}" --alter --entity-type users --entity-name "$user" --add-config "$quota" >/dev/null 2>&1; then n=$((n+1)); else fail "配額 $user"; fi
+  done < <(grep "^Quota configs for user-principal" "$dir/users.txt" | sed "s/^Quota configs for user-principal '\([^']*\)' are /\1 /; s/\.0\b//g; s/, /,/g"); ok "配額：$n 個帳號"
+  # acls.txt 一條一行：資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY
+  local name pat host op perm resource who operation
+  n=0; while IFS='|' read -r rtype name pat principal host op perm; do
+    [ -n "$op" ] || continue
+    case $rtype in TOPIC) resource=(--topic "$name");; GROUP) resource=(--group "$name");; CLUSTER) resource=(--cluster);; TRANSACTIONAL_ID) resource=(--transactional-id "$name");; *) fail "不認得的 ACL 資源類型 $rtype"; continue;; esac
+    [ "$pat" = PREFIXED ] && resource+=(--resource-pattern-type prefixed)
+    operation=$(awk -v s="$op" 'BEGIN{n=split(tolower(s),a,"_"); for(i=1;i<=n;i++) printf "%s", toupper(substr(a[i],1,1)) substr(a[i],2)}')
+    if [ "$perm" = DENY ]; then who=(--deny-principal "$principal"); [ "$host" != '*' ] && who+=(--deny-host "$host")
+    else who=(--allow-principal "$principal"); [ "$host" != '*' ] && who+=(--allow-host "$host"); fi
+    if kafka-acls "${admin[@]}" --add "${who[@]}" --operation "$operation" "${resource[@]}" >/dev/null 2>&1; then n=$((n+1)); else fail "ACL $rtype:$name $principal $op"; fi
+  done < "$dir/acls.txt"; ok "ACL：$n 條"
+  n=0; for kv in $(awk '/^Default configs for brokers/{p=1;next} p{print $1}' "$dir/broker-configs.txt"); do
+    if kafka-configs "${admin[@]}" --alter --entity-type brokers --entity-default --add-config "$kv" >/dev/null 2>&1; then n=$((n+1)); else fail "broker 設定 $kv"; fi
+  done; ok "broker 動態設定：$n 個"
+  set +f
+}
+
 # 23.6 演練（lab 與驗收用）：建演練物件 → 備份 → 誤刪 → 還原 → 用該帳號寫讀一筆 → 清掉
 drill() {
   local topic=orders.restore-demo user=app-restore cid dir client_conf role
@@ -192,5 +242,6 @@ case $ACTION in
   compare)  compare;;
   restore)  restore "${2:-}" "${3:--}" "${4:--}"; [ "$FAIL_COUNT" = 0 ];;
   drill)    drill; [ "$FAIL_COUNT" = 0 ];;
-  *) die "用法：bash $0 grant|run|schedule|compare|restore <備份目錄> <topic|-> <帳號|->|drill";;
+  restore-all) restore_all "${2:-}"; [ "$FAIL_COUNT" = 0 ];;
+  *) die "用法：bash $0 grant|run|schedule|compare|restore <備份目錄> <topic|-> <帳號|->|drill|restore-all <備份目錄>";;
 esac
