@@ -504,7 +504,7 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 使用者說明並確認：Kafka lab 與 CyberArk 已脫鉤，**只剩一件事和 CyberArk 有關**：人員登入 CyberArk（PVWA 網頁，AD＋MFA）→ PSMP 代登 → 進操作機是 root；root 才讀得到 `/secure/ssh` 的 cpuser 私鑰（0400）。
 
 - 平台的密碼與金鑰（Secret Protection 的 passphrase 與 master key、`svc-mds-bind`、測試人員密碼、應用程式 SCRAM、`store.pass`、`kafka-admin`、緊急憑證 `opmenu-breakglass`、JMX 抓取密碼、`confluent-audit`、license）**全部只留在操作機 root 才讀得到的位置（0600）**，不再交 Secrets 團隊存進 PVWA、不再「從 PVWA 取出」。
-- CPM 輪替（root、`svc-mds-bind`）全部拿掉，改手動輪替（沿用同一套 A/B 兩組切換程序）。
+- CPM 輪替（root、`svc-mds-bind`）全部拿掉，改手動輪替。`svc-mds-bind` **維持單一帳號**（2026-10-30 使用者確認：銀行 AD 通常只給一個服務帳號）：AD 換密碼與平台更新密文、滾動重啟排在同一張變更單、同一個時段（手把手 20.4）；銀行願意給兩組時才改 A／B（問題清單 8.5）。A／B 只用在應用程式的 SCRAM 帳號（20.6）。
 - 後果要在文件講清楚：①操作機掉了，passphrase 就沒了（master key 還在各主機的 service.env），所以 `~/secrets`、`~/pki` 的備份由銀行自己的備份機制處理（問題清單新增一題）；②OP menu 91 緊急憑證改成讀操作機上的檔，不再從 PVWA 貼上；操作者本來就是 root，91 的把關只剩「必填原因＋稽核記錄」，不是硬性隔離。
 - 動到：手把手第 0、3、11、15、16、17、18、19、20、25 章與 6465 行 license；install（site.env、15／16／19／20 站、lab 的 bank-sim／run-customer、opmenu 的 91 取憑證方式與提示字、README）；問題清單；README／CLAUDE.md；CyberArk 登入設計 Word（只保留登入與金鑰那段）。
 
