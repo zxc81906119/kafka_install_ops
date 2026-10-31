@@ -83,3 +83,7 @@
 - 12 塊 rc=0：每台 120–126 個更新、confluent-* 0 個、Rocky 10 判斷會停；broker → controller（leader 最後）→ REST／C3／ops02 全部 9.8，鎖 = 裝，REST 照 12.1 重啟。
 - 之後第 19 章：健康 22/22、安全 16/16、寫讀、冷開機 MDS 117 s／C3 151 s。
 - 改：30.5 `26-os-patch.sh` → `30-os-patch.sh`；更新集合大小改引 30.0；刪空的 @role；空格。
+
+## 第 31 章通過（Podman，2026-10-31 22:45）
+- 使用者選擇不重下載 C3 2.6.0 RPM（1 GB，10-30 下載過）：dl01 上 rpm -K、sha256 -c 都 OK；31.1 的下載塊略過（runner 產生後刪掉那一塊），其餘 5 塊 rc=0。
+- 31.3 退回 2.6.0、31.4 升回 2.6.1：config same、ExecStart 我們的、4 個 generated 檔 cp-control-center、alice 200、Prometheus 指標 125 種。

@@ -8625,7 +8625,7 @@ lab 裡：已經是原廠最新的 2.6.1（29.3 升好的），所以演練是�
 
 @role 小安 | dl01 | root
 
-和第 2 章一樣指定精確版本；C3 的 RPM **沒有宣告任何真實的相依**（實測 `rpm -qpR` 只有 `/bin/sh`、`bash` 和自己的設定），所以 `dnf` 不會替它檢查或帶入什麼，`--resolve` 也沒有東西可解。原廠文件要求的前置套件 `cyrus-sasl`、`openssl-devel` 來自銀行的 OS 套件庫、在7.3 節已經裝好，是否還在要自己檢查（31.2 最後一步）。下載改成「`dnf` 只印出網址、`curl` 下載」：實測 `dnf download` 把這個約 1 GB 的 RPM 下載完整之後，行程常常不會結束（連線卡住）；`curl` 沒有這個問題。下載完用 `rpm -K` 驗簽章：
+和第 2 章一樣指定精確版本；C3 的 RPM **沒有宣告任何真實的相依**（實測 `rpm -qpR` 只有 `/bin/sh`、`bash` 和自己的設定），所以 `dnf` 不會替它檢查或帶入什麼，`--resolve` 也沒有東西可解。原廠文件要求的前置套件 `cyrus-sasl`、`openssl-devel` 來自銀行的 OS 套件庫、在 7.3 節已經裝好，是否還在要自己檢查（31.2 最後一步）。下載改成「`dnf` 只印出網址、`curl` 下載」：實測 `dnf download` 把這個約 1 GB 的 RPM 下載完整之後，行程常常不會結束（連線卡住）；`curl` 沒有這個問題。下載完用 `rpm -K` 驗簽章：
 
 ```bash
 V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)" && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls
