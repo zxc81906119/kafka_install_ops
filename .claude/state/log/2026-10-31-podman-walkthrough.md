@@ -64,3 +64,7 @@
 ## 第 26 章通過（Podman，2026-10-31 21:29）
 - 26.1／26.2 3 塊 rc=0（trial 剩 29 天、rc=2、timer 08:00）；26.4 重置 8 塊照設計略過（on-demand, destructive；10-30 在 Docker lab 實跑過）。
 - 自檢無需修改：license JWT 放 ~/secrets 0600、不放 CyberArk；重置後用 kafka-internal 建第一條 binding（同第 11 章）。
+
+## 第 27 章通過（Podman，2026-10-31 21:31）
+- 15 塊 rc=0；SCRAM A／B、app-shipping 用 ca/g2 簽、REST 白名單＋12.1 重啟、寫自己的 200／別人的 40301、下線全部清乾淨。
+- 自檢：27.3 選 CA 目錄的說明補 21.4（中繼改由 G3 簽，仍在 ca/g2）。

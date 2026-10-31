@@ -7480,7 +7480,7 @@ app-shipping: csr ok；subject=CN=app-shipping, O=PoC Bank, C=TW
 
 @role 銀行 CA 窗口（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-正式環境走 9.2 一樣的管道（檔案交換平台送 CSR、收回憑證鏈）。lab：只簽這一張，放回 `~/pki/incoming/`；用**現行**的 CA：不是看目錄存不存在，而是看哪個目錄的中繼憑證能被平台現在信任的根（操作機的 `bank-root.pem`）驗證通過（21.3 換過 CA 之後是 `ca/g2`，沒換過是 `ca`）：
+正式環境走 9.2 一樣的管道（檔案交換平台送 CSR、收回憑證鏈）。lab：只簽這一張，放回 `~/pki/incoming/`；用**現行**的 CA：不是看目錄存不存在，而是看哪個目錄的中繼憑證能被平台現在信任的根（操作機的 `bank-root.pem`）驗證通過（21.3 換過 CA 之後是 `ca/g2`；21.4 換鏈之後中繼改由 G3 簽，仍在 `ca/g2`；沒換過是 `ca`）：
 
 ```bash
 cd ~/kafka-lab && podman exec lab-ops02-1 cat /etc/pki/ca-trust/source/anchors/bank-root.pem > ca/exchange/anchor.pem && d=""; for c in ca ca/g2; do [ -f $c/issuing.crt ] && openssl verify -CAfile "$(cygpath -m ca/exchange/anchor.pem)" "$(cygpath -m $c/issuing.crt)" >/dev/null 2>&1 && d=$c; done; [ -n "$d" ] || { echo "沒有一個 CA 目錄的中繼憑證能被平台信任"; false; } && mkdir -p ca/exchange/requests ca/exchange/signed && podman cp lab-ops02-1:/root/pki/requests/app-shipping.csr "$(cygpath -m "$PWD/ca/exchange/requests/app-shipping.csr")" && bash $d/sign.sh ca/exchange/requests/app-shipping.csr ca/exchange/signed/app-shipping.crt | sed "s/  (.*//" && podman cp "$(cygpath -m "$PWD/ca/exchange/signed/app-shipping.crt")" lab-ops02-1:/root/pki/incoming/ && echo "用 $d 簽"
