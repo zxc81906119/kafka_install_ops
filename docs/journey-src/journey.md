@@ -832,10 +832,10 @@ cd /out && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "too
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-正式環境由行內的檔案交換平台把核准的檔案送到操作機的 `~/landing`（root 的家目錄底下）。lab 裡：用 `podman cp` 模擬這個平台；送進去之後把目錄設成唯讀（對 root 其實擋不住寫入，只是約定「落地區的檔案不改」）：
+正式環境由行內的檔案交換平台把核准的檔案送到操作機的 `~/landing`（root 的家目錄底下）。lab 裡：用 `podman cp` 模擬這個平台（`podman cp` 不會自動建立目的目錄，所以先建 `~/landing`）；送進去之後把目錄設成唯讀（對 root 其實擋不住寫入，只是約定「落地區的檔案不改」）：
 
 ```bash
-podman cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/ && podman exec lab-ops02-1 bash -c 'chmod -R a-w /root/landing && find /root/landing -type f | wc -l && du -sh /root/landing'
+podman exec lab-ops02-1 install -d -m 0700 /root/landing && podman cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/ && podman exec lab-ops02-1 bash -c 'chmod -R a-w /root/landing && find /root/landing -type f | wc -l && du -sh /root/landing'
 ```
 
 ```out
@@ -843,13 +843,13 @@ podman cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/
 6.9G	/root/landing
 ```
 
-79 個檔：兩套 RPM 各 11、1 個 jar、2 把公鑰、48 個官方監控檔、`SHA256SUMS`、`os-packages.txt`、`bank/` 的兩個 JDK 各兩個檔（tar 與 .sha256）。
+79 個檔：兩套 RPM 各 11、1 個 jar、2 把公鑰、48 個官方監控檔、`SHA256SUMS`、`os-packages.txt`、`bank/` 的兩個 JDK 各兩個檔（tar 與 .sha256）。lab 重跑時落地區可能已有第 16 章的 `tools/opmenu/`、第 31 章的 `c3/`（各 2 個檔），會是 83 個。
 
 ## 3.3 進內網後再驗一次
 
 @role 小安 | ops02 | root
 
-這是第二道驗證（第一道是 dl01 上的 2.6）：證明搬運途中沒被動過，用的是一起送進來的 `SHA256SUMS`。看到 `72 files OK` 才往下；有任何一個檔不符就退回銀行重送，不要裝：
+這是第二道驗證（第一道是 dl01 上的 2.6）：證明搬運途中沒被動過，用的是一起送進來的 `SHA256SUMS`。看到 `73 files OK` 才往下；有任何一個檔不符就退回銀行重送，不要裝：
 
 ```bash
 cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) files OK"
@@ -1058,7 +1058,7 @@ R="--disablerepo=* --enablerepo=vault96-baseos,vault96-appstream,vault96-extras"
 ok=0; for try in 1 2 3; do dnf -q $R download --resolve --arch x86_64 --arch noarch --destdir /out/Packages chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion && { ok=1; break; }; echo "鏡像站還沒同步好，60 秒後重試（第 $try 次）" >&2; dnf -q clean metadata; sleep 60; done; [ $ok = 1 ]
 dnf -q -y --disablerepo="*" install /out/Packages/*.rpm >/dev/null
 createrepo_c -q /out
-ls /out/Packages | wc -l' && podman cp "$(cygpath -m "$PWD/bank-os/9.6")/." lab-repo01-1:/var/www/repo/os/ && podman exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
+ls /out/Packages | wc -l' && podman exec lab-repo01-1 install -d /var/www/repo/os && podman cp "$(cygpath -m "$PWD/bank-os/9.6")/." lab-repo01-1:/var/www/repo/os/ && podman exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
 ```
 
 ```out
