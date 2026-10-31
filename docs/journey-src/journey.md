@@ -4595,9 +4595,8 @@ kb01
 
 | 留在操作機 | 收掉或交出去 |
 |---|---|
-| `~/conf/`（範本與產出的設定，之後改設定都從這裡）、`~/pki/`（憑證、CSR、keystore 密碼）、`~/secrets/`（0600）、`~/monitoring/` | `~/landing/`、`~/repo/` 可以刪（套件已上架；要回滾用套件庫裡的舊版）。例外：還要照第 29 章遷移的話，`~/landing/rpm-target/` 與 `~/landing/bank/` 的 JDK 25 要留到遷移完成 |
+| `~/conf/`（範本與產出的設定，之後改設定都從這裡）、`~/pki/`（憑證、CSR、keystore 密碼；含綁 SystemAdmin 的 `svc-ops.key`，和其他金鑰一樣只放這裡、0600）、`~/secrets/`（0600）、`~/monitoring/` | `~/landing/`、`~/repo/` 可以刪（套件已上架；要回滾用套件庫裡的舊版）。例外：還要照第 29 章遷移的話，`~/landing/rpm-target/` 與 `~/landing/bank/` 的 JDK 25 要留到遷移完成 |
 | ssh 私鑰 `/secure/ssh/cpuser_ed25519`（root、0400）留在操作機的獨立 file system；不放 CyberArk、不備份，操作機重建就重新產生並重新佈署公鑰（第 4 章） | `/tmp/` 裡安裝期間的暫存檔 |
-| | `~/pki/keys/svc-ops.key`：安裝完成後建議移到離線保管，需要時再取回（它綁 SystemAdmin）；憑證輪替（第 21 章）、升級（第 29 章）前要先取回 |
 | | 各主機 cpuser 的全權 sudo（`/etc/sudoers.d/cpuser`）：移除，只留 `cpuser-ops` 窄規則（lab 留著，後面章節還要用） |
 | | 平台的密碼與金鑰只留在操作機 root 才讀得到的位置：`~/secrets`（passphrase、master key、kafka-admin、應用程式 SCRAM、緊急憑證、confluent-audit 等，11.1、15.2、16.2、18.1）、`~/pki`、`/secure/ssh`；不放 CyberArk。操作機的備份交銀行的備份機制並加密（`/secure/ssh` 的私鑰依 第 4 章 不備份） |
 
@@ -4614,7 +4613,7 @@ kc01: /tmp 殘留 0 個；sudoers cpuser,cpuser-ops,
 
 交付清單裡還有兩個排程要先裝好：license 到期檢查（26.2）、每日中繼資料備份（23.2–23.4）。兩個都先放在操作機的 systemd timer；**待銀行確認**：行內若有排程系統（例如 Control-M），改由它在同樣的時間呼叫同一支腳本，操作機上的 timer 就不用裝。
 
-> 正式環境交付時再做三件 lab 不做的事：OS 團隊把各主機 `/etc/sudoers.d/cpuser`（全權）移除；把 `svc-ops.key` 移到離線保管；`~/landing`、`~/repo` 依銀行留存政策處理（套件庫才是正本）。
+> 正式環境交付時再做兩件 lab 不做的事：OS 團隊把各主機 `/etc/sudoers.d/cpuser`（全權）移除；`~/landing`、`~/repo` 依銀行留存政策處理（套件庫才是正本）。`svc-ops.key` 留在操作機的 `~/pki`（不移到離線保管，2026-10-31 定案）：誰在什麼時間進了操作機的 root，靠 PVWA 的登入紀錄與 PSMP 錄影追；它在叢集上做的事，Kafka 的稽核日誌記成 `User:svc-ops`。
 
 # 20. 第二十站：密碼與金鑰輪替
 

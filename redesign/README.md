@@ -302,7 +302,7 @@
 - 只保留現行設計：舊的 cpctl 安裝程式、cp-poc／cp-man 兩個 lab、舊手動安裝手冊、全流程簡報、主機準備清單、另設堡壘機的舊 OP menu 設計都已從 redesign 分支移除（只剩 main 分支的歷史）。
 - 現行設計只有一種：操作機 ops02 同時是維運人員登入點（經 PSMP），OP menu 跑在操作機，碰主機用 cpadmin 金鑰（正本在 PVWA，只放進 ssh-agent），見手把手第 16 章。SSH 金鑰只有 cpadmin 一組。
 - 同日確認：cpadmin 先用 `NOPASSWD` sudo；CPM 的 reconcile 帳號不用 cpadmin。
-- 同日確認：super user 等級的私鑰（`svc-ops`、MDS token 簽章私鑰）**不另外放 PVWA safe**，維持 20.5「安裝完成後移到離線保管」。
+- 同日確認：super user 等級的私鑰（`svc-ops`、MDS token 簽章私鑰）**不另外放 PVWA safe**，維持 20.5「安裝完成後移到離線保管」。（2026-10-31 改：`svc-ops.key` 照 10-28「平台密碼與金鑰只放操作機」留在 `~/pki`，不移到離線保管；19.5、請銀行確認事項 8.8 已改。）
 
 ### REST Proxy 重啟前先從 LB 停用（2026-10-26 定案，lab 實測）
 

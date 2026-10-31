@@ -28,3 +28,7 @@
 - 第 19 章：7 塊全過，一次就健康 22／22、安全 16／16、應用程式寫讀、選單重啟 kb03、Podman 上冷開機（compose stop／start：MDS 86 s、C3 153 s、重試 0）。**安裝基底 0–19 章在 Podman 上照手冊從零跑完。**
 - 待使用者決定：19.5 建議 `svc-ops.key`（SystemAdmin）交付後「移到離線保管」，和 10-28 定案「平台密碼與金鑰只放操作機」有出入。
 - 順帶：lab 容器沒有 `unzip`（找 jar 時靜默失敗，改用 grep）；SecurePassConfigProvider 在 confluent-server／metadata-service、REST 的 confluent-security、C3 自己的 RPM 裡，不用另裝 jar。
+
+## svc-ops.key 留在操作機（使用者 2026-10-31 選定）
+- 19.5 原寫「安裝完成後建議移到離線保管」，和 10-28「平台密碼與金鑰只放操作機」矛盾；改為留在 `~/pki`（0600），追溯靠 PVWA 登入紀錄、PSMP 錄影、Kafka 稽核日誌（User:svc-ops）。
+- 已改：journey 19.5（兩處）、questions 8.8（改成告知）、redesign/README.md、`19-acceptance.sh` 的交付提醒；questions docx 已重建。
