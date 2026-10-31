@@ -4,7 +4,7 @@
 - 跑完要一起修的手冊小地方：
   - 4.5 out 寫 `host=kb01.poc.lab`，實跑是 `host=172.35.0.31`（sshd 沒反查）：out 不寫死主機名。
   - 10.4 格式化 controller 時 8.2.4 的 kafka-storage 印 `WARN 'share' in group.coordinator.rebalance.protocols is deprecated`（不是我們的設定）：out 補說明。
-  - 13 章第 5 塊「帶 kafka_broker_id 的節點數」：檢查只要 >0 就停，印出當下回報到的數（這次 5，之後是 7 = 3 controller＋4 broker）；改成等到 7／7。
+  - 13 章第 5 塊「帶 kafka_broker_id 的節點數」：檢查只要 >0 就停，印出當下回報到的數（這次 5，之後是 7 = 3 controller＋4 broker）；改成等到 7／7。（2026-10-31 Podman 輪複查：手冊已寫「大於 0 即可、穩定後是 7、剛啟動時 5」，不用改）
   - 14 章 out 的 topic 寫 `poc-cluster-2-6-1-10-…`，基底是 C3 2.5.1，實跑是 `2-5-1`。
   - 16.5 第 12 塊 out 的兩行 kb04 日誌：23 只列 error／warn 字樣的行，最近 10 行沒有時就沒輸出（這次沒有）；out 要註明。
   - 18.4 稽核 topic 是 broker 自建、min.insync.replicas=1：銀行若要求稽核紀錄至少寫 2 份才算成功，可改 2（列入待確認）。
