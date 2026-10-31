@@ -3686,7 +3686,7 @@ c3-01   https=200 http=000 metrics=2115
 | `alertmanager/` | `alertmanager.yml` | 併入行內 Alertmanager 的設定 |
 | `grafana/` | `datasource-prometheus.yml`、`dashboards/`（32 個 JSON 加 `dashboard.yml`） | Grafana 的 `provisioning/datasources/`、`provisioning/dashboards/` |
 
-**scrape 設定**：四個 job，名稱和標籤是官方 dashboard 寫死的（`job="kafka-broker"`、`env`、`hostname`），不要改。`env` 的值是這個環境的名字（lab 用 `lab`，客戶用 `prod`／`uat`）。抓取密碼放檔案不放設定裡。這個檔用 Prometheus 的 `scrape_config_files` 引用，不用併進 `prometheus.yml`：
+**scrape 設定**：四個 job，名稱和標籤是官方 dashboard 寫死的（`job="kafka-broker"`、`env`、`hostname`），不要改。`env` 的值是這個環境的名字（lab 用 `lab`，客戶用 `prod`／`uat`）。7071 只做 HTTPS，所以每個 job 只有 `scheme: https` 和驗銀行根憑證的 `tls_config`，沒有帳密。這個檔用 Prometheus 的 `scrape_config_files` 引用，不用併進 `prometheus.yml`：
 
 ```bash
 rm -rf ~/monitoring/to-bank && install -d ~/monitoring/to-bank/prometheus ~/monitoring/to-bank/alertmanager ~/monitoring/to-bank/grafana/dashboards
