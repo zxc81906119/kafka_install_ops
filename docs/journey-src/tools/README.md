@@ -5,7 +5,7 @@ node tools/run-chapter.js journey.md 15 16 /tmp/ch15.sh   # 第 15 章（到第 
 bash /tmp/ch15.sh > /tmp/ch15.log 2>&1
 ```
 
-- 每個 ```bash 區塊依最近的 `@role 誰 | 主機 | 身分` 決定在哪跑：`Windows 終端` → 本機 Git Bash；`dl01` → `docker exec dl01`；其他主機 → `docker exec lab-<主機>-1`，操作機（ops02）一律以 root 進（`-w /root`；ssh 到各主機靠 root 的 `~/.ssh/config` 指到 `/secure/ssh/cpuser_ed25519`，不需要傳 ssh-agent）。
+- 每個 ```bash 區塊依最近的 `@role 誰 | 主機 | 身分` 決定在哪跑：`Windows 終端` → 本機 Git Bash；`dl01` → `podman exec dl01`；其他主機 → `podman exec lab-<主機>-1`，操作機（ops02）一律以 root 進（`-w /root`；ssh 到各主機靠 root 的 `~/.ssh/config` 指到 `/secure/ssh/cpuser_ed25519`，不需要傳 ssh-agent）。
 - 同一主機連續的區塊共用一個 shell（像讀者留在那台沒登出），腳本經 `/tmp/runner.sh` 餵進去、stdin 接 /dev/null（ssh 才不會吃掉後面的指令）。
 - 含 `-it` 的區塊、`@role … | — | —` 的區塊會略過；任一區塊 rc≠0 就停。
 - 用途：改了章節後重跑，把實際輸出對回 ```out 區塊。

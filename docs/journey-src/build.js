@@ -114,11 +114,11 @@ function table(rows) {
 
 // 每個 ```bash 指令塊上方的「在哪執行」：取自最近的 @role；換了主機（或每章第一塊）再附上 lab 裡切過去的指令
 const ENTER = {
-  'ops02|root': 'docker exec -it -w /root lab-ops02-1 bash',
-  'dl01|root': 'docker exec -it dl01 bash',
-  'repo01|root': 'docker exec -it lab-repo01-1 bash',
-  'lb01|root': 'docker exec -it lab-lb01-1 bash',
-  'ad01|root': 'docker exec -it lab-ad01-1 bash',
+  'ops02|root': 'podman exec -it -w /root lab-ops02-1 bash',
+  'dl01|root': 'podman exec -it dl01 bash',
+  'repo01|root': 'podman exec -it lab-repo01-1 bash',
+  'lb01|root': 'podman exec -it lab-lb01-1 bash',
+  'ad01|root': 'podman exec -it lab-ad01-1 bash',
 };
 function placeLine(roleText, changed, fromContainer) {
   const [who, where = '', user = ''] = roleText.split('|').map(s => s.trim());

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install/ 的靜態檢查：改完腳本、上 lab 之前先跑。
 #   bash install/tools/lint.sh            在有 shellcheck 的機器跑（RHEL：EPEL 的 ShellCheck）
-#   在 Windows Git Bash 沒有 shellcheck 時，自動改用原廠 docker image koalaman/shellcheck（LINT_IMAGE 可換）
+#   在 Windows Git Bash 沒有 shellcheck 時，自動改用原廠 podman image koalaman/shellcheck（LINT_IMAGE 可換）
 #
 # 檢查三件事：
 #   1. 每支 .sh 本身（shellcheck，warning 以上）
@@ -15,13 +15,13 @@ set -uo pipefail
 INSTALL_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LINT_IMAGE=${LINT_IMAGE:-koalaman/shellcheck:v0.10.0}
 
-# 沒有 shellcheck：每次呼叫改在 docker 裡跑（目前目錄唯讀掛進去、不連網；檔名都用相對路徑）
+# 沒有 shellcheck：每次呼叫改在 podman 裡跑（目前目錄唯讀掛進去、不連網；檔名都用相對路徑）
 if ! command -v shellcheck >/dev/null; then
-  command -v docker >/dev/null || { echo "找不到 shellcheck，也沒有 docker"; exit 1; }
+  command -v podman >/dev/null || export PATH="$(cygpath -u "$LOCALAPPDATA")/Programs/Podman:$PATH"; command -v podman >/dev/null || { echo "找不到 shellcheck，也沒有 podman"; exit 1; }
   shellcheck() {
     local here=$PWD
     command -v cygpath >/dev/null && here=$(cygpath -m "$PWD")
-    MSYS_NO_PATHCONV=1 docker run --rm --network none -v "$here:/mnt:ro" -w /mnt "$LINT_IMAGE" "$@"
+    MSYS_NO_PATHCONV=1 podman run --rm --network none -v "$here:/mnt:ro" -w /mnt "$LINT_IMAGE" "$@"
   }
 fi
 
