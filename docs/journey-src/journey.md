@@ -6097,7 +6097,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 ![certexpiry]
 
-**這一章在做什麼**：第 9 章的憑證一年到期（9.3 看到 `days=364`），到期那一刻 broker 之間、REST Proxy、C3、應用程式全部連不上；第 21 章是怎麼換，這一章是**怎麼提前知道**。做兩層：22.2 銀行 Prometheus 的 blackbox_exporter 探平台的每個 TLS 端點，剩 60 天 warning、14 天 critical；22.3 操作機每天一次讀 `~/pki/certs` 全部憑證（含 blackbox 看不到、不對外的 client 憑證與信任的根），寫 syslog。客戶目前沒有 blackbox_exporter，22.2 列為建議（問題清單 11.10）；22.3 與選單 17 沒有前提。lab 兩層都建、都驗。前提：第 17 章接上了、第 9 章的憑證在 `~/pki/certs`。完成的樣子：Prometheus 的 `cert-expiry` job 10 個以上 target 全 up、規則 24 條、`promtool test rules` 通過；操作機腳本列出每張憑證剩幾天、timer 裝好。
+**這一章在做什麼**：第 9 章的憑證一年到期（9.3 看到 `days=364`），到期那一刻 broker 之間、REST Proxy、C3、應用程式全部連不上；第 21 章是怎麼換，這一章是**怎麼提前知道**。做兩層：22.2 銀行 Prometheus 的 blackbox_exporter 探平台的每個 TLS 端點，剩 60 天 warning、14 天 critical；22.3 操作機每天一次讀 `~/pki/certs` 全部憑證（含 blackbox 看不到、不對外的 client 憑證與信任的根），寫 syslog。客戶目前沒有 blackbox_exporter，22.2 列為建議（問題清單 11.10）；22.3 與選單 17 沒有前提。lab 兩層都建、都驗。前提：第 17 章接上了、第 9 章的憑證在 `~/pki/certs`。完成的樣子：Prometheus 的 `cert-expiry` job 24 個 target 全 up、規則 25 條（第 17 章 22 條加這一章 3 條）、`promtool test rules` 通過；操作機腳本列出每張憑證剩幾天、timer 裝好。
 
 ## 22.1 要看哪些憑證
 
@@ -6107,6 +6107,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 |---|---|---|---|
 | `kafka-internal` | controller 9093、broker 9092 | 探得到（mTLS 的 listener 也會先出示自己的憑證） | 有 |
 | `cp-server` | broker 9094／9095／9096／8090、REST 8082（兩台＋LB）、C3 9021 | 探得到 | 有 |
+| 同上兩張（7071 與 C3 9090） | 每台的 7071（JMX exporter，第 17 章：controller 用 `kafka-internal`、其他用 `cp-server`）、C3 內建 Prometheus 9090 | 不另外探：和上面兩列是同一張憑證、同一個到期日；7071 過期時銀行 Prometheus 本來就抓不到，`ConfluentTargetDown` 會響 | 有（同一個檔） |
 | `svc-rest`、`svc-c3`、`c3-monitoring`、`svc-ops`、`svc-backup`、`opmenu-breakglass`、app 憑證 | client 憑證，不對外 | 探不到 | 有（`~/pki/certs/*.crt`） |
 | 銀行根、中繼（truststore；`bank-root.pem`） | — | 探到的是鏈裡最早到期的那一張（`probe_ssl_earliest_cert_expiry`） | 有（`bank-root.pem`） |
 | AD 的 LDAPS 憑證 | ad01 636 | 探得到（銀行的，順便看；它到期 MDS 就查不到 AD） | 無 |

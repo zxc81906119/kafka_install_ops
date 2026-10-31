@@ -41,3 +41,8 @@
 ## 第 21 章通過（Podman，2026-10-31 19:17）
 - 81 塊 rc=0：leaf 換發、換 CA 三階段（G2）、換鏈三階段（G3）；每次拿掉舊根後舊憑證/舊鏈 → REST 000，新的 200，alice/套件庫 200，Prometheus 10/10。
 - 自檢：7071（JMX exporter，只用 HTTPS）也出示伺服器憑證，拿掉舊根後銀行 Prometheus 只信新根 → 21.1 補 kc01/rest01/c3-01:7071（11 行），21.3 把關 13→17、21.4 把關 17→19；21.2.4 說明 7071 讀服務的 keystore、隨服務重啟。刪兩個空的 @role；三處說明段落移到小安的指令前。
+
+## 第 22 章通過（Podman，2026-10-31 20:32）
+- 9 塊 rc=0；blackbox 24/24 up、promtool SUCCESS、規則 25 條 0 錯；操作機腳本 10 張、5 天／過期兩個分支與 syslog 正確；timer 08:10。
+- 使用者同意下載 prom/blackbox-exporter:v0.25.0（Podman machine 新建，原本沒有）。
+- 自檢：22.1 的表補 7071／C3 9090（同一張憑證，7071 過期時 ConfluentTargetDown 會響，不另外探）；章首「規則 24 條」改 25（17 章 22＋3）。
