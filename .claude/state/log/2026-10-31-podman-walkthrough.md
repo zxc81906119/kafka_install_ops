@@ -9,3 +9,4 @@
 - 第 5 章：10 塊全過（5.1 先建 /var/www/repo/os 的修正生效）。自檢無問題。埠對應先驗：Windows localhost:18082／19021 → curl rc=35（TCP 連到 lb01 的 nginx，後端還沒起來），`podman port` 有 8082→18082、9021→19021；第 12、13 章再驗 200。
 - 第 6 章：4 塊全過；自檢：只上架基底、ssh＋tar 推給 repodeploy（銀行上架方式待回覆）符合；修「第 第 4 章」錯字（全書一起掃）。
 - 第 7 章：14 塊全過；broker 仍是 errors=2——查出 `sysctl -w` 失敗也回 0（直接寫 /proc/sys/net/core/rmem_max 是 Permission denied），可行性測試那句「Podman 改得動」是誤判，已更正 feasibility log 與 redesign；手冊 7.3「errors=2，VM 上是 0」本來就對。自檢：7.3 防火牆後補「7071 沒有帳密，存取控制靠防火牆，拿到 Prometheus 位址後只放行它（11.4）」；「進7.3」空格。
+- 第 8 章：3 塊全過。自檢：「第 29 章由腳本解開 versionlock」→「逐台解開、換完再鎖回（29.3–29.6）」（手冊是手打指令）。

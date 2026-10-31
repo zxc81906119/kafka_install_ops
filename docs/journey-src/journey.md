@@ -1569,7 +1569,7 @@ c3-01: 1 confluent packages
 ops02: 10 confluent packages
 ```
 
-每台約一兩分鐘。鎖版本（只鎖 Confluent；C3 的兩個 OS 套件跟著 OS 修補，不鎖）。這個鎖在第 29 章遷移時由腳本先解開、換完版本再鎖回；第 30 章的 OS 更新（9.6 → 9.8）靠它確保 Confluent 不被動到：
+每台約一兩分鐘。鎖版本（只鎖 Confluent；C3 的兩個 OS 套件跟著 OS 修補，不鎖）。這個鎖在第 29 章遷移時逐台先解開、換完版本再鎖回（29.3–29.6）；第 30 章的 OS 更新（9.6 → 9.8）靠它確保 Confluent 不被動到：
 
 ```bash
 for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo dnf -q -y install python3-dnf-plugin-versionlock >/dev/null && for p in $(rpm -qa "confluent-*"); do sudo dnf -q versionlock add "$p" >/dev/null; done; echo "$(hostname): $(sudo dnf -q versionlock list | grep -c confluent) locked"'; done; for h in kb01 rest01 c3-01; do ssh $h.poc.lab 'echo "$(hostname): $(getent passwd cp-kafka cp-kafka-rest cp-control-center 2>/dev/null | cut -d: -f1 | tr "\n" " ") group=$(getent group confluent | cut -d: -f1) kafka_pkg=$(rpm -q confluent-server >/dev/null 2>&1 && echo yes || echo no)"'; done
