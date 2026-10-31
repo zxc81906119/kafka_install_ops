@@ -588,3 +588,8 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 44 快照補 `rbac.txt`、ACL 改成和 23.3 一樣一條一行，7 個檔和每日備份逐位元組相同（lab 實測 sha256 全部相同），23.6、26.4 的還原程式可以直接拿快照還原。為此每日備份的 `rbac.txt` 也去掉 CLI 表格的對齊空白、binding 排序；ACL、帳號、role binding 一律 `LC_ALL=C` 排序（ops02 是 C.UTF-8，銀行的 RHEL 多半是 en_US.UTF-8，排序結果會不同）。
 - 順手修掉的既有 bug：44 的權限清單 CSV 每個 principal 的每個 role 都少了最後一個資源（`printf '%s' | sed` 沒有結尾換行，`read` 丟掉最後一行；lab 13 筆 → 33 筆）；23.6 單一帳號還原遇到叢集層級 binding 會帶錯的 `--resource Cluster:`（改成看資源名稱）；11.2 AD 斷線演練的 kafka-admin 檢查在腳本版是假通過（見 log/2026-10-30-script-full-run.md）。
 - 43 加選項（使用者 2026-10-30 選定）：一般、敏感（`OPMENU_AUDIT_SENSITIVE_TOPIC`，預設 `<一般>_sensitive`）、兩個都看（依事件時間合併）；非互動第 5 個參數 `normal|sensitive|all`。稽核群組綁 audit topic 的 prefix 就兩個都讀得到。哪些 topic 算敏感由銀行定（lab 的 `payments.*` 只是例子，請銀行確認事項 9.5）。
+
+### JMX exporter 7071 只用 HTTPS，拿掉 basic auth（2026-10-31 定案，待實作）
+- 使用者決定：7071 只做 HTTPS（銀行根憑證驗得過鏈），不用 basic auth，也不用 mTLS。指標只讀、沒有訊息內容與密碼；少一組要交給銀行、要同步輪替的抓取密碼。
+- 代價：連得到 7071 的人都讀得到平台結構資訊（topic、consumer group、client id）。存取控制改成只靠網路：請銀行確認事項 11.4（7071 只放行行內 Prometheus 的來源位址）變成必要條件。
+- 要改：手冊 17.1／17.4／17.5、19 章驗收、25.1.5、B.2；`install/steps/17-jmx-exporter.sh`、`19-acceptance.sh`、`templates/jmx-header.yml`、`prometheus-scrape.yml`；questions 11.4。照三步：逐章手冊實跑到第 17 章前，先在 lab 手動試，再改手冊、照手冊跑，最後改腳本。
