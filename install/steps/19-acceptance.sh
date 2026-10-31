@@ -58,7 +58,7 @@ check "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $BANK_ROOT
 check "cp-server 只有 serverAuth，拿來當 client 憑證連 C3 的 Prometheus 被拒" bash -c "[ \"\$(openssl x509 -in $CERTS_DIR/cp-server.crt -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' ')\" = TLSWebServerAuthentication ] && ! curl -sf -m 15 --cacert $BANK_ROOT_CA --cert $CERTS_DIR/cp-server.crt --key $KEYS_DIR/cp-server.key https://$C3_FQDN:9090/-/ready"
 if [ "$JMX_EXPORTER" = 1 ]; then
   for host in ${CONTROLLERS%% *} ${BROKERS%% *} ${RESTS%% *} $C3_HOST; do
-    check "$host JMX exporter 7071 要帳密" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$(fqdn "$host"):7071/metrics)\" = 401 ]"
+    check "$host JMX exporter 7071 只走 HTTPS" bash -c "[ \"\$(http_code --cacert \$BANK_ROOT_CA https://$(fqdn "$host"):7071/metrics)\" = 200 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://$(fqdn "$host"):7071/metrics)\" = 000 ]"
   done
 fi
 health_failures=$FAIL_COUNT

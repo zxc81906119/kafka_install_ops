@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# 第 17 站：監控 —— 每個 Java 程序（controller、broker、REST Proxy、C3）掛 JMX exporter（7071、HTTPS、basic auth），
+# 第 17 站：監控 —— 每個 Java 程序（controller、broker、REST Proxy、C3）掛 JMX exporter（7071、只用 HTTPS、不要帳密：存取控制靠防火牆只放行行內 Prometheus），
 #           並產出給銀行監控團隊（行內 Prometheus／Alertmanager／Grafana）的設定、告警規則、官方 dashboard
 # where: ops02 （root）
 #
 # 何時用：JMX_EXPORTER=1。jar 與 Confluent 官方的規則檔（jmx-monitoring-stacks）在第 2.4 站已帶進 ~/landing。
 # 做什麼：
-#   17.1 抓取密碼（設定檔只存加鹽 SHA-256）、exporter 設定的標頭（HTTPS、帳密）
+#   17.1 exporter 設定的標頭（HTTPS；keystore 密碼不寫進 YAML）；清掉舊版（10-30 以前）的抓取密碼與鹽
 #   17.2 每台的 exporter 設定 = 標頭 + Confluent 官方規則（controller／broker／REST）或我們的小規則（C3）
 #   17.3 jar 與設定派送、drop-in 把 -javaagent 加進 KAFKA_OPTS／KAFKAREST_OPTS／CONTROL_CENTER_OPTS
-#   17.4 滾動重啟；匿名要 401、帶帳密要看到指標
-#   17.5 給銀行：scrape 設定、告警規則、Alertmanager 設定（兩種 webhook 格式）、Grafana datasource 與 32 個官方 dashboard、根憑證、抓取密碼
+#   17.4 滾動重啟；HTTPS 看得到指標、不加密的 http:// 連不上
+#   17.5 給銀行：scrape 設定、告警規則、Alertmanager 設定（兩種 webhook 格式）、Grafana datasource 與 32 個官方 dashboard、根憑證
 # 不做：C3 內建的 Prometheus／Alertmanager 不動（C3 畫面還要用）；告警與 dashboard 只走行內那一套，不在 C3 建 alert trigger／action。
-# 注意：exporter 的 YAML 不支援 Secret Protection，keystore 密碼只能明文寫在裡面，所以檔案 0640 root:confluent。
-# 重跑：安全（抓取密碼與鹽已存在就沿用）。
+# 注意：exporter 的 YAML 不支援 Secret Protection；keystore 密碼用 ${JMX_KEYSTORE_PASSWORD} 從 root 0600 的環境檔帶進去，YAML 本身 0640 root:confluent。
+# 重跑：安全。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
@@ -24,27 +24,19 @@ EXPORTER_JAR=$(ls "$LANDING"/tools/jmx_prometheus_javaagent-*.jar 2>/dev/null | 
 EXPORTER_JAR_NAME=$(basename "$EXPORTER_JAR")
 OFFICIAL=$LANDING/monitoring/jmx-monitoring-stacks     # Confluent 官方 jmx-monitoring-stacks（第 2.4 站，固定在一個 commit）
 [ -s "$OFFICIAL/COMMIT" ] || die "$OFFICIAL 不存在：官方規則檔還沒帶進來（第 2.4 站）"
-SCRAPE_PASSWORD_FILE=$SECRETS_DIR/jmx-scrape.pass   # Prometheus 抓取用的密碼（給銀行一份）
-SCRAPE_SALT_FILE=$SECRETS_DIR/jmx-scrape.salt       # 整個叢集共用一個鹽
 
-section "17.1 抓取密碼與 exporter 設定的標頭"
+section "17.1 exporter 設定的標頭（HTTPS，不要帳密）"
 install -d -m 0700 "$MONITORING_DIR"
-(umask 077
- [ -s "$SCRAPE_PASSWORD_FILE" ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$SCRAPE_PASSWORD_FILE"
- [ -s "$SCRAPE_SALT_FILE" ] || openssl rand -hex 16 > "$SCRAPE_SALT_FILE")
-export SALT HASH KS
-SALT=$(cat "$SCRAPE_SALT_FILE")
-# exporter 比對時算 sha256("<鹽>:<密碼>")，再用 Java 的 BigInteger.toString(16) 轉十六進位：開頭的 0 會被吃掉，
-# 所以這裡也要去掉前導 0，否則雜湊剛好以 0 開頭時（機率 1/16）帳密永遠 401
-HASH=$(printf '%s:%s' "$SALT" "$(cat "$SCRAPE_PASSWORD_FILE")" | sha256sum | cut -d' ' -f1 | sed 's/^0*//')
+# 舊版（10-30 以前）7071 用 basic auth：抓取密碼與鹽已經不用了，留著只會讓人以為還要交給銀行
+rm -f "$SECRETS_DIR/jmx-scrape.pass" "$SECRETS_DIR/jmx-scrape.salt" "$MONITORING_DIR/to-bank/prometheus/scrape.pass"
+export KS
 # 兩種標頭：controller 沒有 cp-server.p12，用 kafka-internal.p12；broker、REST、C3 用 cp-server.p12
 # keystore 密碼不寫進 YAML：寫 ${JMX_KEYSTORE_PASSWORD}（exporter 1.4 起支援），值在每台 /etc/confluent/jmx-exporter.env（root 0600），drop-in 用 EnvironmentFile 帶進去。
 # 範本裡用佔位字串，渲染後才換成 ${…}（render_template 會把沒換掉的 ${…} 當錯誤）
 for KS in cp-server kafka-internal; do
-  render_template "$TEMPLATE_DIR/jmx-header.yml" "$MONITORING_DIR/jmx-header-$KS.yml" KS HASH SALT || die "render jmx-header"
+  render_template "$TEMPLATE_DIR/jmx-header.yml" "$MONITORING_DIR/jmx-header-$KS.yml" KS || die "render jmx-header"
   sed -i 's/@JMX_KEYSTORE_PASSWORD@/${JMX_KEYSTORE_PASSWORD}/' "$MONITORING_DIR/jmx-header-$KS.yml"
 done
-unset SALT HASH
 (umask 077; printf 'JMX_KEYSTORE_PASSWORD=%s\n' "$(cat "$PKI_DIR/store.pass")" > "$MONITORING_DIR/jmx-exporter.env")
 ok "標頭 jmx-header-cp-server.yml、jmx-header-kafka-internal.yml（keystore 密碼：$(grep -h 'password:' "$MONITORING_DIR"/jmx-header-*.yml | sort -u | sed 's/^ *//')）；jmx-exporter.env $(stat -c %a "$MONITORING_DIR/jmx-exporter.env")"
 
@@ -65,7 +57,7 @@ cp "$TEMPLATE_DIR/jmx-rules-c3.yml" "$MONITORING_DIR/rules-c3.yml"
 log "c3：標頭 cp-server + 我們的 rules-c3.yml + 官方 kafka_streams.yml 的 rules → $(wc -l < "$MONITORING_DIR/jmx-c3.yml") 行"
 ok "4 份設定：jmx-controller.yml、jmx-broker.yml、jmx-rest.yml、jmx-c3.yml"
 
-section "17.3 派送 jar 與設定、drop-in 掛上 javaagent（7071 在7.3 節已開）"
+section "17.3 派送 jar 與設定、drop-in 掛上 javaagent（7071 在 7.3 節已開）"
 for host in $KAFKA_HOSTS $RESTS $C3_HOST; do
   case $host in
     kc*)   role=controller; config_path=/etc/confluent/kafka/jmx-exporter.yml;          opts_var=KAFKA_OPTS;;
@@ -96,19 +88,20 @@ EOF
 done
 [ "$FAIL_COUNT" = 0 ] || die "派送失敗，不重啟"
 
-section "17.4 滾動重啟、驗證端點（匿名 401、帶帳密看得到指標；憑證鏈用銀行根憑證驗，不用 -k）"
+section "17.4 滾動重啟、驗證端點（HTTPS 看得到指標、不加密的 http:// 連不上；憑證鏈用銀行根憑證驗，不用 -k）"
 rolling_restart controllers brokers rests c3 || die "滾動重啟有主機沒健康"
 # controller／broker 的官方規則帶 startDelaySeconds: 120，重啟後前兩分鐘 7071 回 200 但沒有指標：等到有指標再算
 for host in $KAFKA_HOSTS $RESTS $C3_HOST; do
   metrics_url=https://$(fqdn "$host"):7071/metrics
-  anonymous_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert "$BANK_ROOT_CA" "$metrics_url")
   metric_count=0
   for _ in $(seq 1 30); do
-    metric_count=$(curl -s --max-time 20 --cacert "$BANK_ROOT_CA" -u "prometheus:$(cat "$SCRAPE_PASSWORD_FILE")" "$metrics_url" | grep -cE '^(kafka_|jvm_)')
+    metric_count=$(curl -s --max-time 30 --cacert "$BANK_ROOT_CA" "$metrics_url" | grep -cE '^(kafka_|jvm_)')
     [ "$metric_count" -gt 20 ] && break; sleep 10
   done
-  if [ "$anonymous_code" = 401 ] && [ "$metric_count" -gt 20 ]; then ok "$host 匿名=$anonymous_code 指標=$metric_count"
-  else fail "$host 匿名=$anonymous_code 指標=$metric_count"; fi
+  https_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert "$BANK_ROOT_CA" "$metrics_url")
+  http_code_plain=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$(fqdn "$host"):7071/metrics")
+  if [ "$https_code" = 200 ] && [ "$http_code_plain" = 000 ] && [ "$metric_count" -gt 20 ]; then ok "$host https=$https_code http=$http_code_plain 指標=$metric_count"
+  else fail "$host https=$https_code http=$http_code_plain 指標=$metric_count"; fi
 done
 
 section "17.5 給銀行監控團隊的檔：$MONITORING_DIR/to-bank/"
@@ -125,7 +118,6 @@ ENV_LABEL=$MONITOR_ENV_LABEL
 render_template "$TEMPLATE_DIR/prometheus-scrape.yml" "$BANK_OUT/prometheus/scrape-confluent.yml" CONTROLLER_TARGETS BROKER_TARGETS REST_TARGETS C3_TARGETS ENV_LABEL || die "render scrape"
 cp "$TEMPLATE_DIR/confluent-alerts.yml" "$BANK_OUT/prometheus/confluent-alerts.yml"
 cp "$BANK_ROOT_CA" "$BANK_OUT/prometheus/ca.pem"
-(umask 077; cp "$SCRAPE_PASSWORD_FILE" "$BANK_OUT/prometheus/scrape.pass")
 cp "$TEMPLATE_DIR/alertmanager.yml" "$BANK_OUT/alertmanager/alertmanager.yml"
 cp "$TEMPLATE_DIR/grafana-datasource.yml" "$BANK_OUT/grafana/datasource-prometheus.yml"
 # 官方 dashboard：原樣複製後修兩件事（落地區的檔是唯讀的，複製出來要加回寫入權限）
@@ -152,9 +144,9 @@ for uid, group in seen.items():
         json.dump(d, open(f, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 print('dashboards: %d, placeholder datasource fixed, uid shared with another file (renamed): %d' % (len(files), renamed))
 EOF
-ok "給銀行：to-bank/prometheus（scrape-confluent.yml、confluent-alerts.yml $(grep -c 'alert:' "$BANK_OUT/prometheus/confluent-alerts.yml") 條、ca.pem、scrape.pass）、to-bank/alertmanager、to-bank/grafana（datasource、$(ls "$BANK_OUT"/grafana/dashboards/*.json | wc -l) 個 dashboard）"
+ok "給銀行：to-bank/prometheus（scrape-confluent.yml、confluent-alerts.yml $(grep -c 'alert:' "$BANK_OUT/prometheus/confluent-alerts.yml") 條、ca.pem）、to-bank/alertmanager、to-bank/grafana（datasource、$(ls "$BANK_OUT"/grafana/dashboards/*.json | wc -l) 個 dashboard）"
 target_count=$(wc -w <<<"$KAFKA_HOSTS $RESTS $C3_HOST")
-ask_bank "監控團隊：prometheus/ 放進行內 Prometheus（scrape-confluent.yml 用 scrape_config_files 引用，confluent-alerts.yml 放進 rule_files，ca.pem、scrape.pass(0600) 放 /etc/prometheus/confluent/）；" \
+ask_bank "監控團隊：prometheus/ 放進行內 Prometheus（scrape-confluent.yml 用 scrape_config_files 引用，confluent-alerts.yml 放進 rule_files，ca.pem 放 /etc/prometheus/confluent/；7071 沒有帳密，防火牆只放行行內 Prometheus 的來源位址）；" \
          "    alertmanager/alertmanager.yml 併入行內 Alertmanager（webhook 網址換成行內的，兩種格式留一種）；grafana/ 的 datasource 與 dashboards/ 放進 Grafana 的 provisioning；" \
          "    確認 $target_count 個 target 都是 up、告警規則載入、dashboard 都在。C3 內建的 Prometheus／Alertmanager 不動，不在 C3 建 alert trigger／action。" \
          "    consumer lag 不是 broker 的 JMX 指標，要看 C3 或另接 lag exporter。"

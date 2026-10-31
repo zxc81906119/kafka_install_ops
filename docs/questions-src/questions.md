@@ -149,6 +149,6 @@
 | 操作機 | 所有平台主機 | 22 | 安裝與維運（ssh，cpuser；來源限制在操作機） |
 | 所有平台主機 | 套件庫 | 443 | dnf 安裝 |
 | 所有平台主機 | NTP | 123/udp | 校時 |
-| 行內 Prometheus | controller、broker、REST Proxy、Control Center | 7071 | 抓指標（HTTPS＋帳密） |
+| 行內 Prometheus | controller、broker、REST Proxy、Control Center | 7071 | 抓指標（只用 HTTPS、不設帳密；只放行行內 Prometheus，見 11.4） |
 | 行內 Alertmanager | 行內事件系統（omnibus） | 由銀行定 | 告警 webhook |
 | Control Center | 自己 | 9090 | 內建 Prometheus（不對外） |

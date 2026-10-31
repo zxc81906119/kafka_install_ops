@@ -386,7 +386,7 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 - **誰提供什麼**：Prometheus、Alertmanager、Grafana 由銀行提供，我方交付設定（exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana datasource 與 dashboard）。lab 的 bank-sim 用 `lab-mon-prometheus／alertmanager／grafana／webhook` 四個容器扮演（`install/lab/bank-sim.sh monitoring`，收掉用 `monitoring-stop`；`reset` 會先收）。
 - **C3 內建的不動**：C3 畫面還要用，第 13 章 otlp 設定照舊。手冊明講：告警與 dashboard 只走外部這套，不在 C3 建 alert trigger／action。手冊第 13 章原有「C3 畫面上建的 trigger 不會觸發」的字句已改成「C3 畫面的圖會空」。
 - **官方來源**：`confluentinc/jmx-monitoring-stacks`（Apache-2.0），固定 commit `f376263fc6d7270185ab6abab9a8c379079e2a92`（2026-05-28，沒有 tag）。在下載機（第 1.4 站）用 GitHub 的 commit tarball 只取要用的路徑（47 個檔），放 `landing/monitoring/`，列進 `SHA256SUMS`（第 1.6 站），經第 2 站進操作機。repo 本身只放我們自己的設定與範本，不放官方 JSON。
-- **exporter 規則**：一律用官方檔（controller `kafka_controller.yml`、broker `kafka_broker.yml`、REST `confluent_rest.yml`），前面接我們的 `httpServer` 標頭（HTTPS 用主機憑證、basic auth 加鹽 SHA-256）。官方檔第一行的 `---` 要拿掉；官方自帶 `startDelaySeconds: 120`，controller、broker 重啟後前兩分鐘 7071 回 200 但沒有指標，驗證要等。舊的手寫 `jmx-rules-kafka.yml`、`jmx-rules-rest.yml`、`alert-rules.yml` 已刪。
+- **exporter 規則**：一律用官方檔（controller `kafka_controller.yml`、broker `kafka_broker.yml`、REST `confluent_rest.yml`），前面接我們的 `httpServer` 標頭（HTTPS 用主機憑證；2026-10-31 起不要帳密，見下面「7071 只用 HTTPS」）。官方檔第一行的 `---` 要拿掉；官方自帶 `startDelaySeconds: 120`，controller、broker 重啟後前兩分鐘 7071 回 200 但沒有指標，驗證要等。舊的手寫 `jmx-rules-kafka.yml`、`jmx-rules-rest.yml`、`alert-rules.yml` 已刪。
 - **job 與標籤**（dashboard 寫死）：`kafka-controller`、`kafka-broker`、`rest-proxy`、`control-center`；`env`（lab 用 `lab`）；`hostname` 由 `__address__` relabel。scrape 設定用 `scrape_config_files` 引用，不併進 `prometheus.yml`。
 - **Grafana 要修兩件事**（實測）：(1) 官方 JSON 是匯入畫面格式，datasource 寫成 `${Prometheus}`，檔案佈建不替換（後端 `Data source not found`）→ 改成固定 uid `Prometheus`，datasource 也用這個 uid；(2) 四組 ZooKeeper／KRaft 成對的 dashboard 共用 uid（`kafka-cluster`、`kafka-topics`、`confluent-platform` 與 `kafka-stream`／`globalktable`），Grafana 只收第一個 → 重複的改 uid 並在標題加檔名。其餘 32 個原樣放，沒有對應元件的（Connect、ksqlDB、SR、Flink …）就是空的。
 - **C3 能給什麼（lab 實測，2026-10-27）**：C3 沒有官方 exporter 設定。掛法：`CONTROL_CENTER_OPTS=-javaagent:…=7071:設定檔`（`control-center-run-class` 讀這個變數；只能放**一個** `-javaagent`，放兩個時 `-check_dir` 讀不到 `java.io.tmpdir`，C3 不起來）。C3 的 JVM 有兩萬多條序列，幾乎全是雜訊（`kafka_rest_jersey_*` 5,586、consumer 3,306、producer 1,913、streams／RocksDB 880、admin 470、Jetty 384 …）。我們只放行：JVM／process（內建 collector）、Kafka Streams `client_state`（0 CREATED、1 REBALANCING、2 RUNNING … 6 ERROR）／`alive_stream_threads`／`failed_stream_threads`、Jetty `request_rate`／`request_error_rate`，約 100 條。**C3 不給**：它處理了多少 telemetry、alert history、RocksDB 狀態（可加規則但序列數大）、使用者活動。官方沒有 C3 專用的 dashboard，`kafka-stream.json`／`kafka-streams-rocksdb.json` 對 C3 也是空的（我們沒放行那些序列）。
@@ -590,13 +590,13 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 順手修掉的既有 bug：44 的權限清單 CSV 每個 principal 的每個 role 都少了最後一個資源（`printf '%s' | sed` 沒有結尾換行，`read` 丟掉最後一行；lab 13 筆 → 33 筆）；23.6 單一帳號還原遇到叢集層級 binding 會帶錯的 `--resource Cluster:`（改成看資源名稱）；11.2 AD 斷線演練的 kafka-admin 檢查在腳本版是假通過（見 log/2026-10-30-script-full-run.md）。
 - 43 加選項（使用者 2026-10-30 選定）：一般、敏感（`OPMENU_AUDIT_SENSITIVE_TOPIC`，預設 `<一般>_sensitive`）、兩個都看（依事件時間合併）；非互動第 5 個參數 `normal|sensitive|all`。稽核群組綁 audit topic 的 prefix 就兩個都讀得到。哪些 topic 算敏感由銀行定（lab 的 `payments.*` 只是例子，請銀行確認事項 9.5）。
 
-### JMX exporter 7071 只用 HTTPS，拿掉 basic auth（2026-10-31 定案，待實作）
+### JMX exporter 7071 只用 HTTPS，拿掉 basic auth（2026-10-31 定案；手冊 10-31 在 Podman 逐章實跑，腳本 10-31 改完）
 - 使用者決定：7071 只做 HTTPS（銀行根憑證驗得過鏈），不用 basic auth，也不用 mTLS。指標只讀、沒有訊息內容與密碼；少一組要交給銀行、要同步輪替的抓取密碼。
 - 代價：連得到 7071 的人都讀得到平台結構資訊（topic、consumer group、client id）。存取控制改成只靠網路：請銀行確認事項 11.4（7071 只放行行內 Prometheus 的來源位址）變成必要條件。
 - 要改：手冊 17.1／17.4／17.5、19 章驗收、25.1.5、B.2；`install/steps/17-jmx-exporter.sh`、`19-acceptance.sh`、`templates/jmx-header.yml`、`prometheus-scrape.yml`；questions 11.4。照三步：逐章手冊實跑到第 17 章前，先在 lab 手動試，再改手冊、照手冊跑，最後改腳本。
 
 ### lab 改用 Podman，移除 Docker Desktop（2026-10-31 定案）
-- 使用者決定：lab 最後只留 Podman（CLI＋WSL2 上的 rootful machine），Docker Desktop 移除；docker-compose 留著（獨立版，當 `podman compose` 的 provider）。手冊與腳本的指令改寫成 `podman …`／`podman compose …`（不靠 alias）。
+- 使用者決定：lab 最後只留 Podman（CLI＋WSL2 上的 rootful machine），Docker Desktop 移除（10-31 晚已移除）。docker-compose 原本是自己下載的獨立版、用 `compose_providers` 指定；10-31 晚改成 Podman Desktop 的 Compose 擴充（system-wide，放在 WindowsApps、PATH 上找得到，不寫 `containers.conf`）。手冊與腳本的指令改寫成 `podman …`／`podman compose …`（不靠 alias）。
 - 可行性測試（log/2026-10-31-podman-feasibility.md）：compose 名稱、systemd、固定 IP、firewalld、sysctl、cp／exec 都可行；要另外處理 `podman-restart.service`、Windows 開機啟動 machine、記憶體（.wslconfig）。真實度和 Docker 完全相同（共用 WSL2 kernel；net.core.rmem_max／wmem_max 一樣改不了：可行性測試時以為改得動，是因為 `sysctl -w` 失敗也回 0，2026-10-31 第 7 章實跑更正）。
 - 順序：先換 Podman（三步：在 Podman 上手動建 lab → 改第 0 章與全書的 docker 指令、lab 腳本、實跑工具、CLAUDE.md → 照手冊從零逐章跑，再腳本版從零），兩邊都過才移除 Docker Desktop。Docker 上第 20 章之後的逐章實跑不再接續。
 
