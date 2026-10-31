@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-31 15:00（lab：Docker 版仍在跑，停在第 20 章，不再接續；改為換 Podman（redesign 2026-10-31）：下一步是下載獨立版 docker-compose、在 Podman machine labtest 上手動建 lab，再改第 0 章與全書指令）
+Updated: 2026-10-31 15:40（**lab 使用中（Podman）**：Docker Desktop 已關，舊 Docker lab 停在第 20 章不接續；Podman machine labtest 上用 podman 照第 0 章建好新 lab（14 台＋dl01）。下一步：第 3 步改第 0 章、全書與腳本的 docker → podman、實跑工具、CLAUDE.md，再在 Podman 上逐章從零跑）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。

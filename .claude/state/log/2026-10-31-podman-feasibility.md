@@ -13,3 +13,6 @@
   - `hostname -f` 只回短名：Docker 也一樣，不是差異。
   - Podman machine 起來時佔用 `\.\pipe\docker_engine`；Docker CLI 走自己的 desktop-linux context，兩者不能同時跑重負載（記憶體）。
 - 結論：可行。真實度沒有提升（一樣共用 WSL2 kernel，不能真重開機、測 kernel 更新、LUKS），唯一實際改善是 net.core.* sysctl 改得動。要換的話：第 0 章（安裝 Podman、建 rootful machine、啟用 podman-restart、Windows 開機啟動 machine、DOCKER_HOST 或 alias）、bank-sim／run-full 的 docker 指令可沿用（compose 名稱相同）；要整輪從零實跑驗證。
+- 決定換 Podman 後（redesign 2026-10-31）：docker-compose v5.5.1 從 Docker Desktop 複製到 `%LOCALAPPDATA%\Programs\docker-compose\`，`%APPDATA%\containers\containers.conf` 設 `[engine] compose_providers`（TOML 字串用正斜線；反斜線會被當成 \U 跳脫而讀不進去）。
+- 第 2 步（手動在 Podman 上建 lab）：關掉 Docker Desktop（WSL 11 GB 共用），啟動 labtest；用 run-chapter.js 抽第 0 章，docker → podman 後照跑。只有 0.4 的映像計數失敗（`podman images` 名稱是 `localhost/lab-node:96`，`grep -cE '^lab-…'` 數成 0）→ 改 `(^|/)lab-` 後全部通過：4 個映像、CA、14 台、dl01 internet 200；11 台 systemd running，ad01 Samba、lb01 nginx、sshd 正常。
+- 實跑工具要改：run-full.sh 3 行（拆 lab）、run-chapter.js 2 處（`docker exec -i … bash -c 'cat > /tmp/runner.sh'` 把指令塊送進主機）。
