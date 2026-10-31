@@ -1242,7 +1242,7 @@ LB：rest01 rest02
 
 # 6. 第六站：上架到內部套件庫
 
-**這一章在做什麼**：把 Confluent 的 RPM 做成一個 dnf 套件庫，放到銀行的套件庫伺服器 repo01，之後 11 台主機都用 `dnf install` 從這裡裝。前提：第 3 章的 `~/landing` 已驗過、第 第 4 章的 repodeploy 金鑰可用。這一章只放安裝基底的 RPM；遷移目標的 RPM 在 29.1 才上架。
+**這一章在做什麼**：把 Confluent 的 RPM 做成一個 dnf 套件庫，放到銀行的套件庫伺服器 repo01，之後 11 台主機都用 `dnf install` 從這裡裝。前提：第 3 章的 `~/landing` 已驗過、第 4 章的 repodeploy 金鑰可用。這一章只放安裝基底的 RPM；遷移目標的 RPM 在 29.1 才上架。
 
 @role 小安 | ops02 | root
 
