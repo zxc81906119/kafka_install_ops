@@ -5023,7 +5023,7 @@ for f in old-ca.pem new-ca.pem; do echo "$f: $(openssl x509 -in $f -noout -subje
 **這一節在做什麼**：換發前後各跑一次的對照。先看每張憑證的序號、剩幾天，以及各服務**實際出示**的是哪一張（換完之後用同一條指令確認每個端點都換到了）：
 
 ```bash
-cd ~/pki && for n in $(awk '{print $1}' requests.txt); do printf '%-19s serial=%s days=%s\n' $n "$(openssl x509 -in certs/$n.crt -noout -serial | cut -d= -f2 | tail -c 9)" $(( ($(date -d "$(openssl x509 -in certs/$n.crt -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); done; echo "-- 各端點出示的憑證（序號末 8 碼）"; for ep in kc01.poc.lab:9093 kb01.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 rest01.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090; do printf '%-22s %s\n' $ep "$(openssl s_client -connect $ep -servername ${ep%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial -subject -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/serial=//; s/subject=.*CN=\([^,]*\).*/\1/' | paste -sd' ' | sed 's/^\(.*\)\(........\) \(.*\)$/\2 \3/')"; done
+cd ~/pki && for n in $(awk '{print $1}' requests.txt); do printf '%-19s serial=%s days=%s\n' $n "$(openssl x509 -in certs/$n.crt -noout -serial | cut -d= -f2 | tail -c 9)" $(( ($(date -d "$(openssl x509 -in certs/$n.crt -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); done; echo "-- 各端點出示的憑證（序號末 8 碼）"; for ep in kc01.poc.lab:9093 kb01.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest01.poc.lab:7071 c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071; do printf '%-22s %s\n' $ep "$(openssl s_client -connect $ep -servername ${ep%:*} </dev/null 2>/dev/null | openssl x509 -noout -serial -subject -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/serial=//; s/subject=.*CN=\([^,]*\).*/\1/' | paste -sd' ' | sed 's/^\(.*\)\(........\) \(.*\)$/\2 \3/')"; done
 ```
 
 ```out
@@ -5034,7 +5034,7 @@ cp-server           serial=F343BC54 days=364
 kc01.poc.lab:9093      F343BC55 kafka-internal
 kb01.poc.lab:9092      F343BC55 kafka-internal
 kb01.poc.lab:9095      F343BC54 cp-server
-（8 行：controller 與 broker 之間是 kafka-internal，其他對外的都是 cp-server）
+（11 行：controller 的 9093、7071 與 broker 的 9092 是 kafka-internal，其他都是 cp-server）
 ```
 
 > 要求 client 憑證的埠（9092、9093、9090）沒有帶憑證也看得到伺服器出示的那張，握手才會在之後失敗；這裡只看伺服器那一張。
@@ -5108,9 +5108,11 @@ cp-server: old=F343BC54 new=F343BC5C
 | 主機 | 換哪些檔 | 重啟 |
 |---|---|---|
 | controller | kafka-internal.p12 | confluent-server |
-| broker | kafka-internal.p12、cp-server.p12 | confluent-server（JMX exporter 一起） |
+| broker | kafka-internal.p12、cp-server.p12 | confluent-server |
 | REST Proxy | cp-server.p12、svc-rest.p12 | confluent-kafka-rest |
 | C3 | cp-server.p12、cp-server.crt／.key、c3-monitoring.crt／.key、svc-c3.p12 | prometheus、alertmanager、confluent-control-center |
+
+每台的 7071（JMX exporter，第 17 章）是服務裡的 javaagent，讀同一個 keystore（controller 用 `kafka-internal.p12`，其他用 `cp-server.p12`）：服務重啟就一起換，不用另外處理；換完用 21.1 的指令看 7071 也是新序號。
 
 一台一台：放檔 → 重啟 → 等健康 → 確認那台出示的是新序號，才做下一台：
 
@@ -5303,8 +5305,6 @@ EOF
 chmod 0700 ~/conf/rolling-restart.sh && echo rolling-restart.sh ok
 ```
 
-我方的信任清單：truststore 加一個 alias `bank-root-g2`；17.5 交給銀行的 `to-bank/prometheus/ca.pem` 也一起換（之後重新交付 `to-bank/` 才不會把舊根帶回去，Prometheus 會全部抓不到）；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
-
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成新舊兩個根的 bundle，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
@@ -5316,7 +5316,10 @@ cp ~/kafka-lab/ca/bundle-g1-g2.pem ~/kafka-lab/bank-monitoring/prometheus/conflu
 ```out
 Prometheus target up：10 / 10（約 70 秒）
 ```
+
 @role 小安 | ops02 | root
+
+我方的信任清單：truststore 加一個 alias `bank-root-g2`；17.5 交給銀行的 `to-bank/prometheus/ca.pem` 也一起換（之後重新交付 `to-bank/` 才不會把舊根帶回去，Prometheus 會全部抓不到）；C3 的 Prometheus／Alertmanager 用的 `ca.pem`、OP menu 的兩份也換成 bundle。派送、滾動重啟：
 
 ```bash
 cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g2 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
@@ -5383,9 +5386,6 @@ bash ~/kafka-lab/lb-member.sh rest02 up
 ```out
 LB：rest01 rest02
 ```
-
-@role 小安 | ops02 | root
-
 
 ### 21.3.3 階段二：全部改由新 CA 簽
 
@@ -5578,11 +5578,11 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 @role 小安 | ops02 | root
 
 ```bash
-bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 rest01.poc.lab:8082 rest02.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090; do i=$(openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/.*CN *= *//; s/,.*//'); [ "$i" = "PoC Bank Issuing CA G2" ] || { echo "$ep 出示的是：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "13 個端點都是 G2 簽的：可以進階段三"
+bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 rest01.poc.lab:7071 c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071; do i=$(openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/.*CN *= *//; s/,.*//'); [ "$i" = "PoC Bank Issuing CA G2" ] || { echo "$ep 出示的是：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "17 個端點都是 G2 簽的：可以進階段三"
 ```
 
 ```out
-13 個端點都是 G2 簽的：可以進階段三
+17 個端點都是 G2 簽的：可以進階段三
 ```
 
 ### 21.3.4 階段三：拿掉舊根
@@ -5599,8 +5599,6 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 
 @role 小安 | ops02 | root
 
-truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem、`to-bank/prometheus/ca.pem` 只留新根，派送、滾動重啟：
-
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成只有新根 G2，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
@@ -5612,7 +5610,10 @@ cp ~/kafka-lab/ca/g2/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/c
 ```out
 Prometheus target up：10 / 10（約 70 秒）
 ```
+
 @role 小安 | ops02 | root
+
+truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem、`to-bank/prometheus/ca.pem` 只留新根，派送、滾動重啟：
 
 ```bash
 cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && keytool -delete -alias bank-root -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass && echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
@@ -5743,8 +5744,6 @@ ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01
 
 @role 小安 | ops02 | root
 
-truststore 加 alias `bank-root-g3`（bundle 的第二張），C3 與 OP menu 的 ca.pem 換成 bundle，派送、滾動重啟（21.3.2 寫的那支 `rolling-restart.sh`）：
-
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成G2＋G3 的 bundle，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
@@ -5756,7 +5755,10 @@ cp ~/kafka-lab/ca/bundle-g2-g3.pem ~/kafka-lab/bank-monitoring/prometheus/conflu
 ```out
 Prometheus target up：10 / 10（約 70 秒）
 ```
+
 @role 小安 | ops02 | root
+
+truststore 加 alias `bank-root-g3`（bundle 的第二張），C3 與 OP menu 的 ca.pem 換成 bundle，派送、滾動重啟（21.3.2 寫的那支 `rolling-restart.sh`）：
 
 ```bash
 cd ~/pki/certs && cp /etc/pki/ca-trust/source/anchors/bank-root.pem bank-root.pem && cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}' && keytool -importcert -noprompt -alias bank-root-g3 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass >/dev/null 2>&1; rm -f /tmp/root-*; echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')" && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q truststore.p12 $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/truststore.p12 /etc/confluent/ssl/ && rm -f /tmp/truststore.p12'; done && scp -q bank-root.pem c3-01.poc.lab:/tmp/ca.pem && ssh c3-01.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/ca.pem /etc/confluent/ssl/ca.pem && rm -f /tmp/ca.pem' && install -m 0644 truststore.p12 /etc/opmenu/ssl/truststore.p12 && install -m 0644 bank-root.pem /etc/opmenu/ssl/ca.pem && bash ~/conf/rolling-restart.sh
@@ -5821,8 +5823,6 @@ bash ~/kafka-lab/lb-member.sh rest02 up
 ```out
 LB：rest01 rest02
 ```
-
-@role 小安 | ops02 | root
 
 ### 21.4.3 階段二之一：銀行換上新中繼，自己的伺服器換鏈
 
@@ -5976,11 +5976,11 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 @role 小安 | ops02 | root
 
 ```bash
-bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 c3-01.poc.lab:9021 c3-01.poc.lab:9090 ad01.poc.lab:636 repo01.poc.lab:443; do i=$(openssl s_client -connect $ep -servername ${ep%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'); [ "$i" = "PoC Bank Root CA G3" ] || { echo "$ep 中繼的簽發者：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "17 個端點都出示新鏈：可以進階段三"
+bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 rest01.poc.lab:7071 c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071 ad01.poc.lab:636 repo01.poc.lab:443; do i=$(openssl s_client -connect $ep -servername ${ep%:*} -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/'); [ "$i" = "PoC Bank Root CA G3" ] || { echo "$ep 中繼的簽發者：${i:-（沒有回應）}"; bad=1; }; done; [ $bad = 0 ] && echo "19 個端點都出示新鏈：可以進階段三"
 ```
 
 ```out
-17 個端點都出示新鏈：可以進階段三
+19 個端點都出示新鏈：可以進階段三
 ```
 
 ### 21.4.5 階段三：拿掉 G2
