@@ -65,7 +65,7 @@ confluent.metadata.server.user.store=LDAP
 confluent.metadata.server.token.signature.algorithm=RS256
 confluent.metadata.server.token.max.lifetime.ms=3600000
 confluent.metadata.server.impersonation.super.users=User:svc-rest
-confluent.metadata.server.impersonation.protected.users=User:kafka-internal;User:kafka-admin;User:svc-ops;User:svc-mds-bind;User:svc-rest;User:svc-c3;User:opmenu-breakglass
+confluent.metadata.server.impersonation.protected.users=User:kafka-internal;User:kafka-admin;User:svc-ops;User:svc-mds-bind;User:svc-rest;User:svc-c3;User:opmenu-breakglass;User:svc-backup;User:confluent-audit
 
 ############################# Cluster defaults #############################
 default.replication.factor=3

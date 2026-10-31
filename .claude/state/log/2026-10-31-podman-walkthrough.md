@@ -13,3 +13,4 @@
 - 第 9 章：6 塊全過（9 張 CSR、9 張簽發、檢查全 ok、21 個檔）。自檢：憑證表補用途——cp-server 也是 C3 內建 Prometheus／Alertmanager 與 broker／REST／C3 的 7071；kafka-internal 也是 controller 的 7071。
 - 第 10 章：11 塊全過（Podman 上第一次起 Kafka 正常）。自檢：super.users 只有 kafka-internal、kafka-admin 只是 SCRAM 緊急帳號、TOKEN／CLIENT／LDAP 不要求 client 憑證，符合。補：10.4 的 MDS 日誌位置（metadata-service.log，不在 journal）；格式化的 `WARN 'share'` 說明（待修清單那一項）。
 - **待使用者決定**：broker 的 `confluent.metadata.server.impersonation.protected.users` 沒有後來新增的平台身分 `confluent-audit`（18）、`svc-backup`（23）。要補的話改手冊第 10 章與 install/templates/broker.tpl，第 12 章 REST 起來後實測冒用被拒。
+- 使用者決定補 protected.users（svc-backup、confluent-audit）：lab 手動改 ~/conf/broker.tpl、kb0*.server.properties、派送、逐台重啟（MDS 200、9 個身分），手冊第 10 章與 install/templates/broker.tpl 跟著改。第 12 章要實測：REST 冒用 svc-backup 被拒。
