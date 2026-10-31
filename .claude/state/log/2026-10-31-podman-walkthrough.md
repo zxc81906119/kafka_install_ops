@@ -15,3 +15,6 @@
 - **待使用者決定**：broker 的 `confluent.metadata.server.impersonation.protected.users` 沒有後來新增的平台身分 `confluent-audit`（18）、`svc-backup`（23）。要補的話改手冊第 10 章與 install/templates/broker.tpl，第 12 章 REST 起來後實測冒用被拒。
 - 使用者決定補 protected.users（svc-backup、confluent-audit）：lab 手動改 ~/conf/broker.tpl、kb0*.server.properties、派送、逐台重啟（MDS 200、9 個身分），手冊第 10 章與 install/templates/broker.tpl 跟著改。第 12 章要實測：REST 冒用 svc-backup 被拒。
 - 第 11 章：13 塊全過（25 條 binding、alice SystemAdmin／carol DeveloperRead、密碼檔 600、11.2 alice 401／kafka-admin 10 個／AD 開回 200）。自檢無問題。
+- 第 12 章：11 塊全過（三種憑證情況、經 LB 200、12.1 演練 107 次 0 失敗）。自檢符合（只有 client 憑證、對應規則只列 REST 的 app、無 DEFAULT、重啟前 LB 停用）。
+  - 埠對應實測：Windows `openssl s_client -connect localhost:18082` 拿到 CN=cp-server（銀行簽發 CA），不帶 client 憑證 rc=56 → Windows→Podman 轉埠→lb01→REST 通。
+  - protected.users 實測：rest01 暫時把 svc-backup 加進 CN 對應規則（LB 先停用 rest01），app-legacy-billing 200、svc-backup 401（日誌 `Error while impersonating user svc-backup`）；還原規則、重啟、LB 恢復。
