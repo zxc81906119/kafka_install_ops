@@ -25,6 +25,7 @@ for log in "$@"; do
     /^===== BLOCK/ { block = substr($0, 13, 70); next }
     /^===== rc=/   { next }
     $0 ~ v { printf "   %s | %s（冒號後沒有值）\n", block, substr($0, 1, 140); next }
+    /^FAIL / { printf "   %s | %s\n", block, substr($0, 1, 140); next }   # 檢查清單自己標的 FAIL：內容再像預期（例如「→ 401」）也一律算可疑
     $0 ~ s && $0 !~ e { printf "   %s | %s\n", block, substr($0, 1, 140) }' "$log")
   if [ -n "$hits" ]; then echo "   可疑的輸出（rc 可能是 0）："; echo "$hits" | head -40; status=1; else echo "   沒有可疑的輸出"; fi
 done
