@@ -115,8 +115,8 @@
 |---|---|---|---|
 | 11.1 | 監控採「JMX exporter＋行內 Prometheus＋行內 Alertmanager＋行內 Grafana」，行內 Prometheus、Alertmanager、Grafana 的版本與位置？ | 我們交付設定，不安裝這三套；版本影響設定寫法（自訂 webhook 內容要較新的 Alertmanager，我們在 0.34.1 實測；Prometheus 2.43 以上才有 scrape_config_files，我們用 3.5.0） | 銀行提供；我方交付 scrape 設定、21 條告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方 32 個 dashboard、根憑證、抓取密碼 |
 | 11.2 | 機房斷電演練時的開機順序可否配合（controller → broker → REST Proxy／Control Center）？ | 全部同時開機時 Control Center 要等權限服務起來 | 已加上等待機制；仍建議依順序開機 |
-| 11.3 | 行內 Prometheus 抓其他系統（主機、資料庫）用哪種認證：不加密、HTTPS＋帳密，還是 HTTPS＋client 憑證（mTLS）？ | 跟著行內既有慣例走，維運與稽核最省事 | HTTPS＋帳密（9 台共用一組抓取密碼，主機上只存加鹽雜湊）；要 mTLS 須另發 Prometheus 的 client 憑證 |
-| 11.4 | 每台的 7071 可否只放行行內 Prometheus 的來源位址？請提供位址（或網段） | 抓取帳密是共用的，限制來源可以縮小外洩後的影響範圍 | 主機防火牆目前對所有來源開放 7071；拿到位址後改成只放行它 |
+| 11.3 | 7071（監控指標）我方只做 HTTPS、不設帳密（2026-10-31 定案）：資安是否接受「HTTPS＋來源限制」，還是要求每個 HTTP 端點都要認證？ | 指標只能讀、沒有訊息內容與密碼；不設帳密就不用交付、輪替一組共用的抓取密碼 | 只用 HTTPS（銀行根憑證驗鏈）＋11.4 的來源限制；資安要求認證時可改回 HTTPS＋帳密，或另發 Prometheus 的 client 憑證做 mTLS |
+| 11.4 | 每台的 7071 可否只放行行內 Prometheus 的來源位址？請提供位址（或網段） | 7071 沒有帳密，**來源限制是唯一的存取控制**：沒做的話，內網連得到的人都讀得到平台的結構資訊（topic、consumer group、client id） | 主機防火牆目前對所有來源開放 7071；拿到位址後改成只放行它（必要） |
 | 11.5 | 告警要送到哪裡？接收端是 IBM Netcool/OMNIbus（下稱 omnibus）；我們送的 JSON 欄位（附範例）符合它的接收規格嗎？要不要認證（API token）？ | 我們準備了兩種 webhook 範例：Alertmanager 預設的 JSON，和照 omnibus 規格自訂的 JSON（source、ClassName、msg_catalog、msg、state、severity、sub_origin、origin、hostname、sub_source）；其中 source、ClassName、origin、hostname、sub_source 先填你們提供的範例值，請確認正式值 | 兩種都交付，銀行留一種；欄位對應（例如 critical → ERROR）依行內的定義改範本。token 放檔案、不寫進設定 |
 | 11.6 | Grafana 怎麼放 dashboard 與 datasource：檔案佈建（provisioning）還是手動匯入？登入用 AD（LDAP／SSO）嗎？誰能改 dashboard？ | 32 個官方 dashboard 以檔案佈建最容易維護與重建；Grafana 的權限要和平台的 RBAC 分開想 | 檔案佈建、唯讀；datasource 名稱與 uid 固定為 Prometheus |
 | 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |

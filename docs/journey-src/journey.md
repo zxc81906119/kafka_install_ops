@@ -3410,7 +3410,7 @@ kb04: full sudo back (change window)
 
 ![jmx]
 
-**這一章在做什麼**：讓銀行的監控系統看得到 Confluent 各程序的狀況，並在出事時發告警。前提：第 10–13 章的服務已經起來（第 15 章是否已做不影響步驟）；這一章會**滾動重啟**所有 Java 程序（17.4），請在變更時段一台一台做。完成的樣子：10 台的 7071 匿名回 401、帶帳密有指標（17.4）；銀行的 Prometheus 上 10 個 target 都 up、告警規則載入、Grafana 有 32 個 dashboard（17.7）。名詞：JMX 是 Java 程序對外提供指標的介面，JMX exporter 把它轉成 Prometheus 讀得懂的 HTTPS 網頁。
+**這一章在做什麼**：讓銀行的監控系統看得到 Confluent 各程序的狀況，並在出事時發告警。前提：第 10–13 章的服務已經起來（第 15 章是否已做不影響步驟）；這一章會**滾動重啟**所有 Java 程序（17.4），請在變更時段一台一台做。完成的樣子：10 台的 7071 用 HTTPS 拿得到指標、憑證鏈驗得過，不加密的 HTTP 連不上（17.4）；銀行的 Prometheus 上 10 個 target 都 up、告警規則載入、Grafana 有 32 個 dashboard（17.7）。名詞：JMX 是 Java 程序對外提供指標的介面，JMX exporter 把它轉成 Prometheus 讀得懂的 HTTPS 網頁。
 
 監控與告警的做法已定案：**每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），由銀行的 Prometheus 抓、銀行的 Alertmanager 發告警、銀行的 Grafana 看圖**。Prometheus、Alertmanager、Grafana 是銀行提供的；我方交付的是設定：exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方的 32 個 dashboard。
 
@@ -3418,7 +3418,7 @@ kb04: full sudo back (change window)
 
 | 誰 | 做什麼 |
 |---|---|
-| 小安 | exporter 的 jar 與 Confluent 官方規則檔已在 2.4 節帶進來；產抓取密碼、組設定、派送、滾動重啟；產給銀行的 `to-bank/`（scrape 設定、告警規則、Alertmanager 設定、Grafana 設定與 dashboard、根憑證、抓取密碼） |
+| 小安 | exporter 的 jar 與 Confluent 官方規則檔已在 2.4 節帶進來；組設定、派送、滾動重啟；產給銀行的 `to-bank/`（scrape 設定、告警規則、Alertmanager 設定、Grafana 設定與 dashboard、根憑證） |
 | 銀行監控團隊 | 把 `to-bank/` 放進自己的 Prometheus、Alertmanager、Grafana；確認 10 個 target 都是 up、規則載入、dashboard 都在；把 webhook 指到行內的事件系統（IBM Netcool/OMNIbus，下稱 omnibus） |
 
 四種程序各用哪份規則，抓得到什麼：
@@ -3430,18 +3430,18 @@ kb04: full sudo back (change window)
 | REST Proxy（rest01–02） | Confluent 官方 `confluent_rest.yml` | Jetty 與每個 REST endpoint 的請求率、錯誤率、延遲，JVM |
 | Control Center（c3-01） | **我方的開頭幾條＋官方 `kafka_streams.yml` 的規則**（官方沒有給 C3 本身的 exporter 設定） | JVM、Kafka Streams（client、thread、task、處理節點）、RocksDB state store（`AlertHistoryStore`、`commander`）、Jetty 請求率，約 2,100 條，名稱和官方 Streams／RocksDB dashboard 對得上。不收 C3 自己的 consumer／producer 與每個 REST endpoint（上萬條） |
 
-## 17.1 抓取密碼與設定檔
+## 17.1 設定檔的標頭：HTTPS
 
 @role 小安 | ops02 | root
 
-exporter 的設定檔只存抓取密碼的加鹽 SHA-256，不存明文；鹽整個叢集固定一個。keystore 密碼也不寫進 YAML：exporter（1.4 起）讀得到 `${環境變數}`，YAML 裡寫 `${JMX_KEYSTORE_PASSWORD}`，值放在每台的 `/etc/confluent/jmx-exporter.env`（root 0600），由 systemd drop-in 的 `EnvironmentFile` 帶進服務（`ps` 看不到；只有 root 與服務本身讀得到）。YAML 仍是 root:confluent 0640。
+7071 只做 **HTTPS**，不要求帳密、也不要求 client 憑證（2026-10-31 定案）：指標只能讀、不能改任何東西，內容沒有訊息也沒有密碼，所以不另外發一組要交給銀行、要同步輪替的抓取密碼。誰連得到 7071 就讀得到，所以**存取控制靠網路**：7071 只放行行內 Prometheus 的來源位址（請銀行確認的事項 11.4；7.3 節的 firewalld 目前對所有來源開放）。keystore 密碼不寫進 YAML：exporter（1.4 起）讀得到 `${環境變數}`，YAML 裡寫 `${JMX_KEYSTORE_PASSWORD}`，值放在每台的 `/etc/confluent/jmx-exporter.env`（root 0600），由 systemd drop-in 的 `EnvironmentFile` 帶進服務（`ps` 看不到；只有 root 與服務本身讀得到）。YAML 是 root:confluent 0640。
 
-keystore 依角色不同：controller 沒有 `cp-server.p12`，用 `kafka-internal.p12`；broker、REST Proxy、C3 用 `cp-server.p12`。這一步只產生兩份**標頭**（HTTPS 與帳密），規則在 17.2 接上去：
+keystore 依角色不同：controller 沒有 `cp-server.p12`，用 `kafka-internal.p12`；broker、REST Proxy、C3 用 `cp-server.p12`。這一步只產生兩份**標頭**（HTTPS），規則在 17.2 接上去：
 
 ```bash
-install -d -m 0700 ~/monitoring && (umask 077; [ -s ~/secrets/jmx-scrape.pass ] || openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/jmx-scrape.pass; [ -s ~/secrets/jmx-scrape.salt ] || openssl rand -hex 16 > ~/secrets/jmx-scrape.salt) && SALT=$(cat ~/secrets/jmx-scrape.salt) && HASH=$(printf '%s:%s' "$SALT" "$(cat ~/secrets/jmx-scrape.pass)" | sha256sum | cut -d' ' -f1 | sed 's/^0*//') && for ks in cp-server kafka-internal; do (umask 077; cat > ~/monitoring/jmx-header-$ks.yml <<EOF
-# Prometheus JMX exporter: HTTPS with this host's certificate, basic auth with a salted SHA-256. No plaintext password in this file:
-# the keystore password comes from JMX_KEYSTORE_PASSWORD (systemd EnvironmentFile /etc/confluent/jmx-exporter.env, root 0600)
+install -d -m 0700 ~/monitoring && rm -f ~/secrets/jmx-scrape.pass ~/secrets/jmx-scrape.salt && for ks in cp-server kafka-internal; do (umask 077; cat > ~/monitoring/jmx-header-$ks.yml <<EOF
+# Prometheus JMX exporter: HTTPS with this host's certificate, no authentication (only the bank's Prometheus may reach 7071: firewall).
+# No plaintext password in this file: the keystore password comes from JMX_KEYSTORE_PASSWORD (systemd EnvironmentFile /etc/confluent/jmx-exporter.env, root 0600)
 httpServer:
   ssl:
     keyStore:
@@ -3450,22 +3450,15 @@ httpServer:
       type: PKCS12
     certificate:
       alias: $ks
-  authentication:
-    basic:
-      username: prometheus
-      passwordHash: $HASH
-      algorithm: SHA-256
-      salt: $SALT
 EOF
-); done; unset SALT HASH; (umask 077; printf 'JMX_KEYSTORE_PASSWORD=%s\n' "$(cat ~/pki/store.pass)" > ~/monitoring/jmx-exporter.env) && echo "headers: $(ls ~/monitoring | grep '^jmx-header' | tr '
-' ' ')；jmx-exporter.env $(stat -c %a ~/monitoring/jmx-exporter.env)；YAML 裡的 keystore 密碼：$(grep -h 'password:' ~/monitoring/jmx-header-*.yml | sort -u | sed 's/^ *//')"
+); done; (umask 077; printf 'JMX_KEYSTORE_PASSWORD=%s\n' "$(cat ~/pki/store.pass)" > ~/monitoring/jmx-exporter.env) && echo "headers: $(ls ~/monitoring | grep '^jmx-header' | tr '\n' ' ')；jmx-exporter.env $(stat -c %a ~/monitoring/jmx-exporter.env)；YAML 裡的 keystore 密碼：$(grep -h 'password:' ~/monitoring/jmx-header-*.yml | sort -u | sed 's/^ *//')；authentication：$(cat ~/monitoring/jmx-header-*.yml | grep -c authentication)"
 ```
 
 ```out
-headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml ；jmx-exporter.env 600；YAML 裡的 keystore 密碼：password: ${JMX_KEYSTORE_PASSWORD}
+headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml ；jmx-exporter.env 600；YAML 裡的 keystore 密碼：password: ${JMX_KEYSTORE_PASSWORD}；authentication：0
 ```
 
-> 陷阱：exporter 比對雜湊時用 Java 的 `BigInteger.toString(16)`，開頭的 0 會被吃掉。雜湊剛好以 0 開頭（機率 1/16）時，帳密永遠 401；所以上面多了 `sed 's/^0*//'` 把前導 0 去掉再寫進 YAML。
+> 舊版（10-30 以前）的 7071 用 basic auth，操作機有 `~/secrets/jmx-scrape.pass`、`jmx-scrape.salt`；上面的 `rm -f` 把它們清掉（不存在也不會出錯）。
 
 ## 17.2 接上 Confluent 官方的規則
 
@@ -3523,10 +3516,10 @@ for f in controller broker rest c3; do printf '%-11s %4d 行  httpServer=%s lowe
 
 ```out
 官方規則版本：f376263fc6d7
-controller   159 行  httpServer=1 lowercaseOutputName=1
-broker       437 行  httpServer=1 lowercaseOutputName=1
-rest          55 行  httpServer=1 lowercaseOutputName=1
-c3           134 行  httpServer=1 lowercaseOutputName=1
+controller   153 行  httpServer=1 lowercaseOutputName=1
+broker       431 行  httpServer=1 lowercaseOutputName=1
+rest          49 行  httpServer=1 lowercaseOutputName=1
+c3           128 行  httpServer=1 lowercaseOutputName=1
 ```
 
 官方規則版本記在 `COMMIT`，換版本（重新下載官方檔）要重做這一步並重新驗證 dashboard。
@@ -3546,16 +3539,16 @@ JAR=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename) &&
 ```
 
 ```out
-kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 159 lines env=600
-kc02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 159 lines env=600
-kc03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 159 lines env=600
-kb01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
-kb02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
-kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
-kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 437 lines env=600
-rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 55 lines env=600
-rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 55 lines env=600
-c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 134 lines env=600
+kc01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 153 lines env=600
+kc02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 153 lines env=600
+kc03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 153 lines env=600
+kb01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 431 lines env=600
+kb02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 431 lines env=600
+kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 431 lines env=600
+kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 431 lines env=600
+rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 49 lines env=600
+rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 49 lines env=600
+c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 128 lines env=600
 ```
 
 > 陷阱：落地區的檔案是唯讀的（第 3 章 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
@@ -3644,19 +3637,21 @@ ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'; for i in $(
 c3 ui=200 after ~60s
 ```
 
-沒帶帳密要被拒（401），帶了要看到指標；憑證鏈用銀行根憑證驗（不用 -k）。controller 與 broker 重啟後前兩分鐘指標是空的（官方規則的 `startDelaySeconds: 120`），所以每台等到有指標再算：
+HTTPS 要拿得到指標，憑證鏈用銀行根憑證驗（不用 -k）；不加密的 `http://` 要連不上（`000`）。controller 與 broker 重啟後前兩分鐘指標是空的（官方規則的 `startDelaySeconds: 120`），所以每台等到有指標再算：
 
 ```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do u=https://$h.poc.lab:7071/metrics; a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert $CA $u); for i in $(seq 1 30); do m=$(curl -s --max-time 30 --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" $u | grep -cE '^(kafka_|jvm_)'); [ "$m" -gt 20 ] && break; sleep 10; done; printf '%-7s anon=%s metrics=%s\n' $h $a $m; done
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do u=https://$h.poc.lab:7071/metrics; for i in $(seq 1 30); do m=$(curl -s --max-time 30 --cacert $CA $u | grep -cE '^(kafka_|jvm_)'); [ "$m" -gt 20 ] && break; sleep 10; done; printf '%-7s https=%s http=%s metrics=%s\n' $h "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert $CA $u)" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://$h.poc.lab:7071/metrics)" $m; done
 ```
 
 ```out
-kc01    anon=401 metrics=1067
-kb01    anon=401 metrics=12017
-rest01  anon=401 metrics=1498
-c3-01   anon=401 metrics=2115
-（10 行，匿名都是 401；controller 約 1,000、REST 約 1,500、C3 約 100 個 kafka_／jvm_ 指標，broker 依 partition 數而定）
+kc01    https=200 http=000 metrics=1067
+kb01    https=200 http=000 metrics=11787
+rest01  https=200 http=000 metrics=1498
+c3-01   https=200 http=000 metrics=2115
+（10 行，https 都是 200、http 都是 000；controller 約 1,000、REST 約 1,500、C3 約 2,000 個 kafka_／jvm_ 指標，broker 依 partition 數而定）
 ```
+
+> 不信任銀行根憑證的 client 連 7071 會在 TLS 那一關失敗（`curl: (60) SSL certificate problem: unable to get local issuer certificate`）；銀行 Prometheus 的 scrape 設定裡要帶 17.5 的 `ca.pem`。
 
 ## 17.5 給銀行監控團隊的檔
 
@@ -3666,7 +3661,7 @@ c3-01   anon=401 metrics=2115
 
 | 資料夾 | 內容 | 放到哪 |
 |---|---|---|
-| `prometheus/` | `scrape-confluent.yml`、`confluent-alerts.yml`、`ca.pem`、`scrape.pass` | Prometheus 的 `/etc/prometheus/confluent/` |
+| `prometheus/` | `scrape-confluent.yml`、`confluent-alerts.yml`、`ca.pem` | Prometheus 的 `/etc/prometheus/confluent/` |
 | `alertmanager/` | `alertmanager.yml` | 併入行內 Alertmanager 的設定 |
 | `grafana/` | `datasource-prometheus.yml`、`dashboards/`（32 個 JSON 加 `dashboard.yml`） | Grafana 的 `provisioning/datasources/`、`provisioning/dashboards/` |
 
@@ -3677,14 +3672,13 @@ rm -rf ~/monitoring/to-bank && install -d ~/monitoring/to-bank/prometheus ~/moni
 cat > ~/monitoring/to-bank/prometheus/scrape-confluent.yml <<'EOF'
 # Confluent Platform scrape jobs for the bank's Prometheus (referenced from prometheus.yml with scrape_config_files)
 # Job names and the env / hostname labels are what Confluent's official Grafana dashboards query (job="kafka-broker", env=...).
-# Files next to this one (/etc/prometheus/confluent/): ca.pem (bank root CA), scrape.pass (basic-auth password, 0600)
+# Files next to this one (/etc/prometheus/confluent/): ca.pem (bank root CA). 7071 is HTTPS only, no credentials: only this Prometheus may reach it (firewall).
 scrape_configs:
   - job_name: kafka-controller
     scheme: https
     scrape_interval: 30s
     scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
-    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
     static_configs: [ { targets: [ "kc01.poc.lab:7071", "kc02.poc.lab:7071", "kc03.poc.lab:7071" ], labels: { env: lab } } ]
     relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
   - job_name: kafka-broker
@@ -3692,7 +3686,6 @@ scrape_configs:
     scrape_interval: 30s
     scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
-    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
     static_configs: [ { targets: [ "kb01.poc.lab:7071", "kb02.poc.lab:7071", "kb03.poc.lab:7071", "kb04.poc.lab:7071" ], labels: { env: lab } } ]
     relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
   - job_name: rest-proxy
@@ -3700,7 +3693,6 @@ scrape_configs:
     scrape_interval: 30s
     scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
-    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
     static_configs: [ { targets: [ "rest01.poc.lab:7071", "rest02.poc.lab:7071" ], labels: { env: lab } } ]
     relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
   - job_name: control-center
@@ -3708,7 +3700,6 @@ scrape_configs:
     scrape_interval: 30s
     scrape_timeout: 25s
     tls_config: { ca_file: /etc/prometheus/confluent/ca.pem }
-    basic_auth: { username: prometheus, password_file: /etc/prometheus/confluent/scrape.pass }
     static_configs: [ { targets: [ "c3-01.poc.lab:7071" ], labels: { env: lab } } ]
     relabel_configs: [ { source_labels: [__address__], target_label: hostname, regex: '([^:]+)(:[0-9]+)?', replacement: '$1' } ]
 EOF
@@ -4051,10 +4042,10 @@ EOF
 dashboards: 32, placeholder datasource fixed, uid shared with another file (renamed): 4
 ```
 
-根憑證與抓取密碼，然後看整個資料夾。抓取密碼另外交給銀行監控團隊（交付方式由銀行決定，不放 CyberArk；lab 直接給檔）。**待銀行確認**（請銀行確認的事項 11.3、11.4）：行內 Prometheus 抓其他系統用哪種認證；7071 能否只放行行內 Prometheus 的來源位址（7.3 節的 firewalld 目前對所有來源開放）：
+根憑證，然後看整個資料夾。7071 沒有帳密，所以沒有密碼要交給銀行。**待銀行確認**（請銀行確認的事項 11.4）：7071 只放行行內 Prometheus 的來源位址（7.3 節的 firewalld 目前對所有來源開放）；這是 7071 唯一的存取控制：
 
 ```bash
-cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && (umask 077; cp ~/secrets/jmx-scrape.pass ~/monitoring/to-bank/prometheus/scrape.pass) && cd ~/monitoring/to-bank && find . -type f ! -name '*.json' | sort && echo "dashboards: $(ls grafana/dashboards/*.json | wc -l) 個 JSON"
+cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem && rm -f ~/monitoring/to-bank/prometheus/scrape.pass && cd ~/monitoring/to-bank && find . -type f ! -name '*.json' | sort && echo "dashboards: $(ls grafana/dashboards/*.json | wc -l) 個 JSON"
 ```
 
 ```out
@@ -4064,7 +4055,6 @@ cp /etc/pki/ca-trust/source/anchors/bank-root.pem ~/monitoring/to-bank/prometheu
 ./prometheus/ca.pem
 ./prometheus/confluent-alerts.yml
 ./prometheus/scrape-confluent.yml
-./prometheus/scrape.pass
 dashboards: 32 個 JSON
 ```
 
@@ -4083,7 +4073,7 @@ cd ~/kafka-lab && rm -rf bank-monitoring && mkdir -p bank-monitoring/prometheus/
 ```
 
 ```out
-prometheus: ca.pem confluent-alerts.yml scrape-confluent.yml scrape.pass / dashboards: 33 個檔
+prometheus: ca.pem confluent-alerts.yml scrape-confluent.yml / dashboards: 33 個檔
 ```
 
 （lab 專用）行內 Prometheus 自己的 `prometheus.yml` 銀行原本就有，這裡只示範要加的三行：引用 scrape 設定、載入告警規則、指向 Alertmanager。一起寫出 webhook 接收端：
@@ -4478,15 +4468,15 @@ Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.repl
 @role 小安 | ops02 | root
 
 ```bash
-export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; chk "controller quorum 有 leader" bash -c 'kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep -q "LeaderId: *[0-9]"'; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do chk "$h confluent-server active" ssh $h.poc.lab 'systemctl is-active -q confluent-server'; done; for h in kb01 kb02 kb03 kb04; do chk "$h MDS 8090 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) = 200 ]"; done; chk "沒有 under-replicated partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions | grep -c Partition:)" = 0 ]'; chk "沒有 offline partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --unavailable-partitions | grep -c Partition:)" = 0 ]'; chk "Self-Balancing 啟用" bash -c 'kafka-rebalance-cluster --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --status 2>/dev/null | grep -q "Balancer status: ENABLED"'; chk "REST Proxy 經 LB 回 200（mTLS）" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 200 ]"; chk "Control Center 9021 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) = 200 ]"; chk "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $CA --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"; for h in kc01 kb01 rest01 c3-01; do chk "$h JMX exporter 7071 要帳密" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:7071/metrics) = 401 ]"; done; echo "健康：$ok / $all 項通過"
+export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml && CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && ok=0; all=0; chk() { local name="$1"; shift; all=$((all+1)); if "$@" >/dev/null 2>&1; then printf 'ok   %s\n' "$name"; ok=$((ok+1)); else printf 'FAIL %s\n' "$name"; fi; }; chk "controller quorum 有 leader" bash -c 'kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep -q "LeaderId: *[0-9]"'; for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do chk "$h confluent-server active" ssh $h.poc.lab 'systemctl is-active -q confluent-server'; done; for h in kb01 kb02 kb03 kb04; do chk "$h MDS 8090 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) = 200 ]"; done; chk "沒有 under-replicated partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions | grep -c Partition:)" = 0 ]'; chk "沒有 offline partition" bash -c '[ "$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --unavailable-partitions | grep -c Partition:)" = 0 ]'; chk "Self-Balancing 啟用" bash -c 'kafka-rebalance-cluster --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --status 2>/dev/null | grep -q "Balancer status: ENABLED"'; chk "REST Proxy 經 LB 回 200（mTLS）" bash -c "[ \$(curl -s --cacert $CA --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) = 200 ]"; chk "Control Center 9021 回 200" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) = 200 ]"; chk "C3 的 Prometheus 有 broker 指標" bash -c "curl -s --cacert $CA --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server"; for h in kc01 kb01 rest01 c3-01; do chk "$h JMX exporter 7071 只走 HTTPS" bash -c "[ \$(curl -s --cacert $CA -o /dev/null -w '%{http_code}' https://$h.poc.lab:7071/metrics) = 200 ] && [ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://$h.poc.lab:7071/metrics) = 000 ]"; done; echo "健康：$ok / $all 項通過"
 ```
 
 ```out
 ok   controller quorum 有 leader
 ok   kc01 confluent-server active
 （…）
-ok   rest01 JMX exporter 7071 要帳密
-ok   c3-01 JMX exporter 7071 要帳密
+ok   rest01 JMX exporter 7071 只走 HTTPS
+ok   c3-01 JMX exporter 7071 只走 HTTPS
 健康：22 / 22 項通過
 ```
 
@@ -6226,7 +6216,6 @@ confluent-alerts-cert.yml
 confluent-alerts.yml
 scrape-blackbox.yml
 scrape-confluent.yml
-scrape.pass
 ```
 
 （第 24 章做完後會再多一個 `confluent-alerts-disk.yml`。）
@@ -7016,7 +7005,7 @@ NodeId  DirectoryId             LogEndOffset  Lag  …  Status
 最後確認：kc03 的監控端點（官方規則有 `startDelaySeconds: 120`，剛啟動兩分鐘內是空的，所以等到有指標）、整體健康（第 14 章的檢查清單）：
 
 ```bash
-CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && for i in $(seq 1 24); do n=$(curl -s --cacert $CA -u "prometheus:$(cat ~/secrets/jmx-scrape.pass)" https://kc03.poc.lab:7071/metrics | grep -c '^kafka_'); [ "$n" -gt 20 ] && break; sleep 10; done; echo "kc03 7071：${n}個指標" && for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo
+CA=/etc/pki/ca-trust/source/anchors/bank-root.pem && for i in $(seq 1 24); do n=$(curl -s --cacert $CA https://kc03.poc.lab:7071/metrics | grep -c '^kafka_'); [ "$n" -gt 20 ] && break; sleep 10; done; echo "kc03 7071：${n}個指標" && for h in kb01 kb02 kb03 kb04; do printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w %{http_code} https://$h.poc.lab:8090/v1/metadata/id)"; done; echo
 ```
 
 ```out
@@ -8861,7 +8850,7 @@ docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-web
 lab-mon-* 已收掉：0 個剩下
 ```
 
-> 兩件事要跟銀行講清楚：(1) exporter 的 YAML 沒有明文密碼（keystore 密碼在 root 0600 的 `/etc/confluent/jmx-exporter.env`，YAML 只有抓取密碼的加鹽雜湊），YAML 維持 root:confluent 0640；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3（畫面）或另外接 lag exporter；Grafana 的 `kafka-consumer.json`、`kafka-lag-exporter.json` 要有對應來源才有資料。
+> 兩件事要跟銀行講清楚：(1) exporter 的 YAML 沒有明文密碼（keystore 密碼在 root 0600 的 `/etc/confluent/jmx-exporter.env`，YAML 裡也沒有帳密：7071 只做 HTTPS，存取控制靠防火牆只放行 Prometheus），YAML 維持 root:confluent 0640；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3（畫面）或另外接 lag exporter；Grafana 的 `kafka-consumer.json`、`kafka-lag-exporter.json` 要有對應來源才有資料。
 >
 > 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用 22 章的 syslog 告警；稽核事件看第 18 章。
 >
