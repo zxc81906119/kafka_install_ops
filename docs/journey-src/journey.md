@@ -2823,7 +2823,7 @@ kc01  active
 （7 行 active）
 LeaderId:               1
 kb01 MDS=200 kb02 MDS=200 kb03 MDS=200 kb04 MDS=200
-topics: billing.events confluent-audit-log-events orders.events payments.events poc-cluster-2-6-1-10-AlertHistoryStore-changelog …
+topics: billing.events confluent-audit-log-events orders.events payments.events poc-cluster-2-5-1-10-AlertHistoryStore-changelog …
 rest via LB: 200
 c3 ui: 200
 metrics in prometheus: 111 kinds
@@ -2842,7 +2842,7 @@ metrics in prometheus: 111 kinds
 
 | 元件 | 主機 | 服務名稱 | 看日誌 | 健康檢查 |
 |---|---|---|---|---|
-| controller、broker | kc*、kb* | `confluent-server` | `sudo journalctl -u confluent-server -n 100 --no-pager` | quorum 有 leader；broker 的 `https://<host>:8090/v1/metadata/id` 回 200 |
+| controller、broker | kc*、kb* | `confluent-server` | `sudo journalctl -u confluent-server -n 100 --no-pager`；MDS 與授權器另在 `/var/log/kafka/metadata-service.log`、`kafka-authorizer.log`（不在 journal） | quorum 有 leader；broker 的 `https://<host>:8090/v1/metadata/id` 回 200 |
 | REST Proxy | rest* | `confluent-kafka-rest` | `sudo journalctl -u confluent-kafka-rest -n 100 --no-pager` | 帶 legacy 憑證 `curl …:8082/v3/clusters` 回 200 |
 | Control Center | c3-01 | `confluent-control-center`、`prometheus`、`alertmanager` | `sudo journalctl -u confluent-control-center -n 100 --no-pager` | `https://c3-01.poc.lab:9021/` 回 200 |
 | AD | ad01 | samba（entrypoint 常駐） | lab 裡：`podman logs lab-ad01-1` | `openssl s_client -connect ad01.poc.lab:636` 驗證通過 |
@@ -2857,7 +2857,7 @@ metrics in prometheus: 111 kinds
 | 步驟 | 能不能重跑 | 怎麼做 |
 |---|---|---|
 | 派送憑證、設定檔、drop-in（第 10–13 章） | 可以，重跑就是覆蓋成一樣的內容 | 改完記得 `sudo systemctl restart <unit>` |
-| 格式化儲存（10.4） | **不能**，`meta.properties` 存在就會拒絕 | 真要重來：停服務、`sudo rm -rf /var/lib/kafka/data/*`，所有 controller 和 broker 一起重做 |
+| 格式化儲存（10.4） | **不能**，`meta.properties` 存在就會拒絕 | 真要重來：停服務、`sudo find /var/lib/kafka/data -mindepth 1 -delete`（不要用 `rm -rf …/*`：經 ssh 時萬用字元由 cpuser 展開、讀不到 0750 的目錄，什麼都沒刪；也刪不到 `.kafka_cleanshutdown`），所有 controller 和 broker 一起重做（26.4 是完整做法） |
 | 憑證（第 9 章） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留；已經上線的環境照第 21 章換發，不要重跑第 9 章 |
 | 裝套件（第 8 章） | 可以，dnf 看到已安裝就略過 | `versionlock add` 對已鎖的套件會再加一筆重複，重跑前先 `sudo dnf versionlock list` 看一下，已鎖的不要再加 |
 | 整台主機重置 | lab 可以；正式環境由銀行重新交付主機 | `podman compose -f compose.yml rm -sf <host> && podman compose -f compose.yml up -d <host>`，再對那台重做：5.1（根憑證信任與 OS 套件來源）、7.1 節（JDK）、7.3 節（OS 調校）、第 8 章（套件），以及它的角色在第 10、12、13 章的派送與啟動 |
