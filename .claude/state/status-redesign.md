@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-31 18:30（**lab 使用中（Podman kafka-lab）**：在 Podman 上照手冊逐章從零跑，每章跑完自檢內容是否符合最終設計；labtest 已刪）
+Updated: 2026-10-31 18:55（**lab 使用中（Podman kafka-lab）**：手冊逐章從零跑，第 0–19 章通過（安裝基底完成）；下一步第 20 章；待決定 svc-ops.key 是否離線保管）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。
