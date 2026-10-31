@@ -28,13 +28,13 @@
 **先手動做的三件事**（只做一次）：
 
 1. 安裝 Podman：從官方 GitHub releases（`github.com/containers/podman`）下載 `podman-installer-windows-amd64.msi`，核對 release 附的 `shasums`、確認數位簽章是 Red Hat, LLC，再安裝（需要系統管理員權限）。裝完**重開一個 Git Bash**，`podman` 才會在 PATH 裡。
-2. 準備 docker-compose（`podman compose` 會呼叫它）：從官方 GitHub releases（`github.com/docker/compose`）下載 `docker-compose-windows-x86_64.exe`，核對 `.sha256`，放到 `%LOCALAPPDATA%\Programs\docker-compose\docker-compose.exe`。
+2. 準備 docker-compose（`podman compose` 會呼叫它）：裝 Podman Desktop（`choco install podman-desktop`，或官方安裝檔），在它的 Compose 擴充按「Set up…」，選裝到系統（system-wide）。它從官方 GitHub（`docker/compose`）下載 docker-compose，放到 `%LOCALAPPDATA%\Microsoft\WindowsApps\docker-compose.exe`（本來就在 PATH 上）；裝完**重開一個 Git Bash**。`podman compose` 沒有另外設定時就到 PATH 上找它，不用寫 `containers.conf`。
 3. WSL2 的記憶體上限：`%UserProfile%\.wslconfig` 的 `[wsl2]` 寫 `memory=11GB`（16 GB 的筆電；整個 lab 約用 9–10 GB）。改完要 `wsl --shutdown` 才生效。
 
-接著在 Git Bash 做兩個全域設定（之後所有 Windows 端指令都在這個視窗），設定 `podman compose` 用哪一份 docker-compose（TOML 的路徑用正斜線；反斜線會被當成跳脫字元），建 rootful 的 machine（容器要用 systemd、firewalld、固定 IP，rootless 做不到；記憶體由 `.wslconfig` 統一管，不用 `--memory`），並讓 machine 重開後自動把帶 `restart` 政策的容器拉起來（`podman-restart.service`，預設是關的）：
+接著在 Git Bash（之後所有 Windows 端指令都在這個視窗）建 rootful 的 machine（容器要用 systemd、firewalld、固定 IP，rootless 做不到；記憶體由 `.wslconfig` 統一管，不用 `--memory`），並讓 machine 重開後自動把帶 `restart` 政策的容器拉起來（`podman-restart.service`，預設是關的）：
 
 ```bash
-export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} "$(cygpath -u "$APPDATA")/containers" && cd ~/kafka-lab && pwd && C="$(cygpath -u "$APPDATA")/containers/containers.conf" && { grep -q '^compose_providers' "$C" 2>/dev/null || printf '[engine]\ncompose_providers = ["%s"]\ncompose_warning_logs = false\n' "$(cygpath -m "$LOCALAPPDATA/Programs/docker-compose/docker-compose.exe")" >> "$C"; } && { podman machine inspect kafka-lab >/dev/null 2>&1 || podman machine init kafka-lab --rootful --cpus 8 >/dev/null; } && { [ "$(podman machine inspect kafka-lab --format '{{.State}}')" = running ] || podman machine start kafka-lab >/dev/null 2>&1; } && podman system connection default kafka-lab-root && podman machine ssh kafka-lab "sudo systemctl enable podman-restart.service >/dev/null 2>&1; systemctl is-enabled podman-restart.service" | tr -d '\r' | sed 's/^/podman-restart: /' && echo "rootless: $(podman info --format '{{.Host.Security.Rootless}}')" && podman compose version 2>/dev/null | tail -1
+export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} && cd ~/kafka-lab && pwd && { podman machine inspect kafka-lab >/dev/null 2>&1 || podman machine init kafka-lab --rootful --cpus 8 >/dev/null; } && { [ "$(podman machine inspect kafka-lab --format '{{.State}}')" = running ] || podman machine start kafka-lab >/dev/null 2>&1; } && podman system connection default kafka-lab-root && podman machine ssh kafka-lab "sudo systemctl enable podman-restart.service >/dev/null 2>&1; systemctl is-enabled podman-restart.service" | tr -d '\r' | sed 's/^/podman-restart: /' && echo "rootless: $(podman info --format '{{.Host.Security.Rootless}}')" && podman compose version 2>/dev/null | tail -1
 ```
 
 ```out
@@ -48,13 +48,14 @@ Docker Compose version v5.x.x
 >
 > （選擇性）Windows 開機後 machine 不會自己啟動。要它自動起來，用工作排程器在登入時執行 `podman machine start kafka-lab`（例如 `schtasks /Create /SC ONLOGON /TN "podman machine kafka-lab" /TR "<podman.exe 的完整路徑> machine start kafka-lab"`）；不設的話，每次開機後先手動跑一次這個指令。
 >
+> `podman compose` 每次會先印一行 `>>>> Executing external compose provider "…docker-compose.exe" … <<<<`：只是提示用的是 Podman Desktop 裝的那一份，不影響結果。docker-compose 的版本跟著 Podman Desktop 的擴充更新（2026-10-31 是 v5.6.1）。
+>
 > 陷阱：Podman 的安裝程式會重設 WSL，正在跑的其他 WSL 發行版（例如 Docker Desktop）會被關掉。
 >
 > 硬體：16 GB 記憶體的筆電（上面的 `.wslconfig` 給 WSL 11 GB）；磁碟至少留 80 GB（2026-10-31 整本跑完：machine 的 `ext4.vhdx` 約 58 GB、`~/kafka-lab` 約 7 GB）。本書在 Podman 6.1.4、Windows 11 實測。
 >
-> 用 Podman Desktop 的人：它是圖形介面，底下是同一個 `podman` 指令和同一台 machine，照上面的步驟做就好，另外注意三件事。(1) 第一次開啟時它會提議安裝 Podman、建立 machine：Podman 可以讓它裝（版本和上面實測的接近即可），**machine 不要用它建**，照上面的指令建 `kafka-lab`（rootful、8 顆 CPU）；已經有它建的 `podman-machine-default`，先 `podman machine stop podman-machine-default`，兩台同時開會搶 `.wslconfig` 給的記憶體。(2) 它的 Compose 擴充另外裝一份 docker-compose 也沒關係：`podman compose` 用的是 `compose_providers` 指定的那一份（第 2 步）。(3) 不要在它的畫面上對 `kafka-lab` 按 Reset 或 Delete：lab 的 volume（含第 4 章放 SSH 私鑰的 `ops-secure`）都在這台 machine 裡，刪了只能從第 0 章重建。
->
 > 容器重開後會不會回來：machine 重開時，`podman-restart` 只拉起有 `restart` 政策的容器。compose 建的 14 台寫了 `restart: unless-stopped`；本書另外用 `podman run` 建的 dl01（0.7）與監控容器（17.6、22.2）也都帶 `--restart unless-stopped`。
+
 ## 0.1 主機映像檔：模擬「裸機 RHEL 9」
 
 **這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：0.0 已做完（machine 起來了、目錄已建）。完成的樣子：build 印出 `Successfully tagged localhost/lab-node:96`，接著印出 `Rocky Linux release 9.6`。

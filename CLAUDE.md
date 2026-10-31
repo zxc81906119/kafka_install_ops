@@ -8,7 +8,7 @@ PoC for installing Confluent Platform fully offline at a bank, as a **baseline +
 baseline CP 8.2.4 + Control Center 2.5.1 + JDK 21 + OS 9.6 (chapters 2–19), then migrate to CP 8.3.2 + C3 2.6.1 + JDK 25 + OS 9.8
 (chapter 29 packages/JDK/finalize, chapter 30 OS minor update, chapter 31 C3 version swap). JDK 25 is not supported by 8.2.x, hence the baseline JDK 21;
 C3 2.5.x supports CP up to 8.2.x and 2.6.x up to 8.3.x, so C3 is upgraded first. Versions live in `install/conf/site.env` (`CP_VERSION` … baseline, `*_TARGET_*` target).
-Simulated hosts run in Podman on Windows 11 (rootful WSL2 machine `kafka-lab`, compose project `lab`, built from `~/kafka-lab`; Docker Desktop is being retired, 2026-10-31); driven from Git Bash.
+Simulated hosts run in Podman on Windows 11 (rootful WSL2 machine `kafka-lab`, compose project `lab`, built from `~/kafka-lab`; Docker Desktop was removed on 2026-10-31, Podman Desktop is installed); driven from Git Bash.
 Details of the architecture and every component: @README.md
 
 ## Working with the user
@@ -50,8 +50,8 @@ Details of the architecture and every component: @README.md
 
 ## Lab facts
 - One lab: project `lab` (14 containers + `dl01`, subnets 172.35/172.36), built from `~/kafka-lab` per journey chapter 0. Host image `lab-node:96` (Rocky 9.6 from the vault; the old 9.8 image is `lab-node:1`, never reuse it), web image `lab-web:96`.
-  WSL2 has 11 GB (`%UserProfile%\.wslconfig`), shared by every WSL distro: never run Docker Desktop or another machine alongside it.
-  `podman compose` runs the standalone docker-compose set in `%APPDATA%\containers\containers.conf` (`compose_providers`, forward slashes in TOML);
+  WSL2 has 11 GB (`%UserProfile%\.wslconfig`), shared by every WSL distro: never run another machine alongside it.
+  `podman compose` runs the docker-compose that Podman Desktop's Compose extension installed system-wide (`%LOCALAPPDATA%\Microsoft\WindowsApps\docker-compose.exe`, found on PATH; no `containers.conf`, so it prints a `>>>> Executing external compose provider` line; version follows the extension, v5.6.1 on 2026-10-31);
   containers come back after a machine restart only because `podman-restart.service` is enabled in the machine (guide 0.0).
 - Enter hosts: `podman exec -it -w /root lab-ops02-1 bash` (ops02 as **root** = what PSMP gives a person; no PVWA/PSMP in the lab),
   `podman exec -it lab-<host>-1 bash` (root, "bank" actions). Prefix podman commands with `MSYS_NO_PATHCONV=1`
@@ -117,6 +117,7 @@ Details of the architecture and every component: @README.md
 - When comparing run logs with the guide's `out` blocks, also compare with digits kept: normalising numbers hid `lab-mon-* 已收掉：1 個剩下` (expected 0) on 2026-10-29.
 - Check run logs line by line, not only `scan-log.sh`: an empty value after "：" means the check's precondition was missing.
 - Emptying a data directory on a host: `ssh h 'sudo rm -rf /var/lib/kafka/data/*'` deletes nothing (the glob is expanded by cpuser, who cannot read the 0750 directory) and `rm -rf dir/*` misses dot files (`.kafka_cleanshutdown`); use `sudo find <dir> -mindepth 1 -delete`. Scripts that `echo $var` over backup lines need `set -f` (`Topic:*` expands to file names).
+- `%LOCALAPPDATA%\Microsoft\WindowsApps` also holds WSL's `bash.exe`: never put it at the **front** of PATH in Git Bash, or `bash -c …` runs inside the Ubuntu distro (2026-10-31: the guide's 0.0 block ran there and started a `podman machine init`; stopped and cleaned up). Append it, or call `/usr/bin/bash`.
 - Podman: `podman images` names local images `localhost/<name>` (count with `(^|/)lab-`); a JS `replace()` with a replacement string containing `$'` pastes the rest of the file (use a function). Installing Podman resets WSL and stops Docker Desktop. Never `podman machine rm kafka-lab` or `reset` casually (it wipes volume `ops-secure`).
 - Building a package set with `dnf download --resolve`: use a clean container and download **before** installing
   tools, or the tools' dependencies are missed (`createrepo_c-libs`).

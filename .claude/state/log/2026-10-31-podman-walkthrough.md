@@ -100,3 +100,9 @@
 - 修：手冊與 bank-sim.sh 所有 `podman run -d`（dl01、5 個 lab-mon-*，共 11 處）加 `--restart unless-stopped`；現有 dl01 `podman update --restart`；重開 machine 驗證 15 台全回來。
 - 0.0 補：硬體（16 GB、磁碟 80 GB：vhdx 58 GB＋~/kafka-lab 7 GB、Podman 6.1.4）、Podman Desktop 使用者三件事（machine 不用它建、compose 擴充無妨、不要 Reset／Delete kafka-lab）、restart 政策說明。
 - 先前把 build.js（docx 的進主機指令）、tools/README.md、lint.sh 的 docker 改成 podman（3a9b823）。
+
+## compose 改用 Podman Desktop 的擴充（2026-10-31 23:30，使用者演練）
+- Docker 殘餘全清（Local\Docker 的 AF_UNIX socket 只能從 WSL 刪）；Podman Desktop 1.29.3 用 choco 裝好（提權腳本要存 UTF-8 BOM，PS 5.1 讀無 BOM 的中文 .ps1 會語法錯）。
+- 使用者要用 Podman Desktop 的 Compose 擴充：containers.conf（只有我們的 compose_providers）搬到 scratchpad 備份；擴充 Set up（system-wide）→ %LOCALAPPDATA%\Microsoft\WindowsApps\docker-compose.exe v5.6.1；podman compose 找得到、`-p lab ps` 14 台；刪掉自己下載的 %LOCALAPPDATA%\Programs\docker-compose。
+- 手冊 0.0：第 2 步改成 Podman Desktop 的 Compose 擴充，指令拿掉 containers.conf；在 Git Bash 手動跑通過（out 相同，v5.6.1）。
+- 事故：測 0.0 時把 WindowsApps 放在 PATH 最前面，`bash` 變成 WSL 的 bash.exe，指令跑進 Ubuntu 並開始 `podman machine init`（下載 machine image）。立刻停掉；Ubuntu 裡 23:27 新建的 ~/kafka-lab、~/.local/share/containers/podman（311 MB）、~/.config/containers 已刪，原有的 cache、storage 未動，Ubuntu 停回。陷阱記進 CLAUDE.md。
