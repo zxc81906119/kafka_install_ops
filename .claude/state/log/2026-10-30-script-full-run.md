@@ -8,3 +8,4 @@
   - 修：ad-drill 自己組 SASL_SSL／SCRAM 設定（truststore＋`~/pki/store.pass`）；手冊 11.2 與 ad-drill 計數改 `grep -vc -e '^Error' -e '^$'`。
   - 重跑 ad-drill：alice 401、kafka-admin 列出 20 個、AD 開回 alice 200；錯密碼反向測試算成 0。手冊 docx 重建。
 - 教訓：用「數行數」判斷成功時，工具的錯誤訊息可能印在 stdout；要排除錯誤行，或比對一個一定存在的名稱。
+- 21:50、22:58 兩輪含 OP menu 調整的從零實跑都中斷：Windows 22:02–23:05 當機 5 次（Kernel-Power 41；BugCheck 0x7E，可能的驅動 rtwlanu.sys＝Realtek USB 無線網卡，dump 在 C:\Windows\Minidump），之後 Docker 又出現 sailor-ingest.sock 問題（run 目錄改名 run.old-20261030-2252 修好）。使用者決定先處理網卡（更新驅動或改有線）再重跑。

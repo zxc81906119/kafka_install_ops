@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-30 21:40（lab 空閒；ops02 的 /opt/opmenu 是新版，落地區的 opmenu 套件還是舊的，下次從零跑會重新打包）
+Updated: 2026-10-31 09:10（lab 空閒，等使用者處理網卡後再從零實跑腳本版；10-30 21:50、22:58 兩輪都因主機藍畫面中斷（0x7E，rtwlanu.sys＝Realtek USB 無線網卡驅動），紀錄 *-interrupted.log）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。
