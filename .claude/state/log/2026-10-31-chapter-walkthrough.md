@@ -15,3 +15,4 @@
 - 腳本（17-jmx-exporter.sh、19-acceptance.sh、templates/jmx-header.yml、prometheus-scrape.yml）待手冊版跑完再改。
 - 第 19 章：健康 22／22，安全 15／16——19.2 還有一項「JMX exporter 匿名 → 401」（17 章改手冊時漏了）。改成「JMX exporter 不加密的 HTTP → 連不上」（http 000），19.2 照手冊原文重跑 16／16。19.3 應用程式寫讀、19.4 選單重啟與冷開機（MDS 75 s、C3 139 s）、19.5 收尾都過。
 - scan-log 漏報：那行 `FAIL JMX exporter 匿名 → 401` 含 EXPECTED 的 `→ 401` 被濾掉。改成 `FAIL ` 開頭的行一律算可疑；今天 0–19 章的紀錄重掃，只有 19 章這一行。
+- 12:31 使用者要關機，第 20 章停在 20.3 滾動重啟中（kb01 之後）。停之前確認新 master key 與密文已派送到 10 台，重開機後全部用新 key，狀態一致。下次整章重跑第 20 章。

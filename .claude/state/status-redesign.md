@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-31 12:40（**lab 使用中**：手冊版逐章實跑 run-full.sh customer <章> <章>，使用者每章看完才往下。第 0–19 章通過；第 20 章在背景跑（紀錄 chapter-20-20261031.console.log），使用者外出，下次從「看第 20 章結果」接續；不要改 docs/journey-src、install/、opmenu/）
+Updated: 2026-10-31 12:35（lab 停著待接續：手冊版逐章實跑到第 19 章通過；第 20 章在 20.3 滾動重啟中途被停下（使用者要關機），新 master key 與密文已派送到全部 10 台，所以重開機後一致；下次從第 20 章整章重跑）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。
@@ -25,7 +25,7 @@ Updated: 2026-10-31 12:40（**lab 使用中**：手冊版逐章實跑 run-full.s
 - 還沒做：腳本版與手冊版都還沒從零重跑一次（含這些改動）。
 
 ## 手冊逐章實跑（2026-10-31，log/2026-10-31-chapter-walkthrough.md）
-- 第 0–19 章照手冊原文跑完（安裝基底 CP 8.2.4／C3 2.5.1／JDK 21／OS 9.6）。第 20 章 12:37 開始在背景跑；下次先看 `~/kafka-lab-runs/chapter-20-20261031.console.log` 與它指向的 run-customer-20-20-*.log，整理給使用者，再問要不要跑第 21 章。
+- 第 0–19 章照手冊原文跑完（安裝基底 CP 8.2.4／C3 2.5.1／JDK 21／OS 9.6）。第 20 章跑了 20.2（kafka-admin 換密碼）與 20.3 的前段（新 master key 產生、派送 10 台、kc01–03、kb01 已重啟），12:31 停下。下次：開機後先確認 14 台容器與服務都起來（新 master key），再 `run-full.sh customer 20 20` 整章重跑（20.2／20.3 再做一次沒有副作用）。
 - 途中定案並已改手冊：7071 只用 HTTPS（17 章、19.2、25.1.5、B.2、questions 11.3／11.4）。scan-log 修了兩處（http=000 是預期；FAIL 開頭一律可疑）。
 - 待做：① 待修清單（log 裡列的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas 列入待確認）；② 手冊版跑完後改腳本（17-jmx-exporter.sh、19-acceptance.sh 健康與安全兩項、templates/jmx-header.yml、prometheus-scrape.yml），再腳本版從零實跑。
 
