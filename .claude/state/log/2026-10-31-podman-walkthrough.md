@@ -22,3 +22,4 @@
 - 第 14 章：1 塊全過。out 的 C3 topic `2-6-1` → `2-5-1`（待修清單）。自檢：14.2 格式化重來用 `rm -rf …/*`（CLAUDE.md 陷阱：經 ssh 什麼都沒刪、漏隱藏檔）→ `sudo find … -mindepth 1 -delete`；14.1 broker 列補 metadata-service.log。
 - 待第 25 章處理：25.1（6951 行附近）、25.2（7121 行附近）清資料用 rm -rf …/*（以 root 展開，刪得到但漏隱藏檔）→ 改 find -mindepth 1 -delete 再實測。
 - 第 15 章：13 塊全過；protected.users 保留（一開始以為沒有：encrypt 會把整份重排成 `key = value`，用 `欄位=` 比對會找不到）。自檢無問題。
+- 第 16 章：16 塊全過。自檢：開頭說「91 用於 MDS 故障時」與設計相反（91 要 MDS 換 token）→ 改成「AD 處理不了時用 91；MDS 也不通時選單進緊急主機模式、Kafka 類用 28.6 kafka-admin」。
