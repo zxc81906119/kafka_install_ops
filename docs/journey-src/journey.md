@@ -1601,8 +1601,8 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 
 | 名稱 | 用途 | EKU | SAN |
 |---|---|---|---|
-| kafka-internal | controller、broker 之間的 mTLS | serverAuth, clientAuth | kc01–03、kb01–04 |
-| cp-server | 所有對外服務的**伺服器端**：client listener、MDS、REST、C3、Prometheus。只當 server 憑證，不拿去當 client 出示 | serverAuth | 全部主機、rest.poc.lab、c3.poc.lab、localhost |
+| kafka-internal | controller、broker 之間的 mTLS；controller 的 JMX exporter（7071，第 17 章；controller 沒有 cp-server） | serverAuth, clientAuth | kc01–03、kb01–04 |
+| cp-server | 所有對外服務的**伺服器端**：client listener、MDS、REST、C3、C3 內建的 Prometheus／Alertmanager、broker／REST／C3 的 JMX exporter（7071）。只當 server 憑證，不拿去當 client 出示 | serverAuth | 全部主機、rest.poc.lab、c3.poc.lab、localhost |
 | svc-rest、svc-c3、svc-ops | REST Proxy、C3、操作機向 MDS 換 token 的身分 | clientAuth | 無 |
 | c3-monitoring | 內建 Prometheus 向 Alertmanager 出示的 client 身分（第 13 章），只有 PEM 檔，沒有 keystore。只做這件事，**不綁任何 Kafka 角色**（C3 本身連 Prometheus、Alertmanager 用自己的 `svc-c3`） | clientAuth | 無 |
 | app-legacy-billing | 走 REST Proxy 的應用程式 | clientAuth | 無 |
