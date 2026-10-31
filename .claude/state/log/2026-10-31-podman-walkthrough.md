@@ -77,3 +77,9 @@
 - 27 塊 rc=0：C3 2.6.1（4 個 generated 檔回 cp-control-center）、broker／controller（leader 最後）／REST／ops02 → 8.3.2、全部 JDK 25、kb04 回滾 8.2.4/JDK 21 再升回、finalize CP-8.3-IV0B。
 - 遷移後重跑第 19 章：健康 22/22、安全 16/16、應用程式寫讀、冷開機 MDS 79 s／C3 135 s。
 - 改：章首「第 1–20 章」→ 2–19；「第 1、2 章隨落地區」→ 2、3；29.8「下面這一段」順序；29.10 `21-upgrade.sh` → `29-upgrade.sh`。
+
+## 第 30 章通過（Podman，2026-10-31 22:14）＋ OS 9.8 後驗收
+- 使用者同意下載 Rocky 9.8 更新集合（156 個 RPM、79 MB，鏡像比 10-30 多 2 個）與 Rocky 10 中繼資料。
+- 12 塊 rc=0：每台 120–126 個更新、confluent-* 0 個、Rocky 10 判斷會停；broker → controller（leader 最後）→ REST／C3／ops02 全部 9.8，鎖 = 裝，REST 照 12.1 重啟。
+- 之後第 19 章：健康 22/22、安全 16/16、寫讀、冷開機 MDS 117 s／C3 151 s。
+- 改：30.5 `26-os-patch.sh` → `30-os-patch.sh`；更新集合大小改引 30.0；刪空的 @role；空格。

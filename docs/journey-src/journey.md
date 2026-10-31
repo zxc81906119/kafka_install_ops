@@ -8437,9 +8437,6 @@ cur=$(. /etc/os-release; echo $VERSION_ID); avail=$(timeout 120 dnf -q repoquery
 停：套件庫是 10.x 的內容，不是 9.x（小版本更新只能在同一主版本內）
 ```
 
-@role 小安 | ops02 | root
-
-
 ## 30.2 broker 逐台
 
 @role 小安 | ops02 | root
@@ -8602,11 +8599,11 @@ under-replicated：0；REST 經 LB=200 C3=200
 **lab 做不到的事（要老實說）**：
 - 容器不能重開機，kernel 沒有更新（容器沒有自己的核心）。lab 只驗證「套件更新的指令、順序、versionlock 擋住 Confluent、服務在新的 glibc／systemd 套件下重啟後是健康的」，**沒有驗證**重開機本身：開機順序、`fstab` 掛載、網卡命名、核心模組、`systemctl enable` 過的服務是否自己起來（19.4 的冷開機演練只涵蓋「容器一起停、一起開」，不是 OS 的開機）。
 - Rocky 不是 RHEL：套件名稱、`needs-restarting` 的輸出與 RHEL 相同，但訂閱管理（`subscription-manager release --set`）、Satellite content view 的行為 lab 都沒有。
-- 更新集合的大小（152 個、78 MB）是這批最小安裝主機的數字，真正的 RHEL 主機不同。
+- 更新集合的大小（30.0 印出的 RPM 數與 MB）是這批最小安裝主機的數字，真正的 RHEL 主機不同。
 
-**回滾**：真正可行的答案是**更新前的快照**（VM 快照、LVM 快照或裸機映像），在 30.1 之前每台先做；小版本更新途中某台出問題，就還原那一台的快照，再照 30.2–30.4 重做。不要依賴 `dnf history undo`：它對 kernel、glibc、systemd 這類核心元件不可靠，而且 Red Hat 不支援把 RHEL 小版本降回去（`dnf downgrade` 整個小版本也一樣）。controller 或 broker 的機器整台壞了，走25.1 節（換 controller）或25.2 節（broker 加回）重建，不要硬救。Confluent 這一側不用回滾：版本沒動。
+**回滾**：真正可行的答案是**更新前的快照**（VM 快照、LVM 快照或裸機映像），在 30.1 之前每台先做；小版本更新途中某台出問題，就還原那一台的快照，再照 30.2–30.4 重做。不要依賴 `dnf history undo`：它對 kernel、glibc、systemd 這類核心元件不可靠，而且 Red Hat 不支援把 RHEL 小版本降回去（`dnf downgrade` 整個小版本也一樣）。controller 或 broker 的機器整台壞了，走 25.1 節（換 controller）或 25.2 節（broker 加回）重建，不要硬救。Confluent 這一側不用回滾：版本沒動。
 
-**換成別的小版本（例如銀行的套件庫是 9.4 → 9.6、9.2 → 9.4）**：步驟完全一樣，只要換三個值：(1) 30.0 銀行同步的目標版本；(2) 30.1 檢查「套件庫的 release 套件」是不是你要的那一版——**套件庫如果不是釘在特定小版本（例如直接追 RHEL 9 最新），`dnf update` 會一路更新到它有的最新小版本**，不是你以為的那一版，要請銀行把套件庫（或主機的 releasever）釘住；(3) 查原廠的 OS 支援表，確認該小版本在 Confluent Platform 8.3 的支援範圍內（原廠表上 RHEL 9.x 為支援；以銀行實際的版本對表）。`install/` 的對應是 `steps/26-os-patch.sh plan｜apply｜verify <版本>`，預設的 OS 版本在 `conf/site.env` 的 `OS_BASE_VERSION`、`OS_TARGET_VERSION`。
+**換成別的小版本（例如銀行的套件庫是 9.4 → 9.6、9.2 → 9.4）**：步驟完全一樣，只要換三個值：(1) 30.0 銀行同步的目標版本；(2) 30.1 檢查「套件庫的 release 套件」是不是你要的那一版——**套件庫如果不是釘在特定小版本（例如直接追 RHEL 9 最新），`dnf update` 會一路更新到它有的最新小版本**，不是你以為的那一版，要請銀行把套件庫（或主機的 releasever）釘住；(3) 查原廠的 OS 支援表，確認該小版本在 Confluent Platform 8.3 的支援範圍內（原廠表上 RHEL 9.x 為支援；以銀行實際的版本對表）。`install/` 的對應是 `steps/30-os-patch.sh plan｜apply｜verify <版本>`，預設的 OS 版本在 `conf/site.env` 的 `OS_BASE_VERSION`、`OS_TARGET_VERSION`。
 
 # 31. 第三十一站：單獨更換 Control Center 版本
 
