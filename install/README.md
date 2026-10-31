@@ -42,7 +42,7 @@ install/
 
 ## 每一站：在哪跑、會在哪裡停下
 
-手把手文件只教手打指令；這張表是兩者的對照。指令都在操作機以 root 執行（人員經 CyberArk PVWA 網頁＋PSMP 登入就是 root；lab 直接 `docker exec -it lab-ops02-1 bash`），到各主機一律用 cpuser 與 `/secure/ssh/cpuser_ed25519` 這把金鑰，除非另外註明。
+手把手文件只教手打指令；這張表是兩者的對照。指令都在操作機以 root 執行（人員經 CyberArk PVWA 網頁＋PSMP 登入就是 root；lab 直接 `podman exec -it lab-ops02-1 bash`），到各主機一律用 cpuser 與 `/secure/ssh/cpuser_ed25519` 這把金鑰，除非另外註明。
 
 | 站 | 指令 | 會停下等銀行（rc 2）／注意 |
 |---|---|---|
@@ -75,12 +75,12 @@ install/
 ## lab 與客戶環境的設定差異（conf/site.env）
 
 與 CyberArk 唯一的關係是人員登入（PVWA 網頁＋PSMP 代登）。平台的密碼與金鑰（passphrase、master key、緊急憑證、`svc-mds-bind` 等）只留在操作機 root 才讀得到的位置（`~/secrets`、`~/pki`，0600），不放 PVWA；root 與 `svc-mds-bind` 的密碼也由人手動輪替（沒有 CPM）。
-人員登入 PVWA 後由 PSMP 代登進操作機就是 root；lab 沒有 PVWA／PSMP，直接 `docker exec` 以 root 進操作機。操作機到各主機一律 cpuser＋一把金鑰
-（放在獨立加密 file system `/secure/ssh`；lab 用 docker volume 模擬那個獨立 file system，LUKS 無法模擬）。下面這些要換：
+人員登入 PVWA 後由 PSMP 代登進操作機就是 root；lab 沒有 PVWA／PSMP，直接 `podman exec` 以 root 進操作機。操作機到各主機一律 cpuser＋一把金鑰
+（放在獨立加密 file system `/secure/ssh`；lab 用 podman volume 模擬那個獨立 file system，LUKS 無法模擬）。下面這些要換：
 
 | 設定 | lab | 客戶 | 為什麼 |
 |---|---|---|---|
-| `SSH_KEY_DIR`、`SSH_KEY_REQUIRE_MOUNT` | `/secure/ssh`（docker volume）、`1` | 銀行規範的掛載點（名稱只是範例）、`1` | 私鑰放獨立（加密）file system，不放系統碟、不備份 |
+| `SSH_KEY_DIR`、`SSH_KEY_REQUIRE_MOUNT` | `/secure/ssh`（podman volume）、`1` | 銀行規範的掛載點（名稱只是範例）、`1` | 私鑰放獨立（加密）file system，不放系統碟、不備份 |
 | `SSH_USER`、`SSH_USER_ID`、`SSH_FROM_ADDRS` | `cpuser`、`1500`、空（= 操作機 IP＋127.0.0.1＋::1） | 同左 | 每台同名同 UID；公鑰只加 `from=` |
 | `FETCH_JDK` | `1` | `0` | 兩個 JDK（21、25）由銀行交付到 `landing/bank/` |
 | `OPMENU_ENV_LABEL` | `LAB` | `PROD`／`UAT` | |

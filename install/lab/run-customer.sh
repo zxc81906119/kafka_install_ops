@@ -11,7 +11,7 @@
 # 版本、JDK、OS 小版本都在 install/conf/site.env（基底 CP_VERSION 等、目標 *_TARGET_*）；這支不改它，只在遷移做完後用 29-upgrade.sh adopt 改 lab 裡那份。
 #
 # 與 CyberArk 唯一的關係是人員登入：人員經 PVWA 網頁＋PSMP 登入操作機就是 root，lab 無法模擬這段，
-# 直接 docker exec 以 root 進 ops02。操作機到各主機一律用 cpuser＋/secure/ssh 的那把金鑰（lab 用獨立的 docker volume 模擬那個獨立 file system）。
+# 直接 podman exec 以 root 進 ops02。操作機到各主機一律用 cpuser＋/secure/ssh 的那把金鑰（lab 用獨立的 podman volume 模擬那個獨立 file system）。
 #
 # 正式環境由人做的事，這支扮演：
 #   工程師        第 4 站在操作機產生金鑰對（root、0400，/secure/ssh）
@@ -23,6 +23,7 @@
 # 遷移期間（段 17–22 的 Confluent／JDK 遷移、段 32 的 OS 更新）各跑一段持續流量（install/tools/load.sh）：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次。
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
+command -v podman >/dev/null 2>&1 || export PATH="$(cygpath -u "$LOCALAPPDATA")/Programs/Podman:$PATH"   # 安裝 Podman 之前就開著的 Git Bash 找不到 podman
 LAB_TOOLS_DIR=$(cd "$(dirname "$0")" && pwd)
 BANK="bash $LAB_TOOLS_DIR/bank-sim.sh"
 LAB=${LAB:-$HOME/kafka-lab}
@@ -45,18 +46,18 @@ stage() {
   [ "$number" -le "${TO:-99}" ] || return 1
   printf '\n######## %s %s (+%ss) ########\n' "$number" "$*" "$(( $(date +%s) - started_at ))"
 }
-# 在操作機以 root 跑 install.sh（人員經 PSMP 登入就是 root；lab 直接 docker exec）
-install_on_ops() { docker exec -w /root "$OPS_CONTAINER" bash install/install.sh "$@" </dev/null; }
+# 在操作機以 root 跑 install.sh（人員經 PSMP 登入就是 root；lab 直接 podman exec）
+install_on_ops() { podman exec -w /root "$OPS_CONTAINER" bash install/install.sh "$@" </dev/null; }
 # 隨時執行的站（20 以後）：直接跑那一支
-step_on_ops() { local script=$1; shift; docker exec -w /root "$OPS_CONTAINER" bash "install/steps/$script" "$@" </dev/null; }
+step_on_ops() { local script=$1; shift; podman exec -w /root "$OPS_CONTAINER" bash "install/steps/$script" "$@" </dev/null; }
 # 在操作機跑一行指令
-on_ops() { docker exec -w /root "$OPS_CONTAINER" bash -c "$1" </dev/null; }
+on_ops() { podman exec -w /root "$OPS_CONTAINER" bash -c "$1" </dev/null; }
 # expect_wait_for_bank <rc> <站> [前置站]：install.sh 應該停在「第 <站> 站等銀行」（rc 2）。
 # 給了前置站就再確認它已經做完（略過的站不會留完成標記，所以由呼叫的地方指定），不然可能是更早的站在等銀行
 expect_wait_for_bank() {
   local exit_code=$1 step=$2 prerequisite_step=${3:-}
   if [ "$exit_code" != 2 ]; then echo "預期 $step 停在等銀行（rc 2），實際 rc=$exit_code"; exit 1; fi
-  if [ -n "$prerequisite_step" ] && ! docker exec "$OPS_CONTAINER" bash -c "ls ~/install-logs/$prerequisite_step-*.done" >/dev/null 2>&1; then
+  if [ -n "$prerequisite_step" ] && ! podman exec "$OPS_CONTAINER" bash -c "ls ~/install-logs/$prerequisite_step-*.done" >/dev/null 2>&1; then
     echo "停在等銀行，但第 $prerequisite_step 站還沒做完：停的不是第 $step 站"; exit 1
   fi
 }
@@ -96,22 +97,22 @@ expect_versions() {
   echo "10 台都符合：OS $os、Confluent $cp、C3 $c3、JDK $jdk"
 }
 
-# 工程師：確認操作機上的私鑰在獨立的 file system（lab：docker volume）、root:root 0400、不是系統碟的一部分
+# 工程師：確認操作機上的私鑰在獨立的 file system（lab：podman volume）、root:root 0400、不是系統碟的一部分
 engineer_checks_key() {
-  docker exec "$OPS_CONTAINER" bash -c 'mountpoint -q /secure/ssh && echo "mounted: /secure/ssh" && stat -c "%U:%G %a %n" /secure/ssh/cpuser_ed25519 /secure/ssh/cpuser_ed25519.pub'
+  podman exec "$OPS_CONTAINER" bash -c 'mountpoint -q /secure/ssh && echo "mounted: /secure/ssh" && stat -c "%U:%G %a %n" /secure/ssh/cpuser_ed25519 /secure/ssh/cpuser_ed25519.pub'
 }
 
 # 第 31 章 31.1–31.2：dl01 下載單一 C3 版本（演練用的 2.6.0）、驗章、送進操作機的落地區
 bring_in_c3_drill_version() {
-  docker exec dl01 bash -c 'V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)" && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls' </dev/null || return 1
-  docker exec "$OPS_CONTAINER" bash -c 'rm -rf /root/landing/c3; mkdir -p /root/landing'
-  docker cp "$(cygpath -m "$LAB/landing/c3")" "$OPS_CONTAINER:/root/landing/" && docker exec "$OPS_CONTAINER" bash -c "chmod -R a-w /root/landing/c3 && cd /root/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok" &&
-  docker exec "$OPS_CONTAINER" bash -c 'cd ~/landing/c3 && echo "RPM 宣告的相依：$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE "^(rpmlib|/)" | sort -u | paste -sd";" -)" && ssh c3-01.poc.lab "rpm -q cyrus-sasl openssl-devel"'
+  podman exec dl01 bash -c 'V=2.6.0 && mkdir -p /out/c3 && cd /out/c3 && rm -f ./*.rpm SHA256SUMS && curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)" && rpm -K ./*.rpm && sha256sum ./*.rpm > SHA256SUMS && ls' </dev/null || return 1
+  podman exec "$OPS_CONTAINER" bash -c 'rm -rf /root/landing/c3; mkdir -p /root/landing'
+  podman cp "$(cygpath -m "$LAB/landing/c3")" "$OPS_CONTAINER:/root/landing/" && podman exec "$OPS_CONTAINER" bash -c "chmod -R a-w /root/landing/c3 && cd /root/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok" &&
+  podman exec "$OPS_CONTAINER" bash -c 'cd ~/landing/c3 && echo "RPM 宣告的相依：$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE "^(rpmlib|/)" | sort -u | paste -sd";" -)" && ssh c3-01.poc.lab "rpm -q cyrus-sasl openssl-devel"'
 }
 
 stage 1 "reset" && { $BANK reset; }
 stage 2 "落地區版面整理（舊版面 → rpm/ 基底、rpm-target/ 目標）、push install/" && { $BANK landing-layout && $BANK push; }
-stage 3 "02 download（dl01）：兩套 Confluent、兩個 JDK" && { docker exec dl01 bash /root/install/steps/02-download.sh </dev/null || exit 1; }
+stage 3 "02 download（dl01）：兩套 Confluent、兩個 JDK" && { podman exec dl01 bash /root/install/steps/02-download.sh </dev/null || exit 1; }
 stage 4 "銀行：檔案交換、OS 內容（$([ -d "$LAB/bank-os" ] && echo 已備好 || echo 先備 9.6 套件庫與 9.8 更新集合)）" && { $BANK os-content && $BANK intake; }
 stage 5 "03–04（產生金鑰後，cpuser 還沒建，04 應停下）" && { install_on_ops --to 04; expect_wait_for_bank $? 04; }
 stage 6 "工程師：確認私鑰在 /secure/ssh（獨立 file system、root、0400）" && { engineer_checks_key || exit 1; }
@@ -145,8 +146,8 @@ stage 18 "29 第一段：C3 → 2.6.1、套件 → 8.3.2（JDK 仍是 21）" && 
 stage 19 "29 第二段：JDK 21 → 25" && { step_on_ops 29-upgrade.sh jdk || exit 1; acceptance "第二段：8.3.2＋JDK 25"; }
 stage 20 "29 回滾演練：kb04 回 8.2.4＋JDK 21，再升回去" && {
   step_on_ops 29-upgrade.sh rollback kb04 || exit 1
-  docker exec -w /root -e ONLY_HOSTS=kb04 "$OPS_CONTAINER" bash install/steps/29-upgrade.sh packages </dev/null || exit 1
-  docker exec -w /root -e ONLY_HOSTS=kb04 "$OPS_CONTAINER" bash install/steps/29-upgrade.sh jdk </dev/null || exit 1
+  podman exec -w /root -e ONLY_HOSTS=kb04 "$OPS_CONTAINER" bash install/steps/29-upgrade.sh packages </dev/null || exit 1
+  podman exec -w /root -e ONLY_HOSTS=kb04 "$OPS_CONTAINER" bash install/steps/29-upgrade.sh jdk </dev/null || exit 1
 }
 stage 21 "29 第三段：finalize（不帶確認要停下，帶 cluster id 才升）、adopt" && {
   if step_on_ops 29-upgrade.sh finalize 4.3; then echo "不帶確認竟然執行了 finalize"; exit 1; fi

@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-31 15:40（**lab 使用中（Podman）**：Docker Desktop 已關，舊 Docker lab 停在第 20 章不接續；Podman machine labtest 上用 podman 照第 0 章建好新 lab（14 台＋dl01）。下一步：第 3 步改第 0 章、全書與腳本的 docker → podman、實跑工具、CLAUDE.md，再在 Podman 上逐章從零跑）
+Updated: 2026-10-31 16:20（**lab 使用中（Podman）**：machine kafka-lab（rootful）已建好、還沒有 lab；labtest（可行性測試用，上面有手動建的 lab）停止中，待使用者決定刪除。第 3 步（手冊、腳本、工具、CLAUDE.md 改 podman）完成；下一步：在 kafka-lab 上照手冊從第 0 章逐章跑）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。

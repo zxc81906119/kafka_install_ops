@@ -13,26 +13,45 @@
 # 0. 第零站：自己把 lab 建起來（只有練習用的 lab 需要）
 > 這一章只有練習用的 lab 需要。正式環境的主機、AD、CA、套件庫都是銀行準備好的，直接從第 2 章開始。
 
-下面這張圖是這一章要蓋出來的東西：先做映像檔與銀行的 AD、CA、套件庫、LB（0.1–0.5），再用一份 compose 檔起整個 lab（0.6），最後是下載機與日常操作（0.7–0.9）。
+下面這張圖是這一章要蓋出來的東西：先準備 Podman（0.0），再做映像檔與銀行的 AD、CA、套件庫、LB（0.1–0.5），再用一份 compose 檔起整個 lab（0.6），最後是下載機與日常操作（0.7–0.9）。
 
 ![labbuild]
 
 @role Lab 管理員（扮演銀行） | Windows 終端（Git Bash） | 本機
 
-這一章在你的 Windows 筆電上用 Docker 蓋出一整套模擬環境：十幾台假主機，加上扮演銀行的 AD、CA、套件庫、負載平衡。做完這一章之後，你就有一個可以照第 2 章以後逐章練習的環境。需要 Docker Desktop 和 Git Bash。整個 lab 放在家目錄的 `kafka-lab/`，不依賴任何現成的專案；下面每個檔案都是用 heredoc 寫出來的，整段貼到 `EOF` 即可。先開一個 Git Bash，做兩個全域設定（之後所有 Windows 端指令都在這個視窗）：
+這一章在你的 Windows 筆電上用 Podman 蓋出一整套模擬環境：十幾台假主機，加上扮演銀行的 AD、CA、套件庫、負載平衡。做完這一章之後，你就有一個可以照第 2 章以後逐章練習的環境。需要 Podman（CLI 與 WSL2 上的 machine，0.0 節）和 Git Bash。整個 lab 放在家目錄的 `kafka-lab/`，不依賴任何現成的專案；下面每個檔案都是用 heredoc 寫出來的，整段貼到 `EOF` 即可。
+
+## 0.0 Podman 與 machine
+
+**這一節在做什麼**（lab 專用）：準備跑容器的環境。Podman 在 Windows 上是「CLI＋一台 WSL2 上的 Linux（machine）」，容器都跑在 machine 裡。前提：Windows 已啟用 WSL2。完成的樣子：machine `kafka-lab` 是 rootful、`podman-restart` 已啟用、`podman compose version` 印得出版本。
+
+**先手動做的三件事**（只做一次）：
+
+1. 安裝 Podman：從官方 GitHub releases（`github.com/containers/podman`）下載 `podman-installer-windows-amd64.msi`，核對 release 附的 `shasums`、確認數位簽章是 Red Hat, LLC，再安裝（需要系統管理員權限）。裝完**重開一個 Git Bash**，`podman` 才會在 PATH 裡。
+2. 準備 docker-compose（`podman compose` 會呼叫它）：從官方 GitHub releases（`github.com/docker/compose`）下載 `docker-compose-windows-x86_64.exe`，核對 `.sha256`，放到 `%LOCALAPPDATA%\Programs\docker-compose\docker-compose.exe`。
+3. WSL2 的記憶體上限：`%UserProfile%\.wslconfig` 的 `[wsl2]` 寫 `memory=11GB`（16 GB 的筆電；整個 lab 約用 9–10 GB）。改完要 `wsl --shutdown` 才生效。
+
+接著在 Git Bash 做兩個全域設定（之後所有 Windows 端指令都在這個視窗），設定 `podman compose` 用哪一份 docker-compose（TOML 的路徑用正斜線；反斜線會被當成跳脫字元），建 rootful 的 machine（容器要用 systemd、firewalld、固定 IP，rootless 做不到；記憶體由 `.wslconfig` 統一管，不用 `--memory`），並讓 machine 重開後自動把帶 `restart` 政策的容器拉起來（`podman-restart.service`，預設是關的）：
 
 ```bash
-export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} && cd ~/kafka-lab && pwd
+export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} "$(cygpath -u "$APPDATA")/containers" && cd ~/kafka-lab && pwd && C="$(cygpath -u "$APPDATA")/containers/containers.conf" && { grep -q '^compose_providers' "$C" 2>/dev/null || printf '[engine]\ncompose_providers = ["%s"]\ncompose_warning_logs = false\n' "$(cygpath -m "$LOCALAPPDATA/Programs/docker-compose/docker-compose.exe")" >> "$C"; } && { podman machine inspect kafka-lab >/dev/null 2>&1 || podman machine init kafka-lab --rootful --cpus 8 >/dev/null; } && { [ "$(podman machine inspect kafka-lab --format '{{.State}}')" = running ] || podman machine start kafka-lab >/dev/null 2>&1; } && podman system connection default kafka-lab-root && podman machine ssh kafka-lab "sudo systemctl enable podman-restart.service >/dev/null 2>&1; systemctl is-enabled podman-restart.service" | tr -d '\r' | sed 's/^/podman-restart: /' && echo "rootless: $(podman info --format '{{.Host.Security.Rootless}}')" && podman compose version 2>/dev/null | tail -1
 ```
 
 ```out
 /c/Users/<你>/kafka-lab
+podman-restart: enabled
+rootless: false
+Docker Compose version v5.x.x
 ```
 
-> `MSYS_NO_PATHCONV=1` 是讓 Git Bash 不要把 `/out`、`/etc/...` 這類容器內路徑轉成 Windows 路徑。給 Docker 的 Windows 路徑一律用 `$(cygpath -m …)` 產生。
+> `MSYS_NO_PATHCONV=1` 是讓 Git Bash 不要把 `/out`、`/etc/...` 這類容器內路徑轉成 Windows 路徑。給 Podman 的 Windows 路徑一律用 `$(cygpath -m …)` 產生。
+>
+> （選擇性）Windows 開機後 machine 不會自己啟動。要它自動起來，用工作排程器在登入時執行 `podman machine start kafka-lab`（例如 `schtasks /Create /SC ONLOGON /TN "podman machine kafka-lab" /TR "<podman.exe 的完整路徑> machine start kafka-lab"`）；不設的話，每次開機後先手動跑一次這個指令。
+>
+> 陷阱：Podman 的安裝程式會重設 WSL，正在跑的其他 WSL 發行版（例如 Docker Desktop）會被關掉。
 ## 0.1 主機映像檔：模擬「裸機 RHEL 9」
 
-**這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：第 0 章 開頭的兩個全域設定已做、目錄已建。完成的樣子：build 的最後一行是 `naming to … lab-node:96`，接著印出 `Rocky Linux release 9.6`。
+**這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：第 0 章 開頭的兩個全域設定已做、目錄已建。完成的樣子：build 印出 `Successfully tagged localhost/lab-node:96`，接著印出 `Rocky Linux release 9.6`。
 
 和銀行開給我們的主機一樣：沒有 JDK、沒有 Confluent、公開 repo 關閉；安裝與維運用的帳號 `cpuser` 也不在映像裡，第 4 章才由銀行 OS 團隊建立。
 
@@ -75,11 +94,11 @@ RUN printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthent
 STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/sbin/init"]
 EOF
-docker build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | tail -1 && docker run --rm lab-node:96 cat /etc/rocky-release
+podman build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | grep '^Successfully tagged' && podman run --rm lab-node:96 cat /etc/rocky-release
 ```
 
 ```out
- => => naming to docker.io/library/lab-node:96
+Successfully tagged localhost/lab-node:96
 Rocky Linux release 9.6 (Blue Onyx)
 ```
 
@@ -87,7 +106,7 @@ Rocky Linux release 9.6 (Blue Onyx)
 
 ## 0.2 銀行的套件庫 web server（repo01）
 
-**這一節在做什麼**（lab 專用）：建出模擬銀行套件庫的 web server 映像 `lab-web:96`，5.1 節與第 6 章把 OS 套件與 Confluent RPM 放上去。前提：0.1 的 `lab-node:96`（這個映像以它為底）。完成的樣子：build 的最後一行是 `naming to … lab-web:96`。
+**這一節在做什麼**（lab 專用）：建出模擬銀行套件庫的 web server 映像 `lab-web:96`，5.1 節與第 6 章把 OS 套件與 Confluent RPM 放上去。前提：0.1 的 `lab-node:96`（這個映像以它為底）。完成的樣子：build 印出 `Successfully tagged localhost/lab-web:96`。
 
 模擬的是銀行自己管的 httpd：只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
 
@@ -122,18 +141,18 @@ Listen 443 https
     </Directory>
 </VirtualHost>
 EOF
-docker build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | tail -1
+podman build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | grep '^Successfully tagged'
 ```
 
 ```out
- => => naming to docker.io/library/lab-web:96
+Successfully tagged localhost/lab-web:96
 ```
 
 憑證 `repo.crt`、`repo.key` 等銀行 CA 建好後再簽（0.5）。
 
 ## 0.3 銀行的 AD（Samba AD DC）
 
-**這一節在做什麼**（lab 專用）：建出模擬銀行 AD 的映像 `lab-ad:1`，5.3 節在裡面建群組與帳號。前提：無（只要 Docker）。完成的樣子：build 的最後一行是 `naming to … lab-ad:1`。
+**這一節在做什麼**（lab 專用）：建出模擬銀行 AD 的映像 `lab-ad:1`，5.3 節在裡面建群組與帳號。前提：0.0 的 machine 已起來。完成的樣子：build 印出 `Successfully tagged localhost/lab-ad:1`。
 
 RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
 
@@ -169,16 +188,16 @@ while true; do
   echo "[ad] samba exited, restarting in 2s"; sleep 2
 done
 EOF
-docker build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | tail -1
+podman build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | grep '^Successfully tagged'
 ```
 
 ```out
- => => naming to docker.io/library/lab-ad:1
+Successfully tagged localhost/lab-ad:1
 ```
 
 ## 0.4 銀行的負載平衡（nginx L4）
 
-**這一節在做什麼**（lab 專用）：建出模擬銀行負載平衡的 nginx 映像 `lab-lb:1`，5.4 節設定轉發到兩台 REST Proxy。前提：無。完成的樣子：build 的最後一行是 `naming to … lab-lb:1`，接著印出 `4`（0.1–0.4 的四個映像都在）。
+**這一節在做什麼**（lab 專用）：建出模擬銀行負載平衡的 nginx 映像 `lab-lb:1`，5.4 節設定轉發到兩台 REST Proxy。前提：無。完成的樣子：build 印出 `Successfully tagged localhost/lab-lb:1`，接著印出 `4`（0.1–0.4 的四個映像都在）。
 
 ```bash
 cat > images/lb/Dockerfile <<'EOF'
@@ -190,11 +209,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssh-server 
     && printf '#!/bin/sh\n/usr/sbin/sshd\nexec nginx -g "daemon off;"\n' > /usr/local/sbin/lb-entrypoint && chmod 0755 /usr/local/sbin/lb-entrypoint
 ENTRYPOINT ["/usr/local/sbin/lb-entrypoint"]
 EOF
-docker build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | tail -1 && docker images --format '{{.Repository}}:{{.Tag}}' | grep -cE '^lab-(node:96|web:96|ad:1|lb:1)$'
+podman build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | grep '^Successfully tagged' && podman images --format '{{.Repository}}:{{.Tag}}' | grep -cE '(^|/)lab-(node:96|web:96|ad:1|lb:1)$'
 ```
 
 ```out
- => => naming to docker.io/library/lab-lb:1
+Successfully tagged localhost/lab-lb:1
 4
 ```
 
@@ -259,7 +278,7 @@ signed repo.csr -> repo.crt  (CN = repo01.poc.lab, O = PoC Bank, C = TW; EKU ser
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-**這一節在做什麼**（lab 專用）：用 docker compose 一次定義所有主機與網路，並產生共用的密碼檔。前提：0.1–0.5 的四個映像與 CA 都建好。完成的樣子：`docker ps` 數出 `14` 台容器。
+**這一節在做什麼**（lab 專用）：用 podman compose 一次定義所有主機與網路，並產生共用的密碼檔。前提：0.1–0.5 的四個映像與 CA 都建好。完成的樣子：`podman ps` 數出 `14` 台容器。
 
 14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
 
@@ -379,7 +398,7 @@ volumes:
   ad-data:
   ad-etc:
 EOF
-docker compose -f compose.yml up -d 2>&1 | grep -c Started
+podman compose -f compose.yml up -d 2>&1 | grep -c Started
 ```
 
 ```out
@@ -390,7 +409,7 @@ docker compose -f compose.yml up -d 2>&1 | grep -c Started
 
 > 陷阱：數字若是 13，通常是 lb01 第一次沒起來（它要同時接兩個網路），再下一次同樣的 `up -d` 就會補起來。
 
-> 陷阱：若出現 `Pool overlaps with other one on this address space`，表示這台電腦已有其他 Docker 網路用了 172.35 或 172.36 網段（`docker network ls` 逐一 `docker network inspect` 看 Subnet）。把 compose.yml 裡 `subnet:` 和所有 `extra_hosts` 的 IP 一起換成沒人用的網段（例如 172.37.0.0/24）再 `up -d`。
+> 陷阱：若出現 `Pool overlaps with other one on this address space`，表示這台電腦的 Podman 已有其他網路用了 172.35 或 172.36 網段（`podman network ls` 逐一 `podman network inspect` 看 Subnet）。把 compose.yml 裡 `subnet:` 和所有 `extra_hosts` 的 IP 一起換成沒人用的網段（例如 172.37.0.0/24）再 `up -d`。
 
 lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓 Windows 的瀏覽器連得到 REST Proxy 與 C3。
 
@@ -401,7 +420,7 @@ lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓 Window
 下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 2 章列給銀行的 OS 套件版本才是 9.6 的：
 
 ```bash
-docker run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && docker exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
+podman run -d --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && podman exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
 ```
 
 ```out
@@ -410,35 +429,35 @@ internet: 200
 
 ## 0.8 進入各台機器
 
-**這一節在做什麼**（lab 專用）：整本手冊在 lab 切換主機都用 `docker exec`；正式環境則是人員經 PVWA＋PSMP 進操作機，再從操作機 ssh 到各台。前提：0.6、0.7 的容器都在跑。完成的樣子：三條指令各進得到一台機器的 shell。之後會一直用到的三條（換主機名稱即可）：
+**這一節在做什麼**（lab 專用）：整本手冊在 lab 切換主機都用 `podman exec`；正式環境則是人員經 PVWA＋PSMP 進操作機，再從操作機 ssh 到各台。前提：0.6、0.7 的容器都在跑。完成的樣子：三條指令各進得到一台機器的 shell。之後會一直用到的三條（換主機名稱即可）：
 
 ```bash
-docker exec -it dl01 bash
+podman exec -it dl01 bash
 ```
 
 ```bash
-docker exec -it -w /root lab-ops02-1 bash
+podman exec -it -w /root lab-ops02-1 bash
 ```
 
 ```bash
-docker exec -it lab-repo01-1 bash
+podman exec -it lab-repo01-1 bash
 ```
 
 第一個是下載機（root），第二個是操作機（root），第三個是銀行的主機（root，扮演銀行時用）。
 
-**操作機一律以 root 進**：正式環境人員是在 CyberArk 的 PVWA 網頁選操作機、按連線，由 PSMP 代登進去，進去就是 root；lab 沒有 PVWA、PSMP，用上面第二條 `docker exec` 直接進，就等於「PSMP 代登之後」的狀態。連其他主機不靠 `docker exec`，而是在操作機上用 cpuser 的金鑰 ssh（第 4 章）。
+**操作機一律以 root 進**：正式環境人員是在 CyberArk 的 PVWA 網頁選操作機、按連線，由 PSMP 代登進去，進去就是 root；lab 沒有 PVWA、PSMP，用上面第二條 `podman exec` 直接進，就等於「PSMP 代登之後」的狀態。連其他主機不靠 `podman exec`，而是在操作機上用 cpuser 的金鑰 ssh（第 4 章）。
 
 ## 0.9 收工與重開
 
-**這一節在做什麼**（lab 專用）：暫停、繼續與重建 lab 的方法。前提：無。完成的樣子：`stop` 之後 `docker ps` 沒有 lab 容器，`start` 之後 14 台回來、Kafka 服務自己起來。
+**這一節在做什麼**（lab 專用）：暫停、繼續與重建 lab 的方法。前提：無。完成的樣子：`stop` 之後 `podman ps` 沒有 lab 容器，`start` 之後 14 台回來、Kafka 服務自己起來。
 
 | 要做什麼 | 指令 | 說明 |
 |---|---|---|
-| 暫停 | `cd ~/kafka-lab && docker compose -f compose.yml stop` | 資料都在 volume 裡 |
-| 繼續 | `docker compose -f compose.yml start` | — |
-| Windows 重開機後 | 不用做（`restart: unless-stopped`）；只有下載機要手動 `docker start dl01` | Kafka 服務設了 enable 也會自己起來 |
+| 暫停 | `cd ~/kafka-lab && podman compose -f compose.yml stop` | 資料都在 volume 裡 |
+| 繼續 | `podman compose -f compose.yml start` | — |
+| Windows 重開機後 | 先 `podman machine start kafka-lab`（設了 0.0 的開機排程就不用）；14 台由 `podman-restart` 依 `restart: unless-stopped` 自己起來；下載機沒有 restart 政策，要手動 `podman start dl01` | Kafka 服務設了 enable 也會自己起來 |
 | 操作機重開後 | 不用做 | `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見第 4 章） |
-| 全部清掉重來 | `docker compose -f compose.yml down -v && docker rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
+| 全部清掉重來 | `podman compose -f compose.yml down -v && podman rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
 
 > 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：操作機的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 5、9 章會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
@@ -471,7 +490,7 @@ docker exec -it lab-repo01-1 bash
 | ad01 | 行內 AD（lab 用 Samba 模擬） | 銀行 |
 | lb01 | 負載平衡（lab 用 nginx 模擬） | 銀行 |
 | 行內監控（Prometheus、Alertmanager、Grafana） | 抓指標、發告警、看 dashboard；告警送到行內的事件系統（lab 用 `lab-mon-*` 四個容器模擬，第 17 章） | 銀行監控團隊 |
-| PVWA、PSMP | CyberArk PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA），由 PSMP 代登進操作機，進去就是 root。**這是本案和 CyberArk 唯一的關係**：平台的密碼與金鑰不放 CyberArk（lab 沒有 PVWA、PSMP，直接 `docker exec` 以 root 進） | 銀行 Secrets 團隊 |
+| PVWA、PSMP | CyberArk PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA），由 PSMP 代登進操作機，進去就是 root。**這是本案和 CyberArk 唯一的關係**：平台的密碼與金鑰不放 CyberArk（lab 沒有 PVWA、PSMP，直接 `podman exec` 以 root 進） | 銀行 Secrets 團隊 |
 
 所有主機的 FQDN 是 `<主機>.poc.lab`。
 
@@ -483,7 +502,7 @@ docker exec -it lab-repo01-1 bash
 
 - 稱呼：本手冊的「章」就是標題寫「第 N 站」的那一段（例如第 9 章 = 第九站），「節」是 9.1 這種小標；內文引用一律寫「第 N 章」或「N.M 節」。「操作機」就是主機名稱 ops02，內文叫操作機，指令與 `@role` 裡寫 ops02。「小安」是手冊裡的虛構新人，代表你。「行內」與「銀行」同義：行內的套件庫、AD 就是銀行準備的套件庫、AD。
 - 綠色標籤 **我方**：小安敲的指令。橘色標籤 **銀行**：銀行各團隊的事，lab 裡由你代勞。
-- 每個指令上方都有一行「▶ 在哪台（用哪個帳號）執行」。要換機器的那一個指令（以及每章第一個指令）會附上 lab 裡切過去的指令，例如 `docker exec -it -w /root lab-ops02-1 bash`；從一台容器換到另一台時，先 `exit` 回到 Git Bash 再切。正式環境進操作機是在 CyberArk 的 PVWA 網頁選目標、由 PSMP 代登（進去是 root）；從操作機連其他主機一律用 cpuser 的金鑰 ssh。
+- 每個指令上方都有一行「▶ 在哪台（用哪個帳號）執行」。要換機器的那一個指令（以及每章第一個指令）會附上 lab 裡切過去的指令，例如 `podman exec -it -w /root lab-ops02-1 bash`；從一台容器換到另一台時，先 `exit` 回到 Git Bash 再切。正式環境進操作機是在 CyberArk 的 PVWA 網頁選目標、由 PSMP 代登（進去是 root）；從操作機連其他主機一律用 cpuser 的金鑰 ssh。
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
 - 指令都是一行可以整段貼上的；多行的 `heredoc`（`<<'EOF' … EOF`）要整段一起貼。
 - 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。平台的密碼與金鑰只放在操作機 root 才讀得到的位置（`~/secrets`、`~/pki`、`/secure/ssh`），不放 CyberArk。需要人手動輸入時一律用**不顯示的寫法**（`read -rs`），PSMP 的錄影才不會錄到。
@@ -813,10 +832,10 @@ cd /out && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "too
 
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
-正式環境由行內的檔案交換平台把核准的檔案送到操作機的 `~/landing`（root 的家目錄底下）。lab 裡：用 `docker cp` 模擬這個平台；送進去之後把目錄設成唯讀（對 root 其實擋不住寫入，只是約定「落地區的檔案不改」）：
+正式環境由行內的檔案交換平台把核准的檔案送到操作機的 `~/landing`（root 的家目錄底下）。lab 裡：用 `podman cp` 模擬這個平台；送進去之後把目錄設成唯讀（對 root 其實擋不住寫入，只是約定「落地區的檔案不改」）：
 
 ```bash
-docker cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/ && docker exec lab-ops02-1 bash -c 'chmod -R a-w /root/landing && find /root/landing -type f | wc -l && du -sh /root/landing'
+podman cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/ && podman exec lab-ops02-1 bash -c 'chmod -R a-w /root/landing && find /root/landing -type f | wc -l && du -sh /root/landing'
 ```
 
 ```out
@@ -858,7 +877,7 @@ rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.as
 延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 31 章單獨換 C3 版本時的單一 RPM。遷移用的新版 RPM 與 JDK 25 已經在第 2、3 章一起進來了（`rpm-target/`、`bank/`），第 29 章只是把它們上架。流程和第 3 章一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）；操作機上已經有同名的目錄會先清掉再送，所以同一個目錄換新版也是這一條。落地區還沒有那個目錄就什麼都不做：
 
 ```bash
-D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; docker exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; podman exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && podman cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && podman exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
 ```
 
 ```out
@@ -884,8 +903,8 @@ sha256-ok
 | 追溯 | 誰在什麼時間進了操作機的 root：CyberArk 的登入紀錄與 PSMP 錄影；各主機上看到的是 cpuser 的操作紀錄 |
 
 lab 裡：正式環境才有的三樣東西，這樣模擬：
-- **沒有 PVWA、PSMP**：你用 `docker exec -it -w /root lab-ops02-1 bash` 直接以 root 進操作機，就是「PSMP 代登之後」。平台的密碼與金鑰不放 CyberArk，所以 lab 也不需要模擬保管庫。
-- **沒有 LUKS**：`/secure/ssh` 是 0.6 compose 裡的獨立 docker volume `ops-secure`，只模擬「獨立的 file system」（獨立掛載點、容器重啟還在），沒有加密。
+- **沒有 PVWA、PSMP**：你用 `podman exec -it -w /root lab-ops02-1 bash` 直接以 root 進操作機，就是「PSMP 代登之後」。平台的密碼與金鑰不放 CyberArk，所以 lab 也不需要模擬保管庫。
+- **沒有 LUKS**：`/secure/ssh` 是 0.6 compose 裡的獨立 podman volume `ops-secure`，只模擬「獨立的 file system」（獨立掛載點、容器重啟還在），沒有加密。
 - **密碼與金鑰的輪替**都是人手動做（20.3、20.4、20.5、20），沒有任何自動輪替。
 ## 4.1 每台主機建 cpuser（銀行 OS 團隊）
 
@@ -894,7 +913,7 @@ lab 裡：正式環境才有的三樣東西，這樣模擬：
 每台主機（含操作機）以 root 做四件事：建帳號（UID／GID 固定 1500，不設密碼，useradd 預設就是鎖定）、sshd 設定、安裝期的全權 sudo。公鑰等操作機產生金鑰後（4.3）再放。lab 對每個容器各跑一次：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker exec -i lab-$h-1 bash -s <<'EOF'
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman exec -i lab-$h-1 bash -s <<'EOF'
 groupadd -g 1500 cpuser && useradd -u 1500 -g 1500 -m -s /bin/bash cpuser
 printf 'Match User cpuser\n    PasswordAuthentication no\n    AuthenticationMethods publickey\n' > /etc/ssh/sshd_config.d/50-cpuser.conf
 sshd -t && systemctl reload sshd
@@ -962,7 +981,7 @@ from="10.20.1.10,127.0.0.1,::1" ssh-ed25519 AAAA…（金鑰內容） cpuser-ops
 操作機連自己時，sshd 看到的來源可能是操作機本身的 IP、`127.0.0.1` 或 `::1`（用 `localhost` 連時 ssh 先走 IPv6），三個都要列。lab 的操作機 IP 是 172.35.0.10。目錄 0700、檔 0600、擁有者 cpuser：
 
 ```bash
-PUB=$(docker exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519.pub) && LINE="from=\"172.35.0.10,127.0.0.1,::1\" $PUB" && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker exec -e LINE="$LINE" lab-$h-1 bash -c 'install -d -m 0700 -o cpuser -g cpuser /home/cpuser/.ssh && printf "%s\n" "$LINE" > /home/cpuser/.ssh/authorized_keys && chown cpuser:cpuser /home/cpuser/.ssh/authorized_keys && chmod 0600 /home/cpuser/.ssh/authorized_keys'; done && docker exec -e LINE="$LINE" lab-repo01-1 bash -c 'install -d -m 0700 -o repodeploy -g repodeploy /home/repodeploy/.ssh && printf "%s\n" "$LINE" > /home/repodeploy/.ssh/authorized_keys && chown repodeploy:repodeploy /home/repodeploy/.ssh/authorized_keys && chmod 0600 /home/repodeploy/.ssh/authorized_keys' && echo "$LINE" | sed 's/AAAA[^ ]*/AAAA…/'
+PUB=$(podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519.pub) && LINE="from=\"172.35.0.10,127.0.0.1,::1\" $PUB" && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman exec -e LINE="$LINE" lab-$h-1 bash -c 'install -d -m 0700 -o cpuser -g cpuser /home/cpuser/.ssh && printf "%s\n" "$LINE" > /home/cpuser/.ssh/authorized_keys && chown cpuser:cpuser /home/cpuser/.ssh/authorized_keys && chmod 0600 /home/cpuser/.ssh/authorized_keys'; done && podman exec -e LINE="$LINE" lab-repo01-1 bash -c 'install -d -m 0700 -o repodeploy -g repodeploy /home/repodeploy/.ssh && printf "%s\n" "$LINE" > /home/repodeploy/.ssh/authorized_keys && chown repodeploy:repodeploy /home/repodeploy/.ssh/authorized_keys && chmod 0600 /home/repodeploy/.ssh/authorized_keys' && echo "$LINE" | sed 's/AAAA[^ ]*/AAAA…/'
 ```
 
 ```out
@@ -998,7 +1017,7 @@ repo01
 `from=` 的用意：就算私鑰被複製到別處，也只有操作機能用。把私鑰副本放到 kb01、從 kb01 連 kb02，應該被拒；kb02 的 sshd 日誌會寫下「不是來自允許的主機」。驗完立刻刪掉副本：
 
 ```bash
-docker exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519 | docker exec -i lab-kb01-1 bash -c 'cat > /tmp/copied-key && chmod 0600 /tmp/copied-key' && docker exec lab-kb01-1 ssh -F /dev/null -i /tmp/copied-key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no cpuser@kb02.poc.lab true 2>&1 | tail -1; docker exec lab-kb01-1 rm -f /tmp/copied-key; docker exec lab-kb02-1 journalctl -u sshd --no-pager -n 30 | grep -o 'not from a permitted host.*' | tail -1 | cut -c1-90
+podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519 | podman exec -i lab-kb01-1 bash -c 'cat > /tmp/copied-key && chmod 0600 /tmp/copied-key' && podman exec lab-kb01-1 ssh -F /dev/null -i /tmp/copied-key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no cpuser@kb02.poc.lab true 2>&1 | tail -1; podman exec lab-kb01-1 rm -f /tmp/copied-key; podman exec lab-kb02-1 journalctl -u sshd --no-pager -n 30 | grep -o 'not from a permitted host.*' | tail -1 | cut -c1-90
 ```
 
 ```out
@@ -1033,13 +1052,13 @@ not from a permitted host (host=kb01.poc.lab, ip=172.35.0.31, public key ED25…
 **這一節在做什麼**：讓每台主機能向行內的 OS 套件庫裝套件（第 7–8 章要用），並信任銀行的根憑證（之後 HTTPS 都靠它）。正式環境這是 Satellite 或 Nexus，銀行已經做好；lab 裡：用 repo01 的 `/os/` 路徑模擬。銀行的套件庫**起初是 9.6 的內容**（安裝基底，30.5 才同步到 9.8）。先在一個乾淨容器把需要的 OS 套件從 Rocky vault 的 9.6 抓下來並建索引，放在 `~/kafka-lab/bank-os/9.6`（這是銀行套件庫的內容，不是我們交付的檔案，所以不在落地區）。**先下載、再裝工具**，順序反了會漏掉工具自己的相依：
 
 ```bash
-cd ~/kafka-lab && mkdir -p bank-os/9.6 && docker run --rm -v "$(cygpath -m "$PWD/bank-os/9.6"):/out" lab-node:96 bash -c '
+cd ~/kafka-lab && mkdir -p bank-os/9.6 && podman run --rm -v "$(cygpath -m "$PWD/bank-os/9.6"):/out" lab-node:96 bash -c '
 set -e
 R="--disablerepo=* --enablerepo=vault96-baseos,vault96-appstream,vault96-extras"
 ok=0; for try in 1 2 3; do dnf -q $R download --resolve --arch x86_64 --arch noarch --destdir /out/Packages chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion && { ok=1; break; }; echo "鏡像站還沒同步好，60 秒後重試（第 $try 次）" >&2; dnf -q clean metadata; sleep 60; done; [ $ok = 1 ]
 dnf -q -y --disablerepo="*" install /out/Packages/*.rpm >/dev/null
 createrepo_c -q /out
-ls /out/Packages | wc -l' && docker cp "$(cygpath -m "$PWD/bank-os/9.6")/." lab-repo01-1:/var/www/repo/os/ && docker exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
+ls /out/Packages | wc -l' && podman cp "$(cygpath -m "$PWD/bank-os/9.6")/." lab-repo01-1:/var/www/repo/os/ && podman exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
 ```
 
 ```out
@@ -1053,7 +1072,7 @@ repodata
 銀行的根憑證（0.5 建的 `ca/root.crt`）放進每台主機的信任清單，並給每台一份指向套件庫的 repo 設定：
 
 ```bash
-ROOT="$(cygpath -m "$HOME/kafka-lab/ca/root.crt")"; for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$ROOT" lab-$h-1:/etc/pki/ca-trust/source/anchors/bank-root.pem && docker exec lab-$h-1 bash -c 'update-ca-trust && cat > /etc/yum.repos.d/bank-os.repo <<EOF
+ROOT="$(cygpath -m "$HOME/kafka-lab/ca/root.crt")"; for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman cp "$ROOT" lab-$h-1:/etc/pki/ca-trust/source/anchors/bank-root.pem && podman exec lab-$h-1 bash -c 'update-ca-trust && cat > /etc/yum.repos.d/bank-os.repo <<EOF
 [bank-os]
 name=Bank OS packages
 baseurl=https://repo01.poc.lab/os/
@@ -1126,7 +1145,7 @@ csr-ok
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && mkdir -p ca/exchange && docker cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01.csr")" && bash ca/sign.sh ca/exchange/ad01.csr ca/exchange/ad01-chain.crt && docker cp "$(cygpath -m "$PWD/ca/exchange/ad01-chain.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && docker cp "$(cygpath -m "$PWD/ca/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 bash -c 'cp /root/csr/ad01.key /var/lib/samba/private/tls/key.pem && chmod 600 /var/lib/samba/private/tls/key.pem && chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem && pkill -x samba; sleep 8; openssl s_client -connect localhost:636 -CAfile /var/lib/samba/private/tls/ca.pem </dev/null 2>/dev/null | grep "Verify return code"'
+cd ~/kafka-lab && mkdir -p ca/exchange && podman cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01.csr")" && bash ca/sign.sh ca/exchange/ad01.csr ca/exchange/ad01-chain.crt && podman cp "$(cygpath -m "$PWD/ca/exchange/ad01-chain.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && podman cp "$(cygpath -m "$PWD/ca/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && podman exec lab-ad01-1 bash -c 'cp /root/csr/ad01.key /var/lib/samba/private/tls/key.pem && chmod 600 /var/lib/samba/private/tls/key.pem && chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem && pkill -x samba; sleep 8; openssl s_client -connect localhost:636 -CAfile /var/lib/samba/private/tls/ca.pem </dev/null 2>/dev/null | grep "Verify return code"'
 ```
 
 ```out
@@ -1139,7 +1158,7 @@ Verify return code: 0 (ok)
 AD 團隊把 svc-mds-bind 的密碼和測試人員的密碼交給小安。正式環境用銀行自己的交付方式（當面、加密郵件等），**不放進 CyberArk 或任何保管庫**。小安放進操作機的 `~/secrets/`（0700 目錄、0600 檔）：在操作機上每個檔執行一次 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/ldap-bind.pass; unset P; echo)`，`read -s` 讓貼上的密碼不顯示在畫面上（PSMP 錄影錄不到），`printf %s` 不多寫換行。lab 由 Windows 終端把 ad01 上的檔直接送進操作機，不經過任何中間資料夾：
 
 ```bash
-docker exec lab-ops02-1 install -d -m 0700 /root/secrets && for k in bind:ldap-bind users:ad-test-users; do docker exec lab-ad01-1 cat /root/secrets/${k%%:*}.pass | docker exec -i lab-ops02-1 bash -c "umask 077; cat > ~/secrets/${k#*:}.pass"; done; docker exec lab-ops02-1 ls -la /root/secrets | tail -n +4
+podman exec lab-ops02-1 install -d -m 0700 /root/secrets && for k in bind:ldap-bind users:ad-test-users; do podman exec lab-ad01-1 cat /root/secrets/${k%%:*}.pass | podman exec -i lab-ops02-1 bash -c "umask 077; cat > ~/secrets/${k#*:}.pass"; done; podman exec lab-ops02-1 ls -la /root/secrets | tail -n +4
 ```
 
 ```out
@@ -1212,7 +1231,7 @@ case $act in
   status) e="";;
   *) echo "用法：$0 <rest01|rest02> down|up|status"; exit 2;;
 esac
-MSYS_NO_PATHCONV=1 docker exec lab-lb01-1 sh -c "{ [ -z '$e' ] || { sed -i '$e' $f && nginx -t -q && nginx -s reload 2>/dev/null; }; } && sleep 1 && echo \"LB：\$(grep -oE 'server rest0[12][^;]*' $f | sed -E 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//; s/server //; s/ down/（停用）/' | paste -sd' ' -)\""
+MSYS_NO_PATHCONV=1 podman exec lab-lb01-1 sh -c "{ [ -z '$e' ] || { sed -i '$e' $f && nginx -t -q && nginx -s reload 2>/dev/null; }; } && sleep 1 && echo \"LB：\$(grep -oE 'server rest0[12][^;]*' $f | sed -E 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//; s/server //; s/ down/（停用）/' | paste -sd' ' -)\""
 EOF
 chmod +x ~/kafka-lab/lb-member.sh && bash ~/kafka-lab/lb-member.sh rest01 status
 ```
@@ -1621,7 +1640,7 @@ for f in ~/pki/requests/*.csr; do echo "== $(basename $f)"; openssl req -in $f -
 正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5 建好的 `sign.sh`，9 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和 5.3 節簽給 ad01 的那張混在一起）：
 
 ```bash
-cd ~/kafka-lab && rm -rf ca/exchange/signed ca/exchange/requests && mkdir -p ca/exchange/signed && docker cp lab-ops02-1:/root/pki/requests "$(cygpath -m "$PWD/ca/exchange/")" && for f in ca/exchange/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/signed/$n.crt"; done && for f in ca/exchange/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/incoming/; done && docker exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
+cd ~/kafka-lab && rm -rf ca/exchange/signed ca/exchange/requests && mkdir -p ca/exchange/signed && podman cp lab-ops02-1:/root/pki/requests "$(cygpath -m "$PWD/ca/exchange/")" && for f in ca/exchange/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/signed/$n.crt"; done && for f in ca/exchange/signed/*.crt; do podman cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/incoming/; done && podman exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
 ```
 
 ```out
@@ -2239,7 +2258,7 @@ stat -c '%a %U %s 位元組 %n' ~/pki/store.pass ~/secrets/kafka-admin.pass ~/se
 @role 銀行 AD 團隊（lab：停掉 ad01 容器） | Windows 終端 | 本機
 
 ```bash
-docker stop lab-ad01-1 >/dev/null && echo "ad01 已停"
+podman stop lab-ad01-1 >/dev/null && echo "ad01 已停"
 ```
 
 ```out
@@ -2262,7 +2281,7 @@ kafka-admin 從 9095 列 topic：10 個
 @role 銀行 AD 團隊（lab：開回 ad01） | Windows 終端 | 本機
 
 ```bash
-docker start lab-ad01-1 >/dev/null && for i in $(seq 1 30); do docker exec lab-ops02-1 bash -c "timeout 5 openssl s_client -connect ad01.poc.lab:636 </dev/null 2>/dev/null | grep -q 'Verify return code: 0'" && break; sleep 5; done; echo "ad01 已開回（LDAPS 約 $((i*5)) 秒後可用）"
+podman start lab-ad01-1 >/dev/null && for i in $(seq 1 30); do podman exec lab-ops02-1 bash -c "timeout 5 openssl s_client -connect ad01.poc.lab:636 </dev/null 2>/dev/null | grep -q 'Verify return code: 0'" && break; sleep 5; done; echo "ad01 已開回（LDAPS 約 $((i*5)) 秒後可用）"
 ```
 
 ```out
@@ -2824,8 +2843,8 @@ metrics in prometheus: 111 kinds
 | controller、broker | kc*、kb* | `confluent-server` | `sudo journalctl -u confluent-server -n 100 --no-pager` | quorum 有 leader；broker 的 `https://<host>:8090/v1/metadata/id` 回 200 |
 | REST Proxy | rest* | `confluent-kafka-rest` | `sudo journalctl -u confluent-kafka-rest -n 100 --no-pager` | 帶 legacy 憑證 `curl …:8082/v3/clusters` 回 200 |
 | Control Center | c3-01 | `confluent-control-center`、`prometheus`、`alertmanager` | `sudo journalctl -u confluent-control-center -n 100 --no-pager` | `https://c3-01.poc.lab:9021/` 回 200 |
-| AD | ad01 | samba（entrypoint 常駐） | lab 裡：`docker logs lab-ad01-1` | `openssl s_client -connect ad01.poc.lab:636` 驗證通過 |
-| 套件庫 | repo01 | `httpd` | lab 裡：`docker exec lab-repo01-1 journalctl -u httpd -n 50` | `https://repo01.poc.lab/confluent/repodata/repomd.xml` 回 200 |
+| AD | ad01 | samba（entrypoint 常駐） | lab 裡：`podman logs lab-ad01-1` | `openssl s_client -connect ad01.poc.lab:636` 驗證通過 |
+| 套件庫 | repo01 | `httpd` | lab 裡：`podman exec lab-repo01-1 journalctl -u httpd -n 50` | `https://repo01.poc.lab/confluent/repodata/repomd.xml` 回 200 |
 
 任何服務起不來或行為不對，先看三件事：服務是不是 `active`、ExecStart 指向哪份設定、日誌最後 20 行的 ERROR。九成的問題在這裡。
 
@@ -2839,7 +2858,7 @@ metrics in prometheus: 111 kinds
 | 格式化儲存（10.4） | **不能**，`meta.properties` 存在就會拒絕 | 真要重來：停服務、`sudo rm -rf /var/lib/kafka/data/*`，所有 controller 和 broker 一起重做 |
 | 憑證（第 9 章） | 可以，重新產生 CSR 再請銀行簽 | 舊的 `~/pki` 先改名保留；已經上線的環境照第 21 章換發，不要重跑第 9 章 |
 | 裝套件（第 8 章） | 可以，dnf 看到已安裝就略過 | `versionlock add` 對已鎖的套件會再加一筆重複，重跑前先 `sudo dnf versionlock list` 看一下，已鎖的不要再加 |
-| 整台主機重置 | lab 可以；正式環境由銀行重新交付主機 | `docker compose -f compose.yml rm -sf <host> && docker compose -f compose.yml up -d <host>`，再對那台重做：5.1（根憑證信任與 OS 套件來源）、7.1 節（JDK）、7.3 節（OS 調校）、第 8 章（套件），以及它的角色在第 10、12、13 章的派送與啟動 |
+| 整台主機重置 | lab 可以；正式環境由銀行重新交付主機 | `podman compose -f compose.yml rm -sf <host> && podman compose -f compose.yml up -d <host>`，再對那台重做：5.1（根憑證信任與 OS 套件來源）、7.1 節（JDK）、7.3 節（OS 調校）、第 8 章（套件），以及它的角色在第 10、12、13 章的派送與啟動 |
 
 ## 14.3 小安踩過的坑
 
@@ -2851,11 +2870,11 @@ metrics in prometheus: 111 kinds
 | 相對路徑 | `scp certs/cp-server.p12` 只在特定目錄下才找得到 | 指令裡一律寫 `~/pki/certs/…` |
 | C3 比 MDS 先起來 | 9021 不回應、日誌 `Failed to fetch MDS URLs … Client has already been closed`，而且不會自己好 | drop-in 加 `ExecStartPre` 等 MDS（第 13 章已加）；broker 全部重啟過一輪後若 C3 卡住，`systemctl restart confluent-control-center` |
 | lab 專用：Git Bash 的 openssl 看不懂 `/c/Users/...` | `sign.sh` 靜靜失敗、沒有產出 `.crt` | 路徑先用 `cygpath -m` 轉成 `C:/Users/...`（0.5 的腳本已內建） |
-| lab 專用：Docker 網段撞到別的 lab | `compose up` 報 `Pool overlaps` | 換 compose.yml 的 subnet 與 extra_hosts 的 IP（0.6） |
+| lab 專用：Podman 網段撞到別的 lab | `compose up` 報 `Pool overlaps` | 換 compose.yml 的 subnet 與 extra_hosts 的 IP（0.6） |
 | C3 的 `*-generated.yml` 是 root 擁有 | `AccessDeniedException` | 四個 generated 檔給 `cp-control-center:confluent` |
 | dnf 快取太舊 | 剛上架的套件「找不到」 | 加 `--refresh` |
 | lab 專用：建銀行 OS 套件庫（5.1）時先裝工具再下載 | 套件庫少了 `createrepo_c-libs` | 乾淨容器，先下載、再裝工具 |
-| lab 專用：Docker VM 網路層卡死 | 所有 Java 都變慢、`docker stats` 也卡 | 任一容器 `timeout 5 ip addr` 卡住就重啟 Docker Desktop，不要查設定 |
+| lab 專用：WSL VM 網路層卡死 | 所有 Java 都變慢、`podman stats` 也卡 | 任一容器 `timeout 5 ip addr` 卡住就重啟 machine（`podman machine stop kafka-lab && podman machine start kafka-lab`），不要查設定 |
 
 # 15. 第十五站：Secret Protection，加密設定檔裡的密碼
 
@@ -3167,7 +3186,7 @@ opmenu-20261029.1a2b3c4d.tar.gz: OK
 @role Lab 管理員（扮演銀行） | Windows 終端 | 本機
 
 ```bash
-D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; docker exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && docker cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; podman exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && podman cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && podman exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
 ```
 
 ```out
@@ -3329,7 +3348,7 @@ Created topic orders.optest.
 @role 維運人員 bob、alice（91 讀操作機上的緊急憑證檔；lab 由 Windows 終端代打） | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && try() { docker exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh "$@"; }; try bob 23 kb04.poc.lab:confluent-server 10 </dev/null | grep -E 'kb04' | tail -2 | cut -c1-100; try bob 21 kb04.poc.lab:confluent-server </dev/null | tail -1; docker exec lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"'; try alice 91 kafka-topics --list </dev/null | grep -c '^[a-z_]' | sed 's/^/91 緊急模式列出的 topic：/'; try alice 33 orders.optest </dev/null | grep 將執行
+cd ~/kafka-lab && try() { podman exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh "$@"; }; try bob 23 kb04.poc.lab:confluent-server 10 </dev/null | grep -E 'kb04' | tail -2 | cut -c1-100; try bob 21 kb04.poc.lab:confluent-server </dev/null | tail -1; podman exec lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb04.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"'; try alice 91 kafka-topics --list </dev/null | grep -c '^[a-z_]' | sed 's/^/91 緊急模式列出的 topic：/'; try alice 33 orders.optest </dev/null | grep 將執行
 ```
 
 ```out
@@ -3399,7 +3418,7 @@ ssh-agent: 0; private keys in /dev/shm,/tmp: 0; key file: root:root 400
 16.4 為了證明「只剩窄規則時選單仍能重啟」，把 kb04 的全權 sudo 收掉了。正式環境的全權是變更時段由 OS 團隊依變更單開、做完收回；lab 後面的章節（第 17、18、20、21、29 章）都還要在 kb04 上安裝與派送，所以演練完把它放回去，當作「下一個變更時段開了全權」：
 
 ```bash
-docker exec lab-kb04-1 bash -c 'mv /root/cpuser.sudoers.full /etc/sudoers.d/cpuser && visudo -cf /etc/sudoers.d/cpuser >/dev/null && echo "kb04: full sudo back (change window)"'
+podman exec lab-kb04-1 bash -c 'mv /root/cpuser.sudoers.full /etc/sudoers.d/cpuser && visudo -cf /etc/sudoers.d/cpuser >/dev/null && echo "kb04: full sudo back (change window)"'
 ```
 
 ```out
@@ -4069,7 +4088,7 @@ dashboards: 32 個 JSON
 先把 `to-bank/` 取出來，放成各容器要的樣子（webhook 網址換成接收端容器；Alertmanager 的 `--cluster.listen-address=` 留空是因為 lab 的 172.35.x.x 不是私有位址，gossip 會起不來）：
 
 ```bash
-cd ~/kafka-lab && rm -rf bank-monitoring && mkdir -p bank-monitoring/prometheus/confluent bank-monitoring/alertmanager bank-monitoring/grafana/provisioning/datasources bank-monitoring/grafana/provisioning/dashboards bank-monitoring/webhook && docker cp lab-ops02-1:/root/monitoring/to-bank "$(cygpath -m "$PWD/bank-monitoring/to-bank")" && cd bank-monitoring && cp to-bank/prometheus/* prometheus/confluent/ && sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' to-bank/alertmanager/alertmanager.yml > alertmanager/alertmanager.yml && sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' to-bank/grafana/datasource-prometheus.yml > grafana/provisioning/datasources/prometheus.yml && cp to-bank/grafana/dashboards/* grafana/provisioning/dashboards/ && echo "prometheus: $(ls prometheus/confluent | tr '\n' ' ')/ dashboards: $(ls grafana/provisioning/dashboards | wc -l) 個檔"
+cd ~/kafka-lab && rm -rf bank-monitoring && mkdir -p bank-monitoring/prometheus/confluent bank-monitoring/alertmanager bank-monitoring/grafana/provisioning/datasources bank-monitoring/grafana/provisioning/dashboards bank-monitoring/webhook && podman cp lab-ops02-1:/root/monitoring/to-bank "$(cygpath -m "$PWD/bank-monitoring/to-bank")" && cd bank-monitoring && cp to-bank/prometheus/* prometheus/confluent/ && sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' to-bank/alertmanager/alertmanager.yml > alertmanager/alertmanager.yml && sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' to-bank/grafana/datasource-prometheus.yml > grafana/provisioning/datasources/prometheus.yml && cp to-bank/grafana/dashboards/* grafana/provisioning/dashboards/ && echo "prometheus: $(ls prometheus/confluent | tr '\n' ' ')/ dashboards: $(ls grafana/provisioning/dashboards | wc -l) 個檔"
 ```
 
 ```out
@@ -4105,7 +4124,7 @@ prometheus.yml 4 行、receiver.py 8 行
 （lab 專用）起四個容器。映像檔 `prom/prometheus`、`prom/alertmanager`、`grafana/grafana` 是銀行自己的事（正式環境不是我們帶進去的），lab 從 Docker Hub 拉；webhook 接收端用 lab 的 `lab-node:96`。Grafana 開匿名 Admin 只為了 lab 好操作，並發佈到 Windows 的 13000。最後要看到 4 個 `lab-mon-*` 容器都是 `Up`：
 
 ```bash
-cd ~/kafka-lab/bank-monitoring && W() { cygpath -m "$PWD/$1"; } && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && docker run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(W webhook):/w:ro" lab-node:96 python3 -u /w/receiver.py >/dev/null && docker run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(W alertmanager/alertmanager.yml):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null && docker run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $HOSTS -v "$(W prometheus/prometheus.yml):/etc/prometheus/prometheus.yml:ro" -v "$(W prometheus/confluent):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null && docker run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(W grafana/provisioning):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null && sleep 60 && docker ps --format '{{.Names}} {{.Status}}' | grep -E 'lab-mon-(prometheus|alertmanager|grafana|webhook)' | sort
+cd ~/kafka-lab/bank-monitoring && W() { cygpath -m "$PWD/$1"; } && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && podman run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(W webhook):/w:ro" lab-node:96 python3 -u /w/receiver.py >/dev/null && podman run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(W alertmanager/alertmanager.yml):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null && podman run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $HOSTS -v "$(W prometheus/prometheus.yml):/etc/prometheus/prometheus.yml:ro" -v "$(W prometheus/confluent):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null && podman run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(W grafana/provisioning):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null && sleep 60 && podman ps --format '{{.Names}} {{.Status}}' | grep -E 'lab-mon-(prometheus|alertmanager|grafana|webhook)' | sort
 ```
 
 ```out
@@ -4122,7 +4141,7 @@ lab-mon-webhook Up About a minute
 正式環境由銀行監控團隊在自己的三套系統上看同樣四件事：每個 job 有幾個 target 是 up（10 個都要 up）；告警規則載入且沒有錯；Alertmanager 認得 Prometheus；Grafana 有 32 個 dashboard、datasource 連得到 Prometheus。lab 裡：從監控容器裡用 `curl` 查（容器內有 Python 可以整理輸出）：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
+podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
 import json, sys, collections
 up = collections.Counter(); total = collections.Counter()
 for t in json.load(sys.stdin)[\"data\"][\"activeTargets\"]:
@@ -4151,7 +4170,7 @@ Grafana dashboard: 32 個
 Grafana 的 dashboard 真的查得到資料：用 Grafana 自己的查詢介面（`/api/ds/query`，和畫面上 panel 走同一條路）跑一個 controller 指標的查詢（active controller 數，叢集健康時是 1），`$env` 換成 `lab`：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "{\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"Prometheus\"},\"expr\":\"sum(kafka_controller_kafkacontroller_activecontrollercount{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})\",\"instant\":true}],\"from\":\"now-5m\",\"to\":\"now\"}" | python3 -c "import json, sys; r = json.load(sys.stdin)[\"results\"][\"A\"]; print(\"status\", r[\"status\"], \"active controller 數 =\", r[\"frames\"][0][\"data\"][\"values\"][1][0])"'
+podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "{\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"Prometheus\"},\"expr\":\"sum(kafka_controller_kafkacontroller_activecontrollercount{env=\\\"lab\\\", job=\\\"kafka-controller\\\"})\",\"instant\":true}],\"from\":\"now-5m\",\"to\":\"now\"}" | python3 -c "import json, sys; r = json.load(sys.stdin)[\"results\"][\"A\"]; print(\"status\", r[\"status\"], \"active controller 數 =\", r[\"frames\"][0][\"data\"][\"values\"][1][0])"'
 ```
 
 ```out
@@ -4182,7 +4201,7 @@ groups:
           summary: "test alert from chapter 17.8"
           description: 'Test only: a "quoted" word and a colon: here, 007 stays a string.'
 EOF
-docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 70; docker logs lab-mon-webhook 2>&1 | grep -c ConfluentTestAlert
+podman exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 70; podman logs lab-mon-webhook 2>&1 | grep -c ConfluentTestAlert
 ```
 
 ```out
@@ -4192,7 +4211,7 @@ docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/
 先看**預設格式**：整包 JSON，`alerts` 是陣列（一個通知群組可能有很多筆），欄位是 Alertmanager 的 version 4：
 
 ```bash
-docker logs lab-mon-webhook 2>&1 | grep '^POST /default' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:96 python3 -c "
+podman logs lab-mon-webhook 2>&1 | grep '^POST /default' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | podman run --rm -i lab-node:96 python3 -c "
 import json, sys
 head, body = sys.stdin.read().split('\n', 1)
 d = json.loads(body)
@@ -4228,7 +4247,7 @@ print(json.dumps({'status': a['status'], 'labels': a['labels'], 'annotations': a
 再看**自訂格式**：一筆告警一個扁平的 JSON，欄位是前面範本組出來的；`description` 裡的雙引號、冒號、`007` 都完整保留，JSON 沒壞：
 
 ```bash
-docker logs lab-mon-webhook 2>&1 | grep '^POST /omnibus' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | docker run --rm -i lab-node:96 python3 -c "
+podman logs lab-mon-webhook 2>&1 | grep '^POST /omnibus' | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/' | podman run --rm -i lab-node:96 python3 -c "
 import json, sys
 head, body = sys.stdin.read().split('\n', 1)
 print(head)
@@ -4254,7 +4273,7 @@ print(json.dumps(json.loads(body), ensure_ascii=False, indent=1))"
 解除：把測試規則拿掉、重新載入。Prometheus 對被拿掉的規則不會補送「已解除」，Alertmanager 要等告警過期（Prometheus 送的告警帶約 4 分鐘的有效期）才自己解除，再在下一輪通知送出 resolved：自訂格式的 `state` 變 `RESOLVED`，預設格式的 `status` 變 `resolved`。（真實的告警是條件消失，Prometheus 會直接送 resolved，不用等這麼久。）等 5 分鐘左右：
 
 ```bash
-cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.yml && docker exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 290; docker logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | docker run --rm -i lab-node:96 python3 -c "import re, sys; [print(re.match(r'POST (\S+)', l).group(1).ljust(11), re.search(r'\"(?:state|status)\":\"(\w+)\"', l).group(1)) for l in sys.stdin]"
+cd ~/kafka-lab/bank-monitoring && rm prometheus/confluent/confluent-alerts-test.yml && podman exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload; sleep 290; podman logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | podman run --rm -i lab-node:96 python3 -c "import re, sys; [print(re.match(r'POST (\S+)', l).group(1).ljust(11), re.search(r'\"(?:state|status)\":\"(\w+)\"', l).group(1)) for l in sys.stdin]"
 ```
 
 ```out
@@ -4523,7 +4542,7 @@ alice 在 billing.events 看到那筆：1
 @role 維運人員 bob（lab 由 Windows 終端代打） | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && docker exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh bob 21 kb03.poc.lab:confluent-server </dev/null | tail -1 && docker exec lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb03.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb03 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb03.poc.lab:8090/v1/metadata/id) after ~$((i*5))s; under-replicated=$(JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)"'
+cd ~/kafka-lab && podman exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh bob 21 kb03.poc.lab:confluent-server </dev/null | tail -1 && podman exec lab-ops02-1 bash -c 'for i in $(seq 1 24); do [ "$(curl -s -o /dev/null -w "%{http_code}" https://kb03.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb03 MDS=$(curl -s -o /dev/null -w "%{http_code}" https://kb03.poc.lab:8090/v1/metadata/id) after ~$((i*5))s; under-replicated=$(JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2>/dev/null | grep -c Partition:)"'
 ```
 
 ```out
@@ -4533,12 +4552,12 @@ kb03 MDS=200 after ~20s; under-replicated=0
 
 @role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
 
-冷開機：全部主機同時關、同時開，看平台自己回來的順序與時間。lab 裡：用 `docker compose stop／start` 模擬停電。看什麼才算過：4 台 broker 的 MDS 都回 200、C3 回 200、REST 經 LB 回 200、broker 的重試次數是 0。C3 比 MDS 先起來時會等（第 13 章的 drop-in）。
+冷開機：全部主機同時關、同時開，看平台自己回來的順序與時間。lab 裡：用 `podman compose stop／start` 模擬停電。看什麼才算過：4 台 broker 的 MDS 都回 200、C3 回 200、REST 經 LB 回 200、broker 的重試次數是 0。C3 比 MDS 先起來時會等（第 13 章的 drop-in）。
 
 @role Lab 管理員（扮演機房停電） | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && MSYS_NO_PATHCONV=1 docker compose -f compose.yml stop 2>&1 | grep -c Stopped && t0=$(date +%s) && MSYS_NO_PATHCONV=1 docker compose -f compose.yml start 2>&1 | grep -c Started && probe() { docker exec lab-ops02-1 bash -c "curl -sk -o /dev/null -w '%{http_code}' $1"; }; for i in $(seq 1 60); do a=0; for h in kb01 kb02 kb03 kb04; do [ "$(probe https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && a=$((a+1)); done; [ $a = 4 ] && break; sleep 10; done; echo "4 台 broker 的 MDS 都回 200：$(( $(date +%s) - t0 ))s"; for i in $(seq 1 60); do [ "$(probe https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 10; done; echo "C3 回 200：$(( $(date +%s) - t0 ))s"; echo "REST 經 LB：$(docker exec lab-ops02-1 bash -c "curl -s --cacert /etc/pki/ca-trust/source/anchors/bank-root.pem --cert /root/pki/certs/app-legacy-billing.crt --key /root/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters")"; docker exec lab-kb01-1 bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
+cd ~/kafka-lab && MSYS_NO_PATHCONV=1 podman compose -f compose.yml stop 2>&1 | grep -c Stopped && t0=$(date +%s) && MSYS_NO_PATHCONV=1 podman compose -f compose.yml start 2>&1 | grep -c Started && probe() { podman exec lab-ops02-1 bash -c "curl -sk -o /dev/null -w '%{http_code}' $1"; }; for i in $(seq 1 60); do a=0; for h in kb01 kb02 kb03 kb04; do [ "$(probe https://$h.poc.lab:8090/v1/metadata/id)" = 200 ] && a=$((a+1)); done; [ $a = 4 ] && break; sleep 10; done; echo "4 台 broker 的 MDS 都回 200：$(( $(date +%s) - t0 ))s"; for i in $(seq 1 60); do [ "$(probe https://c3-01.poc.lab:9021/)" = 200 ] && break; sleep 10; done; echo "C3 回 200：$(( $(date +%s) - t0 ))s"; echo "REST 經 LB：$(podman exec lab-ops02-1 bash -c "curl -s --cacert /etc/pki/ca-trust/source/anchors/bank-root.pem --cert /root/pki/certs/app-legacy-billing.crt --key /root/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters")"; podman exec lab-kb01-1 bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
 ```
 
 ```out
@@ -4768,7 +4787,7 @@ T=$(mktemp -d) && cp ~/secrets/security.properties $T/s && export CONFLUENT_SECU
 AD 團隊在 AD 改密碼，把新密碼交給小安（交付方式同 5.3，不放保管庫）。lab 用 samba-tool 改密碼：
 
 ```bash
-docker exec lab-ad01-1 bash -c 'until P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $P =~ [A-Z] && $P =~ [a-z] && $P =~ [0-9] ]]; do :; done; samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"'
+podman exec lab-ad01-1 bash -c 'until P=$(openssl rand -base64 24 | tr -dc "A-Za-z0-9" | head -c 20); [[ $P =~ [A-Z] && $P =~ [a-z] && $P =~ [0-9] ]]; do :; done; samba-tool user setpassword svc-mds-bind --newpassword="$P" >/dev/null && printf "%s" "$P" > /root/secrets/bind.pass && echo "AD: password changed"'
 ```
 
 ```out
@@ -4780,7 +4799,7 @@ AD: password changed
 正式環境同 5.3 不顯示的寫法（檔名 `ldap-bind.pass`，舊的先另存 `ldap-bind.prev.pass`）。lab：
 
 ```bash
-docker exec lab-ad01-1 cat /root/secrets/bind.pass | docker exec -i lab-ops02-1 bash -c 'umask 077; cp -p ~/secrets/ldap-bind.pass ~/secrets/ldap-bind.prev.pass; cat > ~/secrets/ldap-bind.pass; echo "ldap-bind.pass: $(wc -c < ~/secrets/ldap-bind.pass) chars"'
+podman exec lab-ad01-1 cat /root/secrets/bind.pass | podman exec -i lab-ops02-1 bash -c 'umask 077; cp -p ~/secrets/ldap-bind.pass ~/secrets/ldap-bind.prev.pass; cat > ~/secrets/ldap-bind.pass; echo "ldap-bind.pass: $(wc -c < ~/secrets/ldap-bind.pass) chars"'
 ```
 
 ```out
@@ -5045,7 +5064,7 @@ kafka-internal: csr ok
 和 9.2 一樣，只是從 `next/` 拿、放回 `next/`：
 
 ```bash
-cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed && docker cp lab-ops02-1:/root/pki/next/requests "$(cygpath -m "$PWD/ca/exchange/next/")" && for f in ca/exchange/next/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/next/signed/$n.crt"; done && for f in ca/exchange/next/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/next/incoming/; done && docker exec lab-ops02-1 bash -c 'ls /root/pki/next/incoming | wc -l'
+cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed && podman cp lab-ops02-1:/root/pki/next/requests "$(cygpath -m "$PWD/ca/exchange/next/")" && for f in ca/exchange/next/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/next/signed/$n.crt"; done && for f in ca/exchange/next/signed/*.crt; do podman cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/next/incoming/; done && podman exec lab-ops02-1 bash -c 'ls /root/pki/next/incoming | wc -l'
 ```
 
 ```out
@@ -5250,7 +5269,7 @@ sha256 Fingerprint=…
 每台主機（含操作機）的 `bank-root.pem` 換成「舊根＋新根」兩張的 bundle。檔名不變，所以所有指向它的設定（curl、操作機上的檢查）都不用改：
 
 ```bash
-cd ~/kafka-lab/ca && cat root.crt g2/root.crt > bundle-g1-g2.pem && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/bundle-g1-g2.pem")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo
+cd ~/kafka-lab/ca && cat root.crt g2/root.crt > bundle-g1-g2.pem && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman cp "$(cygpath -m "$PWD/bundle-g1-g2.pem")" lab-$h-1:/root/bank-root.pem && podman exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo
 ```
 
 ```out
@@ -5290,7 +5309,7 @@ chmod 0700 ~/conf/rolling-restart.sh && echo rolling-restart.sh ok
 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成新舊兩個根的 bundle，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
 
 ```bash
-cp ~/kafka-lab/ca/bundle-g1-g2.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+cp ~/kafka-lab/ca/bundle-g1-g2.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && podman restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -5374,7 +5393,7 @@ LB：rest01 rest02
 銀行 CA 窗口先用 G2 重簽銀行自己的伺服器：AD 的 LDAPS、套件庫。私鑰要不要換是銀行的事（lab 裡簡化成沿用），重啟讓它們出示新憑證：
 
 ```bash
-cd ~/kafka-lab && docker cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01-g2.csr")" && bash ca/g2/sign.sh ca/exchange/ad01-g2.csr ca/exchange/ad01-g2.crt && docker cp "$(cygpath -m "$PWD/ca/exchange/ad01-g2.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && docker cp "$(cygpath -m "$PWD/ca/bundle-g1-g2.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem; pkill -x samba; sleep 8' && O="$(cygpath -m "$PWD/images/web/tls")" && openssl req -new -key "$O/repo.key" -out "$O/repo-g2.csr" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/g2/sign.sh images/web/tls/repo-g2.csr images/web/tls/repo.crt && rm -f images/web/tls/repo-g2.csr && docker exec lab-repo01-1 systemctl restart httpd && for ep in ad01.poc.lab:636 repo01.poc.lab:443; do echo "$ep $(docker exec lab-ops02-1 bash -c "openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
+cd ~/kafka-lab && podman cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01-g2.csr")" && bash ca/g2/sign.sh ca/exchange/ad01-g2.csr ca/exchange/ad01-g2.crt && podman cp "$(cygpath -m "$PWD/ca/exchange/ad01-g2.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && podman cp "$(cygpath -m "$PWD/ca/bundle-g1-g2.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && podman exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem; pkill -x samba; sleep 8' && O="$(cygpath -m "$PWD/images/web/tls")" && openssl req -new -key "$O/repo.key" -out "$O/repo-g2.csr" -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/g2/sign.sh images/web/tls/repo-g2.csr images/web/tls/repo.crt && rm -f images/web/tls/repo-g2.csr && podman exec lab-repo01-1 systemctl restart httpd && for ep in ad01.poc.lab:636 repo01.poc.lab:443; do echo "$ep $(podman exec lab-ops02-1 bash -c "openssl s_client -connect $ep </dev/null 2>/dev/null | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
 ```
 
 ```out
@@ -5404,7 +5423,7 @@ kafka-internal: csr ok
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed && docker cp lab-ops02-1:/root/pki/next/requests "$(cygpath -m "$PWD/ca/exchange/next/")" && for f in ca/exchange/next/requests/*.csr; do n=$(basename $f .csr); bash ca/g2/sign.sh "$f" "ca/exchange/next/signed/$n.crt"; done && for f in ca/exchange/next/signed/*.crt; do docker cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/next/incoming/; done && docker exec lab-ops02-1 bash -c 'ls /root/pki/next/incoming | wc -l'
+cd ~/kafka-lab && rm -rf ca/exchange/next && mkdir -p ca/exchange/next/signed && podman cp lab-ops02-1:/root/pki/next/requests "$(cygpath -m "$PWD/ca/exchange/next/")" && for f in ca/exchange/next/requests/*.csr; do n=$(basename $f .csr); bash ca/g2/sign.sh "$f" "ca/exchange/next/signed/$n.crt"; done && for f in ca/exchange/next/signed/*.crt; do podman cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/next/incoming/; done && podman exec lab-ops02-1 bash -c 'ls /root/pki/next/incoming | wc -l'
 ```
 
 ```out
@@ -5570,7 +5589,7 @@ bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.
 @role 銀行 OS 團隊 | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/g2/root.crt")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; docker cp "$(cygpath -m "$PWD/g2/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem
+cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman cp "$(cygpath -m "$PWD/g2/root.crt")" lab-$h-1:/root/bank-root.pem && podman exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; podman cp "$(cygpath -m "$PWD/g2/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem
 ```
 
 ```out
@@ -5586,7 +5605,7 @@ truststore 拿掉舊的 alias、C3 與 OP menu 的 ca.pem、`to-bank/prometheus/
 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成只有新根 G2，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
 
 ```bash
-cp ~/kafka-lab/ca/g2/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+cp ~/kafka-lab/ca/g2/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && podman restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -5714,7 +5733,7 @@ issuing-g3.crt: PoC Bank Issuing CA G2（簽發者 PoC Bank Root CA G3）key=…
 和 21.3.2 一樣，bundle 換成 G2＋G3（AD 的 `ca.pem` 也一起）：
 
 ```bash
-cd ~/kafka-lab/ca && cat g2/root.crt g3/root.crt > bundle-g2-g3.pem && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/bundle-g2-g3.pem")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; docker cp "$(cygpath -m "$PWD/bundle-g2-g3.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 chmod 644 /var/lib/samba/private/tls/ca.pem
+cd ~/kafka-lab/ca && cat g2/root.crt g3/root.crt > bundle-g2-g3.pem && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman cp "$(cygpath -m "$PWD/bundle-g2-g3.pem")" lab-$h-1:/root/bank-root.pem && podman exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; podman cp "$(cygpath -m "$PWD/bundle-g2-g3.pem")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && podman exec lab-ad01-1 chmod 644 /var/lib/samba/private/tls/ca.pem
 ```
 
 ```out
@@ -5730,7 +5749,7 @@ truststore 加 alias `bank-root-g3`（bundle 的第二張），C3 與 OP menu �
 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成G2＋G3 的 bundle，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
 
 ```bash
-cp ~/kafka-lab/ca/bundle-g2-g3.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+cp ~/kafka-lab/ca/bundle-g2-g3.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && podman restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -5811,7 +5830,7 @@ LB：rest01 rest02
 銀行 CA 窗口把簽發腳本改用新的中繼（之後簽的 leaf 都附新鏈）；AD、套件庫的憑證檔換成「原本的 leaf＋新中繼」，重啟；新中繼交給小安（放 `~/pki/bank-issuing-new.pem`）：
 
 ```bash
-cd ~/kafka-lab && mv ca/g2/issuing.crt ca/g2/issuing-under-g2.crt && cp ca/g2/issuing-g3.crt ca/g2/issuing.crt && rechain() { awk '/BEGIN CERT/{n++} n==1' "$1" > "$1.new" && cat ca/g2/issuing.crt >> "$1.new" && mv "$1.new" "$1"; } && docker cp lab-ad01-1:/var/lib/samba/private/tls/cert.pem "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")" && rechain ca/exchange/ad01-cert.pem && docker cp "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && docker exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem; pkill -x samba; sleep 8' && rechain images/web/tls/repo.crt && docker exec lab-repo01-1 systemctl restart httpd && docker cp "$(cygpath -m "$PWD/ca/g2/issuing.crt")" lab-ops02-1:/root/pki/bank-issuing-new.pem && for ep in ad01.poc.lab:636 repo01.poc.lab:443; do echo "$ep 中繼的簽發者：$(docker exec lab-ops02-1 bash -c "openssl s_client -connect $ep -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
+cd ~/kafka-lab && mv ca/g2/issuing.crt ca/g2/issuing-under-g2.crt && cp ca/g2/issuing-g3.crt ca/g2/issuing.crt && rechain() { awk '/BEGIN CERT/{n++} n==1' "$1" > "$1.new" && cat ca/g2/issuing.crt >> "$1.new" && mv "$1.new" "$1"; } && podman cp lab-ad01-1:/var/lib/samba/private/tls/cert.pem "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")" && rechain ca/exchange/ad01-cert.pem && podman cp "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && podman exec lab-ad01-1 bash -c 'chmod 644 /var/lib/samba/private/tls/cert.pem; pkill -x samba; sleep 8' && rechain images/web/tls/repo.crt && podman exec lab-repo01-1 systemctl restart httpd && podman cp "$(cygpath -m "$PWD/ca/g2/issuing.crt")" lab-ops02-1:/root/pki/bank-issuing-new.pem && for ep in ad01.poc.lab:636 repo01.poc.lab:443; do echo "$ep 中繼的簽發者：$(podman exec lab-ops02-1 bash -c "openssl s_client -connect $ep -showcerts </dev/null 2>/dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")"; done
 ```
 
 ```out
@@ -5968,7 +5987,7 @@ bad=0; for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.
 @role 銀行 OS 團隊 | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do docker cp "$(cygpath -m "$PWD/g3/root.crt")" lab-$h-1:/root/bank-root.pem && docker exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; docker cp "$(cygpath -m "$PWD/g3/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && docker exec lab-ad01-1 chmod 644 /var/lib/samba/private/tls/ca.pem
+cd ~/kafka-lab/ca && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman cp "$(cygpath -m "$PWD/g3/root.crt")" lab-$h-1:/root/bank-root.pem && podman exec lab-$h-1 bash -c 'install -m 0644 /root/bank-root.pem /etc/pki/ca-trust/source/anchors/bank-root.pem && rm -f /root/bank-root.pem && update-ca-trust && printf "%s:%s " $(hostname) $(grep -c "BEGIN CERT" /etc/pki/ca-trust/source/anchors/bank-root.pem)'; done; echo; podman cp "$(cygpath -m "$PWD/g3/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && podman exec lab-ad01-1 chmod 644 /var/lib/samba/private/tls/ca.pem
 ```
 
 ```out
@@ -5980,7 +5999,7 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 行內 Prometheus 抓 JMX exporter 用的 `ca.pem`（17.5 交給監控團隊的那份）換成只有 G3，重啟 Prometheus，確認 10 個 target 都回到 up。少了這一步，換完憑證之後 Prometheus 就抓不到任何指標（lab 實測：覆蓋率變 0／816）：
 
 ```bash
-cp ~/kafka-lab/ca/g3/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(docker exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
+cp ~/kafka-lab/ca/g3/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem && podman restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do n=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2>/dev/null | grep -o '"health":"up"' | wc -l); [ "$n" = 10 ] && break; sleep 10; done; echo "Prometheus target up：$n / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -6225,7 +6244,7 @@ scrape-confluent.yml
 正式環境：銀行起自己的 blackbox_exporter（映像檔 `prom/blackbox-exporter`，和 Prometheus 一樣是銀行的），`scrape-blackbox.yml` 放進 `scrape_config_files`、規則放進 `rule_files`，先 `promtool test rules`。lab：exporter 用容器 `lab-mon-blackbox`（主機名稱要 `--add-host`，和 17.6 的 Prometheus 一樣），`prometheus.yml` 的 `scrape_config_files` 改成 `scrape-*.yml`（單檔 bind mount，改了要 restart）：
 
 ```bash
-cd ~/kafka-lab/bank-monitoring && mkdir -p blackbox && docker cp lab-ops02-1:/root/monitoring/to-bank/prometheus "$(cygpath -m "$PWD/to-bank-prom")" && cp to-bank-prom/blackbox.yml blackbox/ && cp to-bank-prom/scrape-blackbox.yml to-bank-prom/confluent-alerts-cert.yml to-bank-prom/cert-expiry-rules-test.yml prometheus/confluent/ && rm -rf to-bank-prom && sed -i 's/BLACKBOX-EXPORTER:9115/lab-mon-blackbox:9115/' prometheus/confluent/scrape-blackbox.yml && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51 ad01:11 lb01:12 rest:12; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && docker rm -f lab-mon-blackbox >/dev/null 2>&1; MSYS_NO_PATHCONV=1 docker run -d --name lab-mon-blackbox --network lab_labnet --memory 64m $HOSTS -v "$(cygpath -m "$PWD/blackbox/blackbox.yml"):/etc/blackbox_exporter/config.yml:ro" -v "$(cygpath -m "$PWD/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml >/dev/null && sed -i 's#scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]#scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]#; s#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do docker exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done; echo "lab-mon-blackbox：$(docker inspect -f '{{.State.Status}}' lab-mon-blackbox)；prometheus.yml：$(grep -c 'scrape-\*.yml' prometheus/prometheus.yml) 行用萬用字元"
+cd ~/kafka-lab/bank-monitoring && mkdir -p blackbox && podman cp lab-ops02-1:/root/monitoring/to-bank/prometheus "$(cygpath -m "$PWD/to-bank-prom")" && cp to-bank-prom/blackbox.yml blackbox/ && cp to-bank-prom/scrape-blackbox.yml to-bank-prom/confluent-alerts-cert.yml to-bank-prom/cert-expiry-rules-test.yml prometheus/confluent/ && rm -rf to-bank-prom && sed -i 's/BLACKBOX-EXPORTER:9115/lab-mon-blackbox:9115/' prometheus/confluent/scrape-blackbox.yml && HOSTS=$(for h in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51 ad01:11 lb01:12 rest:12; do printf -- '--add-host %s.poc.lab:172.35.0.%s ' ${h%%:*} ${h##*:}; done) && podman rm -f lab-mon-blackbox >/dev/null 2>&1; MSYS_NO_PATHCONV=1 podman run -d --name lab-mon-blackbox --network lab_labnet --memory 64m $HOSTS -v "$(cygpath -m "$PWD/blackbox/blackbox.yml"):/etc/blackbox_exporter/config.yml:ro" -v "$(cygpath -m "$PWD/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml >/dev/null && sed -i 's#scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]#scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]#; s#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml && podman restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do podman exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done; echo "lab-mon-blackbox：$(podman inspect -f '{{.State.Status}}' lab-mon-blackbox)；prometheus.yml：$(grep -c 'scrape-\*.yml' prometheus/prometheus.yml) 行用萬用字元"
 ```
 
 ```out
@@ -6235,7 +6254,7 @@ lab-mon-blackbox：running；prometheus.yml：1 行用萬用字元
 驗三件事：`promtool test rules` 通過（在 Prometheus 容器裡跑，它自帶 promtool）、`cert-expiry` 的 target 全 up（第一次抓要等一個 `scrape_interval`，最多 5 分鐘）、規則 24 條載入沒錯：
 
 ```bash
-docker exec lab-mon-prometheus sh -c 'cd /etc/prometheus/confluent && promtool test rules cert-expiry-rules-test.yml 2>&1 | grep -oE "SUCCESS|FAIL" | head -1'; for i in $(seq 1 36); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
+podman exec lab-mon-prometheus sh -c 'cd /etc/prometheus/confluent && promtool test rules cert-expiry-rules-test.yml 2>&1 | grep -oE "SUCCESS|FAIL" | head -1'; for i in $(seq 1 36); do r=$(podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c "
 import json, sys
 t = [x for x in json.load(sys.stdin)[\"data\"][\"activeTargets\"] if x[\"labels\"][\"job\"] == \"cert-expiry\"]
 print(\"cert-expiry target up %d / %d\" % (sum(x[\"health\"] == \"up\" for x in t), len(t)))"; curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
@@ -6254,7 +6273,7 @@ cert-expiry target up 24 / 24
 每個端點真的探到了什麼：剩幾天、哪一張（Grafana 做一張表就是同一個查詢）：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s --data-urlencode "query=(probe_ssl_earliest_cert_expiry{job=\"cert-expiry\"} - time()) / 86400" http://lab-mon-prometheus:9090/api/v1/query | python3 -c "
+podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s --data-urlencode "query=(probe_ssl_earliest_cert_expiry{job=\"cert-expiry\"} - time()) / 86400" http://lab-mon-prometheus:9090/api/v1/query | python3 -c "
 import json, sys
 rs = sorted(json.load(sys.stdin)[\"data\"][\"result\"], key=lambda r: r[\"metric\"][\"instance\"])
 for r in rs: print(\"%-24s 剩 %3d 天\" % (r[\"metric\"][\"instance\"], float(r[\"value\"][1])))
@@ -6726,7 +6745,7 @@ kb04: 149G 用 / 1007G（16%）掛在 /
 同樣的數字銀行 Prometheus 也有：第 17 章的 exporter 規則把每個 partition 的大小變成 `kafka_log_log_size`，可以依 topic 加總、畫趨勢；`kafka_log_logmanager_logdirectoryoffline` 是每台 broker 的 log dir 是否離線（0 正常）。lab 從容器裡查（`__cluster_metadata` 是 KRaft 的 metadata log，每台 broker 都有一份，不是 topic；`topk` 會把它一起列出來）：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:96 bash -c 'q() { curl -s --data-urlencode "query=$1" http://lab-mon-prometheus:9090/api/v1/query; }; q "topk(3, sum by (topic) (kafka_log_log_size))" | python3 -c "
+podman run --rm --network lab_labnet lab-node:96 bash -c 'q() { curl -s --data-urlencode "query=$1" http://lab-mon-prometheus:9090/api/v1/query; }; q "topk(3, sum by (topic) (kafka_log_log_size))" | python3 -c "
 import json, sys
 for r in json.load(sys.stdin)[\"data\"][\"result\"]: print(\"%-32s %.1f MB（三個 replica 合計）\" % (r[\"metric\"][\"topic\"], float(r[\"value\"][1]) / 1048576))"; q "count(kafka_log_logmanager_logdirectoryoffline{job=\"kafka-broker\"} == 0)" | python3 -c "
 import json, sys
@@ -6787,10 +6806,10 @@ confluent-alerts-disk.yml: 2 條規則
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-正式環境是銀行監控團隊把這個檔放到 `/etc/prometheus/confluent/`、reload Prometheus，再把 `KafkaDataDiskFillingUp` 的 mountpoint 與 job 改成行內 node_exporter 的寫法。lab：複製進 `bank-monitoring/prometheus/confluent/`（Prometheus 容器唯讀掛著這個資料夾）；`prometheus.yml` 的 `rule_files` 若還是單一檔名就改成 `confluent-alerts*.yml`（17.6 的寫法）；`prometheus.yml` 是以單檔掛進容器的，改了要 `docker restart` 才讀得到（正式環境是 reload）。剛載入的規則 health 是 unknown，要等過一次 evaluation（30 秒）才變 ok，所以數規則前最多等 100 秒：
+正式環境是銀行監控團隊把這個檔放到 `/etc/prometheus/confluent/`、reload Prometheus，再把 `KafkaDataDiskFillingUp` 的 mountpoint 與 job 改成行內 node_exporter 的寫法。lab：複製進 `bank-monitoring/prometheus/confluent/`（Prometheus 容器唯讀掛著這個資料夾）；`prometheus.yml` 的 `rule_files` 若還是單一檔名就改成 `confluent-alerts*.yml`（17.6 的寫法）；`prometheus.yml` 是以單檔掛進容器的，改了要 `podman restart` 才讀得到（正式環境是 reload）。剛載入的規則 health 是 unknown，要等過一次 evaluation（30 秒）才變 ok，所以數規則前最多等 100 秒：
 
 ```bash
-cd ~/kafka-lab/bank-monitoring && docker cp lab-ops02-1:/root/monitoring/to-bank/prometheus/confluent-alerts-disk.yml "$(cygpath -m "$PWD/prometheus/confluent/confluent-alerts-disk.yml")" && { grep -q 'confluent-alerts\*\.yml' prometheus/prometheus.yml || sed -i 's#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml; } && docker restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do docker exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done && for i in $(seq 1 20); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
+cd ~/kafka-lab/bank-monitoring && podman cp lab-ops02-1:/root/monitoring/to-bank/prometheus/confluent-alerts-disk.yml "$(cygpath -m "$PWD/prometheus/confluent/confluent-alerts-disk.yml")" && { grep -q 'confluent-alerts\*\.yml' prometheus/prometheus.yml || sed -i 's#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml; } && podman restart lab-mon-prometheus >/dev/null && for i in $(seq 1 12); do podman exec lab-mon-prometheus wget -qO- http://localhost:9090/-/ready 2>/dev/null | grep -q Ready && break; sleep 5; done && for i in $(seq 1 20); do r=$(podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c "
 import json, sys
 g = json.load(sys.stdin)[\"data\"][\"groups\"]
 r = [x for y in g for x in y[\"rules\"]]
@@ -6927,7 +6946,7 @@ NodeId  DirectoryId             LogEndOffset  Lag  LastFetchTimestamp  LastCaugh
 正式環境是銀行主機團隊換了碟、掛回同一個路徑。lab 裡：用清空資料目錄模擬：
 
 ```bash
-docker exec lab-kc03-1 bash -c 'systemctl stop confluent-server && rm -rf /var/lib/kafka/data/* && echo "kc03 data: $(ls -A /var/lib/kafka/data | wc -l) files, $(stat -c %U:%G:%a /var/lib/kafka/data)"'
+podman exec lab-kc03-1 bash -c 'systemctl stop confluent-server && rm -rf /var/lib/kafka/data/* && echo "kc03 data: $(ls -A /var/lib/kafka/data | wc -l) files, $(stat -c %U:%G:%a /var/lib/kafka/data)"'
 ```
 
 ```out
@@ -7460,7 +7479,7 @@ app-shipping: csr ok；subject=CN=app-shipping, O=PoC Bank, C=TW
 正式環境走 9.2 一樣的管道（檔案交換平台送 CSR、收回憑證鏈）。lab：只簽這一張，放回 `~/pki/incoming/`；用**現行**的 CA：不是看目錄存不存在，而是看哪個目錄的中繼憑證能被平台現在信任的根（操作機的 `bank-root.pem`）驗證通過（21.3 換過 CA 之後是 `ca/g2`，沒換過是 `ca`）：
 
 ```bash
-cd ~/kafka-lab && docker exec lab-ops02-1 cat /etc/pki/ca-trust/source/anchors/bank-root.pem > ca/exchange/anchor.pem && d=""; for c in ca ca/g2; do [ -f $c/issuing.crt ] && openssl verify -CAfile "$(cygpath -m ca/exchange/anchor.pem)" "$(cygpath -m $c/issuing.crt)" >/dev/null 2>&1 && d=$c; done; [ -n "$d" ] || { echo "沒有一個 CA 目錄的中繼憑證能被平台信任"; false; } && mkdir -p ca/exchange/requests ca/exchange/signed && docker cp lab-ops02-1:/root/pki/requests/app-shipping.csr "$(cygpath -m "$PWD/ca/exchange/requests/app-shipping.csr")" && bash $d/sign.sh ca/exchange/requests/app-shipping.csr ca/exchange/signed/app-shipping.crt | sed "s/  (.*//" && docker cp "$(cygpath -m "$PWD/ca/exchange/signed/app-shipping.crt")" lab-ops02-1:/root/pki/incoming/ && echo "用 $d 簽"
+cd ~/kafka-lab && podman exec lab-ops02-1 cat /etc/pki/ca-trust/source/anchors/bank-root.pem > ca/exchange/anchor.pem && d=""; for c in ca ca/g2; do [ -f $c/issuing.crt ] && openssl verify -CAfile "$(cygpath -m ca/exchange/anchor.pem)" "$(cygpath -m $c/issuing.crt)" >/dev/null 2>&1 && d=$c; done; [ -n "$d" ] || { echo "沒有一個 CA 目錄的中繼憑證能被平台信任"; false; } && mkdir -p ca/exchange/requests ca/exchange/signed && podman cp lab-ops02-1:/root/pki/requests/app-shipping.csr "$(cygpath -m "$PWD/ca/exchange/requests/app-shipping.csr")" && bash $d/sign.sh ca/exchange/requests/app-shipping.csr ca/exchange/signed/app-shipping.crt | sed "s/  (.*//" && podman cp "$(cygpath -m "$PWD/ca/exchange/signed/app-shipping.crt")" lab-ops02-1:/root/pki/incoming/ && echo "用 $d 簽"
 ```
 
 ```out
@@ -7665,7 +7684,7 @@ bootstrap 給三台 broker 是故意的：出事時 kb01 可能就是掛掉的�
 同時看 Alertmanager／Prometheus 現在有哪些告警（正式環境看 Alertmanager 畫面或 omnibus；lab 查 Prometheus 的 API，`firing` 是已過 `for` 時間、`pending` 是條件成立但還在等）：
 
 ```bash
-docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
+podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
 import json, sys
 a = json.load(sys.stdin)[\"data\"][\"alerts\"]
 print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(\" + x[\"labels\"].get(\"hostname\", x[\"labels\"].get(\"env\", \"\")) + \")\" for x in a if x[\"state\"] == \"firing\"))) or \"無\") + \"；pending：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x in a if x[\"state\"] == \"pending\"))) or \"無\"))"'
@@ -7685,7 +7704,7 @@ firing：無；pending：無
 lab 把 kb04 的服務直接停掉，當作主機或服務掛了（正式環境是主機團隊或告警通知你）：
 
 ```bash
-docker exec lab-kb04-1 systemctl stop confluent-server && sleep 15 && echo "kb04 confluent-server：$(docker exec lab-kb04-1 systemctl is-active confluent-server) $(date +%T)"
+podman exec lab-kb04-1 systemctl stop confluent-server && sleep 15 && echo "kb04 confluent-server：$(podman exec lab-kb04-1 systemctl is-active confluent-server) $(date +%T)"
 ```
 
 ```out
@@ -7715,7 +7734,7 @@ kb04：failed；日誌最後一行：Oct 29 03:35:36 kb04 systemd[1]: confluent-
 告警：`ConfluentTargetDown` 2 分鐘後 firing、`KafkaUnderReplicatedPartitions` 5 分鐘後 firing（`for` 是故意放寬的，滾動重啟時才不會叫人）。lab 每 10 秒看一次、最多等 7 分鐘：
 
 ```bash
-for i in $(seq 1 42); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
+for i in $(seq 1 42); do r=$(podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
 import json, sys
 a = json.load(sys.stdin)[\"data\"][\"alerts\"]
 print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] + \"(\" + x[\"labels\"].get(\"hostname\", x[\"labels\"].get(\"env\", \"\")) + \")\" for x in a if x[\"state\"] == \"firing\"))) or \"無\") + \"；pending：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x in a if x[\"state\"] == \"pending\"))) or \"無\"))"'); grep -qE 'firing：[^；]*KafkaUnderReplicatedPartitions' <<<"$r" && break; sleep 10; done; echo "等了約 $((i*10)) 秒：$r"
@@ -7746,7 +7765,7 @@ kb04：active
 告警自己解除（條件不成立就從 firing 消失，Alertmanager 送 resolved）：
 
 ```bash
-for i in $(seq 1 18); do r=$(docker run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
+for i in $(seq 1 18); do r=$(podman run --rm --network lab_labnet lab-node:96 bash -c 'curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c "
 import json, sys
 a = json.load(sys.stdin)[\"data\"][\"alerts\"]
 print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x in a if x[\"state\"] == \"firing\"))) or \"無\"))"'); grep -q '^firing：無' <<<"$r" && break; sleep 10; done; echo "等了約 $((i*10)) 秒：$r"
@@ -7774,7 +7793,7 @@ print(\"firing：\" + (\", \".join(sorted(set(x[\"labels\"][\"alertname\"] for x
 | `KafkaStorageException` / `LogDirectoryOffline` | broker 日誌 | 資料碟壞或滿 | 24 章、25.2 換碟 |
 | `Scheduled restart job, restart counter is at N` | journalctl | 服務起來就死，systemd 一直重試 | 三件事：ExecStart、設定、日誌第一個 ERROR（14.2） |
 | `HTTP 401` 登 MDS | 選單、confluent CLI | AD 帳密錯、AD 不通、token 過期（1 小時） | 重新登入；AD 不通看 11.2 |
-| `Pool overlaps`、`timeout 5 ip addr` 卡住 | lab 專用 | Docker 網段或 VM 網路層問題 | 14.3 |
+| `Pool overlaps`、`timeout 5 ip addr` 卡住 | lab 專用 | Podman 網段或 WSL VM 網路層問題 | 14.3 |
 
 ## 28.5 自己解不掉：收集 diagnostics
 
@@ -7794,7 +7813,7 @@ lab 用「網路團隊在 broker 上擋掉操作機連 8090」模擬（只加 ru
 @role 銀行網路團隊（lab 由 Windows 終端代打） | Windows 終端 | 本機
 
 ```bash
-for h in kb01 kb02 kb03 kb04; do echo "$h: $(docker exec lab-$h-1 firewall-cmd --add-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"; done
+for h in kb01 kb02 kb03 kb04; do echo "$h: $(podman exec lab-$h-1 firewall-cmd --add-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"; done
 ```
 
 ```out
@@ -7864,7 +7883,7 @@ retention.ms=86400000
 @role 銀行網路團隊（lab 由 Windows 終端代打） | Windows 終端 | 本機
 
 ```bash
-for h in kb01 kb02 kb03 kb04; do echo "$h: $(docker exec lab-$h-1 firewall-cmd --remove-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"; done
+for h in kb01 kb02 kb03 kb04; do echo "$h: $(podman exec lab-$h-1 firewall-cmd --remove-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"; done
 ```
 
 ```out
@@ -8360,7 +8379,7 @@ c3-01 java=jdk-25.0.5+8 confluent=2.6.1 os=9.6
 lab 沒有銀行的套件庫同步，就自己做：在一個乾淨的 9.6 容器裡，把 5.1 下載的 9.6 套件裝起來（等於「裝好這批套件的 9.6 主機」），對 Rocky 的 9.8 倉庫（`pub/rocky/9.8`）做 `dnf update --downloadonly`，就得到「9.6 主機升到 9.8 要的更新集合」。把更新集合和 9.6 的內容合併、重建索引，換上 repo01 的 `/os/`。`--downloadonly` 只下載不安裝；下載的檔案先複製到銀行的目錄、再建索引：
 
 ```bash
-cd ~/kafka-lab && docker run --rm -v "$(cygpath -m "$PWD/bank-os"):/out" lab-node:96 bash -c '
+cd ~/kafka-lab && podman run --rm -v "$(cygpath -m "$PWD/bank-os"):/out" lab-node:96 bash -c '
 set -e
 t0=$(date +%s)
 dnf -q -y --disablerepo="*" install /out/9.6/Packages/*.rpm >/tmp/i.log 2>&1 || { echo "裝 9.6 套件失敗："; tail -5 /tmp/i.log; exit 1; }
@@ -8369,7 +8388,7 @@ mkdir -p /out/9.8-updates/Packages /tmp/dl
 dnf -q -y --disablerepo="*" --enablerepo=r98-baseos,r98-appstream,r98-extras update --downloadonly --downloaddir /tmp/dl >/tmp/u.log 2>&1 || { echo "抓 9.8 的更新失敗（多半是連不到 dl.rockylinux.org，稍後重跑這一段）："; tail -5 /tmp/u.log; exit 1; }
 cp -a /tmp/dl/. /out/9.8-updates/Packages/ && createrepo_c -q /out/9.8-updates
 mkdir -p /out/9.8/Packages && cp -a /out/9.6/Packages/. /out/9.8/Packages/ && cp -a /out/9.8-updates/Packages/. /out/9.8/Packages/ && createrepo_c -q /out/9.8
-echo "9.8 更新集合：$(ls /out/9.8-updates/Packages | wc -l) 個 RPM、$(du -sm /out/9.8-updates | cut -f1) MB（$(( $(date +%s) - t0 )) 秒）；合併後的套件庫 $(ls /out/9.8/Packages | wc -l) 個 RPM"' && docker exec lab-repo01-1 bash -c 'rm -rf /var/www/repo/os/*' && docker cp "$(cygpath -m "$PWD/bank-os/9.8")/." lab-repo01-1:/var/www/repo/os/ && docker exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; echo "repo01 /os/：$(ls /var/www/repo/os/Packages | wc -l) 個 RPM；rocky-release：$(ls /var/www/repo/os/Packages | grep rocky-release)"'
+echo "9.8 更新集合：$(ls /out/9.8-updates/Packages | wc -l) 個 RPM、$(du -sm /out/9.8-updates | cut -f1) MB（$(( $(date +%s) - t0 )) 秒）；合併後的套件庫 $(ls /out/9.8/Packages | wc -l) 個 RPM"' && podman exec lab-repo01-1 bash -c 'rm -rf /var/www/repo/os/*' && podman cp "$(cygpath -m "$PWD/bank-os/9.8")/." lab-repo01-1:/var/www/repo/os/ && podman exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; echo "repo01 /os/：$(ls /var/www/repo/os/Packages | wc -l) 個 RPM；rocky-release：$(ls /var/www/repo/os/Packages | grep rocky-release)"'
 ```
 
 ```out
@@ -8624,7 +8643,7 @@ confluent-control-center-next-gen-2.6.0-1.noarch.rpm
 照 3.4 的方式送到操作機的落地區（唯讀），進來後再驗一次 sha256：
 
 ```bash
-docker cp "$(cygpath -m "$HOME/kafka-lab/landing/c3")" lab-ops02-1:/root/landing/ && docker exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/c3 && cd /root/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+podman cp "$(cygpath -m "$HOME/kafka-lab/landing/c3")" lab-ops02-1:/root/landing/ && podman exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/c3 && cd /root/landing/c3 && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
 ```
 
 ```out
@@ -8775,7 +8794,7 @@ for f in sorted(glob.glob(os.path.join(folder, "*.json"))):
     print("%-34s %6d %6d  %s" % (os.path.basename(f), n, ok, ("; ".join(missing[:6]) + (" …" if len(missing) > 6 else "")) if detail else ""))
 print("合計 %d 個 dashboard、%d 個 panel、%d 個有資料" % (total["dash"], total["panels"], total["data"]))
 EOF
-docker run --rm --network lab_labnet -v "$(cygpath -m "$PWD"):/w:ro" lab-node:96 python3 /w/dashboard-coverage.py http://lab-mon-prometheus:9090 /w/grafana/provisioning/dashboards
+podman run --rm --network lab_labnet -v "$(cygpath -m "$PWD"):/w:ro" lab-node:96 python3 /w/dashboard-coverage.py http://lab-mon-prometheus:9090 /w/grafana/provisioning/dashboards
 ```
 
 ```out
@@ -8843,7 +8862,7 @@ zookeeper-cluster.json                 11      0
 驗完把 lab 的五個監控容器收掉（第 17 章的四個加上第 22 章的 blackbox）（正式環境是銀行的系統，不收）。設定資料夾 `~/kafka-lab/bank-monitoring` 留著；重建 lab（第 0 章 `down -v`）之前一定要先收，否則容器還接在 labnet 上，網路刪不掉：
 
 ```bash
-docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook lab-mon-blackbox >/dev/null && echo "lab-mon-* 已收掉：$(docker ps -a --format '{{.Names}}' | grep -c '^lab-mon-') 個剩下"
+podman rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook lab-mon-blackbox >/dev/null && echo "lab-mon-* 已收掉：$(podman ps -a --format '{{.Names}}' | grep -c '^lab-mon-') 個剩下"
 ```
 
 ```out

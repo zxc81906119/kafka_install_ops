@@ -9,6 +9,7 @@
 # 跑完用 scan-log.sh 掃「rc 是 0 但其實失敗」的輸出。結束碼：執行檔的結束碼；有可疑輸出也算失敗。
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
+command -v podman >/dev/null 2>&1 || export PATH="$(cygpath -u "$LOCALAPPDATA")/Programs/Podman:$PATH"   # 安裝 Podman 之前就開著的 Git Bash 找不到 podman
 MODE=${1:?用法：bash $0 customer [起始章] [結束章]}
 FROM=${2:-0}; TO=${3:-end}
 [ "$FROM" = A ] && FROM=0; [ "$TO" = A ] && TO=0   # 建 lab 原本是附錄 A，2026-10-29 搬回開頭成為第 0 章
@@ -31,10 +32,10 @@ sed -i "s#<交付物的目錄>#$DELIVERY#" "$runner"
 if [ "$FROM" = 0 ]; then
   echo "拆掉 lab（保留 $LAB/landing 與 $LAB/bank-os；舊版面的 landing-extra 併進 landing）"
   if [ -f "$LAB/compose.yml" ]; then
-    docker rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null 2>&1   # 接在 lab_labnet 上，不先收掉 down -v 刪不掉網路
-    (cd "$LAB" && docker compose -f compose.yml down -v >/dev/null 2>&1)
+    podman rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null 2>&1   # 接在 lab_labnet 上，不先收掉 down -v 刪不掉網路
+    (cd "$LAB" && podman compose -f compose.yml down -v >/dev/null 2>&1)
   fi
-  docker rm -f dl01 bank-prometheus >/dev/null 2>&1
+  podman rm -f dl01 bank-prometheus >/dev/null 2>&1
   [ -d "$LAB" ] && find "$LAB" -mindepth 1 -maxdepth 1 ! -name landing ! -name landing-extra ! -name bank-os -exec rm -rf {} +
   # 舊版面（8.3.2 在 landing/rpm、8.2.4 在 landing-extra/）→ landing/rpm = 基底、landing/rpm-target = 目標（只搬檔案）
   bash "$(cygpath -m "$REPO_DIR/install/lab/bank-sim.sh")" landing-layout || exit 1

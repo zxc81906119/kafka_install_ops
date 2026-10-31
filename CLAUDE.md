@@ -8,7 +8,7 @@ PoC for installing Confluent Platform fully offline at a bank, as a **baseline +
 baseline CP 8.2.4 + Control Center 2.5.1 + JDK 21 + OS 9.6 (chapters 2–19), then migrate to CP 8.3.2 + C3 2.6.1 + JDK 25 + OS 9.8
 (chapter 29 packages/JDK/finalize, chapter 30 OS minor update, chapter 31 C3 version swap). JDK 25 is not supported by 8.2.x, hence the baseline JDK 21;
 C3 2.5.x supports CP up to 8.2.x and 2.6.x up to 8.3.x, so C3 is upgraded first. Versions live in `install/conf/site.env` (`CP_VERSION` … baseline, `*_TARGET_*` target).
-Simulated hosts run in Docker Desktop on Windows 11 (project `lab`, built from `~/kafka-lab`); driven from Git Bash.
+Simulated hosts run in Podman on Windows 11 (rootful WSL2 machine `kafka-lab`, compose project `lab`, built from `~/kafka-lab`; Docker Desktop is being retired, 2026-10-31); driven from Git Bash.
 Details of the architecture and every component: @README.md
 
 ## Working with the user
@@ -27,7 +27,7 @@ Details of the architecture and every component: @README.md
   newest entries in `.claude/state/log/`. Summarise where things stand before doing anything.
 - Update the status file at every milestone (step verified, decision made, document produced, lab state changed);
   add a dated log file for each topic. Auto-memory holds only user preferences, never project state.
-- One session = one git worktree = one branch. The Docker lab is shared: note "lab 使用中" in the status file.
+- One session = one git worktree = one branch. The lab is shared: note "lab 使用中" in the status file.
 
 ## Repository map
 - `docs/journey-src/` — `journey.md` (the hands-on guide, chapter 0 = build the lab, chapters 1–31, appendix B = monitoring coverage and lab tear-down; single `customer` mode; it must stay runnable by someone **without this repository**: every lab file is written inline, the OP menu arrives as a delivered tarball made by `opmenu/package.sh`)
@@ -50,16 +50,18 @@ Details of the architecture and every component: @README.md
 
 ## Lab facts
 - One lab: project `lab` (14 containers + `dl01`, subnets 172.35/172.36), built from `~/kafka-lab` per journey chapter 0. Host image `lab-node:96` (Rocky 9.6 from the vault; the old 9.8 image is `lab-node:1`, never reuse it), web image `lab-web:96`.
-  Docker Desktop VM has ~10.7 GB, so never run anything else alongside it.
-- Enter hosts: `docker exec -it -w /root lab-ops02-1 bash` (ops02 as **root** = what PSMP gives a person; no PVWA/PSMP in the lab),
-  `docker exec -it lab-<host>-1 bash` (root, "bank" actions). Prefix docker commands with `MSYS_NO_PATHCONV=1`
+  WSL2 has 11 GB (`%UserProfile%\.wslconfig`), shared by every WSL distro: never run Docker Desktop or another machine alongside it.
+  `podman compose` runs the standalone docker-compose set in `%APPDATA%\containers\containers.conf` (`compose_providers`, forward slashes in TOML);
+  containers come back after a machine restart only because `podman-restart.service` is enabled in the machine (guide 0.0).
+- Enter hosts: `podman exec -it -w /root lab-ops02-1 bash` (ops02 as **root** = what PSMP gives a person; no PVWA/PSMP in the lab),
+  `podman exec -it lab-<host>-1 bash` (root, "bank" actions). Prefix podman commands with `MSYS_NO_PATHCONV=1`
   and pass Windows paths through `cygpath -m` (Node is a Windows program: convert paths before handing them over).
 - ops02 → all hosts: user `cpuser` (UID/GID 1500, locked password), one key `/secure/ssh/cpuser_ed25519` (root 0400) on the
-  separate file system simulated by docker volume `ops-secure` (no LUKS); `~/.ssh/config` makes plain `ssh kb01.poc.lab` use it.
+  separate file system simulated by podman volume `ops-secure` (no LUKS); `~/.ssh/config` makes plain `ssh kb01.poc.lab` use it.
   It survives restarts (volume), nothing to re-paste. Platform secrets live only on ops02 (`~/secrets`, `~/pki`, root 0600); there is no vault simulation.
 - Bind mounts of Windows folders (9p) are slow for multi-GB reads: download inside the container, then copy out.
-- After a Docker Desktop restart check `docker ps --format '{{.Names}}' | cut -d- -f1 | sort | uniq -c`.
-- If every container's `timeout 5 ip addr` hangs, the VM's netlink is wedged: restart Docker Desktop, don't debug configs.
+- After a machine restart check `podman ps --format '{{.Names}}' | cut -d- -f1 | sort | uniq -c` (Windows does not start the machine by itself unless a logon task does: `podman machine start kafka-lab`).
+- If every container's `timeout 5 ip addr` hangs, the VM's netlink is wedged: restart the machine (`podman machine stop kafka-lab && podman machine start kafka-lab`), don't debug configs.
 - In the lab Claude plays the bank (`install/lab/bank-sim.sh`, or the guide's 銀行 blocks): AD (samba-tool on ad01),
   CA (`~/kafka-lab/ca`), OS repo and NTP on repo01, nginx on lb01, the OS team (cpuser account, sshd drop-in, public key line with `from=`, install-period sudo on every host incl. ops02; `bank-sim.sh prepare`),
   monitoring (Prometheus, Alertmanager, Grafana, webhook receiver) as four
@@ -92,7 +94,7 @@ Details of the architecture and every component: @README.md
 
 ## Gotchas learned the hard way
 - A Rocky 9.6 image's default repo files point at the **latest 9.x** (mirrorlist with `$releasever` = 9): `dnf install` there installs 9.8 packages. Freeze to the vault (`dl.rockylinux.org/vault/rocky/9.6`, repo ids `vault96-*`); 9.8 lives in `pub/rocky/9.8`, 9.6 is not in `pub`.
-- Lab hosts are containers on the WSL2 kernel: `systemctl reboot` fails ("Could not activate remote peer"); `systemd-detect-virt -c` answers `wsl`/`docker`. Chapter 30 / `30-os-patch.sh` / `rest-restart.sh -r` restart the platform services instead. A kernel update cannot be tested in the lab.
+- Lab hosts are containers on the WSL2 kernel: `systemctl reboot` fails ("Could not activate remote peer"); `systemd-detect-virt -c` answers `wsl` (Podman and Docker alike). Chapter 30 / `30-os-patch.sh` / `rest-restart.sh -r` restart the platform services instead. A kernel update cannot be tested in the lab.
 - `dnf update` from a `file://` repo that is also the `--downloaddir` can delete the RPMs it just used: copy the downloaded set before indexing/using it.
 - Before `systemctl start` of an RPM service, confirm the drop-in is in effect:
   `systemctl show <unit> -p ExecStart` must point to **our** properties file, else the RPM default config starts
@@ -115,6 +117,6 @@ Details of the architecture and every component: @README.md
 - When comparing run logs with the guide's `out` blocks, also compare with digits kept: normalising numbers hid `lab-mon-* 已收掉：1 個剩下` (expected 0) on 2026-10-29.
 - Check run logs line by line, not only `scan-log.sh`: an empty value after "：" means the check's precondition was missing.
 - Emptying a data directory on a host: `ssh h 'sudo rm -rf /var/lib/kafka/data/*'` deletes nothing (the glob is expanded by cpuser, who cannot read the 0750 directory) and `rm -rf dir/*` misses dot files (`.kafka_cleanshutdown`); use `sudo find <dir> -mindepth 1 -delete`. Scripts that `echo $var` over backup lines need `set -f` (`Topic:*` expands to file names).
-- Docker Desktop backend dead with `sailor-ingest.sock rename … cannot be accessed`: quit Docker and `wsl --shutdown`, rename `%LOCALAPPDATA%\Docker\run`, start again. Never "Reset to factory defaults" (it wipes volume `ops-secure`).
+- Podman: `podman images` names local images `localhost/<name>` (count with `(^|/)lab-`); a JS `replace()` with a replacement string containing `$'` pastes the rest of the file (use a function). Installing Podman resets WSL and stops Docker Desktop. Never `podman machine rm kafka-lab` or `reset` casually (it wipes volume `ops-secure`).
 - Building a package set with `dnf download --resolve`: use a clean container and download **before** installing
   tools, or the tools' dependencies are missed (`createrepo_c-libs`).

@@ -1,7 +1,7 @@
 // usage: [MODE=customer] node run-chapter.js <journey.md> <fromChapter> <toChapter|end> <out.sh>   (chapter ids 0–31, B; both inclusive; "A" is accepted as the old name of 0)
 // consecutive blocks on the same host/user run in ONE shell, fed from a file (stdin=/dev/null so ssh can't eat it)
 // MODE: only `customer` exists now (CyberArk PAM only); the variable is kept so older call sites still work.
-// ops02: people arrive as root (PVWA + PSMP in production, plain docker exec in the lab); root's ~/.ssh/config points at /secure/ssh/cpuser_ed25519, so nothing needs to be passed in.
+// ops02: people arrive as root (PVWA + PSMP in production, plain podman exec in the lab); root's ~/.ssh/config points at /secure/ssh/cpuser_ed25519, so nothing needs to be passed in.
 const fs=require("fs"); const [,, md, from, to, out]=process.argv;
 const MODE=process.env.MODE||"customer";
 if(MODE!=="customer") throw new Error("MODE must be customer (the only mode left)");
@@ -28,7 +28,7 @@ while((m=re.exec(sec))){
   if(!/Windows/.test(role.host)) {
     const c= role.host==="dl01" ? "dl01" : `lab-${role.host}-1`;
     const u= role.host==="ops02" ? "-w /root" : "";
-    ex=`docker exec ${u} ${c}`.replace("docker exec  ","docker exec "); key=c+"|"+role.user;
+    ex=`podman exec ${u} ${c}`.replace("podman exec  ","podman exec "); key=c+"|"+role.user;
   }
   const g=groups[groups.length-1];
   if(g && g.key===key) g.blocks.push({n,head,code,host:role.host,user:role.user}); else groups.push({key,ex,blocks:[{n,head,code,host:role.host,user:role.user}]});
@@ -42,7 +42,7 @@ for(const g of groups){
     run++;
     body+=`echo "===== BLOCK ${bl.n} [${bl.host} ${bl.user}] ${bl.head} ====="\n${bl.code}rc=$?; echo "===== rc=$rc ====="; [ $rc -ne 0 ] && { echo "STOP at block ${bl.n}"; exit 1; }\n`;
   }
-  if(g.ex) o+=`\n${g.ex.replace("docker exec","docker exec -i")} bash -c 'cat > /tmp/runner.sh' <<'__BLK__'\n${body}exit 0
+  if(g.ex) o+=`\n${g.ex.replace("podman exec","podman exec -i")} bash -c 'cat > /tmp/runner.sh' <<'__BLK__'\n${body}exit 0
 __BLK__\n${g.ex} bash /tmp/runner.sh </dev/null\n[ $? -ne 0 ] && exit 1\n`;
   else o+=`\n${body}`;
 }

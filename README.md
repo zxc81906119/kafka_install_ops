@@ -1,6 +1,6 @@
 # Confluent Platform 企業版 — 銀行離線安裝與遷移 PoC（8.2 → 8.3）
 
-在完全離線的銀行環境安裝 Confluent Platform 企業版、再遷移到新版的**手動程序**，以及照同一條路寫成的安裝腳本。主線是「先裝**安裝基底**，再**遷移**到目標版本」：lab 在 Windows 11 的 Docker Desktop 上以容器模擬 RHEL 9 主機與銀行各團隊（AD、CA、套件庫、CyberArk PVWA），從零自建、照手冊逐章實跑驗證。
+在完全離線的銀行環境安裝 Confluent Platform 企業版、再遷移到新版的**手動程序**，以及照同一條路寫成的安裝腳本。主線是「先裝**安裝基底**，再**遷移**到目標版本」：lab 在 Windows 11 的 Podman（WSL2 上的 rootful machine）以容器模擬 RHEL 9 主機與銀行各團隊（AD、CA、套件庫、CyberArk PVWA），從零自建、照手冊逐章實跑驗證。
 
 | 元件 | 安裝基底（第 2–19 章） | 遷移目標（第 29、30、31 章） | 數量 |
 |---|---|---|---|
@@ -35,7 +35,7 @@ C3 的版本由原廠相容表決定：2.5.x 支援 CP 到 8.2.x，2.6.x 支援�
 | repo01 | 行內套件庫 web server（lab 兼 NTP） | 銀行 |
 | ad01 | 行內 AD（lab 用 Samba） | 銀行 |
 | lb01 | 負載平衡（lab 用 nginx） | 銀行 |
-| PVWA、PSMP | CyberArk PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA），由 PSMP 代登進操作機成為 root。這是平台和 CyberArk **唯一**的關係；平台的密碼與金鑰不放 CyberArk（lab 無法模擬登入，直接 `docker exec` 以 root 進） | 銀行 Secrets 團隊 |
+| PVWA、PSMP | CyberArk PAM：人員在 PVWA 網頁登入（AD 帳密＋MFA），由 PSMP 代登進操作機成為 root。這是平台和 CyberArk **唯一**的關係；平台的密碼與金鑰不放 CyberArk（lab 無法模擬登入，直接 `podman exec` 以 root 進） | 銀行 Secrets 團隊 |
 
 ## 手冊只有一種模式：客戶情境
 
@@ -85,5 +85,5 @@ redesign/           設計討論紀錄
 ## 已知限制
 
 - 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。Confluent Server 的 raft 指標（`kafka_server_raft_metrics_*`）只有單台 controller 的環境抓得到；三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）一條都沒有，所以不能用來告警，quorum 健康改用 `ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount`；官方 `kraft.json` dashboard 在三台 controller 叢集只有 10／18 個 panel 有值（靠 raft 指標的是空的）。另外官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 B.1 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章已在完整 lab 從零跑過（2026-10-30，手冊第 0 章到附錄 B 全部照打實跑）。
-- CyberArk PAM 本身（PVWA 登入、PSMP 代登與錄影）與放私鑰的加密 file system（LUKS）無法在 lab 模擬：lab 直接以 root 進操作機，`/secure/ssh` 用獨立的 docker volume 代替（獨立掛載點，沒有加密）；只驗證我方拿到值之後的程序。
+- CyberArk PAM 本身（PVWA 登入、PSMP 代登與錄影）與放私鑰的加密 file system（LUKS）無法在 lab 模擬：lab 直接以 root 進操作機，`/secure/ssh` 用獨立的 podman volume 代替（獨立掛載點，沒有加密）；只驗證我方拿到值之後的程序。
 - MDS token 金鑰不排輪替（公鑰檔放兩把沒有用，無法零中斷切換）；只在私鑰外洩時用 `install/lab/mds-token-key-rotate.sh` 驗過的程序換。
