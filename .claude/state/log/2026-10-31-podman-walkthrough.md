@@ -32,3 +32,8 @@
 ## svc-ops.key 留在操作機（使用者 2026-10-31 選定）
 - 19.5 原寫「安裝完成後建議移到離線保管」，和 10-28「平台密碼與金鑰只放操作機」矛盾；改為留在 `~/pki`（0600），追溯靠 PVWA 登入紀錄、PSMP 錄影、Kafka 稽核日誌（User:svc-ops）。
 - 已改：journey 19.5（兩處）、questions 8.8（改成告知）、redesign/README.md、`19-acceptance.sh` 的交付提醒；questions docx 已重建。
+
+## 第 20 章通過（Podman，2026-10-31 19:04）
+- 23 塊 rc=0；kafka-admin 換密碼、master key 輪替＋滾動重啟（MDS 200、C3 200、alice 200）、svc-mds-bind 換密碼（7 行密文、LDAP 錯誤 0）、SSH 換金鑰（探針 28 次 0 失敗）、SCRAM A／B（600 筆 0 錯誤）。
+- 自檢：20.1 總表 master key 的「保管人異動」不合 10-28 定案（沒有保管人）→ 改「每年（待銀行確認 8.6）；疑似外洩時」；SSH 金鑰補題號 4.6。
+- 20.4 out 的 security.properties 行數 151 是舊值，從零建起是 170。

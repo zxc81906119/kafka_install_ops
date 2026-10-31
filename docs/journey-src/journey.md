@@ -4624,9 +4624,9 @@ kc01: /tmp 殘留 0 個；sudoers cpuser,cpuser-ops,
 | 項目 | 放在哪 | 多久換一次 | 誰做 | 怎麼換 |
 |---|---|---|---|---|
 | 緊急 SCRAM 帳號 `kafka-admin` 的密碼 | 操作機 `~/secrets/kafka-admin.pass` | 每次用過就換 | 平台工程師 | 20.2 |
-| Secret Protection 的 master key（與 passphrase） | 操作機 `~/secrets`、各主機 `service.env` | 每年；保管人異動 | 平台工程師 | 20.3 |
+| Secret Protection 的 master key（與 passphrase） | 操作機 `~/secrets`、各主機 `service.env` | 每年（待銀行確認，問題清單 8.6）；疑似外洩時 | 平台工程師 | 20.3 |
 | AD 查詢帳號 `svc-mds-bind` 的密碼 | AD；密文在各主機 `security.properties` | 依銀行 AD 規範；換前一定要通知平台 | AD 團隊換、平台更新密文 | 20.4 |
-| 操作機到各主機的 SSH 金鑰 | 操作機 `/secure/ssh` | 依銀行規範（待確認）；操作機重建 | 平台工程師＋OS 團隊 | 20.5 |
+| 操作機到各主機的 SSH 金鑰 | 操作機 `/secure/ssh` | 每年（待銀行確認，問題清單 4.6）；操作機重建 | 平台工程師＋OS 團隊 | 20.5 |
 | 應用程式的 SCRAM 密碼 | 操作機產生、交應用程式團隊 | 依應用程式團隊 | 維運選單 35（A／B 兩個帳號，換閒置的那個） | 20.6 |
 | 服務憑證（kafka-internal、cp-server…）與 client 憑證 | 操作機 `~/pki` | 一年（CA 簽發效期） | 平台工程師＋CA | 第 21 章 |
 | MDS token 金鑰對 | 各主機 `mds-token-keypair.pem` | 不排輪替，只在外洩時換 | 平台工程師 | 不在本手冊（見設計紀錄） |
@@ -4818,7 +4818,7 @@ cd ~/conf && cp -p ~/secrets/security.properties ~/secrets/security.properties.b
 ```out
 kc01: key=kc01.server.properties
 （7 行）
-changed lines: 7, of which ldap credentials: 7；總行數 151 → 151（要相同）
+changed lines: 7, of which ldap credentials: 7；總行數 170 → 170（要相同）
 ```
 
 > 新密碼會短暫出現在這台操作機的行程參數裡（`--config` 只吃命令列）。能登入操作機的只有經 PSMP 進來的人員（root，全程錄影），可以接受；介意的話就改走 15.3 整批重新加密。
