@@ -1,36 +1,28 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-31 22:40（**lab 使用中（Podman kafka-lab）**：手冊逐章從零跑，第 0–30 章通過；lab 是 8.3.2／C3 2.6.1／JDK 25／OS 9.8；下一步第 31 章、附錄 B）
+Updated: 2026-10-31 22:50（**lab 使用中（Podman kafka-lab）**：手冊版從零跑完 0 → B；lab 是 8.3.2／C3 2.6.1／JDK 25／OS 9.8，監控容器已在 B.2 收掉）
 
 ## 現在在做什麼
-試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。
+手冊版在 Podman 上逐章實跑＋逐章自檢（是否符合最終設計，不只指令對）**全部完成**：第 0–31 章與附錄 B（log/2026-10-31-podman-walkthrough.md 逐章紀錄）。沒有進行中的工作。
 
-## 今天（10-30）做完
-- 手冊從第 0 章完整實跑通過（407 塊；log/2026-10-30-full-manual-run.md）。
-- 手冊殘留的 CyberArk 保管說法清掉（f9bcd44）；docs/evidence 不進版控；job label 不改官方檔；銀行沒有 Streams 應用。
-- Docker Desktop 後端當掉（socket 檔壞）→ 把 `%LOCALAPPDATA%\Docker\run` 改名（`run.old-20261030`）後恢復。
-- 26.4：重置程序第一輪手動實跑、手冊寫好（D.clusterreset 圖在前；8 塊，`@role` 第 4 欄「整本實跑不執行」→ run-chapter.js 略過）、第二輪照手冊原文實跑全過（ACL 4 條建回、第 19 章健康 22/22、安全 16/16、應用程式寫讀過；新試用期到 2026-11-29）。
-- 23.3 `acls.txt` 改成一條一行（`TYPE|name|pattern|principal|host|op|perm`，舊格式排序後無法還原）；手冊與 `install/steps/23-metadata-backup.sh` 都改；23.6 `metadata-restore.sh` 加 `set -f`（`Topic:*`）。
+## 今天（10-31）做完
+- lab 從 Docker Desktop 換到 Podman（rootful WSL2 machine `kafka-lab`），手冊與工具改成 podman；compose 用 docker-compose v5.5.1。
+- 定案：7071 只用 HTTPS；protected.users 補 svc-backup、confluent-audit；svc-ops.key 留在操作機（取代「離線保管」）。
+- 逐章自檢改掉的內容（重點）：21 章 7071 也算憑證端點（把關 13→17、17→19）；23.5 快照要和新備份比；25 章清目錄改 find -delete；20.1／22／24 的數字與題號；29、30 章的腳本名（29-upgrade.sh、30-os-patch.sh）；附錄 B 的 audit dashboard（8.3.2 沒有 confluent-audit-metrics MBean）與 quotas（沒流量）。
+- 遷移後與 OS 9.8 後各重跑第 19 章：健康 22/22、安全 16/16、寫讀、冷開機都過。
+- 下載（使用者同意）：prom/blackbox-exporter:v0.25.0、Rocky 9.8 更新集合 156 個 RPM／79 MB。C3 2.6.0 RPM 沿用 10-30 的檔（重驗簽章）。
 
 ## 下一步（候選）
-1. ~~26.4 包成腳本~~ **做完**：`26-license.sh reset`（輸入現在的 cluster id 確認）＋`23-metadata-backup.sh restore-all`；lab 實跑通過（約 8 分鐘，ACL 4、binding 33），錯的確認被拒，之後第 19 站 42/42。
-2. ~~腳本版從零再跑一次~~ **做完**（20:31，34 段 rc=0，驗收 6 次 42/42；log/2026-10-30-script-full-run.md）。找到 11.2 ad-drill 假通過（腳本版當時還沒有 app-orders.properties，錯誤行被算成 1 個 topic），bank-sim.sh 與手冊 11.2 已修、重跑通過。
-3. ~~銀行確認事項加 license 題~~ **做完**：12.4（docx 已重建）。
-- 待銀行回覆：換金鑰週期；omnibus 正式值。
-
-## OP menu 調整：做完（2026-10-30，log/2026-10-30-opmenu-adjust.md）
-- 13 consumer group（lag＋在線成員）、15 查看配額、38 調整配額（新）、17 加 license、43 查詢與匯出（合併 45，可選一般／敏感 _sensitive／全部）、44 快照補 rbac.txt、ACL 新格式（7 檔和每日備份 sha256 相同）。
-- 每日備份 rbac.txt 去對齊空白、LC_ALL=C 排序；順手修 44 CSV 少最後一筆、23.6 叢集層級 binding、11.2 ad-drill 假通過。
-- 驗證：手冊 16.5／18.3／23.3／23.5 原文在 lab 跑過；16 站新檢查 FAIL 0；回歸 45/45；23.6 drill 通過。
-- 還沒做：腳本版與手冊版都還沒從零重跑一次（含這些改動）。
-
-## 手冊逐章實跑（2026-10-31，log/2026-10-31-chapter-walkthrough.md）
-- 第 0–28 章照手冊原文跑完（基底、20 輪替、21 憑證／換 CA G2／換鏈 G3、22–28 維運）。lab 信任 G3 根。下一步 `run-full.sh customer 29 29`（遷移），之後 30（OS 9.8）、31（C3 2.6.1）、B。
-- 途中定案並已改手冊：7071 只用 HTTPS（17 章、19.2、25.1.5、B.2、questions 11.3／11.4）。scan-log 修了兩處（http=000 是預期；FAIL 開頭一律可疑）。
-- 待做：① 待修清單（log 裡列的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas 列入待確認）；② 手冊版跑完後改腳本（17-jmx-exporter.sh、19-acceptance.sh 健康與安全兩項、templates/jmx-header.yml、prometheus-scrape.yml），再腳本版從零實跑。
+1. 改腳本版：`17-jmx-exporter.sh`、`19-acceptance.sh`（健康與安全兩項）、`templates/jmx-header.yml`、`prometheus-scrape.yml` → 7071 只用 HTTPS；同步手冊這次的修正（21 章 7071 把關、23.5 快照比對等，若腳本有對應）。
+2. 腳本版在 Podman 上從零實跑（`install/lab/run-customer.sh`）。
+3. 兩邊都過之後：移除 Docker Desktop（使用者自己按確認）。
+4. 待決定：稽核寫入失敗是否用 `confluent-event-logger` 的 producer 指標告警（redesign/README.md 394 之後）。
+5. 舊待修清單（10-31 Docker 逐章時記的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas）：Podman 這輪沒再出現問題，要不要結案待看。
+- 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。
 
 ## 環境狀態
-- lab：專案 `lab`，由腳本版 10-30 17:45 從零建出並跑完整條主線：OS 9.8、CP 8.3.2、C3 2.6.1、JDK 25；license trial 到 2026-11-29。
-- Docker VM 約 10.7 GB，不要同時跑別的。絕不按 Docker Desktop 的 Reset to factory defaults（會清掉 volume `ops-secure`）。
+- lab：Podman machine `kafka-lab`，compose 專案 `lab`（14 台＋dl01），10-31 照手冊從零建。監控容器（lab-mon-*）B.2 已收；要再用跑 `bank-sim.sh monitoring`。license trial 到 2026-11-30。
+- lab 信任根是 G3（21.4 之後）；簽新憑證用 `~/kafka-lab/ca/g2/sign.sh`（中繼 G2 由 G3 簽）。
+- WSL2 11 GB（.wslconfig），Docker Desktop 不要同時開。絕不 `podman machine rm/reset kafka-lab`（volume `ops-secure`）。
 - 密碼檔：`~/kafka-lab/secrets.env`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
-- Git Bash 的 `python3` 是 Store 空殼：改檔用 node；跑手冊片段時 `export MSYS_NO_PATHCONV=1`。
+- Git Bash 的 `python3` 是 Store 空殼：改檔用 node（替換字串用函式，避免 `$'`）；podman 指令前加 `MSYS_NO_PATHCONV=1`。
