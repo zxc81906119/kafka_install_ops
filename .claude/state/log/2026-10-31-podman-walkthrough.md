@@ -87,3 +87,9 @@
 ## 第 31 章通過（Podman，2026-10-31 22:45）
 - 使用者選擇不重下載 C3 2.6.0 RPM（1 GB，10-30 下載過）：dl01 上 rpm -K、sha256 -c 都 OK；31.1 的下載塊略過（runner 產生後刪掉那一塊），其餘 5 塊 rc=0。
 - 31.3 退回 2.6.0、31.4 升回 2.6.1：config same、ExecStart 我們的、4 個 generated 檔 cp-control-center、alice 200、Prometheus 指標 125 種。
+
+## 附錄 B 通過（Podman，2026-10-31 22:43）——整本手冊第 0 章到附錄 B 在 Podman 上照原文跑完
+- B.1 32 個 dashboard、816 panel、296 有資料（和 10-29 完全相同）；B.2 lab-mon-* 收掉 0 個剩下。
+- 自檢發現：audit dashboard 0／6 是 8.3.2 沒有 confluent-audit-metrics MBean（jshell attach 確認），刪掉「啟用後 5／6」；quotas 0／6 是沒流量（sensor 閒置過期）。B.2 備註 license 指 26 章（原寫 22）。
+- 待決定：稽核寫入失敗是否用 confluent-event-logger producer 指標告警（記在 redesign）。
+- 注意：B.2 收掉了監控容器；要再用監控需 `bank-sim.sh monitoring`。

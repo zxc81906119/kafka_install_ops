@@ -8835,7 +8835,7 @@ zookeeper-cluster.json                 11      0
 合計 32 個 dashboard、816 個 panel、296 個有資料
 ```
 
-怎麼讀這張表（2026-10-29 在**遷移完成後**的 lab 實測——Confluent Server 8.3.2、C3 2.6.1，3 台 controller、4 台 broker、2 台 REST Proxy、1 台 C3，第 18 章的稽核已開。和安裝基底 8.2.4／C3 2.5.1 時量的比，只有 C3 Streams 那三張變了（17.2 改收 Kafka Streams），其餘各列相同；**Tiered Storage 沒開，要在正式叢集上補驗**）：
+怎麼讀這張表（2026-10-29 在**遷移完成後**的 lab 實測；2026-10-31 在 Podman 上從零重跑到遷移、OS 9.8 之後再量，數字完全相同——Confluent Server 8.3.2、C3 2.6.1，3 台 controller、4 台 broker、2 台 REST Proxy、1 台 C3，第 18 章的稽核已開。和安裝基底 8.2.4／C3 2.5.1 時量的比，只有 C3 Streams 那三張變了（17.2 改收 Kafka Streams），其餘各列相同；**Tiered Storage 沒開，要在正式叢集上補驗**）：
 
 | dashboard（檔名） | 有資料／總數 | 判讀 |
 |---|---|---|
@@ -8844,12 +8844,12 @@ zookeeper-cluster.json                 11      0
 | `kafka-topics-kraft.json` | 13／13 | **可用**。topic 大小、流量、partition |
 | `kafka-transaction-coordinator.json` | 0／10 | **空**。這輪沒有應用程式使用交易（transaction），coordinator 沒有活動；有交易型應用之後再看 |
 | `rest-proxy.json` | 10／10 | **可用**。每個 REST endpoint 的請求率、錯誤、延遲 |
-| `confluent-audit.json` | 0／6（第 18 章稽核啟用之前） | **稽核啟用後才有值**；上一輪啟用後量到 5／6，缺的是「Fallback entries」，稽核寫不進 topic 才會有值 |
+| `confluent-audit.json` | 0／6（第 18 章稽核已啟用） | **空**。官方規則要的 MBean `kafka.server:type=confluent-audit-metrics` 在 8.3.2 的 broker 上不存在（2026-10-31 用 jshell attach 到 broker 列出全部 5,452 個 MBean 確認），稽核只以 producer `confluent-event-logger` 出現；稽核是否在寫看第 18 章的 topic 與選單 43。之前寫的「啟用後 5／6」無法重現，已刪 |
 | `confluent-platform-kraft.json` | 8／23 | **部分**。總覽裡 broker、controller 的部分有值；Schema Registry、Connect、ksqlDB 區塊是空的（我們沒有這些元件） |
 | `kafka-topics.json`、`kafka-cluster.json`、`confluent-platform.json` | 10／12、64／87、4／26 | **用 KRaft 版就好**。這三張是 ZooKeeper 時代的版本；「Total # of Topics」「Active Controllers」「Offline Partitions」等 panel 同樣寫 `job="kafka-broker"`，在專用 controller 的 KRaft 叢集裡是空的 |
 | `kafka-consumer.json`、`kafka-producer.json`、`kafka-lag-exporter.json` | 3／25、3／32、3／9 | **部分／要另外接**。這幾張要應用程式（或 lag exporter）自己掛 exporter；只有 broker 端看得到的少數 panel 有值。consumer lag 請看 C3 畫面 |
 | `cluster-linking.json`、`tiered-storage.json` | 12／19、3／8 | 沒開這兩個功能，有值的是不分功能的計數（多數是 0） |
-| `kafka-quotas.json` | 0／6 | **未驗證**。要有 quota 設定才有 `kafka_server_produce_byte_rate`；lab 這次的測試叢集沒設 quota（正式叢集依 `conf/apps.txt` 設了，應該有值） |
+| `kafka-quotas.json` | 0／6 | **有流量才有值**。`kafka_server_produce_byte_rate{user=…}` 這類序列來自 `kafka.server:type=Produce,user=…`，只在設了配額的帳號正在傳資料時存在，閒置約一小時就消失；lab 量的時候沒有應用程式流量（設了配額的帳號都在，2026-10-31 確認 MBean 也不在）。正式叢集有流量時應該有值，上線後再看一次 |
 | `confluent-rbac.json` | 7／10 | **大部分可用**。MDS 與 RBAC 開著，授權相關的計數有值；其餘 3 個沒有查明原因 |
 | `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 26／27、14／24、39／40 | **C3 自己的 Kafka Streams**（17.2：C3 收 `kafka.streams:*`，套官方 `kafka_streams.yml` 規則，約 2,100 條序列）。選 `job=control-center` 就看到 C3 的 thread、task、RocksDB store（`AlertHistoryStore`、`commander`）。空的兩個 panel 用 `task_created_total`、`number_file_errors_total`：JMX exporter 1.x 會把 gauge 名稱結尾的 `_total` 拿掉（OpenMetrics 規定 `_total` 只給 counter），官方 dashboard 還用舊名。globalktable 空的 10 個是 C3 沒有用到的 GlobalKTable、cache 類指標。銀行目前沒有自己的 Kafka Streams 應用（2026-10-30 確認），所以這幾張看的只有 C3；之後若有，應用程式掛同一份規則就能看 |
 | `kafka-connect-cluster.json`、`confluent-oracle-cdc.json`、`mongo.json`、`debezium-connectors.json`、`replicator.json` | 全 0 | **空**。沒有 Connect |
@@ -8872,7 +8872,7 @@ lab-mon-* 已收掉：0 個剩下
 
 > 兩件事要跟銀行講清楚：(1) exporter 的 YAML 沒有明文密碼（keystore 密碼在 root 0600 的 `/etc/confluent/jmx-exporter.env`，YAML 裡也沒有帳密：7071 只做 HTTPS，存取控制靠防火牆只放行 Prometheus），YAML 維持 root:confluent 0640；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3（畫面）或另外接 lag exporter；Grafana 的 `kafka-consumer.json`、`kafka-lag-exporter.json` 要有對應來源才有資料。
 >
-> 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用 22 章的 syslog 告警；稽核事件看第 18 章。
+> 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用第 26 章、憑證到期用第 22 章的 syslog 告警；稽核事件看第 18 章。
 >
 > KRaft 指標：Confluent Server 的 `kafka_server_raft_metrics_*`（current_leader、number_of_voters、commit／election latency 等）**只有單台 controller（`--standalone`）的環境抓得到**。三台 controller 的叢集，不論 8.2.4 或遷移後的 8.3.2，實測 controller job 有三千多條序列，raft 指標卻是 0 條。所以 quorum 健康靠 controller 自己的四個指標：`ActiveControllerCount`（全叢集剛好 1）、`LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`（leader 更換次數）；quorum 內容用 `kafka-metadata-quorum describe --status` 看。官方 `kraft.json` 這張 dashboard 因此只有一部分有值（實測 10／18），其餘靠 raft 指標的 panel 是空的。
 
