@@ -55,3 +55,8 @@
 ## 第 24 章通過（Podman，2026-10-31 20:44）
 - 9 塊 rc=0；規則 27 條 0 錯、retention 縮短 250 秒後三個 replica 0 KB、reassign 4 秒 kb01 目錄消失。
 - 自檢：章首「19 → 21 條」改成「多 2 條（17 章後 22→24，做過 22 章 25→27）」。
+
+## 第 25 章通過（Podman，2026-10-31 20:52）
+- 14 塊 rc=0；換 kc03（新 directory id，MDS 全程 200）、kb04 縮減 71 個 replica 約 12 分、空 broker 加回 1020 秒後 104 上 10 個 replica、背景 6 萬筆 0 ERROR／2 次 leader 重送。
+- 改：25.1.2／25.2.3 清資料目錄 rm -rf dir/* → find -mindepth 1 -delete（腳本版本來就是）；format 輸出 4.3-IV0B → 基底的 4.2-IV1A；scan-log EXPECTED 加「ERROR 行）：0；」（第 14 塊誤報）。
+- 使用者問：重建要新 cluster id？答：第 25 章沿用原 cluster id、只換 directory id，零停機；只有 26.4 試用期重置才用新 cluster id（停機約 15 分）。

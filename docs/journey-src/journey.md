@@ -6945,10 +6945,10 @@ NodeId  DirectoryId             LogEndOffset  Lag  LastFetchTimestamp  LastCaugh
 
 @role Lab 管理員 | Windows 終端 | 本機
 
-正式環境是銀行主機團隊換了碟、掛回同一個路徑。lab 裡：用清空資料目錄模擬：
+正式環境是銀行主機團隊換了碟、掛回同一個路徑。lab 裡：用清空資料目錄模擬（用 `find -mindepth 1 -delete`：`rm -rf <目錄>/*` 會漏掉 `.kafka_cleanshutdown` 這類點開頭的檔）：
 
 ```bash
-podman exec lab-kc03-1 bash -c 'systemctl stop confluent-server && rm -rf /var/lib/kafka/data/* && echo "kc03 data: $(ls -A /var/lib/kafka/data | wc -l) files, $(stat -c %U:%G:%a /var/lib/kafka/data)"'
+podman exec lab-kc03-1 bash -c 'systemctl stop confluent-server && find /var/lib/kafka/data -mindepth 1 -delete && echo "kc03 data: $(ls -A /var/lib/kafka/data | wc -l) files, $(stat -c %U:%G:%a /var/lib/kafka/data)"'
 ```
 
 ```out
@@ -6998,7 +6998,7 @@ source ~/conf/kraft.env && ssh kc03.poc.lab "sudo bash -c 'run() { set -a; . /et
 ```
 
 ```out
-Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
 kc03 active dir=eELCq6OM-4WuTdfGQSmOgQ（新的 directory id，和 OLD_DIR 不同）
 kc03：Lag=0 Observer
 ```
@@ -7118,13 +7118,15 @@ under-replicated：0
 加回來的 broker 必須是空的（舊 replica 不能帶回來）：清空資料目錄、用同一個 cluster id 以觀察者格式化、啟動。換一台全新主機時，前面照第 4、5、7、8 章準備，憑證的 SAN 要有它的名稱（21.2）：
 
 ```bash
-source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'rm -rf /var/lib/kafka/data/*; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
+source ~/conf/kraft.env && ssh kb04.poc.lab "sudo bash -c 'find /var/lib/kafka/data -mindepth 1 -delete; run() { set -a; . /etc/confluent/service.env; set +a; runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY=\"\$CONFLUENT_SECURITY_MASTER_KEY\" \"\$@\"; }; run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id $CLUSTER_ID --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1' && sudo systemctl enable --now confluent-server >/dev/null 2>&1" && for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ] && break; sleep 5; done; echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
 ```
 
 ```out
-Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.3-IV0B.
+Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
 kb04 MDS=200
 ```
+
+（版本字串跟著裝的版本走：基底 8.2.4 是 `4.2-IV1A`，遷移到 8.3.2 之後換節點是 `4.3-IV0B`。）
 
 Self-Balancing 發現空的 broker 會自己開始搬（不用下指令）。它不是馬上動：lab 等了十幾分鐘才開始，之後分批搬、要再一段時間才平均（實測加回 30 分鐘時 101–103 各約 130、104 約 45，還在增加）。這裡等到 104 上有 replica、而且沒有 under-replicated：
 
