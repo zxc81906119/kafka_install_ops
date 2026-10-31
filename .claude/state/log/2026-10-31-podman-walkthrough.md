@@ -20,3 +20,5 @@
   - protected.users 實測：rest01 暫時把 svc-backup 加進 CN 對應規則（LB 先停用 rest01），app-legacy-billing 200、svc-backup 401（日誌 `Error while impersonating user svc-backup`）；還原規則、重啟、LB 恢復。
 - 第 13 章：5 塊全過（C3 UI 50 s、kafka_broker_id 7）。自檢：「操作機連不到 9090（防火牆只開 9021）」不對（7.3 有開 9090、19.2 也從操作機連）→ 改成「9090 要 client 憑證，在 c3-01 用 c3-monitoring 查」。13 章節點數那項待修：手冊已寫「>0、穩定 7、剛啟動 5」，不用改。埠對應：Windows localhost:19021 → HTTP 200（CN=cp-server），0.6 兩側都驗完。
 - 第 14 章：1 塊全過。out 的 C3 topic `2-6-1` → `2-5-1`（待修清單）。自檢：14.2 格式化重來用 `rm -rf …/*`（CLAUDE.md 陷阱：經 ssh 什麼都沒刪、漏隱藏檔）→ `sudo find … -mindepth 1 -delete`；14.1 broker 列補 metadata-service.log。
+- 待第 25 章處理：25.1（6951 行附近）、25.2（7121 行附近）清資料用 rm -rf …/*（以 root 展開，刪得到但漏隱藏檔）→ 改 find -mindepth 1 -delete 再實測。
+- 第 15 章：13 塊全過；protected.users 保留（一開始以為沒有：encrypt 會把整份重排成 `key = value`，用 `欄位=` 比對會找不到）。自檢無問題。
