@@ -106,3 +106,7 @@
 - 使用者要用 Podman Desktop 的 Compose 擴充：containers.conf（只有我們的 compose_providers）搬到 scratchpad 備份；擴充 Set up（system-wide）→ %LOCALAPPDATA%\Microsoft\WindowsApps\docker-compose.exe v5.6.1；podman compose 找得到、`-p lab ps` 14 台；刪掉自己下載的 %LOCALAPPDATA%\Programs\docker-compose。
 - 手冊 0.0：第 2 步改成 Podman Desktop 的 Compose 擴充，指令拿掉 containers.conf；在 Git Bash 手動跑通過（out 相同，v5.6.1）。
 - 事故：測 0.0 時把 WindowsApps 放在 PATH 最前面，`bash` 變成 WSL 的 bash.exe，指令跑進 Ubuntu 並開始 `podman machine init`（下載 machine image）。立刻停掉；Ubuntu 裡 23:27 新建的 ~/kafka-lab、~/.local/share/containers/podman（311 MB）、~/.config/containers 已刪，原有的 cache、storage 未動，Ubuntu 停回。陷阱記進 CLAUDE.md。
+
+## 腳本版跟上 7071 只用 HTTPS（2026-10-31 23:55）
+- 17-jmx-exporter.sh：拿掉抓取密碼與鹽（重跑時刪掉舊的 jmx-scrape.pass／salt、to-bank 的 scrape.pass），17.4 改驗 https=200、http=000、有指標；jmx-header.yml 拿掉 authentication；prometheus-scrape.yml 拿掉 4 個 basic_auth；19-acceptance.sh 改「7071 只走 HTTPS」。redesign、questions（表格 7071 那列）同步，docx 重建。
+- 腳本版從零實跑：使用者決定改天。待決定 C3 2.6.0 RPM 是否重抓。
