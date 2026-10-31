@@ -60,3 +60,7 @@
 - 14 塊 rc=0；換 kc03（新 directory id，MDS 全程 200）、kb04 縮減 71 個 replica 約 12 分、空 broker 加回 1020 秒後 104 上 10 個 replica、背景 6 萬筆 0 ERROR／2 次 leader 重送。
 - 改：25.1.2／25.2.3 清資料目錄 rm -rf dir/* → find -mindepth 1 -delete（腳本版本來就是）；format 輸出 4.3-IV0B → 基底的 4.2-IV1A；scan-log EXPECTED 加「ERROR 行）：0；」（第 14 塊誤報）。
 - 使用者問：重建要新 cluster id？答：第 25 章沿用原 cluster id、只換 directory id，零停機；只有 26.4 試用期重置才用新 cluster id（停機約 15 分）。
+
+## 第 26 章通過（Podman，2026-10-31 21:29）
+- 26.1／26.2 3 塊 rc=0（trial 剩 29 天、rc=2、timer 08:00）；26.4 重置 8 塊照設計略過（on-demand, destructive；10-30 在 Docker lab 實跑過）。
+- 自檢無需修改：license JWT 放 ~/secrets 0600、不放 CyberArk；重置後用 kafka-internal 建第一條 binding（同第 11 章）。
