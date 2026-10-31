@@ -905,12 +905,12 @@ sha256-ok
 lab 裡：正式環境才有的三樣東西，這樣模擬：
 - **沒有 PVWA、PSMP**：你用 `podman exec -it -w /root lab-ops02-1 bash` 直接以 root 進操作機，就是「PSMP 代登之後」。平台的密碼與金鑰不放 CyberArk，所以 lab 也不需要模擬保管庫。
 - **沒有 LUKS**：`/secure/ssh` 是 0.6 compose 裡的獨立 podman volume `ops-secure`，只模擬「獨立的 file system」（獨立掛載點、容器重啟還在），沒有加密。
-- **密碼與金鑰的輪替**都是人手動做（20.3、20.4、20.5、20），沒有任何自動輪替。
+- **密碼與金鑰的輪替**都是人手動做（20.2–20.6），沒有任何自動輪替。
 ## 4.1 每台主機建 cpuser（銀行 OS 團隊）
 
 @role 銀行 OS 團隊（每台主機依變更單做；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-每台主機（含操作機）以 root 做四件事：建帳號（UID／GID 固定 1500，不設密碼，useradd 預設就是鎖定）、sshd 設定、安裝期的全權 sudo。公鑰等操作機產生金鑰後（4.3）再放。lab 對每個容器各跑一次：
+每台主機（含操作機）以 root 做三件事：建帳號（UID／GID 固定 1500，不設密碼，useradd 預設就是鎖定）、sshd 設定、安裝期的全權 sudo。公鑰等操作機產生金鑰後（4.3）再放。lab 對每個容器各跑一次：
 
 ```bash
 for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman exec -i lab-$h-1 bash -s <<'EOF'
@@ -1022,7 +1022,7 @@ podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519 | podman exec -i lab-kb01
 
 ```out
 cpuser@kb02.poc.lab: Permission denied (publickey).
-not from a permitted host (host=kb01.poc.lab, ip=172.35.0.31, public key ED25…
+not from a permitted host (host=172.35.0.31, ip=172.35.0.31, public key ED25…
 ```
 
 > 說明：
