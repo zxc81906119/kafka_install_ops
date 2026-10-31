@@ -93,3 +93,10 @@
 - 自檢發現：audit dashboard 0／6 是 8.3.2 沒有 confluent-audit-metrics MBean（jshell attach 確認），刪掉「啟用後 5／6」；quotas 0／6 是沒流量（sensor 閒置過期）。B.2 備註 license 指 26 章（原寫 22）。
 - 待決定：稽核寫入失敗是否用 confluent-event-logger producer 指標告警（記在 redesign）。
 - 注意：B.2 收掉了監控容器；要再用監控需 `bank-sim.sh monitoring`。
+
+## Docker Desktop 已移除（2026-10-31 晚）；給 Podman Desktop 同事的準備
+- 使用者自己移除了 Docker Desktop（choco 紀錄還留著 docker-desktop 4.90.0）：exe、docker-desktop distro、281 GB 的 docker_data.vhdx 都不在了，C 槽剩 291 GB。殘留小資料夾（~90 MB）與 choco 紀錄待清。
+- 移除時 WSL 被關掉：machine kafka-lab 停了，`podman machine start kafka-lab` 後 lab 14 台自動回來，**dl01 沒回來**（restart=no）。
+- 修：手冊與 bank-sim.sh 所有 `podman run -d`（dl01、5 個 lab-mon-*，共 11 處）加 `--restart unless-stopped`；現有 dl01 `podman update --restart`；重開 machine 驗證 15 台全回來。
+- 0.0 補：硬體（16 GB、磁碟 80 GB：vhdx 58 GB＋~/kafka-lab 7 GB、Podman 6.1.4）、Podman Desktop 使用者三件事（machine 不用它建、compose 擴充無妨、不要 Reset／Delete kafka-lab）、restart 政策說明。
+- 先前把 build.js（docx 的進主機指令）、tools/README.md、lint.sh 的 docker 改成 podman（3a9b823）。

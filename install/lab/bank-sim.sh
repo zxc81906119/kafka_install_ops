@@ -225,11 +225,11 @@ http.server.HTTPServer(('0.0.0.0', 8080), H).serve_forever()
 PY
   # 主機名稱 → 容器 IP（Prometheus 容器不在 compose 裡，要自己給）
   for h in $KAFKA_HOSTS $RESTS $C3_HOST; do hosts="$hosts --add-host $(fqdn "$h"):$(podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$h")")"; done
-  podman run -d --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(windows_path "$dir/webhook"):/w:ro" $NODE_IMAGE python3 -u /w/receiver.py >/dev/null
-  podman run -d --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(windows_path "$dir/alertmanager/alertmanager.yml"):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null
+  podman run -d --restart unless-stopped --name lab-mon-webhook --network lab_labnet --memory 64m -v "$(windows_path "$dir/webhook"):/w:ro" $NODE_IMAGE python3 -u /w/receiver.py >/dev/null
+  podman run -d --restart unless-stopped --name lab-mon-alertmanager --network lab_labnet --memory 128m -v "$(windows_path "$dir/alertmanager/alertmanager.yml"):/etc/alertmanager/alertmanager.yml:ro" prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= >/dev/null
   # shellcheck disable=SC2086
-  podman run -d --name lab-mon-prometheus --network lab_labnet --memory 600m $hosts -v "$(windows_path "$dir/prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null
-  podman run -d --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(windows_path "$dir/grafana/provisioning"):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null
+  podman run -d --restart unless-stopped --name lab-mon-prometheus --network lab_labnet --memory 600m $hosts -v "$(windows_path "$dir/prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d >/dev/null
+  podman run -d --restart unless-stopped --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin -v "$(windows_path "$dir/grafana/provisioning"):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 >/dev/null
   announce "Windows 瀏覽器：Prometheus http://localhost:19090（若有發布）、Grafana http://localhost:13000（匿名 Admin，只在 lab）"
 }
 
@@ -336,7 +336,7 @@ monitoring_blackbox() {   # 22.2（lab）：監控團隊起 blackbox_exporter（
   hosts="$hosts --add-host $REST_VIP:$(labnet_ip "$LB_HOST")"
   podman rm -f lab-mon-blackbox >/dev/null 2>&1
   # shellcheck disable=SC2086
-  podman run -d --name lab-mon-blackbox --network lab_labnet --memory 64m $hosts -v "$(windows_path "$dir/blackbox/blackbox.yml"):/etc/blackbox_exporter/config.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml >/dev/null
+  podman run -d --restart unless-stopped --name lab-mon-blackbox --network lab_labnet --memory 64m $hosts -v "$(windows_path "$dir/blackbox/blackbox.yml"):/etc/blackbox_exporter/config.yml:ro" -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml >/dev/null
   # prometheus.yml：scrape_config_files 與 rule_files 都改成萬用字元（單檔 bind mount，改了要 restart）
   sed -i 's#scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]#scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]#; s#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' "$dir/prometheus/prometheus.yml"
   podman restart lab-mon-prometheus >/dev/null
