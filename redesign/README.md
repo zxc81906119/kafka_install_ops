@@ -593,3 +593,8 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 使用者決定：7071 只做 HTTPS（銀行根憑證驗得過鏈），不用 basic auth，也不用 mTLS。指標只讀、沒有訊息內容與密碼；少一組要交給銀行、要同步輪替的抓取密碼。
 - 代價：連得到 7071 的人都讀得到平台結構資訊（topic、consumer group、client id）。存取控制改成只靠網路：請銀行確認事項 11.4（7071 只放行行內 Prometheus 的來源位址）變成必要條件。
 - 要改：手冊 17.1／17.4／17.5、19 章驗收、25.1.5、B.2；`install/steps/17-jmx-exporter.sh`、`19-acceptance.sh`、`templates/jmx-header.yml`、`prometheus-scrape.yml`；questions 11.4。照三步：逐章手冊實跑到第 17 章前，先在 lab 手動試，再改手冊、照手冊跑，最後改腳本。
+
+### lab 改用 Podman，移除 Docker Desktop（2026-10-31 定案）
+- 使用者決定：lab 最後只留 Podman（CLI＋WSL2 上的 rootful machine），Docker Desktop 移除；docker-compose 留著（獨立版，當 `podman compose` 的 provider）。手冊與腳本的指令改寫成 `podman …`／`podman compose …`（不靠 alias）。
+- 可行性測試（log/2026-10-31-podman-feasibility.md）：compose 名稱、systemd、固定 IP、firewalld、sysctl、cp／exec 都可行；要另外處理 `podman-restart.service`、Windows 開機啟動 machine、記憶體（.wslconfig）。真實度不變（共用 WSL2 kernel），net.core.* sysctl 改得動是唯一改善。
+- 順序：先換 Podman（三步：在 Podman 上手動建 lab → 改第 0 章與全書的 docker 指令、lab 腳本、實跑工具、CLAUDE.md → 照手冊從零逐章跑，再腳本版從零），兩邊都過才移除 Docker Desktop。Docker 上第 20 章之後的逐章實跑不再接續。
