@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-10-31 19:50（**lab 使用中（Podman kafka-lab）**：手冊逐章從零跑，第 0–21 章通過；svc-ops.key 定案留在操作機；下一步第 22 章）
+Updated: 2026-10-31 21:40（**lab 使用中（Podman kafka-lab）**：手冊逐章從零跑，第 0–28 章通過；下一步第 29 章遷移 8.3.2／JDK 25）
 
 ## 現在在做什麼
 試用 license 到期的處理寫成手冊 **26.4「試用期到期：申請延長，或重置測試環境的叢集」** 並實測兩輪（log/2026-10-30-trial-reset.md）。沒有進行中的工作。
@@ -25,7 +25,7 @@ Updated: 2026-10-31 19:50（**lab 使用中（Podman kafka-lab）**：手冊逐�
 - 還沒做：腳本版與手冊版都還沒從零重跑一次（含這些改動）。
 
 ## 手冊逐章實跑（2026-10-31，log/2026-10-31-chapter-walkthrough.md）
-- 第 0–21 章照手冊原文跑完（基底 + 20 輪替 + 21 憑證輪替／換 CA G2／換鏈 G3）。lab 目前信任 G3 根、leaf 由 G2 中繼（G3 簽）簽發。下一步 `run-full.sh customer 22 22`。
+- 第 0–28 章照手冊原文跑完（基底、20 輪替、21 憑證／換 CA G2／換鏈 G3、22–28 維運）。lab 信任 G3 根。下一步 `run-full.sh customer 29 29`（遷移），之後 30（OS 9.8）、31（C3 2.6.1）、B。
 - 途中定案並已改手冊：7071 只用 HTTPS（17 章、19.2、25.1.5、B.2、questions 11.3／11.4）。scan-log 修了兩處（http=000 是預期；FAIL 開頭一律可疑）。
 - 待做：① 待修清單（log 裡列的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas 列入待確認）；② 手冊版跑完後改腳本（17-jmx-exporter.sh、19-acceptance.sh 健康與安全兩項、templates/jmx-header.yml、prometheus-scrape.yml），再腳本版從零實跑。
 
