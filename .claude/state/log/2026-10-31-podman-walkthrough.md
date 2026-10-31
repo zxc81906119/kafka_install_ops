@@ -24,3 +24,4 @@
 - 第 15 章：13 塊全過；protected.users 保留（一開始以為沒有：encrypt 會把整份重排成 `key = value`，用 `欄位=` 比對會找不到）。自檢無問題。
 - 第 16 章：16 塊全過。自檢：開頭說「91 用於 MDS 故障時」與設計相反（91 要 MDS 換 token）→ 改成「AD 處理不了時用 91；MDS 也不通時選單進緊急主機模式、Kafka 類用 28.6 kafka-admin」。
 - 第 17 章：23 塊過，第 24 塊遇到 Windows podman 客戶端經 ssh 連 machine 斷線（`ssh: handshake failed … wsarecv`，machine 正常、沒有當機），只重跑 24、25 塊通過。結果與 Docker 輪一致（https=200 http=000、up 10／10、22 條規則、32 dashboard、兩種 webhook firing／resolved）。自檢：17.5「抓取密碼放檔案不放設定裡」殘留 → 改成「只有 scheme https 與 tls_config，沒有帳密」。
+- 第 18 章：8 塊全過（_sensitive 2 筆、43 篩 bob 2 筆存檔、敏感 1 筆、carol 被拒、RF 3）。自檢無問題；待修清單的 18.4 min.insync.replicas=1：手冊已寫明是刻意（少一台 broker 不停寫），劃掉。
