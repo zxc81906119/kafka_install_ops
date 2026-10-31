@@ -14,3 +14,4 @@
 - 第 10 章：11 塊全過（Podman 上第一次起 Kafka 正常）。自檢：super.users 只有 kafka-internal、kafka-admin 只是 SCRAM 緊急帳號、TOKEN／CLIENT／LDAP 不要求 client 憑證，符合。補：10.4 的 MDS 日誌位置（metadata-service.log，不在 journal）；格式化的 `WARN 'share'` 說明（待修清單那一項）。
 - **待使用者決定**：broker 的 `confluent.metadata.server.impersonation.protected.users` 沒有後來新增的平台身分 `confluent-audit`（18）、`svc-backup`（23）。要補的話改手冊第 10 章與 install/templates/broker.tpl，第 12 章 REST 起來後實測冒用被拒。
 - 使用者決定補 protected.users（svc-backup、confluent-audit）：lab 手動改 ~/conf/broker.tpl、kb0*.server.properties、派送、逐台重啟（MDS 200、9 個身分），手冊第 10 章與 install/templates/broker.tpl 跟著改。第 12 章要實測：REST 冒用 svc-backup 被拒。
+- 第 11 章：13 塊全過（25 條 binding、alice SystemAdmin／carol DeveloperRead、密碼檔 600、11.2 alice 401／kafka-admin 10 個／AD 開回 200）。自檢無問題。
