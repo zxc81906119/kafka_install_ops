@@ -11,3 +11,5 @@
 - 第 7 章：14 塊全過；broker 仍是 errors=2——查出 `sysctl -w` 失敗也回 0（直接寫 /proc/sys/net/core/rmem_max 是 Permission denied），可行性測試那句「Podman 改得動」是誤判，已更正 feasibility log 與 redesign；手冊 7.3「errors=2，VM 上是 0」本來就對。自檢：7.3 防火牆後補「7071 沒有帳密，存取控制靠防火牆，拿到 Prometheus 位址後只放行它（11.4）」；「進7.3」空格。
 - 第 8 章：3 塊全過。自檢：「第 29 章由腳本解開 versionlock」→「逐台解開、換完再鎖回（29.3–29.6）」（手冊是手打指令）。
 - 第 9 章：6 塊全過（9 張 CSR、9 張簽發、檢查全 ok、21 個檔）。自檢：憑證表補用途——cp-server 也是 C3 內建 Prometheus／Alertmanager 與 broker／REST／C3 的 7071；kafka-internal 也是 controller 的 7071。
+- 第 10 章：11 塊全過（Podman 上第一次起 Kafka 正常）。自檢：super.users 只有 kafka-internal、kafka-admin 只是 SCRAM 緊急帳號、TOKEN／CLIENT／LDAP 不要求 client 憑證，符合。補：10.4 的 MDS 日誌位置（metadata-service.log，不在 journal）；格式化的 `WARN 'share'` 說明（待修清單那一項）。
+- **待使用者決定**：broker 的 `confluent.metadata.server.impersonation.protected.users` 沒有後來新增的平台身分 `confluent-audit`（18）、`svc-backup`（23）。要補的話改手冊第 10 章與 install/templates/broker.tpl，第 12 章 REST 起來後實測冒用被拒。

@@ -2025,7 +2025,7 @@ kb01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx node.id=101
 （7 台 cluster.id 相同。metadata 版本字串跟著安裝的版本走：基底 8.2.4 預期是 4.2-IV1A（features describe 顯示 CP-8.2-IV1A），遷移到 8.3.2 之後新格式化的（25.1、25.2 節）才是 4.3-IV0B；字串以實際為準，從零重跑時對一次）
 ```
 
-格式化只做一次，重跑會被 `already formatted` 擋下，這是保護。
+格式化只做一次，重跑會被 `already formatted` 擋下，這是保護。格式化 controller 時每台會多印一行 `WARN 'share' in group.coordinator.rebalance.protocols is deprecated …`：那是 8.2.4 的 `kafka-storage` 對自己預設值的提示，不是我們的設定，不影響結果。
 
 操作機連 controller 的 client 設定（用內部憑證），然後啟動 controller、看 quorum。好結果：3 台 controller 都在清單裡、有一個 leader、`Lag` 很小；有一台沒出現就先別啟動 broker：
 
@@ -2068,7 +2068,7 @@ kb03 MDS=200
 kb04 MDS=200
 ```
 
-有任何一台不是 `active`，看它的日誌：`ssh <host> 'sudo journalctl -u confluent-server -n 50 --no-pager'`。
+有任何一台不是 `active`，看它的日誌：`ssh <host> 'sudo journalctl -u confluent-server -n 50 --no-pager'`。MDS（8090）一直不回 200 時，MDS 與授權器的日誌**不在 journal**，在 `/var/log/kafka/metadata-service.log`（與 `kafka-authorizer.log`）：`LDAP … data 52e` 是 `svc-mds-bind` 密碼錯，`Waiting for all of the authorizer futures` 是授權器還在等（28.4）。
 
 # 11. 第十一站：帳號與權限
 
