@@ -51,7 +51,7 @@ Docker Compose version v5.x.x
 > 陷阱：Podman 的安裝程式會重設 WSL，正在跑的其他 WSL 發行版（例如 Docker Desktop）會被關掉。
 ## 0.1 主機映像檔：模擬「裸機 RHEL 9」
 
-**這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：第 0 章 開頭的兩個全域設定已做、目錄已建。完成的樣子：build 印出 `Successfully tagged localhost/lab-node:96`，接著印出 `Rocky Linux release 9.6`。
+**這一節在做什麼**（lab 專用）：建出所有主機共用的映像檔 `lab-node:96`：Rocky 9.6 最小安裝 + systemd + sshd + sudo，sshd 只收金鑰、沒有密碼登入。前提：0.0 已做完（machine 起來了、目錄已建）。完成的樣子：build 印出 `Successfully tagged localhost/lab-node:96`，接著印出 `Rocky Linux release 9.6`。
 
 和銀行開給我們的主機一樣：沒有 JDK、沒有 Confluent、公開 repo 關閉；安裝與維運用的帳號 `cpuser` 也不在映像裡，第 4 章才由銀行 OS 團隊建立。
 
@@ -519,10 +519,10 @@ podman exec -it lab-repo01-1 bash
 
 ![versionpath]
 
-| 層 | 安裝基底（第 1–20 章裝的） | 遷移目標（第 21、26、27 章） | 為什麼 |
+| 層 | 安裝基底（第 2–19 章裝的） | 遷移目標（第 29、30、31 章） | 為什麼 |
 |---|---|---|---|
 | Confluent Platform | 8.2.4 | 8.3.2 | 第 29 章：套件滾動升級、finalize |
-| Control Center | 2.5.1 | 2.6.1 | 原廠相容表：2.5.x 支援到 CP 8.2.x，2.6.x 才支援到 8.3.x，所以 CP 升 8.3 之前 C3 先升（29.3、27） |
+| Control Center | 2.5.1 | 2.6.1 | 原廠相容表：2.5.x 支援到 CP 8.2.x，2.6.x 才支援到 8.3.x，所以 CP 升 8.3 之前 C3 先升（29.3；單獨換 C3 是第 31 章） |
 | JDK | 21 | 25 | 8.2.x 只支援 Java 17／21，**不支援 25**，所以基底一定是 21；8.3.x 才支援 25（原廠建議版本仍是 21）（29.7） |
 | OS（RHEL 9） | 9.6 | 9.8 | 第 30.5 節：小版本更新；Confluent 與 JDK 被 versionlock、tar 擋住，只動 OS 套件 |
 
@@ -541,7 +541,7 @@ podman exec -it lab-repo01-1 bash
 | RBAC、role binding | 權限控管：把「角色」（例如 SystemAdmin）綁到「身分」（AD 群組或 User:xxx）上 |
 | principal | 平台看到的身分名稱，例如 User:app-orders、Group:kafka-admins |
 | SCRAM | 帳號密碼式的認證，密碼存在 Kafka 裡；給直連的應用程式用 |
-| mTLS | 雙向 TLS：連線兩端都出示憑證。broker 之間、Prometheus 都用它 |
+| mTLS | 雙向 TLS：連線兩端都出示憑證。broker 之間、REST Proxy 的應用程式、C3 內建的 Prometheus 都用它；銀行的 Prometheus 抓 7071 只用 HTTPS（第 17 章） |
 | token（OAUTHBEARER） | MDS 發的短期通行證；C3、REST Proxy、操作機先用憑證向 MDS 換 token，再拿 token 進 TOKEN listener |
 | CSR / SAN / EKU | 憑證申請單 / 憑證適用的主機名稱清單 / 憑證用途（serverAuth 給伺服器、clientAuth 給客戶端） |
 | keystore / truststore | Java 用的憑證容器：keystore 放自己的私鑰和憑證，truststore 放信任的根憑證 |
@@ -583,13 +583,13 @@ podman exec -it lab-repo01-1 bash
 | 19 驗收與收尾 | 30 分 | 四組檢查；冷開機要等 3 分鐘 |
 | 20 密碼與金鑰輪替 | 40 分 | master key 輪替與 AD 查詢密碼各一輪滾動重啟；換 SSH 金鑰要逐台放公鑰 |
 | 21 憑證輪替 | 30 分／90 分 | leaf 換發一輪一次滾動重啟；換 CA 三階段要三次 |
-| 22 憑證到期監控（選配，待補） | — | — |
+| 22 憑證到期監控（選配） | 5 分 | 銀行 Prometheus 加 blackbox 探測與告警規則、promtool 測規則 |
 | 23 日常備份與還原 | 15 分 | 還原演練：建演練物件、備份、誤刪、重建、驗證 |
-| 24 磁碟與容量（待補） | — | — |
+| 24 磁碟與容量 | 5 分 | 用量與告警；演練要縮短 retention、搬 partition |
 | 25 節點更換與增減 | 50 分 | 新 controller 要追上 metadata log；Self-Balancing 搬資料（加回後十幾分鐘才開始搬） |
 | 26 license 監控 | 5 分 | — |
-| 27 新應用上線（待補） | — | — |
-| 28 故障排查速查（待補） | — | — |
+| 27 新應用上線 | 5 分 | SCRAM（A／B）與憑證各上線一個再下線；憑證要等銀行簽 |
+| 28 故障排查速查 | 15 分 | 演練：停一台 broker 等告警 firing 再恢復；擋 8090 走緊急路徑 |
 | 29 遷移到新版 | 70 分 | C3、套件一輪、JDK 一輪滾動重啟（每台 15 秒到 2 分鐘）；controller 要等 quorum 追上 |
 | 30 OS 修補與小版本更新 | 10 分（每月修補）／30 分（9.6 → 9.8） | 逐台 dnf update；要重開機的話每台多幾分鐘 |
 | 31 單獨換 C3 版本 | 10 分 | C3 只有一台，畫面約 1 分鐘不能用 |

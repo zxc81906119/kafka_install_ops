@@ -101,20 +101,21 @@ D.map = () => svg(760, 400, [
 ].join(''));
 
 // 0. build the practice lab (chapter 0): what each section creates on the Windows laptop
-D.labbuild = () => svg(800, 440, [
-  region(10, 12, 780, 120, "0.1–0.5 先做映像檔與銀行的東西（~/kafka-lab/images、ca）", "gray"),
-  box(26, 44, 170, 74, "0.1 lab-node:96", ["Rocky 9.6（vault）", "systemd＋sshd，只收金鑰", "所有主機共用"], "teal"),
-  box(212, 44, 170, 74, "0.2 lab-web:96", ["銀行套件庫 repo01", "httpd，只有 HTTPS"], "amber"),
-  box(398, 44, 170, 74, "0.3 Samba AD", ["銀行的 AD ad01", "LDAPS 636"], "amber"),
-  box(584, 44, 190, 74, "0.4 nginx L4／0.5 CA", ["銀行的 LB lb01", "根 CA、簽發 CA、sign.sh"], "amber"),
-  region(10, 150, 780, 150, "0.6 compose.yml：專案 lab，一次起 14 台（兩個網段 172.35、172.36）", "blue"),
-  box(26, 184, 180, 100, "操作機 ops02", ["人員以 root 進來", "/secure/ssh：獨立 volume", "（模擬加密 file system）"], "teal"),
-  box(222, 184, 180, 100, "Kafka 主機 ×10", ["kc01–03、kb01–04", "rest01–02、c3-01", "裸機：沒有 JDK、沒有 Confluent"], "blue"),
-  box(418, 184, 170, 100, "銀行的 3 台", ["repo01、ad01、lb01", "（0.2–0.4 的映像）"], "amber"),
-  box(604, 184, 170, 100, "secrets.env", ["AD 管理員等 lab 密碼", "0600，不進 git"], "coral"),
-  box(10, 318, 380, 60, "0.7 下載機 dl01", ["唯一能連外網，第 2 章用；/out = 落地區 ~/kafka-lab/landing"], "teal"),
-  box(410, 318, 380, 60, "0.8 進各台／0.9 收工與重開", ["podman exec 代替 PSMP 登入；重建前一定 down -v"], "gray"),
-  box(10, 392, 780, 40, "正式環境不做這一章：主機、AD、CA、套件庫、LB 都是銀行準備好的，直接從第 2 章開始", [], "gray"),
+D.labbuild = () => svg(800, 496, [
+  box(10, 12, 780, 44, "0.0 Podman machine kafka-lab（WSL2，rootful）", ["podman-restart：machine 重開後把容器拉起來；podman compose 呼叫獨立的 docker-compose"], "purple"),
+  region(10, 68, 780, 120, "0.1–0.5 先做映像檔與銀行的東西（~/kafka-lab/images、ca）", "gray"),
+  box(26, 100, 170, 74, "0.1 lab-node:96", ["Rocky 9.6（vault）", "systemd＋sshd，只收金鑰", "所有主機共用"], "teal"),
+  box(212, 100, 170, 74, "0.2 lab-web:96", ["銀行套件庫 repo01", "httpd，只有 HTTPS"], "amber"),
+  box(398, 100, 170, 74, "0.3 Samba AD", ["銀行的 AD ad01", "LDAPS 636"], "amber"),
+  box(584, 100, 190, 74, "0.4 nginx L4／0.5 CA", ["銀行的 LB lb01", "根 CA、簽發 CA、sign.sh"], "amber"),
+  region(10, 206, 780, 150, "0.6 compose.yml：專案 lab，一次起 14 台（兩個網段 172.35、172.36）", "blue"),
+  box(26, 240, 180, 100, "操作機 ops02", ["人員以 root 進來", "/secure/ssh：獨立 volume", "（模擬加密 file system）"], "teal"),
+  box(222, 240, 180, 100, "Kafka 主機 ×10", ["kc01–03、kb01–04", "rest01–02、c3-01", "裸機：沒有 JDK、沒有 Confluent"], "blue"),
+  box(418, 240, 170, 100, "銀行的 3 台", ["repo01、ad01、lb01", "（0.2–0.4 的映像）"], "amber"),
+  box(604, 240, 170, 100, "secrets.env", ["AD 管理員等 lab 密碼", "0600，不進 git"], "coral"),
+  box(10, 374, 380, 60, "0.7 下載機 dl01", ["唯一能連外網，第 2 章用；/out = 落地區 ~/kafka-lab/landing"], "teal"),
+  box(410, 374, 380, 60, "0.8 進各台／0.9 收工與重開", ["podman exec 代替 PSMP 登入；重建前一定 down -v"], "gray"),
+  box(10, 448, 780, 40, "正式環境不做這一章：主機、AD、CA、套件庫、LB 都是銀行準備好的，直接從第 2 章開始", [], "gray"),
 ].join(""));
 
 // 3. journey overview (5 stages)
