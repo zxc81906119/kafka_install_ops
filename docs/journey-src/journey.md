@@ -6377,7 +6377,7 @@ syslog：檢查了 10 張憑證，結束碼 0
 
 ![backup]
 
-**這一章在做什麼**：每天自動把叢集的「設定類」中繼資料（誰有什麼權限、有哪些 topic 與設定）匯出成文字檔，遇到誤刪時能照著重建。訊息本身不備份。前提：第 9 章已發 `svc-backup` 憑證、第 10 章的 `access.rule.providers` 有開 `KRAFT_ACL`。順序：建專用的唯讀身分（23.1、23.2）→ 匯出腳本（23.3）→ 排程（23.4）→ 怎麼比對與還原（23.5）。完成的樣子：`~/backup/metadata/<時間>/` 每天多一份、每個檔都有內容，syslog 有 tag `confluent-backup` 的成功紀錄。
+**這一章在做什麼**：每天自動把叢集的「設定類」中繼資料（誰有什麼權限、有哪些 topic 與設定）匯出成文字檔，遇到誤刪時能照著重建。訊息本身不備份。前提：第 9 章已發 `svc-backup` 憑證、第 10 章的 `access.rule.providers` 有開 `KRAFT_ACL`。順序：建專用的唯讀身分（23.1、23.2）→ 匯出腳本（23.3）→ 排程（23.4）→ 怎麼比對（23.5）→ 還原演練（23.6）。完成的樣子：`~/backup/metadata/<時間>/` 每天多一份、每個檔都有內容，syslog 有 tag `confluent-backup` 的成功紀錄。
 
 要備份的東西分成三類，各走各的路：
 
@@ -6570,16 +6570,16 @@ orders.backup-demo 還在嗎：0
 
 > features 的 `Epoch` 每次都不同、ACL、帳號清單（`users.txt`）與 role binding 列出的順序不固定，腳本已經拿掉與排序（一律 `LC_ALL=C`，不受操作機語系影響；`rbac.txt` 另外去掉表格的對齊空白，欄位用 `|` 分開），否則常會顯示「有變」。
 
-變更前的快照也可以由維運人員從 OP menu 44 匯出（`44 snapshot`）：以本人 AD 身分執行（要 SecurityAdmin 或 UserAdmin），放在選單的輸出目錄，檔名與內容和這裡一樣（另多一份權限清單 CSV），所以 23.6、26.4 的還原程式也能直接拿它來還原。`rbac.txt` 由選單直接問 MDS 產生，每日備份則用 confluent CLI 列；兩邊都去掉表格的對齊空白、每個 principal 底下的 binding 用 `LC_ALL=C` 排序，所以逐位元組相同。做完上面的備份，馬上拍一次快照比對：
+變更前的快照也可以由維運人員從 OP menu 44 匯出（`44 snapshot`）：以本人 AD 身分執行（要 SecurityAdmin 或 UserAdmin），放在選單的輸出目錄，檔名與內容和這裡一樣（另多一份權限清單 CSV），所以 23.6、26.4 的還原程式也能直接拿它來還原。`rbac.txt` 由選單直接問 MDS 產生，每日備份則用 confluent CLI 列；兩邊都去掉表格的對齊空白、每個 principal 底下的 binding 用 `LC_ALL=C` 排序，所以逐位元組相同。先匯出一份新的備份、馬上拍一次快照，兩份比對（上面最新的那份備份還帶著剛刪掉的示範 topic，拿它比會顯示 topic 兩個檔不同）：
 
 @role 維運人員 alice（lab 由小安代打） | ops02 | root
 
 ```bash
-P=$(cat ~/secrets/ad-test-users.pass); env OPMENU_USER=alice OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run 44 snapshot 2>&1 </dev/null | tail -1 | sed 's/\x1b\[[0-9;]*m//g; s/[0-9]\{8\}-[0-9]\{6\}/<時間>/'; unset P; b=$(ls -d ~/backup/metadata/20* | tail -1); s=$(ls -dt /var/log/opmenu/snapshot-* | head -1); for f in $(cd $b && ls *.txt); do printf '%-18s %s\n' $f "$([ "$(sha256sum < $b/$f)" = "$(sha256sum < $s/$f)" ] && echo 相同 || echo 不同)"; done
+b=$(~/conf/metadata-backup.sh) && P=$(cat ~/secrets/ad-test-users.pass); env OPMENU_USER=alice OPMENU_PASS="$P" OPMENU_YES=1 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run 44 snapshot 2>&1 </dev/null | tail -1 | sed 's/\x1b\[[0-9;]*m//g; s/[0-9]\{8\}-[0-9]\{6\}/<時間>/'; unset P; s=$(ls -dt /var/log/opmenu/snapshot-* | head -1); for f in $(cd $b && ls *.txt); do printf '%-18s %s\n' $f "$([ "$(sha256sum < $b/$f)" = "$(sha256sum < $s/$f)" ] && echo 相同 || echo 不同)"; done
 ```
 
 ```out
-已匯出變更前快照(33 筆權限,7 個清單):/var/log/opmenu/snapshot-<時間>-alice
+已匯出變更前快照(32 筆權限,7 個清單):/var/log/opmenu/snapshot-<時間>-alice
 acls.txt           相同
 broker-configs.txt 相同
 features.txt       相同

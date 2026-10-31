@@ -46,3 +46,8 @@
 - 9 塊 rc=0；blackbox 24/24 up、promtool SUCCESS、規則 25 條 0 錯；操作機腳本 10 張、5 天／過期兩個分支與 syslog 正確；timer 08:10。
 - 使用者同意下載 prom/blackbox-exporter:v0.25.0（Podman machine 新建，原本沒有）。
 - 自檢：22.1 的表補 7071／C3 9090（同一張憑證，7071 過期時 ConfluentTargetDown 會響，不另外探）；章首「規則 24 條」改 25（17 章 22＋3）。
+
+## 第 23 章通過（Podman，2026-10-31 20:38）
+- 13 塊 rc=0；svc-backup 反向（讀訊息/建 topic/改 binding 都被拒）、匯出 7 檔密碼字樣 0、timer、比對、還原演練（topic＋binding 3＋SCRAM＋配額，9095 寫讀 ok）。
+- 發現：23.5 OP menu 44 快照和「最新一份備份」比對，那份帶著剛刪的 orders.backup-demo → topics/topic-configs 不同。改成先匯出一份新備份再拍快照比（手動驗證 7 檔全相同）；快照權限 33→32（從零的實際值）。
+- 自檢：章首順序補 23.6；第 24 章章首「19 → 21 條」待查（17 章後已是 22 條）。
