@@ -596,5 +596,5 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 
 ### lab 改用 Podman，移除 Docker Desktop（2026-10-31 定案）
 - 使用者決定：lab 最後只留 Podman（CLI＋WSL2 上的 rootful machine），Docker Desktop 移除；docker-compose 留著（獨立版，當 `podman compose` 的 provider）。手冊與腳本的指令改寫成 `podman …`／`podman compose …`（不靠 alias）。
-- 可行性測試（log/2026-10-31-podman-feasibility.md）：compose 名稱、systemd、固定 IP、firewalld、sysctl、cp／exec 都可行；要另外處理 `podman-restart.service`、Windows 開機啟動 machine、記憶體（.wslconfig）。真實度不變（共用 WSL2 kernel），net.core.* sysctl 改得動是唯一改善。
+- 可行性測試（log/2026-10-31-podman-feasibility.md）：compose 名稱、systemd、固定 IP、firewalld、sysctl、cp／exec 都可行；要另外處理 `podman-restart.service`、Windows 開機啟動 machine、記憶體（.wslconfig）。真實度和 Docker 完全相同（共用 WSL2 kernel；net.core.rmem_max／wmem_max 一樣改不了：可行性測試時以為改得動，是因為 `sysctl -w` 失敗也回 0，2026-10-31 第 7 章實跑更正）。
 - 順序：先換 Podman（三步：在 Podman 上手動建 lab → 改第 0 章與全書的 docker 指令、lab 腳本、實跑工具、CLAUDE.md → 照手冊從零逐章跑，再腳本版從零），兩邊都過才移除 Docker Desktop。Docker 上第 20 章之後的逐章實跑不再接續。
