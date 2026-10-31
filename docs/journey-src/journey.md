@@ -6697,7 +6697,7 @@ app-restore 寫一筆：ok；讀回：1
 
 ![disk]
 
-**這一章在做什麼**：broker 的資料盤（`log.dirs=/var/lib/kafka/data`，第 10 章）是平台裡唯一會自己長大的東西：topic 沒設 retention、應用程式流量變大、replication factor 3 讓每筆訊息存三份。這一章把「看用量 → 告警 → 快滿時的處理 → 擴容與換碟」走一遍，24.3 在 lab 用一個示範 topic 真的做：寫 5 MB、縮短 retention 看 segment 被刪、再把 partition 搬到別台 broker。前提：第 14 章的檢查正常、第 17 章的監控已接上（24.2 要多給一個規則檔）。完成的樣子：24.1 印得出每台 broker 的合計與最大的 topic；銀行 Prometheus 多載入一個規則檔（19 → 21 條）；示範 topic 縮短 retention 後三個 replica 都變 0、partition 搬離 kb01 後 kb01 上的目錄消失。
+**這一章在做什麼**：broker 的資料盤（`log.dirs=/var/lib/kafka/data`，第 10 章）是平台裡唯一會自己長大的東西：topic 沒設 retention、應用程式流量變大、replication factor 3 讓每筆訊息存三份。這一章把「看用量 → 告警 → 快滿時的處理 → 擴容與換碟」走一遍，24.3 在 lab 用一個示範 topic 真的做：寫 5 MB、縮短 retention 看 segment 被刪、再把 partition 搬到別台 broker。前提：第 14 章的檢查正常、第 17 章的監控已接上（24.2 要多給一個規則檔）。完成的樣子：24.1 印得出每台 broker 的合計與最大的 topic；銀行 Prometheus 多載入一個規則檔（多 2 條：第 17 章做完是 22 → 24 條，做過第 22 章是 25 → 27 條）；示範 topic 縮短 retention 後三個 replica 都變 0、partition 搬離 kb01 後 kb01 上的目錄消失。
 
 ## 24.1 看用量：哪台 broker、哪個 topic 吃多少
 
