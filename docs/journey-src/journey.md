@@ -7927,13 +7927,13 @@ kafka-admin: SCRAM-SHA-512=iterations=8192
 
 ![migrationflow]
 
-安裝基底（第 1–20 章）裝的是 **Confluent Platform 8.2.4**、**Control Center 2.5.1**、**JDK 21**。這一章是主線的下一步：遷移到 **Confluent Platform 8.3.2**，C3 同時升到 **2.6.1**，並把 **JDK 21 換成 25**。順序和原因：
+安裝基底（第 2–19 章）裝的是 **Confluent Platform 8.2.4**、**Control Center 2.5.1**、**JDK 21**。這一章是主線的下一步：遷移到 **Confluent Platform 8.3.2**，C3 同時升到 **2.6.1**，並把 **JDK 21 換成 25**。順序和原因：
 
 - **C3 先升**：原廠相容表上 C3 2.5.x 只支援到 CP 8.2.x，2.6.x 才支援到 8.3.x（2.6.x 的範圍是 7.5.15 到 8.3.x，所以 2.6.1 配著 8.2.4 也在支援範圍內）。CP 一升到 8.3，2.5.1 就落在支援範圍外，所以 C3 要在 broker 之前換（29.3）。
 - **JDK 25 在 CP 升完之後才換**：8.2.x 只支援 Java 17／21，8.3.x 才支援 25；注意原廠對 8.3 的**建議**版本仍是 21，25 是「支援」，選 25 要和原廠支援確認（銀行沒有這個要求時，留在 21 就好，只做第一、三段）。C3 也一起換成 JDK 25（2026-10-28 定案：全部 Java 節點同一個版本；C3 2.6 的需求是 Java 17 以上，lab 實測 2.6.1 在 25 上正常）。
 - **OS 小版本（9.6 → 9.8）不在這一章**，是第 30 章的 30.5：Confluent 套件被 versionlock 鎖住、JDK 是 tar，OS 更新碰不到它們，所以兩條線可以分開做；本章每一段結束都跑第 19 章的驗收。
 
-> 前提：安裝基底已經裝好並通過第 19 章驗收；目標版本的 RPM 與 JDK 25 已經在第 1、2 章隨落地區進來（`~/landing/rpm-target/`、`~/landing/bank/`），這一章 29.1 才把它們上架。第 21 章的憑證輪替做過沒做過都行，順序沒有相依。
+> 前提：安裝基底已經裝好並通過第 19 章驗收；目標版本的 RPM 與 JDK 25 已經在第 2、3 章隨落地區進來（`~/landing/rpm-target/`、`~/landing/bank/`），這一章 29.1 才把它們上架。第 21 章的憑證輪替做過沒做過都行，順序沒有相依。
 
 分三段，每段結束都可以停下來驗收：
 
@@ -8167,7 +8167,7 @@ rest02 confluent-kafka-rest-8.3.2-1.noarch
 
 @role 小安 | ops02 | root
 
-**這一節在做什麼**：把 controller、broker、REST Proxy、C3、操作機的 JDK 全部從 21 換成 25。前提：第一段已全部完成並驗收。和7.1 節一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。C3 也換：原廠對 Control Center 只寫「最低 Java 17」、沒有明列 25 的測試結果，本案決定全部節點一致用 25（上線前請向原廠支援確認）；C3 只有一台，重啟時畫面約 1 分鐘不能用。
+**這一節在做什麼**：把 controller、broker、REST Proxy、C3、操作機的 JDK 全部從 21 換成 25。前提：第一段已全部完成並驗收。和 7.1 節一樣解壓到 `/opt/java/<版本目錄>`，只是把 `/opt/java/current` 切過去；所有服務的 drop-in 寫的都是 `/opt/java/current`，設定檔不用改。舊的 JDK 21 目錄留著，退回就是把連結切回去。C3 也換：原廠對 Control Center 只寫「最低 Java 17」、沒有明列 25 的測試結果，本案決定全部節點一致用 25（上線前請向原廠支援確認）；C3 只有一台，重啟時畫面約 1 分鐘不能用。
 
 > Java 25 在 CP 8.3 的相容表上是「支援」，原廠部署文件的建議版本仍是 21。這一段是照銀行「升 8.3 時一起換 25」的要求做；銀行沒有這個要求時，留在 21 就好（只做第一、三段）。
 
@@ -8287,7 +8287,7 @@ export JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/ka
 kb04 confluent-server-8.3.2-1.noarch /opt/java/jdk-25.0.5+8/bin/java MDS 200（約 15–20 秒）
 ```
 
-退回的那台在其他台都是 8.3.2 的叢集裡正常服務（under-replicated 回到 0）。回滾驗證完，馬上升回去（下面這一段），再往下做 finalize。
+退回的那台在其他台都是 8.3.2 的叢集裡正常服務（MDS 回 200）；上面已經把它升回 8.3.2、JDK 25，接著做 finalize。
 
 > 回滾：finalize 之後就不能用這個方法了。真的要退，得用 29.2 的備份與原廠支援的還原程序，所以 finalize 一定排在前兩段都驗收、觀察一段時間之後。
 
@@ -8343,7 +8343,7 @@ kc01 java=jdk-25.0.x+y confluent=8.3.2 os=9.6
 c3-01 java=jdk-25.0.5+8 confluent=2.6.1 os=9.6
 ```
 
-`os=9.6` 還沒動，那是第 30 章的事。**記下新的基準**：之後新增或換掉主機（25.1、25.2 節）要裝**現行版本**——7.1 節裝 JDK 25（`OpenJDK25U-*`）、第 8 章的版本號換成 8.3.2 與 2.6.1，不是這本書前面寫的 8.2.4／2.5.1。用 `install/` 腳本的話，改 `conf/site.env` 的 `CP_VERSION`、`C3_VERSION`、`JDK_MAJOR` 三個值就行（`21-upgrade.sh adopt` 會代改）。
+`os=9.6` 還沒動，那是第 30 章的事。**記下新的基準**：之後新增或換掉主機（25.1、25.2 節）要裝**現行版本**——7.1 節裝 JDK 25（`OpenJDK25U-*`）、第 8 章的版本號換成 8.3.2 與 2.6.1，不是這本書前面寫的 8.2.4／2.5.1。用 `install/` 腳本的話，改 `conf/site.env` 的 `CP_VERSION`、`C3_VERSION`、`JDK_MAJOR` 三個值就行（`29-upgrade.sh adopt` 會代改）。
 
 # 30. 第三十站：OS 修補與小版本更新
 
