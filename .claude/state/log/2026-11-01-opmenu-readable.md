@@ -27,3 +27,11 @@
 - 唯讀項目 alice 各跑一次、正規化時間後比對：10、12、13、14、15、16、17、19、23、41、43、44（CSV）完全相同；11 只差 HighWatermark（叢集持續增加的計數，正常）。44 的 CSV 新舊 sha256 相同。比對腳本在 scratchpad/opmenu-compare.sh（ops02 沒有 diff／cmp，改用 sha256＋awk 列出不同的行）。
 - 還沒做（下次）：變更類項目實跑（31 建 → 32 改 retention → 33 刪；34 建帳號 → 38 配額 → 35 輪替 → 37 下架；42 加／移除權限；36 重設 offset；22 重啟 REST；27 滾動重啟；91 緊急模式）；44 snapshot 和每日備份 sha256 比對（手冊 23.5）；全部過了再更新交付物（package.sh）與 /opt/opmenu。
 - 之後：使用者想把手冊的手動指令也改成同樣寫法，OP menu 做完再討論範圍。
+
+## 變更類項目實跑、上線（11-01 晚）
+- 比對腳本（scratchpad/opmenu-change-compare.sh、opmenu-35-compare.sh）：舊版 /opt/opmenu 用後綴 o1、新版 /root/opmenu-new 用 n1 跑同一串，正規化後比對。31（含不合規名稱）、32（含受保護 topic）、33（含受保護）、34、35（a／b、不存在的 -c）、37、38（設定與拿掉）、41、42（add／remove、綁個人與不允許的 role 被拒）、91（describe、--bootstrap-server 與 kafka-acls --add 被拒）新舊輸出相同。14 只差 TopicId；36／13 只差測試資料落在哪個 partition（格式與判斷相同）。
+- 44 snapshot（新版）和 metadata-backup.sh 的 7 個清單 sha256 全部相同；快照多 permission-review.csv 與舊版一樣。
+- 新版 22 重啟 rest01（kb01 被拒，不在 AUX 清單）、27 滾動重啟 4 台 333 s 全過，紀錄每步 STEP。
+- 測試殘留已清：8 個測試帳號的 SCRAM 憑證、12 個交接檔 shred、暫存；consumer group 隨 topic 刪除已消失；/root/opmenu-new 已刪。
+- package.sh → 落地區 opmenu-20261101.f866d235.tar.gz，照手冊 16.3 送進 ops02、裝到 /opt/opmenu（逐檔和 repo 相同）；16.3 --list、16.4 三人選單 out 相同。
+- 手冊 16.3 小修：ssh-keyscan 在 ops02（OS 9.8 後）把 `# host:22 SSH-2.0…` 印到 stdout，known_hosts 變 20 行 → 加 `grep -v "^#"`（手冊與 install/steps/16-opmenu.sh）；項目數改 `ls items/*.sh`。重跑後 out 回到 `27 items; known_hosts 10 keys`。

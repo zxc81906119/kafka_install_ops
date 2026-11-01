@@ -65,7 +65,7 @@ install -m 0644 "$CERTS_DIR/truststore.p12" /etc/opmenu/ssl/truststore.p12
 install -m 0600 "$PKI_DIR/store.pass" /etc/opmenu/ssl/truststore.pass
 install -m 0644 "$BANK_ROOT_CA" /etc/opmenu/ssl/ca.pem
 cluster_fqdns=(); for host in $CLUSTER_HOSTS; do cluster_fqdns+=("$(fqdn "$host")"); done
-ssh-keyscan -t ed25519 "${cluster_fqdns[@]}" 2>/dev/null | sort | install -m 0644 /dev/stdin /etc/opmenu/known_hosts
+ssh-keyscan -t ed25519 "${cluster_fqdns[@]}" 2>/dev/null | grep -v "^#" | sort | install -m 0644 /dev/stdin /etc/opmenu/known_hosts
 # /var/log/opmenu：選單紀錄與匯出檔
 install -d -m 0750 -o root -g root /var/log/opmenu
 # 緊急憑證 PEM（91 用）：私鑰＋憑證串成一個檔，放操作機 ~/secrets（0600、root 才讀得到）；選單讀檔時會檢查權限與 owner
@@ -84,7 +84,7 @@ render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL BR
   || die "render opmenu.conf"
 install -m 0644 "$CONF_DIR/opmenu.conf" /etc/opmenu/opmenu.conf
 listed_items=$(/opt/opmenu/opmenu.sh --list 2>/dev/null | wc -l)
-if [ "$listed_items" -gt 20 ]; then ok "opmenu $(ls /opt/opmenu/items | wc -l) 個項目、known_hosts $(wc -l < /etc/opmenu/known_hosts) 把"
+if [ "$listed_items" -gt 20 ]; then ok "opmenu $(ls /opt/opmenu/items/*.sh | wc -l) 個項目、known_hosts $(wc -l < /etc/opmenu/known_hosts) 把"
 else die "opmenu --list 失敗（只列出 $listed_items 項）"; fi
 
 section "16.4 各主機 $SSH_USER 的窄 sudo 規則 /etc/sudoers.d/$SSH_USER-ops（逐一列出，不用萬用字元）"
