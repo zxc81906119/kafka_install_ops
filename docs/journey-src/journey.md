@@ -15289,7 +15289,7 @@ kb01 8090=000 9095=通
 kb02 8090=000 9095=通
 kb03 8090=000 9095=通
 kb04 8090=000 9095=通
-MDS 全部連不上:https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8090
+MDS 全部連不上:https://kb01.poc.lab:8090,https://kb02.poc.lab:8090,https://kb03.poc.lab:8090,https://kb04.poc.lab:8
 無法連到 MDS（Kafka 的權限服務），AD 登入做不了。
 Kafka 類的緊急操作（topic、設定、SCRAM 帳號）改用手把手 28.6 的 kafka-admin（SCRAM,9095,不經 MDS 
 已進入緊急主機模式：只能做 16 18 21 22 23（看日誌、磁碟、收集診斷、重啟服務）；每一步
@@ -17014,25 +17014,51 @@ lab 裡：已經是原廠最新的 2.6.1（29.3 升好的），所以演練是�
 
 ```bash
 V=2.6.0
+rpm=confluent-control-center-next-gen-$V-1.noarch.rpm
 
-# 1. 乾淨的下載目錄（舊的 RPM 與 SHA256SUMS 先清掉）
 mkdir -p /out/c3
 cd /out/c3
-rm -f ./*.rpm SHA256SUMS
 
-# 2. dnf 只給這個版本的下載網址，curl 下載
-curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)"
+# have_copy：這個版本的 RPM 已經在這裡、而且 SHA256SUMS 對得上就印 yes，否則 no
+have_copy() {
+  if [ ! -f $rpm ]; then
+    echo no
+    return
+  fi
 
-# 3. 驗簽章、記下 sha256
+  if ! grep -q " ./$rpm\$" SHA256SUMS 2> /dev/null; then
+    echo no
+    return
+  fi
+
+  if ! sha256sum -c --quiet SHA256SUMS > /dev/null 2>&1; then
+    echo no
+    return
+  fi
+
+  echo yes
+}
+
+# 1. 已經下載過、檔案沒壞就沿用（約 1 GB，不重抓）；否則清掉舊檔，dnf 只給下載網址、curl 下載
+if [ "$(have_copy)" = yes ]; then
+  echo "已經有 $rpm，sha256 對得上，不重新下載"
+else
+  rm -f ./*.rpm SHA256SUMS
+  curl -fsS -O "$(dnf -q download --url confluent-control-center-next-gen-$V | head -1)"
+  sha256sum ./*.rpm > SHA256SUMS
+fi
+
+# 2. 不管是不是沿用，簽章都驗一次
 rpm -K ./*.rpm
-sha256sum ./*.rpm > SHA256SUMS
 ls
 ```
 
 ```out
+已經有 confluent-control-center-next-gen-2.6.0-1.noarch.rpm，sha256 對得上，不重新下載
 ./confluent-control-center-next-gen-2.6.0-1.noarch.rpm: digests signatures OK
 SHA256SUMS
 confluent-control-center-next-gen-2.6.0-1.noarch.rpm
+（第一次做時沒有「已經有」那一行，而是下載約 1 GB）
 ```
 
 ## 31.2 引進、上架
