@@ -22,6 +22,7 @@ run_21() {
     echo "可重啟的 broker:$OPMENU_BROKER_SERVICES"
     read -r -p "要重啟的 broker: " svc
   fi
+
   if ! v_broker_svc "$svc"; then
     return 1
   fi
@@ -29,20 +30,24 @@ run_21() {
   # 2. 緊急主機模式（MDS 連不上）：查不到叢集狀態，只能警告，由操作者明確確認後才重啟
   if [ "${OP_EMERGENCY_HOST:-0}" = 1 ]; then
     echo "${CR}緊急主機模式:無法確認 under-replicated／offline partition。重啟可能讓還在服務的 partition 暫時沒有 leader。${C0}"
+
     if ! core_confirm "在無法確認叢集狀態下重啟 $svc"; then
       return 1
     fi
+
     be_service_restart "$svc"
     return $?
   fi
 
   # 3. 檢查 under-replicated partition
   local output count
+
   output=$(be_kafka kafka-topics --describe --under-replicated-partitions 2>/dev/null)
   if [ $? -ne 0 ]; then
     echo "無法檢查 under-replicated partition(權限不足或連不上叢集),拒絕重啟"
     return 1
   fi
+
   count=$(echo "$output" | grep -c "Partition:")
   if [ "$count" -ne 0 ]; then
     echo "目前有 $count 個 under-replicated partition,拒絕重啟(官方滾動重啟前提:先回到 0)"
@@ -55,6 +60,7 @@ run_21() {
     echo "無法檢查 offline partition(權限不足或連不上叢集),拒絕重啟"
     return 1
   fi
+
   count=$(echo "$output" | grep -c "Partition:")
   if [ "$count" -ne 0 ]; then
     echo "目前有 $count 個 offline partition,拒絕重啟(先處理離線問題)"
@@ -65,6 +71,7 @@ run_21() {
   if ! core_confirm "重啟 $svc;期間該台的 partition 會切換 leader"; then
     return 1
   fi
+
   be_service_restart "$svc"
   return $?
 }

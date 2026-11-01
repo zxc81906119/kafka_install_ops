@@ -107,33 +107,40 @@ show_menu() {
 
   echo
   echo "${CB}=== Kafka 維運操作選單  [${CR}${OPMENU_ENV_LABEL}${C0}${CB}]  操作者:${OP_USER} ===${C0}"
+
   if [ -n "${OP_MENU_NOTE:-}" ]; then
     echo "${CY}${OP_MENU_NOTE}${C0}"
   fi
 
   for tier in 1 2 3 4; do
     printed_header=no
+
     for id in "${ACT_IDS[@]}"; do
       # 不是這一區的、看不到的（緊急主機模式）就跳過
       if [ "${ACT_TIER[$id]}" != "$tier" ]; then
         continue
       fi
+
       if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then
         continue
       fi
+
       # 這一區的第一個項目之前，先印區名
       if [ "$printed_header" = no ]; then
         echo "${CC}-- ${TIER_NAME[$tier]} --${C0}"
         printed_header=yes
       fi
+
       # 變更類的項目後面標「(變更)」
       mark=""
       if [ "${ACT_CHANGE[$id]}" = y ]; then
         mark="  (變更)"
       fi
+
       echo "  $id  ${ACT_TITLE[$id]}$mark"
     done
   done
+
   echo "  0  離開"
 }
 
@@ -152,6 +159,7 @@ menu() {
       echo "閒置逾時,登出"
       return
     fi
+
     if [ $rc -ne 0 ]; then
       echo
       echo "讀不到輸入,登出"
@@ -163,9 +171,11 @@ menu() {
     if [ -z "$selection" ]; then
       continue
     fi
+
     if [ "$selection" = 0 ]; then
       return
     fi
+
     core_run "$selection"
   done
 }
@@ -209,10 +219,12 @@ main() {
     shift
     login
     core_menu_permissions   # 選單一律全顯示；這裡只處理緊急主機模式
+
     if [ "${1:-}" = menu ]; then
       print_visible_items
       exit 0
     fi
+
     core_run "$@"
     exit $?
   fi
@@ -226,6 +238,7 @@ main() {
       *) OP_READ_TIMEOUT=(-t "$OPMENU_IDLE_TIMEOUT") ;;
     esac
   fi
+
   # 在終端機上輸入時，可以用方向鍵編輯（read -e）
   OP_READ_EDIT=()
   if [ -t 0 ]; then
@@ -234,8 +247,10 @@ main() {
 
   login
   core_log LOGIN "login" ""
+
   core_menu_permissions
   menu
+
   core_log LOGOUT "logout" ""
 }
 main "$@"

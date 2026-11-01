@@ -12,3 +12,4 @@
 - lab 實測（新版放 ops02 /root/opmenu-new，/opt/opmenu 沒動）：--list 27 項、alice --run menu 27 個編號、bob 12、alice／bob 21 重啟 kb04（檢查→確認→active）、不在清單的主機被拒；紀錄 OK／FAIL 正確。
 - 注意：在 ops02 上用 heredoc 餵多個指令時，ssh 會吃掉後面的 stdin；選單呼叫要 </dev/null。
 - 下一步：使用者看過 21 的風格後，再改其餘 26 項與 lib 的其他函式；改完更新交付物（package.sh）與手冊 16 章的 out（若有變）。
+- 使用者（11-01）：不相關的行之間要有空白行。21、load_items、core_run／_core_run、core_log_result、be_service_restart、show_menu／menu／main 已加；規則補進 redesign 與 opmenu README；7 支測試全過。

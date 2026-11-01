@@ -49,6 +49,7 @@ be_service_restart() {
     echo "重啟 $host 的 $svc 失敗（見上方訊息）"
     return 1
   fi
+
   echo "已重啟 $host 的 $svc"
   return 0
 }

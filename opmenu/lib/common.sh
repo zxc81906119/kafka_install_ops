@@ -33,6 +33,7 @@ load_items() {
     if [ -z "$id" ]; then
       continue
     fi
+
     case "$id" in
       "#"*) continue ;;
     esac
@@ -42,6 +43,7 @@ load_items() {
       echo "選單對照表的第 $id 項：找不到檔案 $items_dir/$file" >&2
       return 1
     fi
+
     . "$items_dir/$file"
 
     # 項目檔裡一定要有 run_<編號> 這個函式（declare -F 只查「有沒有這個函式」，不執行它）
@@ -63,6 +65,7 @@ load_items() {
     echo "選單對照表 $table 裡沒有任何項目" >&2
     return 1
   fi
+
   return 0
 }
 
@@ -161,6 +164,7 @@ core_run() {
   local rc
   _core_run "$@"
   rc=$?
+
   core_lock_release
   return $rc
 }
@@ -175,6 +179,7 @@ _core_run() {
     echo "沒有這個項目:$id"
     return 1
   fi
+
   local what="$id $title"   # 紀錄裡「項目」那一欄寫的字
 
   # 2. 緊急主機模式（MDS 連不上）只開放部分項目；直接輸入編號也一樣擋下
@@ -186,6 +191,7 @@ _core_run() {
 
   echo
   echo "${CB}[$id] $title${C0}  (${TIER_NAME[${ACT_TIER[$id]}]})"
+
   if [ -n "${ACT_DESC[$id]}" ]; then
     echo "  ${ACT_DESC[$id]}"
   fi
@@ -199,6 +205,7 @@ _core_run() {
         return 1
       fi
     fi
+
     if ! core_lock_acquire "$what"; then
       core_log BLOCKED "$what" "lock held"
       return 1
@@ -216,6 +223,7 @@ _core_run() {
       core_log DENIED "$what" "host gate"
       return 1
     fi
+
     if ! core_check_ssh_key; then
       core_log BLOCKED "$what" "no ssh key file"
       return 1
@@ -232,18 +240,23 @@ _core_run() {
 
   # 7. 執行：輸出邊顯示邊另存一份（tee），項目裡的提問與確認才看得到；結果判斷要用存下來的那份
   local shown started rc
+
   shown="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"
   started=$(date +%s)
+
   : > "$OP_LAST_RAW"                 # 清空：be_kafka、be_mds 會把工具的原始輸出（含被項目過濾掉的錯誤訊息）寫進這裡
   "run_$id" "$@" 2>&1 | tee "$shown"
   rc=${PIPESTATUS[0]}                # 管線裡第一個指令（run_<編號>）的結束碼；直接用 $? 拿到的是 tee 的
 
   # 8. 依結果寫紀錄
   local all_output elapsed
+
   all_output="$(cat "$OP_LAST_RAW" "$shown")"
   rm -f "$shown"
+
   elapsed=$(( $(date +%s) - started ))
   core_log_result "$what" "$rc" "$all_output" "$* [rc=$rc ${elapsed}s]"
+
   return $rc
 }
 
@@ -267,6 +280,7 @@ core_log_result() {
     if [ -n "${OP_TOKEN_AT:-}" ]; then
       token_age=$(( $(date +%s) - OP_TOKEN_AT ))
     fi
+
     if [ -n "${OP_TOKEN_AT:-}" ] && [ "$token_age" -ge "${OPMENU_TOKEN_TTL:-3600}" ]; then
       echo "${CR}登入已逾時(token 到期),請離開後重新登入。${C0}"
       core_log TOKEN_EXPIRED "$what" "$note"
@@ -274,11 +288,13 @@ core_log_result() {
       echo "${CR}登入失敗:帳號或密碼不正確。${C0}"
       core_log AUTH_FAIL "$what" "$note"
     fi
+
     return 0
   fi
 
   echo "${CR}執行失敗(見上方訊息)${C0}"
   core_log FAIL "$what" "$note"
+
   return 0
 }
 
