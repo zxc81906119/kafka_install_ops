@@ -10,3 +10,4 @@
 - 記錄：CLAUDE.md gotcha、手冊 0.0 加一條陷阱。
 - 原因更正（實測）：正常 `podman machine stop` → socket 檔被清掉、下次 start 正常；直接砍 win-sshproxy（等同 machine 還在跑就關 Windows）→ 檔留下、下次 start 出現 `API forwarding … not available`。今早的孤兒檔多半是昨晚直接關機留下的，不一定是 Docker 反安裝。PowerShell Remove-Item 刪得掉。手冊 0.0、CLAUDE.md 已更正：關機前先 podman machine stop。
 - 保險（使用者同意）：~/kafka-lab/start-lab.ps1（ASCII；沒有 win-sshproxy 就刪孤兒 socket，machine 在跑但沒轉發就先 stop，再 start；log 在 start-lab.log）。schtasks ONLOGON 要系統管理員（Access is denied），改放使用者啟動資料夾的捷徑「kafka-lab podman machine.lnk」（Startup）。實測：正常狀態什麼都不做；砍掉 win-sshproxy 後執行 → 刪檔、stop、start、API forwarding ok；之後 15 台、compose 看得到 14 台。不要了就刪那個捷徑。這不在手冊裡（lab 個人環境的保險）。
+- 使用者決定（11-01）：Podman CLI 也由 Podman Desktop 的引導安裝（手冊 0.0 第 1 步改寫，官方 MSI 留作替代；引導裝 CLI 這條路尚未在乾淨電腦實測）；machine 照 0.0 指令建。自動開機很佔資源，手冊不強調（只寫要用時 start、用完 stop）。start-lab.ps1 與啟動資料夾捷徑保留；Podman Desktop 的自動開 machine 要關（今早 08:16 是它開的 machine），由使用者在 Settings → Preferences 關，之後讀 settings.json 確認。

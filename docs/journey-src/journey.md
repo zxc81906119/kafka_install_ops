@@ -27,8 +27,8 @@
 
 **先手動做的三件事**（只做一次）：
 
-1. 安裝 Podman：從官方 GitHub releases（`github.com/containers/podman`）下載 `podman-installer-windows-amd64.msi`，核對 release 附的 `shasums`、確認數位簽章是 Red Hat, LLC，再安裝（需要系統管理員權限）。裝完**重開一個 Git Bash**，`podman` 才會在 PATH 裡。
-2. 準備 docker-compose（`podman compose` 會呼叫它）：裝 Podman Desktop（`choco install podman-desktop`，或官方安裝檔），在它的 Compose 擴充按「Set up…」，選裝到系統（system-wide）。它從官方 GitHub（`docker/compose`）下載 docker-compose，放到 `%LOCALAPPDATA%\Microsoft\WindowsApps\docker-compose.exe`（本來就在 PATH 上）；裝完**重開一個 Git Bash**。`podman compose` 沒有另外設定時就到 PATH 上找它，不用寫 `containers.conf`。
+1. 安裝 Podman Desktop（`choco install podman-desktop`，或 `podman-desktop.io` 的官方安裝檔），第一次開啟時照它的引導安裝 Podman（它下載的是官方的 Podman 安裝檔，需要系統管理員權限）。**引導提議建立 Podman machine 時跳過**：machine 照下面的指令建（要 rootful、名稱 `kafka-lab`）。裝完**重開一個 Git Bash**，`podman` 才會在 PATH 裡。不用 Podman Desktop 的話，也可以直接裝官方 GitHub releases（`github.com/containers/podman`）的 `podman-installer-windows-amd64.msi`（核對 `shasums`、數位簽章是 Red Hat, LLC）。
+2. 準備 docker-compose（`podman compose` 會呼叫它）：在 Podman Desktop 的 Compose 擴充按「Set up…」，選裝到系統（system-wide）。它從官方 GitHub（`docker/compose`）下載 docker-compose，放到 `%LOCALAPPDATA%\Microsoft\WindowsApps\docker-compose.exe`（本來就在 PATH 上）；裝完**重開一個 Git Bash**。`podman compose` 沒有另外設定時就到 PATH 上找它，不用寫 `containers.conf`。
 3. WSL2 的記憶體上限：`%UserProfile%\.wslconfig` 的 `[wsl2]` 寫 `memory=11GB`（16 GB 的筆電；整個 lab 約用 9–10 GB）。改完要 `wsl --shutdown` 才生效。
 
 接著在 Git Bash（之後所有 Windows 端指令都在這個視窗）建 rootful 的 machine（容器要用 systemd、firewalld、固定 IP，rootless 做不到；記憶體由 `.wslconfig` 統一管，不用 `--memory`），並讓 machine 重開後自動把帶 `restart` 政策的容器拉起來（`podman-restart.service`，預設是關的）：
@@ -46,7 +46,7 @@ Docker Compose version v5.x.x
 
 > `MSYS_NO_PATHCONV=1` 是讓 Git Bash 不要把 `/out`、`/etc/...` 這類容器內路徑轉成 Windows 路徑。給 Podman 的 Windows 路徑一律用 `$(cygpath -m …)` 產生。
 >
-> （選擇性）Windows 開機後 machine 不會自己啟動。要它自動起來，用工作排程器在登入時執行 `podman machine start kafka-lab`（例如 `schtasks /Create /SC ONLOGON /TN "podman machine kafka-lab" /TR "<podman.exe 的完整路徑> machine start kafka-lab"`）；不設的話，每次開機後先手動跑一次這個指令。
+> machine 不會隨 Windows 自己啟動（整個 lab 很吃資源，要用時才開）：要用 lab 時先跑 `podman machine start kafka-lab`，用完 `podman machine stop kafka-lab`。
 >
 > `podman compose` 每次會先印一行 `>>>> Executing external compose provider "…docker-compose.exe" … <<<<`：只是提示用的是 Podman Desktop 裝的那一份，不影響結果。docker-compose 的版本跟著 Podman Desktop 的擴充更新（2026-10-31 是 v5.6.1）。
 >
