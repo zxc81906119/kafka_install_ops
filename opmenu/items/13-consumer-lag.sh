@@ -1,5 +1,4 @@
-item 13 1 n n "查看 consumer group(lag 與成員數)" "每個 partition 的 lag,每個 group 的合計 lag 與在線成員數(0 = 應用程式沒在跑);直接按 Enter 查全部(只會看到你有權限的),或輸入名稱 prefix、完整名稱"
-run() {
+run_13() {
   local g="${1:-}"; [ -n "$g" ] || [ $# -ge 1 ] || read -r -p "consumer group(空 = 全部;可輸入 prefix): " g
   [ -z "$g" ] || v_group "$g" || return 1
   local args=() list x

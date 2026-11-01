@@ -1,5 +1,4 @@
-item 42 4 y y "指派或移除權限" "只能綁 AD 群組,不能綁個人;可指派的 role 限於 OPMENU_ROLES_ALLOWED"
-run() {
+run_42() {
   local op="${1:-}" g="${2:-}" role="${3:-}" rtype="${4:-}" rname="${5:-}"
   [ -n "$op" ] || read -r -p "動作(add | remove): " op; [ -n "$g" ] || read -r -p "AD 群組(不含 Group:): " g; [ -n "$role" ] || read -r -p "role(例 DeveloperRead、Operator): " role
   v_in "$op" "add remove" "動作" || return 1; v_adgroup "$g" || return 1; v_role "$role" || return 1

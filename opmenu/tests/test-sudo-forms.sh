@@ -10,6 +10,7 @@ export OPMENU_AUX_SERVICES='rest01.poc.lab:confluent-kafka-rest c3-01.poc.lab:co
 export OPMENU_CONTROLLER_HOSTS='kc01.poc.lab'
 export OPMENU_HOSTS='kb01.poc.lab kb02.poc.lab rest01.poc.lab c3-01.poc.lab kc01.poc.lab'
 . lib/defaults.sh; . lib/common.sh; . lib/hosts.sh
+OP_HOST_OK=1   # 這支只測 sudo 寫法：主機權限閘門當作已經通過（閘門另有 test-host-gate.sh）
 
 fails=0
 check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fails=$((fails+1)); fi; }

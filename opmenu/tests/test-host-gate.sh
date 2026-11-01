@@ -16,9 +16,15 @@ be_name() { echo fake; }
 BODY_FILE="$(mktemp)"
 be_mds() { printf '%s' "$3" > "$BODY_FILE"; [ "$MDS_RC" = 0 ] || return 1; printf '%s\nHTTP 200' "$MDS_REPLY"; }   # 在 $(...) 裡被呼叫:請求內容寫檔才帶得出來
 be_kafka() { [ "$KAFKA_RC" = 0 ] || { echo "org.apache.kafka.common.errors.TimeoutException"; return 1; }; echo ""; }
-be_service_restart() { RESTARTED+="$1 "; echo "restarted $1"; }
-be_service_logs() { echo "log line"; }
-core_guard_host_actions
+# 用真的 be_service_restart／be_service_logs（lib/hosts.sh，開頭自己呼叫 core_host_gate），只把最底層的 _ssh 換成假的：
+# 重啟指令記進 RESTARTED（記成「主機:confluent-server」），看日誌回一行假的日誌
+. lib/hosts.sh
+_ssh() {
+  case "$2" in
+    *"systemctl restart"*) RESTARTED+="$1:confluent-server "; echo "restarted" ;;
+    *journalctl*) echo "log line" ;;
+  esac
+}
 
 fails=0
 check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fails=$((fails+1)); fi; }
@@ -36,7 +42,7 @@ check "DENIED:訊息讓 core 記成 DENIED" '[[ "$out" == *"Authorization failed
 reset; MDS_REPLY='["DENIED"]'; be_service_logs kb01:confluent-server >/dev/null; rc=$?
 check "看日誌也受閘門管" '[ $rc -ne 0 ]'
 
-reset; MDS_REPLY='["DENIED"]'; out=$(act_23 kb01:confluent-server 20); rc=$?
+reset; MDS_REPLY='["DENIED"]'; out=$(run_23 kb01:confluent-server 20); rc=$?
 check "23 看日誌:閘門拒絕時回報失敗,不是「沒有錯誤」(原本記成 OK)" '[ $rc -ne 0 ] && [[ "$out" == *"Authorization failed"* ]] && [[ "$out" != *"沒有錯誤"* ]]'
 
 reset; MDS_REPLY='["ALLOWED"]'; MDS_RC=1; be_service_restart kb01:confluent-server >/dev/null; rc=$?
@@ -48,10 +54,10 @@ check "回應看不懂:一律拒絕" '[ -z "$RESTARTED" ] && [ $rc -ne 0 ]'
 reset; MDS_REPLY='["DENIED"]'; OPMENU_HOST_ACTION_AUTHZ='' be_service_restart kb01:confluent-server >/dev/null
 check "設為空字串:不檢查(node 用本人帳號時)" '[ -n "$RESTARTED" ]'
 
-reset; MDS_REPLY='["ALLOWED"]'; KAFKA_RC=1; out=$(act_21 kb01:confluent-server); rc=$?
+reset; MDS_REPLY='["ALLOWED"]'; KAFKA_RC=1; out=$(run_21 kb01:confluent-server); rc=$?
 check "21:檢查指令失敗時拒絕重啟(原本會放行)" '[[ "$out" != *restarted* ]] && [ $rc -ne 0 ] && [[ "$out" == *"無法檢查"* ]]'
 
-reset; KAFKA_RC=0; act_21 kb01:confluent-server >/dev/null
+reset; KAFKA_RC=0; run_21 kb01:confluent-server >/dev/null
 check "21:檢查通過時照常重啟" '[ "$RESTARTED" = "kb01:confluent-server " ]'
 
 rm -f "$OPMENU_LOG" "$OP_LAST_RAW" "$BODY_FILE"

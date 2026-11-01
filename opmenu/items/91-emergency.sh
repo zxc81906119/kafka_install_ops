@@ -1,4 +1,3 @@
-item 91 4 y y "緊急模式(以備用憑證執行一個指令)" "只在一般權限無法處理時使用;工具與動作限於 OPMENU_EMERGENCY_ACTIONS;必填原因;逐條記錄;事後必須檢討。憑證(User:opmenu-breakglass,SystemAdmin)從操作機上 0600 的檔案讀(OPMENU_BREAKGLASS_PEM),用完即丟"
 _emergency_ok() { # _emergency_ok <工具> <參數...>:工具要在清單內;參數中屬於「動作」的選項都要在該工具允許的動作內;不得覆寫連線設定
   local tool="$1"; shift; v_tool "$tool" || return 1
   local allowed="" e; for e in $OPMENU_EMERGENCY_ACTIONS; do [ "${e%%=*}" = "$tool" ] && allowed="${e#*=}"; done
@@ -9,7 +8,7 @@ _emergency_ok() { # _emergency_ok <工具> <參數...>:工具要在清單內;參
   done
   [ $found = 1 ] || { echo "緊急模式的參數必須包含一個動作(例如 --list、--describe)"; return 1; }
 }
-run() {
+run_91() {
   local tool="${1:-}"; [ -n "$tool" ] || read -r -p "要執行的 Kafka 工具(例 kafka-topics): " tool
   local args=("${@:2}"); if [ ${#args[@]} = 0 ]; then read -r -p "參數: " -a args; fi
   _emergency_ok "$tool" "${args[@]}" || return 1

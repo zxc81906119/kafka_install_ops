@@ -8,7 +8,8 @@
 #   lib/kafka.sh              共用:以操作者身分跑 Kafka 工具、呼叫 MDS;91 用操作機上的緊急憑證檔
 #   lib/hosts.sh              共用:ssh 到各主機重啟、看日誌、磁碟、診斷
 #   lib/secrets/file.sh       91 緊急憑證從哪裡取:操作機上 root 才讀得到的檔案(預設 ~/secrets/opmenu-breakglass.pem,0600)
-#   items/<編號>-<名稱>.sh     每個選單項目一個檔:開頭 item 一行宣告,下面 run() 做事
+#   items/menu.list           選單對照表:每個項目一行(編號、層級、變更類、要確認、檔案、標題、說明);要加項目或改標題改這裡
+#   items/<編號>-<名稱>.sh     每個選單項目一個檔:裡面的 run_<編號> 函式做事(例 items/21-restart-broker.sh 的 run_21)
 #
 # 用法:
 #   opmenu.sh                     互動選單
@@ -25,8 +26,9 @@ if [ "${OPMENU_ALLOW_ENV_OVERRIDE:-0}" != 1 ]; then unset OPMENU_USER OPMENU_PAS
 . "$OPMENU_HOME/lib/kafka.sh"
 . "$OPMENU_HOME/lib/hosts.sh"
 . "$OPMENU_HOME/lib/secrets/file.sh" || { echo "找不到 lib/secrets/file.sh"; exit 1; }
-core_guard_host_actions   # 碰主機的介面先過權限閘門
-load_items "$OPMENU_HOME/items" || exit 1
+if ! load_items "$OPMENU_HOME/items"; then   # 讀選單對照表 items/menu.list、載入每個項目檔
+  exit 1
+fi
 
 # ── 登入:操作者本人的 AD 帳密 → 向 MDS 換 token;產生只有自己能讀的 Kafka 連線設定檔(記憶體檔案系統);推算沒填的設定 ──
 login() {
@@ -99,39 +101,141 @@ derive_local() {
 }
 
 # ── 選單畫面與迴圈 ──
-menu() {
-  while true; do
-    echo; echo "${CB}=== Kafka 維運操作選單  [${CR}${OPMENU_ENV_LABEL}${C0}${CB}]  操作者:${OP_USER} ===${C0}"
-    [ -n "${OP_MENU_NOTE:-}" ] && echo "${CY}${OP_MENU_NOTE}${C0}"
-    local t id
-    for t in 1 2 3 4; do
-      local any=0
-      for id in "${ACT_IDS[@]}"; do [ "${ACT_TIER[$id]}" = "$t" ] || continue; [ "${OP_VISIBLE[$id]:-1}" = 1 ] || continue; [ $any = 0 ] && { echo "${CC}-- ${TIER_NAME[$t]} --${C0}"; any=1; }
-        printf '  %s  %s%s\n' "$id" "${ACT_TITLE[$id]}" "$([ "${ACT_CHANGE[$id]}" = y ] && echo '  (變更)')"; done
+# show_menu：印出選單。依層級分四區（值班查看、服務操作、變更作業、授權與緊急），每區只印這個人看得到的項目
+show_menu() {
+  local tier id mark printed_header
+
+  echo
+  echo "${CB}=== Kafka 維運操作選單  [${CR}${OPMENU_ENV_LABEL}${C0}${CB}]  操作者:${OP_USER} ===${C0}"
+  if [ -n "${OP_MENU_NOTE:-}" ]; then
+    echo "${CY}${OP_MENU_NOTE}${C0}"
+  fi
+
+  for tier in 1 2 3 4; do
+    printed_header=no
+    for id in "${ACT_IDS[@]}"; do
+      # 不是這一區的、看不到的（緊急主機模式）就跳過
+      if [ "${ACT_TIER[$id]}" != "$tier" ]; then
+        continue
+      fi
+      if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then
+        continue
+      fi
+      # 這一區的第一個項目之前，先印區名
+      if [ "$printed_header" = no ]; then
+        echo "${CC}-- ${TIER_NAME[$tier]} --${C0}"
+        printed_header=yes
+      fi
+      # 變更類的項目後面標「(變更)」
+      mark=""
+      if [ "${ACT_CHANGE[$id]}" = y ]; then
+        mark="  (變更)"
+      fi
+      echo "  $id  ${ACT_TITLE[$id]}$mark"
     done
-    echo "  0  離開"
-    local sel rc; read -r "${OP_READ_TIMEOUT[@]}" "${OP_READ_EDIT[@]}" -p "請選擇: " sel; rc=$?
-    if [ $rc -gt 128 ]; then echo; echo "閒置逾時,登出"; return; elif [ $rc -ne 0 ]; then echo; echo "讀不到輸入,登出"; return; fi   # read 逾時回傳 >128;EOF 回傳 1
-    sel="$(printf '%s' "$sel" | tr -cd '0-9')"   # 只取數字:方向鍵的跳脫序列、\r、空白都丟掉
-    [ -z "$sel" ] && continue
-    [ "$sel" = 0 ] && return
-    core_run "$sel"
+  done
+  echo "  0  離開"
+}
+
+# menu：選單迴圈。印選單 → 讀編號 → 執行 → 再印選單，直到輸入 0、閒置逾時或讀不到輸入
+menu() {
+  local selection rc
+
+  while true; do
+    show_menu
+    read -r "${OP_READ_TIMEOUT[@]}" "${OP_READ_EDIT[@]}" -p "請選擇: " selection
+    rc=$?
+
+    # read 逾時的結束碼大於 128；讀到檔尾（例如連線斷了）是 1
+    if [ $rc -gt 128 ]; then
+      echo
+      echo "閒置逾時,登出"
+      return
+    fi
+    if [ $rc -ne 0 ]; then
+      echo
+      echo "讀不到輸入,登出"
+      return
+    fi
+
+    # 只留數字：方向鍵的跳脫序列、\r、空白都丟掉
+    selection=$(echo "$selection" | tr -cd '0-9')
+    if [ -z "$selection" ]; then
+      continue
+    fi
+    if [ "$selection" = 0 ]; then
+      return
+    fi
+    core_run "$selection"
   done
 }
 
+# list_items：--list 用，每個項目一行：編號、層級名稱、變更類、要確認、標題（用 tab 隔開）
+list_items() {
+  local id
+  for id in "${ACT_IDS[@]}"; do
+    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "${TIER_NAME[${ACT_TIER[$id]}]}" "${ACT_CHANGE[$id]}" "${ACT_CONFIRM[$id]}" "${ACT_TITLE[$id]}"
+  done
+}
+
+# print_visible_items：--run menu 用，印出這個人看得到的編號（測試用）
+print_visible_items() {
+  local id visible=""
+  for id in "${ACT_IDS[@]}"; do
+    if [ "${OP_VISIBLE[$id]}" = 1 ]; then
+      visible="$visible $id"
+    fi
+  done
+  echo "@@MENU@@$visible"
+}
+
 main() {
-  if [ "${1:-}" = -c ]; then   # 當登入殼層時,ssh/su 送來的 "-c <指令>" 一律不執行,直接進選單
-    [ -n "${SSH_ORIGINAL_COMMAND:-}" ] && core_log_pre_login BYPASS_ATTEMPT "ssh 指令被擋" "$SSH_ORIGINAL_COMMAND"
+  # 選單當成登入殼層時，ssh／su 送來的 "-c <指令>" 一律不執行，直接進選單（並記下有人試著繞過）
+  if [ "${1:-}" = -c ]; then
+    if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+      core_log_pre_login BYPASS_ATTEMPT "ssh 指令被擋" "$SSH_ORIGINAL_COMMAND"
+    fi
     set --
   fi
-  if [ "${1:-}" = --list ]; then local id; for id in "${ACT_IDS[@]}"; do printf '%s\t%s\t%s\t%s\t%s\n' "$id" "${TIER_NAME[${ACT_TIER[$id]}]}" "${ACT_CHANGE[$id]}" "${ACT_CONFIRM[$id]}" "${ACT_TITLE[$id]}"; done; exit 0; fi
-  if [ "${1:-}" = --run ]; then
-    shift; login; core_menu_permissions   # 選單一律全顯示;core_menu_permissions 只處理緊急主機模式
-    if [ "${1:-}" = menu ]; then local id v=""; for id in "${ACT_IDS[@]}"; do [ "${OP_VISIBLE[$id]}" = 1 ] && v+="$id "; done; printf '@@MENU@@ %s\n' "${v% }"; exit 0; fi
-    core_run "$@"; exit $?
+
+  # opmenu.sh --list：列出所有項目（不用登入）
+  if [ "${1:-}" = --list ]; then
+    list_items
+    exit 0
   fi
-  OP_READ_TIMEOUT=(); if [ "${OPMENU_IDLE_TIMEOUT:-0}" -gt 0 ] && [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* ]]; then OP_READ_TIMEOUT=(-t "$OPMENU_IDLE_TIMEOUT"); fi   # Git Bash 的 read -t 對終端機會立刻 EOF,那裡不用
-  OP_READ_EDIT=(); [ -t 0 ] && OP_READ_EDIT=(-e)
-  login; core_log LOGIN "login" ""; core_menu_permissions; menu; core_log LOGOUT "logout" ""
+
+  # opmenu.sh --run <編號> [參數...]：登入後直接執行一個項目（測試、排程用）
+  if [ "${1:-}" = --run ]; then
+    shift
+    login
+    core_menu_permissions   # 選單一律全顯示；這裡只處理緊急主機模式
+    if [ "${1:-}" = menu ]; then
+      print_visible_items
+      exit 0
+    fi
+    core_run "$@"
+    exit $?
+  fi
+
+  # 互動選單
+  # 閒置逾時：Git Bash 的 read -t 對終端機會立刻讀到檔尾，所以在 Git Bash 上不用
+  OP_READ_TIMEOUT=()
+  if [ "${OPMENU_IDLE_TIMEOUT:-0}" -gt 0 ]; then
+    case "$OSTYPE" in
+      msys*|cygwin*) ;;
+      *) OP_READ_TIMEOUT=(-t "$OPMENU_IDLE_TIMEOUT") ;;
+    esac
+  fi
+  # 在終端機上輸入時，可以用方向鍵編輯（read -e）
+  OP_READ_EDIT=()
+  if [ -t 0 ]; then
+    OP_READ_EDIT=(-e)
+  fi
+
+  login
+  core_log LOGIN "login" ""
+  core_menu_permissions
+  menu
+  core_log LOGOUT "logout" ""
 }
 main "$@"

@@ -1,5 +1,4 @@
-item 37 3 y y "下架 service account" "34 的反向：解除 A／B 兩個帳號（沒有 A／B 時是單一帳號）的 binding 並停用 SCRAM（憑證覆寫成隨機密碼，不刪除；需 ClusterAdmin 與 UserAdmin）"
-run() {
+run_37() {
   local base="${1:-}" prefix="${2:-}"
   [ -n "$base" ] || read -r -p "應用程式名稱（例 app-orders）: " base
   [ -n "$prefix" ] || read -r -p "topic prefix（例 orders.）: " prefix

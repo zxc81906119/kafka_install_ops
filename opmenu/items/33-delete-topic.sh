@@ -1,5 +1,4 @@
-item 33 3 y y "刪除 topic" "有 consumer 在線時拒絕;受保護的 topic 不處理"
-run() {
+run_33() {
   local t="${1:-}"; [ -n "$t" ] || read -r -p "要刪除的 topic: " t
   v_topic "$t" || return 1
   # 一次描述全部 group,找出成員正在訂閱這個 topic 的 group(精確比對 topic 欄,不用子字串)

@@ -1,5 +1,4 @@
-item 22 2 y y "重啟 REST Proxy 或 C3" "影響經 REST Proxy 的 application 與管理介面的使用者"
-run() {
+run_22() {
   local svc="${1:-}"; [ -n "$svc" ] || { echo "可重啟的服務:$OPMENU_AUX_SERVICES"; read -r -p "要重啟的服務: " svc; }
   v_aux_svc "$svc" || return 1
   if [ "${svc##*:}" = confluent-kafka-rest ]; then   # REST：先請 LB 團隊停用這一台，重啟完再恢復（手把手 12.1）

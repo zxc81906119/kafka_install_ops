@@ -1,20 +1,69 @@
 # common.sh — 所有項目共用的東西:項目登記、紀錄、確認、輸入驗證、執行流程(時窗、並行鎖、結果判斷)、主機權限閘門、ssh 私鑰檔檢查。
 # 不知道環境細節:環境相依的事都透過 be_* 介面(lib/kafka.sh、lib/hosts.sh),機敏資料透過 secret_get(lib/secrets/*.sh)。
 #
-# 項目檔(items/<編號>-<名稱>.sh)的寫法:
-#   item <編號> <層級 1-4> <變更類 y/n> <需確認 y/n> "<標題>" "<說明>"
-#   run() { ...; }          # 函式內用 $OP_USER、be_* 介面;所有使用者輸入先過 v_* 函式;變更類 = 受並行鎖與變更時窗管制
-# 載入時 run 會被改名成 act_<編號>,所以每個檔都可以叫 run。
+# 要改選單（新增項目、改標題、改層級）：改 items/menu.list，一行一個項目。
+# 要改某個項目做的事：改 items/<編號>-<名稱>.sh 裡的 run_<編號> 函式（例如 items/21-restart-broker.sh 的 run_21）。
+#   函式內用 $OP_USER、be_* 介面;所有使用者輸入先過 v_* 函式;變更類 = 受並行鎖與變更時窗管制。
 
+# ── 項目登記 ──
+# load_items 讀完 items/menu.list 之後，這些變數裡就有每個項目的資料（[編號] 取值，例如 ${ACT_TITLE[21]}）：
+#   ACT_IDS              所有編號，照表上的順序
+#   ACT_TIER[編號]        層級 1-4
+#   ACT_CHANGE[編號]      變更類 y／n
+#   ACT_CONFIRM[編號]     要確認 y／n
+#   ACT_TITLE[編號]       標題
+#   ACT_DESC[編號]        說明
 declare -A ACT_TITLE ACT_DESC ACT_TIER ACT_CHANGE ACT_CONFIRM
 ACT_IDS=()
-item() { OP_ITEM_ID="$1"; ACT_IDS+=("$1"); ACT_TIER[$1]="$2"; ACT_CHANGE[$1]="$3"; ACT_CONFIRM[$1]="$4"; ACT_TITLE[$1]="$5"; ACT_DESC[$1]="${6:-}"; }
-load_items() { # load_items <目錄>:每個檔先 source,再把它的 run 改名成 act_<編號>
-  local f; for f in "$1"/[0-9]*.sh; do
-    [ -f "$f" ] || continue; OP_ITEM_ID=""; unset -f run; . "$f"
-    [ -n "$OP_ITEM_ID" ] && declare -F run >/dev/null || { echo "項目檔格式錯誤(缺 item 或 run):$f" >&2; return 1; }
-    eval "$(declare -f run | sed "1s/^run /act_$OP_ITEM_ID /")"; unset -f run
-  done; unset OP_ITEM_ID
+
+# load_items <items 目錄>：讀選單對照表，載入每個項目檔
+load_items() {
+  local items_dir="$1"
+  local table="$items_dir/menu.list"
+  local id tier change confirm file title desc
+
+  if [ ! -f "$table" ]; then
+    echo "找不到選單對照表：$table" >&2
+    return 1
+  fi
+
+  # 一次讀一行，用 | 切成 7 個欄位
+  while IFS='|' read -r id tier change confirm file title desc; do
+    # 略過空行與 # 開頭的說明
+    if [ -z "$id" ]; then
+      continue
+    fi
+    case "$id" in
+      "#"*) continue ;;
+    esac
+
+    # 載入項目檔
+    if [ ! -f "$items_dir/$file" ]; then
+      echo "選單對照表的第 $id 項：找不到檔案 $items_dir/$file" >&2
+      return 1
+    fi
+    . "$items_dir/$file"
+
+    # 項目檔裡一定要有 run_<編號> 這個函式（declare -F 只查「有沒有這個函式」，不執行它）
+    if ! declare -F "run_$id" > /dev/null; then
+      echo "項目檔 $file 裡沒有 run_$id 函式" >&2
+      return 1
+    fi
+
+    # 記下這個項目
+    ACT_IDS+=("$id")
+    ACT_TIER[$id]="$tier"
+    ACT_CHANGE[$id]="$change"
+    ACT_CONFIRM[$id]="$confirm"
+    ACT_TITLE[$id]="$title"
+    ACT_DESC[$id]="$desc"
+  done < "$table"
+
+  if [ ${#ACT_IDS[@]} -eq 0 ]; then
+    echo "選單對照表 $table 裡沒有任何項目" >&2
+    return 1
+  fi
+  return 0
 }
 
 TIER_NAME=([1]="值班查看" [2]="服務操作" [3]="變更作業" [4]="授權與緊急")
@@ -97,55 +146,141 @@ core_check_ssh_key() {
 }
 # 這個項目會不會碰主機（重啟、日誌、磁碟、診斷）：OPMENU_HOST_ITEMS 列出的編號
 core_item_touches_host() { _in_words "$1" "$OPMENU_HOST_ITEMS"; }
-# ── 執行一個項目的固定流程:緊急主機模式有沒有開放 → 時窗 → 並行鎖 → 主機閘門 → 管理員閘門 → 執行 → 依輸出判斷結果 → 記錄 ──
-_core_run() {
-  local id="$1"; shift
-  [ -n "${ACT_TITLE[$id]:-}" ] || { echo "沒有這個項目:$id"; return 1; }
-  if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then   # 只有緊急主機模式會隱藏項目(MDS 連不上,Kafka 類做不了):直接輸入編號一樣擋下並記錄
-    echo "${CR}項目 $id 在緊急主機模式不開放(只能做 OPMENU_EMERGENCY_ITEMS 列的主機類項目)。Kafka 類操作改用手把手 28.6 的 kafka-admin。${C0}"
-    core_log DENIED "$id ${ACT_TITLE[$id]}" "not in emergency items"; return 1
-  fi
-  echo; echo "${CB}[$id] ${ACT_TITLE[$id]}${C0}  (${TIER_NAME[${ACT_TIER[$id]}]})"
-  [ -n "${ACT_DESC[$id]}" ] && echo "  ${ACT_DESC[$id]}"
-  if [ "${ACT_CHANGE[$id]}" = y ]; then
-    if ! core_window_ok && ! _in_words "$id" "$OPMENU_WINDOW_EXEMPT"; then
-      echo "${CR}目前不在允許變更的時窗內(OPMENU_CHANGE_WINDOW=$OPMENU_CHANGE_WINDOW)${C0}"; core_log BLOCKED "$id ${ACT_TITLE[$id]}" "outside change window"; return 1
-    fi
-    core_lock_acquire "$id ${ACT_TITLE[$id]}" || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "lock held"; return 1; }
-  fi
-  # token 快到期就先換新(換不到就不做這個動作)
-  core_token_fresh "$id ${ACT_TITLE[$id]}" || return 1
-  # 碰主機的項目:先過權限閘門,再確認主機用的私鑰檔在(沒掛載就擋下)
-  if core_item_touches_host "$id"; then
-    core_host_gate || { core_log DENIED "$id ${ACT_TITLE[$id]}" "host gate"; return 1; }
-    core_check_ssh_key || { core_log BLOCKED "$id ${ACT_TITLE[$id]}" "no ssh key file"; return 1; }
-  fi
-  # 用備用身分執行的項目(91):Kafka 檢查的是備用憑證、不是本人,所以本人要先過管理員閘門
-  if _in_words "$id" "$OPMENU_ADMIN_ITEMS"; then
-    core_admin_gate || { core_log DENIED "$id ${ACT_TITLE[$id]}" "admin gate"; return 1; }
-  fi
-  local rc shown t0; shown="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"; t0=$(date +%s)
-  : > "$OP_LAST_RAW"
-  "act_$id" "$@" 2>&1 | tee "$shown"; rc=${PIPESTATUS[0]}   # 邊執行邊顯示(項目裡的提問與確認要即時看到),同時側錄一份用來判斷結果
-  local raw; raw="$(cat "$OP_LAST_RAW" "$shown")"          # 工具的原始輸出(項目可能過濾掉錯誤訊息,所以後端另存一份)
-  rm -f "$shown"
-  local note="$* [rc=$rc $(( $(date +%s) - t0 ))s]"
-  if [ $rc -eq 0 ]; then
-    core_log OK "$id ${ACT_TITLE[$id]}" "$note"
-  elif printf '%s' "$raw" | grep -q -i "AuthorizationException\|not authorized\|Authorization failed\|HTTP 403"; then
-    echo "${CR}Kafka 拒絕:你的群組沒有這項權限,請依變更單申請。${C0}"; core_log DENIED "$id ${ACT_TITLE[$id]}" "$note"
-  elif printf '%s' "$raw" | grep -q -i "SaslAuthenticationException\|Authentication failed\|HTTP 401"; then
-    if [ -n "${OP_TOKEN_AT:-}" ] && [ $(( $(date +%s) - OP_TOKEN_AT )) -ge "${OPMENU_TOKEN_TTL:-3600}" ]; then
-      echo "${CR}登入已逾時(token 到期),請離開後重新登入。${C0}"; core_log TOKEN_EXPIRED "$id ${ACT_TITLE[$id]}" "$note"
-    else
-      echo "${CR}登入失敗:帳號或密碼不正確。${C0}"; core_log AUTH_FAIL "$id ${ACT_TITLE[$id]}" "$note"
-    fi
-  else
-    echo "${CR}執行失敗(見上方訊息)${C0}"; core_log FAIL "$id ${ACT_TITLE[$id]}" "$note"
-  fi
+# ── 執行一個項目 ──
+# 每個項目都照同樣的順序，任何一關不過就不執行，並寫一筆紀錄：
+#   1. 有沒有這個編號
+#   2. 緊急主機模式有沒有開放這個項目
+#   3. 變更類：是不是在變更時窗內、拿不拿得到並行鎖
+#   4. MDS token 快到期就先換新
+#   5. 碰主機的項目：主機權限閘門、主機用的 SSH 私鑰在不在
+#   6. 用備用身分執行的項目（91）：本人要先過管理員閘門
+#   7. 執行 run_<編號>，邊執行邊顯示
+#   8. 依結果寫紀錄（core_log_result）
+# core_run <編號> [參數...]：選單和 --run 都從這裡進來；不管成功失敗，最後都放掉並行鎖
+core_run() {
+  local rc
+  _core_run "$@"
+  rc=$?
+  core_lock_release
   return $rc
 }
-core_run() { _core_run "$@"; local rc=$?; core_lock_release; return $rc; }
+
+_core_run() {
+  local id="$1"
+  shift
+
+  # 1. 有沒有這個編號
+  local title="${ACT_TITLE[$id]:-}"
+  if [ -z "$title" ]; then
+    echo "沒有這個項目:$id"
+    return 1
+  fi
+  local what="$id $title"   # 紀錄裡「項目」那一欄寫的字
+
+  # 2. 緊急主機模式（MDS 連不上）只開放部分項目；直接輸入編號也一樣擋下
+  if [ "${OP_VISIBLE[$id]:-1}" != 1 ]; then
+    echo "${CR}項目 $id 在緊急主機模式不開放(只能做 OPMENU_EMERGENCY_ITEMS 列的主機類項目)。Kafka 類操作改用手把手 28.6 的 kafka-admin。${C0}"
+    core_log DENIED "$what" "not in emergency items"
+    return 1
+  fi
+
+  echo
+  echo "${CB}[$id] $title${C0}  (${TIER_NAME[${ACT_TIER[$id]}]})"
+  if [ -n "${ACT_DESC[$id]}" ]; then
+    echo "  ${ACT_DESC[$id]}"
+  fi
+
+  # 3. 變更類：時窗與並行鎖
+  if [ "${ACT_CHANGE[$id]}" = y ]; then
+    if ! core_window_ok; then
+      if ! _in_words "$id" "$OPMENU_WINDOW_EXEMPT"; then
+        echo "${CR}目前不在允許變更的時窗內(OPMENU_CHANGE_WINDOW=$OPMENU_CHANGE_WINDOW)${C0}"
+        core_log BLOCKED "$what" "outside change window"
+        return 1
+      fi
+    fi
+    if ! core_lock_acquire "$what"; then
+      core_log BLOCKED "$what" "lock held"
+      return 1
+    fi
+  fi
+
+  # 4. token 快到期就先換新（換不到就不做這個動作）
+  if ! core_token_fresh "$what"; then
+    return 1
+  fi
+
+  # 5. 碰主機的項目：先過權限閘門，再確認主機用的私鑰檔在（沒掛載就擋下）
+  if core_item_touches_host "$id"; then
+    if ! core_host_gate; then
+      core_log DENIED "$what" "host gate"
+      return 1
+    fi
+    if ! core_check_ssh_key; then
+      core_log BLOCKED "$what" "no ssh key file"
+      return 1
+    fi
+  fi
+
+  # 6. 用備用身分執行的項目（91）：Kafka 檢查的是備用憑證、不是本人，所以本人要先過管理員閘門
+  if _in_words "$id" "$OPMENU_ADMIN_ITEMS"; then
+    if ! core_admin_gate; then
+      core_log DENIED "$what" "admin gate"
+      return 1
+    fi
+  fi
+
+  # 7. 執行：輸出邊顯示邊另存一份（tee），項目裡的提問與確認才看得到；結果判斷要用存下來的那份
+  local shown started rc
+  shown="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"
+  started=$(date +%s)
+  : > "$OP_LAST_RAW"                 # 清空：be_kafka、be_mds 會把工具的原始輸出（含被項目過濾掉的錯誤訊息）寫進這裡
+  "run_$id" "$@" 2>&1 | tee "$shown"
+  rc=${PIPESTATUS[0]}                # 管線裡第一個指令（run_<編號>）的結束碼；直接用 $? 拿到的是 tee 的
+
+  # 8. 依結果寫紀錄
+  local all_output elapsed
+  all_output="$(cat "$OP_LAST_RAW" "$shown")"
+  rm -f "$shown"
+  elapsed=$(( $(date +%s) - started ))
+  core_log_result "$what" "$rc" "$all_output" "$* [rc=$rc ${elapsed}s]"
+  return $rc
+}
+
+# core_log_result <項目> <結束碼> <輸出> <備註>：依結束碼與輸出裡的關鍵字，判斷是成功、被 Kafka 拒絕、登入問題，還是其他失敗
+core_log_result() {
+  local what="$1" rc="$2" output="$3" note="$4"
+
+  if [ "$rc" -eq 0 ]; then
+    core_log OK "$what" "$note"
+    return 0
+  fi
+
+  if printf '%s' "$output" | grep -q -i "AuthorizationException\|not authorized\|Authorization failed\|HTTP 403"; then
+    echo "${CR}Kafka 拒絕:你的群組沒有這項權限,請依變更單申請。${C0}"
+    core_log DENIED "$what" "$note"
+    return 0
+  fi
+
+  if printf '%s' "$output" | grep -q -i "SaslAuthenticationException\|Authentication failed\|HTTP 401"; then
+    local token_age=0
+    if [ -n "${OP_TOKEN_AT:-}" ]; then
+      token_age=$(( $(date +%s) - OP_TOKEN_AT ))
+    fi
+    if [ -n "${OP_TOKEN_AT:-}" ] && [ "$token_age" -ge "${OPMENU_TOKEN_TTL:-3600}" ]; then
+      echo "${CR}登入已逾時(token 到期),請離開後重新登入。${C0}"
+      core_log TOKEN_EXPIRED "$what" "$note"
+    else
+      echo "${CR}登入失敗:帳號或密碼不正確。${C0}"
+      core_log AUTH_FAIL "$what" "$note"
+    fi
+    return 0
+  fi
+
+  echo "${CR}執行失敗(見上方訊息)${C0}"
+  core_log FAIL "$what" "$note"
+  return 0
+}
 
 # core_token_fresh <項目>:MDS token 用了超過「OPMENU_TOKEN_TTL − OPMENU_TOKEN_RENEW_MARGIN」就自動換新(每個動作開始前在主 shell 呼叫,
 # 換到的 token 才留得住;項目裡的 be_mds 多半在 $(...) 子 shell 裡跑)。帳密取自本次登入的 Kafka 連線設定 OP_CLIENT_CONF
@@ -202,14 +337,8 @@ core_host_gate() {
   echo "${CR}主機類動作 Authorization failed:需要叢集層級權限($OPMENU_HOST_ACTION_AUTHZ),你的群組沒有;請依變更單申請。${C0}"   # 含 "Authorization failed",會記成 DENIED
   return 1
 }
-core_guard_host_actions() { # Decorator:把所有「碰主機」的介面包上 core_host_gate;新增項目或換後端都不會漏掉
-  local f
-  for f in be_service_restart be_service_logs be_disk_usage be_collect_diag; do
-    declare -F "$f" >/dev/null || continue
-    eval "_unguarded_$(declare -f "$f")"
-    eval "$f() { core_host_gate || return 1; _unguarded_$f \"\$@\"; }"
-  done
-}
+# 「碰主機」的介面（lib/hosts.sh 的 be_service_restart、be_service_logs、be_disk_usage、be_collect_diag）
+# 每一個開頭都自己呼叫 core_host_gate：新增項目時不管走哪一條路呼叫它們，都會先過閘門。新增碰主機的 be_* 函式時也要這樣寫。
 
 # ── 並行鎖與變更時窗 ──
 _in_words() { local x; for x in $2; do [ "$x" = "$1" ] && return 0; done; return 1; }

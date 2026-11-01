@@ -1,6 +1,5 @@
-item 35 3 y y "輪替 service account 密碼（A／B）" "一個應用程式有 -a、-b 兩個帳號：只換「應用程式現在沒在用的那個」，換完請應用程式切過去，不中斷。新密碼寫進交接檔、不顯示（需 ClusterAdmin）"
 # 單一帳號（沒有 -a／-b）的舊應用程式：改密碼會讓它的新連線立刻失敗，要明確確認；建議先用 34 建好 A／B 再遷移
-run() {
+run_35() {
   local base="${1:-}" in_use="${2:-}"
   [ -n "$base" ] || read -r -p "應用程式名稱（例 app-orders）: " base
   v_svc_acct "$base" || return 1

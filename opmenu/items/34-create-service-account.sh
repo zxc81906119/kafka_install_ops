@@ -1,6 +1,5 @@
-item 34 3 y y "新增 service account" "建 A／B 兩個 SCRAM 帳號（<名稱>-a、<名稱>-b）並 bind 該系統 topic prefix 的讀寫權限；密碼寫進交接檔、不顯示；binding 失敗會回滾（建帳號需 ClusterAdmin；綁權限需 UserAdmin）"
 # 兩個帳號權限完全一樣：應用程式先用 -a；之後輪替密碼（35）換沒在用的那個，再請應用程式切過去，不中斷
-run() {
+run_34() {
   local base="${1:-}" prefix="${2:-}" mode="${3:-rw}"
   [ -n "$base" ] || read -r -p "應用程式名稱（例 app-orders，會建 app-orders-a、app-orders-b）: " base
   [ -n "$prefix" ] || read -r -p "topic prefix（例 orders.）: " prefix

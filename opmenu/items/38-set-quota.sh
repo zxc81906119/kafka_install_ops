@@ -1,6 +1,5 @@
-item 38 3 y y "調整配額(quota)" "改一個帳號的 producer_byte_rate、consumer_byte_rate(bytes/秒)或 request_percentage;顯示改前改後;值填 - 表示拿掉那一項(需 ClusterAdmin)"
 # 參數(非互動):<帳號> <項目=值[,項目=值…]>
-run() {
+run_38() {
   local u="${1:-}" spec="${2:-}" kv k v add="" del="" cur
   [ -n "$u" ] || read -r -p "帳號: " u; v_svc_acct "$u" || return 1
   cur=$(k_quota_lines "$u") || return 1

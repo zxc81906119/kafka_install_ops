@@ -1,0 +1,38 @@
+# 選單對照表：選單上的每一個項目一行。要新增、改標題、改層級、搬檔案，都改這裡。
+# 格式（用 | 隔開，不要有多餘的空白）：
+#   編號|層級|變更類|要確認|檔案|標題|說明
+#   編號     選單上輸入的號碼；項目檔裡的函式要叫 run_<編號>（例如 run_21）
+#   層級     1 值班查看、2 服務操作、3 變更作業、4 授權與緊急（決定顯示在哪一區）
+#   變更類   y = 會改東西：受變更時窗（OPMENU_CHANGE_WINDOW）與並行鎖管制；n = 只看
+#   要確認   y = 項目會請操作者輸入 yes 才執行（標示用，確認動作寫在項目檔裡）
+#   檔案     items/ 底下的檔名
+#   標題     選單上顯示的文字
+#   說明     執行這個項目時，標題下方顯示的一行說明
+# # 開頭的行、空行都會被略過。
+10|1|n|n|10-balance-report.sh|查看 leader 與 partition 分布(balance report)|每台 broker 的 leader 數、replica 數、preferred leader 偏離;只算你看得到的 topic
+11|1|n|n|11-health.sh|cluster 與身分鏈健康檢查|offline partition、under-replicated partition、各 broker 是否在線;MDS 各台狀態與延遲、你的 token 剩餘時間、controller quorum(有權限時)
+12|1|n|n|12-topics.sh|列出 topic 與 partition 狀態|只會看到你有權限的 topic
+13|1|n|n|13-consumer-lag.sh|查看 consumer group(lag 與成員數)|每個 partition 的 lag,每個 group 的合計 lag 與在線成員數(0 = 應用程式沒在跑);直接按 Enter 查全部(只會看到你有權限的),或輸入名稱 prefix、完整名稱
+14|1|n|n|14-topic-config.sh|查看某個 topic 的設定|retention、partition count、replication factor
+15|1|n|n|15-quotas.sh|查看配額(quota)|每個帳號的 producer_byte_rate、consumer_byte_rate(bytes/秒)與 request_percentage;直接按 Enter 查全部,或輸入帳號(需叢集層級的 DescribeConfigs:ClusterAdmin 或 SystemAdmin)
+16|1|n|n|16-disk-usage.sh|查看磁碟與 data directory 用量|各主機 Kafka data directory(經 ssh,需 HOST 權限)
+17|1|n|n|17-cert-expiry.sh|查看 certificate 與 license 到期日|連到各服務的 TLS 端點，看它們實際出示的憑證：主旨、簽發者、到期日（換發後確認每一台都換到了）；license 的類型與到期日（讀得到 _confluent-command 就即時讀，讀不到就顯示操作機每日檢查的最後一筆）
+18|1|n|n|18-collect-diag.sh|收集 diagnostics|把各主機最近的日誌與 cluster 狀態打包,交給二線或原廠(經 ssh,需 HOST 權限)
+19|1|n|n|19-effective-config.sh|查看生效中的設定(effective configuration)|每個值的來源:conf = opmenu.conf、derived = 自動推算、default = 預設
+21|2|y|y|21-restart-broker.sh|重啟單一 broker|一次只重啟一台;執行前檢查沒有 under-replicated 與 offline partition,否則拒絕
+22|2|y|y|22-restart-aux.sh|重啟 REST Proxy 或 C3|影響經 REST Proxy 的 application 與管理介面的使用者
+23|2|n|n|23-service-logs.sh|查看服務日誌|最近 N 行的錯誤與警告;會記錄誰看了哪台的日誌
+27|2|y|y|27-rolling-restart.sh|滾動重啟所有 broker|依 OPMENU_BROKER_SERVICES 的順序一台一台重啟;每台重啟後等全部 broker 在線且 under-replicated、offline 回到 0 才換下一台;任何一步失敗就停止。不含 controller
+31|3|y|y|31-create-topic.sh|建立 topic|名稱須符合命名規範 <系統>.<名稱>;replication factor 固定為標準值
+32|3|y|y|32-topic-retention.sh|修改 topic retention|顯示改前改後的值;受保護的 topic 不處理
+33|3|y|y|33-delete-topic.sh|刪除 topic|有 consumer 在線時拒絕;受保護的 topic 不處理
+34|3|y|y|34-create-service-account.sh|新增 service account|建 A／B 兩個 SCRAM 帳號（<名稱>-a、<名稱>-b）並 bind 該系統 topic prefix 的讀寫權限；密碼寫進交接檔、不顯示；binding 失敗會回滾（建帳號需 ClusterAdmin；綁權限需 UserAdmin）
+35|3|y|y|35-rotate-service-password.sh|輪替 service account 密碼（A／B）|一個應用程式有 -a、-b 兩個帳號：只換「應用程式現在沒在用的那個」，換完請應用程式切過去，不中斷。新密碼寫進交接檔、不顯示（需 ClusterAdmin）
+36|3|y|y|36-reset-offsets.sh|重設 consumer 讀取位置|該 consumer group 必須先停止;可重設到最早、最新或指定時間
+37|3|y|y|37-retire-service-account.sh|下架 service account|34 的反向：解除 A／B 兩個帳號（沒有 A／B 時是單一帳號）的 binding 並停用 SCRAM（憑證覆寫成隨機密碼，不刪除；需 ClusterAdmin 與 UserAdmin）
+38|3|y|y|38-set-quota.sh|調整配額(quota)|改一個帳號的 producer_byte_rate、consumer_byte_rate(bytes/秒)或 request_percentage;顯示改前改後;值填 - 表示拿掉那一項(需 ClusterAdmin)
+41|4|n|n|41-show-permissions.sh|查看權限|輸入 AD 群組或帳號,列出它的 role binding 與資源(需 SecurityAdmin 或 UserAdmin)
+42|4|y|y|42-grant-revoke.sh|指派或移除權限|只能綁 AD 群組,不能綁個人;可指派的 role 限於 OPMENU_ROLES_ALLOWED
+43|4|y|n|43-audit.sh|查詢與匯出 audit 紀錄|最近 N 分鐘的 audit 事件,可選一般、敏感(_sensitive:敏感 topic 的讀寫)或兩個都看,依主體(例 alice)與結果(DENIED 或 ALLOWED)篩選,畫面顯示最後 50 筆;最後問要不要把篩選結果存成檔案交給 auditor(需 audit topic〔prefix,含 _sensitive〕與 audit- consumer group prefix 的 DeveloperRead)
+44|4|n|n|44-permission-review.sh|匯出權限清單(permission review)/變更前快照|列出各 role 的所有 principal 與資源範圍(CSV),交給定期權限覆核;加 snapshot 再匯出 topic、設定、帳號與配額、ACL、role binding、features(變更前快照,檔名與格式同每日備份,可直接用手把手 23.6、26.4 還原);需 SecurityAdmin 或 UserAdmin
+91|4|y|y|91-emergency.sh|緊急模式(以備用憑證執行一個指令)|只在一般權限無法處理時使用;工具與動作限於 OPMENU_EMERGENCY_ACTIONS;必填原因;逐條記錄;事後必須檢討。憑證(User:opmenu-breakglass,SystemAdmin)從操作機上 0600 的檔案讀(OPMENU_BREAKGLASS_PEM),用完即丟

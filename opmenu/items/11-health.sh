@@ -1,5 +1,4 @@
-item 11 1 n n "cluster 與身分鏈健康檢查" "offline partition、under-replicated partition、各 broker 是否在線;MDS 各台狀態與延遲、你的 token 剩餘時間、controller quorum(有權限時)"
-run() {
+run_11() {
   echo "-- under-replicated partition(應為空):"; be_kafka kafka-topics --describe --under-replicated-partitions || return $?
   echo "-- offline partition(應為空):"; be_kafka kafka-topics --describe --unavailable-partitions || return $?
   echo "-- broker 在線清單:"; be_kafka kafka-broker-api-versions 2>&1 | grep -o -E '^[a-zA-Z0-9.-]+:[0-9]+ \(id: [0-9]+' | sort -u

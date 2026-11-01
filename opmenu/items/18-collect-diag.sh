@@ -1,5 +1,4 @@
-item 18 1 n n "收集 diagnostics" "把各主機最近的日誌與 cluster 狀態打包,交給二線或原廠(經 ssh,需 HOST 權限)"
-run() {
+run_18() {
   local d="$OPMENU_OUT_DIR/diag-$(date +%Y%m%d-%H%M%S)-$OP_USER"
   be_collect_diag "$d" || return $?
   be_kafka kafka-topics --describe > "$d/topics.txt" 2>&1

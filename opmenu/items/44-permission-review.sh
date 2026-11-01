@@ -1,4 +1,3 @@
-item 44 4 n n "匯出權限清單(permission review)/變更前快照" "列出各 role 的所有 principal 與資源範圍(CSV),交給定期權限覆核;加 snapshot 再匯出 topic、設定、帳號與配額、ACL、role binding、features(變更前快照,檔名與格式同每日備份,可直接用手把手 23.6、26.4 還原);需 SecurityAdmin 或 UserAdmin"
 # 把權限清單寫成 CSV;回傳寫了幾筆(印在 stdout 最後一行)
 review_csv() {
   local f="$1" role p res code body rb arr o n=0 rt rn pt
@@ -41,7 +40,7 @@ snapshot_rbac() {
     done < <(printf '%s' "$body" | grep -o '"[A-Za-z]*":\[[^]]*\]') | LC_ALL=C sort
   done
 }
-run() {
+run_44() {
   local mode="${1:-}" c f d n failed=""
   if [ -z "$mode" ] && [ -t 0 ]; then read -r -p "1) 只匯出權限清單 CSV  2) 變更前完整快照 [1]: " c; [ "$c" = 2 ] && mode=snapshot; fi
   if [ "$mode" != snapshot ]; then

@@ -1,5 +1,4 @@
-item 17 1 n n "查看 certificate 與 license 到期日" "連到各服務的 TLS 端點，看它們實際出示的憑證：主旨、簽發者、到期日（換發後確認每一台都換到了）；license 的類型與到期日（讀得到 _confluent-command 就即時讀，讀不到就顯示操作機每日檢查的最後一筆）"
-run() {
+run_17() {
   be_cert_list
   echo
   local claims exp type days

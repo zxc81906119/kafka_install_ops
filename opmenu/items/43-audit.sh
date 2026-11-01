@@ -1,6 +1,5 @@
-item 43 4 y n "查詢與匯出 audit 紀錄" "最近 N 分鐘的 audit 事件,可選一般、敏感(_sensitive:敏感 topic 的讀寫)或兩個都看,依主體(例 alice)與結果(DENIED 或 ALLOWED)篩選,畫面顯示最後 50 筆;最後問要不要把篩選結果存成檔案交給 auditor(需 audit topic〔prefix,含 _sensitive〕與 audit- consumer group prefix 的 DeveloperRead)"
 # 參數(非互動):<分鐘> [主體|-] [DENIED|ALLOWED|-] [save|-] [normal|sensitive|all(預設 normal)];互動時沒給參數就逐項問
-run() {
+run_43() {
   local mins="${1:-}" who="${2:-}" res="${3:-}" save="${4:-}" which="${5:-}"
   if [ $# -eq 0 ] && [ -t 0 ]; then
     read -r -p "最近幾分鐘 [60]: " mins

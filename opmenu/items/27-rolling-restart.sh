@@ -1,5 +1,4 @@
-item 27 2 y y "滾動重啟所有 broker" "依 OPMENU_BROKER_SERVICES 的順序一台一台重啟;每台重啟後等全部 broker 在線且 under-replicated、offline 回到 0 才換下一台;任何一步失敗就停止。不含 controller"
-run() {
+run_27() {
   local svcs=($OPMENU_BROKER_SERVICES) n urp off live; n=${#svcs[@]}
   [ "$n" -ge 2 ] || { echo "只有 $n 台 broker,滾動重啟沒有意義(重啟就是中斷服務),請改用項目 21"; return 1; }
   read -r urp off live <<<"$(k_cluster_counts)"

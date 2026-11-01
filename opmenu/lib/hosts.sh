@@ -23,15 +23,43 @@ be_cleanup() { # 離開選單時關掉所有重用的 ssh 連線
 }
 
 # <服務> 的格式:<主機>:<systemd 服務名>,例如 kb01.poc.lab:confluent-server(清單在 OPMENU_BROKER_SERVICES / OPMENU_AUX_SERVICES)
-be_service_restart() { local host="${1%%:*}" svc="${1##*:}"; v_any_svc "$1" >/dev/null || return 1; _ssh "$host" "sudo -n systemctl restart '$svc' && systemctl is-active '$svc'" && echo "已重啟 $host 的 $svc"; }
-be_service_logs()    { local host="${1%%:*}" svc="${1##*:}" n="${2:-50}"; v_any_svc "$1" >/dev/null || return 1; v_number "$n" >/dev/null || return 1
+# be_service_restart <主機:服務>：ssh 到那台主機重啟服務，再確認它是 active
+#   例：be_service_restart kb01.poc.lab:confluent-server
+#   主機上的 sudo 規則（/etc/sudoers.d/cpuser-ops）只允許 "systemctl restart <服務>" 這個固定寫法，改寫法要同步改規則
+be_service_restart() {
+  local service="$1"
+
+  # 碰主機前先過權限閘門（見 common.sh 的 core_host_gate）
+  if ! core_host_gate; then
+    return 1
+  fi
+
+  # 服務必須在設定檔的清單內（不信任呼叫端傳來的值）
+  if ! v_any_svc "$service" > /dev/null; then
+    return 1
+  fi
+
+  # 拆開「主機:服務」：冒號前是主機，冒號後是服務名
+  local host svc
+  host=$(echo "$service" | cut -d: -f1)
+  svc=$(echo "$service" | cut -d: -f2)
+
+  # 重啟，再確認是 active（兩個都要成功）
+  if ! _ssh "$host" "sudo -n systemctl restart '$svc' && systemctl is-active '$svc'"; then
+    echo "重啟 $host 的 $svc 失敗（見上方訊息）"
+    return 1
+  fi
+  echo "已重啟 $host 的 $svc"
+  return 0
+}
+be_service_logs()    { core_host_gate || return 1; local host="${1%%:*}" svc="${1##*:}" n="${2:-50}"; v_any_svc "$1" >/dev/null || return 1; v_number "$n" >/dev/null || return 1
   [ "$n" -le "$_JOURNAL_LINES" ] || { echo "(一次最多看 $_JOURNAL_LINES 行,改看 $_JOURNAL_LINES 行)" >&2; n=$_JOURNAL_LINES; }
   _ssh "$host" "sudo -n journalctl -u '$svc' -n $_JOURNAL_LINES --no-pager | tail -n $n"; }
-be_disk_usage() { local h; for h in $OPMENU_HOSTS; do printf '%-28s ' "$h"; _ssh "$h" "df -h '$OPMENU_DATA_DIR' 2>/dev/null | tail -1 | awk '{print \"磁碟用量 \" \$5 \"  剩餘 \" \$4}'"; done; }
+be_disk_usage() { core_host_gate || return 1; local h; for h in $OPMENU_HOSTS; do printf '%-28s ' "$h"; _ssh "$h" "df -h '$OPMENU_DATA_DIR' 2>/dev/null | tail -1 | awk '{print \"磁碟用量 \" \$5 \"  剩餘 \" \$4}'"; done; }
 # 這台主機上選單管得到的 systemd 服務(broker/輔助服務清單 + controller 主機的 confluent-server);診斷逐一服務收集,不用萬用字元
 _host_units() { local h="$1" s out=""; for s in $OPMENU_BROKER_SERVICES ${OPMENU_AUX_SERVICES:-}; do [ "${s%%:*}" = "$h" ] && out+="${s##*:} "; done
   case " ${OPMENU_CONTROLLER_HOSTS:-} " in *" $h "*) out+="confluent-server ";; esac; echo "$out"; }
-be_collect_diag() { local d="$1" h u; mkdir -p "$d"; for h in $OPMENU_HOSTS; do : > "$d/$h.log"
+be_collect_diag() { core_host_gate || return 1; local d="$1" h u; mkdir -p "$d"; for h in $OPMENU_HOSTS; do : > "$d/$h.log"
     for u in $(_host_units "$h"); do { echo "== $u"; _ssh "$h" "sudo -n journalctl -u '$u' -n $_JOURNAL_LINES --no-pager"; } >> "$d/$h.log" 2>&1; done; done; }
 be_hosts() { echo "$OPMENU_HOSTS"; }
 # be_lb_connections <主機>：那台 8082 上從負載平衡進來的連線數；沒設 OPMENU_LB_HOST 就不印（不檢查）

@@ -1,5 +1,4 @@
-item 10 1 n n "查看 leader 與 partition 分布(balance report)" "每台 broker 的 leader 數、replica 數、preferred leader 偏離;只算你看得到的 topic"
-run() {
+run_10() {
   local out; out=$(be_kafka kafka-topics --describe | grep 'Partition:')
   [ -n "$out" ] || { echo "沒有讀到 partition(沒有權限或沒有 topic)"; return 1; }
   printf '%s\n' "$out" | awk '{

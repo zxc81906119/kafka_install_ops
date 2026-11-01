@@ -1,5 +1,4 @@
-item 36 3 y y "重設 consumer 讀取位置" "該 consumer group 必須先停止;可重設到最早、最新或指定時間"
-run() {
+run_36() {
   local g="${1:-}" to="${2:-}"; [ -n "$g" ] || read -r -p "consumer group: " g; [ -n "$to" ] || read -r -p "重設到(earliest | latest | 2026-01-31T00:00:00.000): " to
   v_group "$g" || return 1; v_offset_to "$to" || return 1
   local opt; case "$to" in earliest) opt="--to-earliest";; latest) opt="--to-latest";; *) opt="--to-datetime $to";; esac

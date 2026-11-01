@@ -19,7 +19,7 @@ be_mds() {
   echo call >> "$CALLS_FILE"; [ "$MDS_UP" = 1 ] || return 1
   case "$3" in *__opmenu-host-ops*) printf '["%s"]\nHTTP 200' "$HOST";; *'"kafka-cluster","operation":"Alter"'*) printf '["%s"]\nHTTP 200' "$ADMIN";; *) printf '["DENIED"]\nHTTP 200';; esac
 }
-act_12() { echo "ran 12"; }; act_23() { echo "ran 23"; }; act_31() { echo "ran 31"; }; act_91() { echo "ran 91"; }
+run_12() { echo "ran 12"; }; run_23() { echo "ran 23"; }; run_31() { echo "ran 31"; }; run_91() { echo "ran 91"; }
 
 fails=0
 check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fails=$((fails+1)); fi; }

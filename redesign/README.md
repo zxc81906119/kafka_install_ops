@@ -602,3 +602,8 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 
 ### REST 不能冒用的身分補上 svc-backup、confluent-audit（2026-10-31 定案）
 - `confluent.metadata.server.impersonation.protected.users` 原本只列到 opmenu-breakglass；後來新增的平台身分 `svc-backup`（23）、`confluent-audit`（18）沒在清單裡。使用者決定補上：所有平台服務身分都不能被 REST Proxy 冒用。手冊第 10 章與 install/templates/broker.tpl 已改；lab（Podman）手動改 ~/conf 與 4 台 broker、逐台重啟，MDS 200。第 12 章實測冒用被拒。
+
+### OP menu 寫給不熟 shell 的維護人員（2026-11-01 定案，進行中）
+- 使用者決定：最優先是可維護性。維護的人不是 shell 高手，要一眼看出「要改的位置在哪」「改不改得動」。指令盡量用新手會用的，一行一個指令，能慢慢寫就慢慢寫，不為簡短而壓縮。
+- 規則：一行一個指令；判斷寫完整的 `if … then … fi`，不用 `&&`／`||` 串接；不用 `eval`、不在執行中改函式名稱；選單用純文字對照表 `items/menu.list`（編號、層級、變更類、要確認、檔案、標題、說明）；項目檔開頭固定四段註解（做什麼、用到的設定、用到的共用函式、改的時候要注意），函式裡照步驟編號；複雜的文字處理包成有名字的小函式並附輸入／輸出例子；寧可多幾行、有重複。
+- 順序：先 OP menu（install/ 等看過再決定）；先做框架＋第 21 項給使用者看，確認風格後再改其餘 26 項。
