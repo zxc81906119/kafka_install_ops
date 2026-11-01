@@ -50,6 +50,8 @@ Docker Compose version v5.x.x
 >
 > `podman compose` 每次會先印一行 `>>>> Executing external compose provider "…docker-compose.exe" … <<<<`：只是提示用的是 Podman Desktop 裝的那一份，不影響結果。docker-compose 的版本跟著 Podman Desktop 的擴充更新（2026-10-31 是 v5.6.1）。
 >
+> 陷阱：`podman machine start` 印出 `API forwarding for Docker API clients is not available … win-sshproxy.exe failed to start` 時，`podman` 本身照常可用，但 `podman compose` 會失敗（`failed to connect to the docker API at npipe:…`）。原因多半是 WSL 曾被強制關掉，留下一個孤兒 socket 檔 `%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock`（Windows 事件記錄裡是 `bind: Only one usage of each socket address`）。把那個檔刪掉（Git Bash `rm` 刪不掉時，從任一個 WSL 發行版 `rm /mnt/c/Users/<你>/AppData/Local/Temp/podman/kafka-lab-api.sock`），再 `podman machine stop kafka-lab && podman machine start kafka-lab`，看到 `API forwarding listening on` 就好了。
+>
 > 陷阱：Podman 的安裝程式會重設 WSL，正在跑的其他 WSL 發行版（例如 Docker Desktop）會被關掉。
 >
 > 硬體：16 GB 記憶體的筆電（上面的 `.wslconfig` 給 WSL 11 GB）；磁碟至少留 80 GB（2026-10-31 整本跑完：machine 的 `ext4.vhdx` 約 58 GB、`~/kafka-lab` 約 7 GB）。本書在 Podman 6.1.4、Windows 11 實測。
