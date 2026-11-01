@@ -20,3 +20,4 @@
 - 10–19、22、23、27、31–38、41–44、91 全部照規則改寫：開頭四段註解、步驟編號、完整 if、段落空行；長的 awk 包成 _item<編號>_xxx 小函式並附輸入／輸出例子（10、13、33、44）；34 拆成建帳號／綁權限／回滾三個小函式（取代 break 2）；38、91 的字串切割改 cut／tr；44 的 CSV 筆數改用檔案行數算（取代 process substitution 裡累加），快照各檔的 awk／sed／sort 一字不改（要和每日備份 sha256 相同，待 lab 比對）。
 - 語法 27/27、7 支測試全過；項目裡已沒有 eval、&& {、<<<、${x%…}。
 - 使用者提議（11-01）：手冊的手動指令之後也照同樣規則改，讓安裝與維運人員更好做事。等 OP menu 做完再討論範圍（400 多個指令塊，每章都要 lab 重跑）。
+- common.sh 全部改完：紀錄、交接檔、確認、v_*（多行的 v_match／v_in／v_topic／v_offset_to）、清理（pid 改用 cut、拆出 _process_alive）、token 換新、選單可見性、兩個閘門共用 _core_authorize、並行鎖、變更時窗（拆出 _minutes_of，用 heredoc 讀每個時段）。先寫 tests/test-change-window.sh（19 例）與 test-lock.sh（7 例）對舊版跑過確認案例正確，改完新版同樣全過；9 支測試全過。
