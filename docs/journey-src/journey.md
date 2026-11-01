@@ -13817,6 +13817,8 @@ topic 18 個；principal 15 個；SCRAM 帳號 6 個；ACL 4 條
 缺密碼檔的 SCRAM 帳號：無
 ```
 
+> 列出來的帳號先對一下 27.6：**已經下線的帳號**（密碼被覆寫成隨機值、密碼檔已刪，帳號留著讓稽核日誌對得上人）也會出現在這裡，它們本來就不該建回來，不用補密碼檔。lab 做過第 27 章時會看到 `app-inventory-a app-inventory-b`，第 7 步也會把它們列在「沒有密碼檔」（2026-11-02 實測）。還在用的帳號出現在這裡，才要另外發新密碼。
+
 第 2 步：停掉所有服務（C3 → REST Proxy → broker → controller）。Java 程式收到停止訊號時以 143 結束，systemd 會標成 `failed`，所以順手 `reset-failed`，結果應該全部是 `inactive`：
 
 ```bash

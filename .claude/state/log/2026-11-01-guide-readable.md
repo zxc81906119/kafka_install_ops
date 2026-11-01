@@ -32,3 +32,7 @@
 - 第三批 20–28 接著第 19 章的狀態實跑（run-customer-20-28-20261101-2208）：189 塊，rc=0 181、略過 8（26.4 七塊＋互動一塊）、失敗 0，scan-log 乾淨。逐塊比對：差異都是序號、日期、秒數、replica 數這類每次不同的值；23.5 metadata-backup.sh 與 44 快照 7 檔 sha256 相同，23.6 還原、24.3（新的 sudo find）、25.1／25.2、27、28 全部符合。只改 28.6 一行 out（cut -c1-120 截斷的位置）。
 - 第四批 29–31＋B 接著跑（run-customer-29-end-20261101-2355）：47 塊全部 rc=0、失敗 0，scan-log 乾淨。pkg-swap.sh／jdk-switch.sh／c3-change.sh／os-patch-host.sh 都照預期：8.3.2、JDK 25、OS 9.8、C3 2.5.1→2.6.1→2.6.0→2.6.1、kb04 回滾演練；附錄 B 覆蓋率 32／816／296 與手冊相同。只更新兩個實測數字：30.0 鏡像現在 156 個 RPM（合併 227）；29.2 c3-01 備份 36K（drop-in 現在有打包）。
 - 到這裡整本手冊 0–31＋B 都照新寫法在 lab 實跑過（26.4 除外，下一步手動驗）。
+- Word 重建（docs/Confluent-安裝旅程-手把手.docx，8.4 MB）；抽查 document.xml：pkg-swap.sh、jdk-switch.sh、next_controller、have_copy 等新內容都在。版面無法在本機預覽，請使用者打開看。
+- 26.4 叢集重置在 lab 手動驗（11-02 凌晨；用 run-chapter 產生第 26 章執行檔，只拿掉 26.4 @role 的「整本實跑不執行」）：11 塊全部 rc=0。8.3.2 上格式化是 4.3-IV0B；新 cluster id、MDS 4/4、svc-ops 第一條權限；cluster-restore-all.sh 建回 topic 3、binding 33、SCRAM 6、配額 5、ACL 4、broker 設定 1；REST、C3 200；license trial、到期 +30 天。之後 19.1–19.3：健康 22/22、安全 16/16、寫讀過。
+- 26.4 第 1 步會把 27.6 下線的帳號（app-inventory-a/b，密碼檔已刪）列成「缺密碼檔」：正確行為，手冊補一段說明。
+- 整本手冊（0–31＋B，含 26.4）都照新寫法在 lab 實跑過。lab 現在是「26.4 重置後」的狀態（新 cluster id，8.3.2／JDK 25／OS 9.8，監控容器已在附錄 B 收掉）。
