@@ -1,5 +1,7 @@
 // usage: [MODE=customer] node run-chapter.js <journey.md> <fromChapter> <toChapter|end> <out.sh>   (chapter ids 0–31, B; both inclusive; "A" is accepted as the old name of 0)
 // consecutive blocks on the same host/user run in ONE shell, fed from a file (stdin=/dev/null so ssh can't eat it)
+// each block runs under `trap … ERR` (like set -e, but no subshell, so variables carry over to the next block as in a terminal):
+// any line that fails stops the run, not only the last one (the guide writes one command per line, 2026-11-01)
 // MODE: only `customer` exists now (CyberArk PAM only); the variable is kept so older call sites still work.
 // ops02: people arrive as root (PVWA + PSMP in production, plain podman exec in the lab); root's ~/.ssh/config points at /secure/ssh/cpuser_ed25519, so nothing needs to be passed in.
 const fs=require("fs"); const [,, md, from, to, out]=process.argv;
@@ -40,7 +42,7 @@ for(const g of groups){
   let body="";
   for(const bl of g.blocks){
     run++;
-    body+=`echo "===== BLOCK ${bl.n} [${bl.host} ${bl.user}] ${bl.head} ====="\n${bl.code}rc=$?; echo "===== rc=$rc ====="; [ $rc -ne 0 ] && { echo "STOP at block ${bl.n}"; exit 1; }\n`;
+    body+=`echo "===== BLOCK ${bl.n} [${bl.host} ${bl.user}] ${bl.head} ====="\ntrap 'rc=$?; echo "===== rc=$rc (line $LINENO failed) ====="; echo "STOP at block ${bl.n}"; exit 1' ERR\n${bl.code}rc=$?; trap - ERR; echo "===== rc=$rc ====="; [ $rc -ne 0 ] && { echo "STOP at block ${bl.n}"; exit 1; }\n`;
   }
   if(g.ex) o+=`\n${g.ex.replace("podman exec","podman exec -i")} bash -c 'cat > /tmp/runner.sh' <<'__BLK__'\n${body}exit 0
 __BLK__\n${g.ex} bash /tmp/runner.sh </dev/null\n[ $? -ne 0 ] && exit 1\n`;

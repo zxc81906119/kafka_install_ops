@@ -17,7 +17,7 @@ Updated: 2026-11-01 晚（**lab 使用中（Podman kafka-lab），machine 開著
 2. 腳本版在 Podman 上從零實跑（`install/lab/run-customer.sh`）：使用者 10-31 決定改天跑。跑之前先決定 C3 2.6.0 RPM（1 GB）要不要重抓（建議改 run-customer.sh 沿用落地區已驗章的檔）；這次也會驗到 v5.6.1 的 `podman compose down -v／up -d`。
 3. ~~移除 Docker Desktop~~ **做完**（10-31 晚，殘餘全清，C 槽剩約 290 GB）；compose 改用 Podman Desktop 的 Compose 擴充（v5.6.1），手冊 0.0 已改。第 0 章的 `podman compose up/down` 在 v5.6.1 上還沒從零實跑。
 4. ~~OP menu 改成新手看得懂的寫法~~ **做完**（log/2026-11-01-opmenu-readable.md）：27 項＋lib＋登入改寫、9 支測試過；lab 唯讀 13 項、變更類 31–38／42／36／91 新舊版輸出相同（含拒絕的情況），44 快照 7 個清單和每日備份 sha256 相同，22、27 新版實跑過；交付物重打包（opmenu-20261101.f866d235）並照手冊 16.3 裝到 /opt/opmenu，16.3／16.4 的 out 相同。順手修：16.3 的 ssh-keyscan 在 OS 9.8 會把 `#` 註解行印到 stdout（known_hosts 20 行），手冊與 16-opmenu.sh 加 `grep -v "^#"`；項目數改數 `items/*.sh`（多了 menu.list）。
-4b. **下一個**：使用者提議（11-01）手冊的手動指令也照同樣規則改；範圍待和使用者討論（400 多個指令塊，每章都要 lab 重跑）。
+4b. **進行中**：手冊手動指令照 OP menu 規則改（log/2026-11-01-guide-readable.md；規則在 redesign/README.md 最後一節）。範圍全部章節，驗證分四批（0–9、10–19、20–28、29–31＋B），每批從第 0 章重建 lab 跑到該批最後一章。執行器 run-chapter.js 已改成每塊 trap ERR（任何一行失敗就停）。**第 0 章文字已改完、待使用者看寫法**（sign.sh 新舊比對、語法檢查過；還沒在 lab 從零跑）。下一步：使用者確認後改 1–9 章，再拆 lab 從零跑 0–9。
 5. 待決定：稽核寫入失敗是否用 `confluent-event-logger` 的 producer 指標告警（redesign/README.md 394 之後）。
 6. 舊待修清單（10-31 Docker 逐章時記的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas）：Podman 這輪沒再出現問題，要不要結案待看。
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。

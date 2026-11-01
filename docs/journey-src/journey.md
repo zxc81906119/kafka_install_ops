@@ -34,7 +34,37 @@
 接著在 Git Bash（之後所有 Windows 端指令都在這個視窗）建 rootful 的 machine（容器要用 systemd、firewalld、固定 IP，rootless 做不到；記憶體由 `.wslconfig` 統一管，不用 `--memory`），並讓 machine 重開後自動把帶 `restart` 政策的容器拉起來（`podman-restart.service`，預設是關的）：
 
 ```bash
-export MSYS_NO_PATHCONV=1; mkdir -p ~/kafka-lab/{images/node,images/web/tls,images/ad,images/lb,ca,landing} && cd ~/kafka-lab && pwd && { podman machine inspect kafka-lab >/dev/null 2>&1 || podman machine init kafka-lab --rootful --cpus 8 >/dev/null; } && { [ "$(podman machine inspect kafka-lab --format '{{.State}}')" = running ] || podman machine start kafka-lab >/dev/null 2>&1; } && podman system connection default kafka-lab-root && podman machine ssh kafka-lab "sudo systemctl enable podman-restart.service >/dev/null 2>&1; systemctl is-enabled podman-restart.service" | tr -d '\r' | sed 's/^/podman-restart: /' && echo "rootless: $(podman info --format '{{.Host.Security.Rootless}}')" && podman compose version 2>/dev/null | tail -1
+# 1. Git Bash 不要把 /etc/... 這類容器內的路徑轉成 Windows 路徑（每開一個新的 Git Bash 都要先執行這一行）
+export MSYS_NO_PATHCONV=1
+
+# 2. lab 的目錄
+mkdir -p ~/kafka-lab/images/node ~/kafka-lab/images/web/tls ~/kafka-lab/images/ad ~/kafka-lab/images/lb
+mkdir -p ~/kafka-lab/ca ~/kafka-lab/landing
+cd ~/kafka-lab
+pwd
+
+# 3. 建 rootful 的 machine（已經建過就跳過）
+if ! podman machine inspect kafka-lab > /dev/null 2>&1; then
+  podman machine init kafka-lab --rootful --cpus 8 > /dev/null
+fi
+
+# 4. 開 machine（已經在跑就跳過）
+state=$(podman machine inspect kafka-lab --format '{{.State}}')
+if [ "$state" != running ]; then
+  podman machine start kafka-lab > /dev/null 2>&1
+fi
+
+# 5. 之後的 podman 指令都連到這台 machine 的 root
+podman system connection default kafka-lab-root
+
+# 6. machine 重開後，自動拉起帶 restart 政策的容器
+podman machine ssh kafka-lab "sudo systemctl enable podman-restart.service > /dev/null 2>&1"
+enabled=$(podman machine ssh kafka-lab "systemctl is-enabled podman-restart.service" | tr -d '\r')
+echo "podman-restart: $enabled"
+
+# 7. 確認：rootless 要是 false，compose 要印得出版本
+echo "rootless: $(podman info --format '{{.Host.Security.Rootless}}')"
+podman compose version 2>/dev/null | tail -1
 ```
 
 ```out
@@ -50,7 +80,7 @@ Docker Compose version v5.x.x
 >
 > `podman compose` 每次會先印一行 `>>>> Executing external compose provider "…docker-compose.exe" … <<<<`：只是提示用的是 Podman Desktop 裝的那一份，不影響結果。docker-compose 的版本跟著 Podman Desktop 的擴充更新（2026-10-31 是 v5.6.1）。
 >
-> 陷阱：`podman machine start` 印出 `API forwarding for Docker API clients is not available … win-sshproxy.exe failed to start` 時，`podman` 本身照常可用，但 `podman compose` 會失敗（`failed to connect to the docker API at npipe:…`）。原因是負責轉發的 `win-sshproxy` 上次被強制結束（machine 還在跑就直接關機或重開 Windows），留下一個孤兒 socket 檔 `%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock`（Windows 事件記錄裡是 `bind: Only one usage of each socket address`）；`podman machine stop` 正常結束時會自己清掉它。所以**關 Windows 之前先 `podman machine stop kafka-lab`**。已經撞到了：把那個檔刪掉（Git Bash `rm`，或 PowerShell `Remove-Item`），再 `podman machine stop kafka-lab && podman machine start kafka-lab`，看到 `API forwarding listening on` 就好了。
+> 陷阱：`podman machine start` 印出 `API forwarding for Docker API clients is not available … win-sshproxy.exe failed to start` 時，`podman` 本身照常可用，但 `podman compose` 會失敗（`failed to connect to the docker API at npipe:…`）。原因是負責轉發的 `win-sshproxy` 上次被強制結束（machine 還在跑就直接關機或重開 Windows），留下一個孤兒 socket 檔 `%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock`（Windows 事件記錄裡是 `bind: Only one usage of each socket address`）；`podman machine stop` 正常結束時會自己清掉它。所以**關 Windows 之前先 `podman machine stop kafka-lab`**。已經撞到了：把那個檔刪掉（Git Bash `rm`，或 PowerShell `Remove-Item`），再依序執行 `podman machine stop kafka-lab`、`podman machine start kafka-lab`，看到 `API forwarding listening on` 就好了。
 
 不想每次手動刪檔，可以寫一支小修復腳本放在 `~/kafka-lab/start-lab.ps1`（只用英文字元：Windows PowerShell 5.1 讀沒有 BOM 的中文 .ps1 會語法錯誤）。它在沒有 `win-sshproxy` 時刪掉那個孤兒檔；machine 已經在跑但沒有轉發就先停掉；再開 machine，結果寫在旁邊的 `start-lab.log`。平常用不到，撞到上面的警告時才跑：
 
@@ -122,21 +152,43 @@ gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
 enabled=1
 EOF
+cat > images/node/10-cp.conf <<'EOF'
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+UseDNS no
+EOF
+
 cat > images/node/Dockerfile <<'EOF'
 FROM rockylinux/rockylinux:9.6
+
+# 1. 只留 vault 的 9.6 倉庫（映像原本的 repo 檔指向最新的 9.x）
 COPY rocky-vault-96.repo /etc/yum.repos.d/rocky-vault-96.repo
-RUN rm -f /etc/yum.repos.d/rocky.repo /etc/yum.repos.d/rocky-addons.repo /etc/yum.repos.d/rocky-devel.repo /etc/yum.repos.d/rocky-extras.repo \
-    && dnf -y update \
-    && dnf -y install systemd openssh-server openssh-clients sudo tar gzip openssl procps-ng nmap-ncat hostname iproute less which findutils dnf-plugins-core ca-certificates \
-    && dnf clean all && rm -f /etc/yum.repos.d/*.repo.rpmnew
-RUN printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf \
-    && systemctl enable sshd \
-    && systemctl mask systemd-logind.service getty.target console-getty.service systemd-udevd.service \
-    && sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo
+RUN rm -f /etc/yum.repos.d/rocky.repo /etc/yum.repos.d/rocky-addons.repo /etc/yum.repos.d/rocky-devel.repo /etc/yum.repos.d/rocky-extras.repo
+
+# 2. 更新到 9.6 的最新修補，裝主機要的基本工具
+RUN dnf -y update
+RUN dnf -y install systemd openssh-server openssh-clients sudo tar gzip openssl procps-ng nmap-ncat hostname iproute less which findutils dnf-plugins-core ca-certificates
+RUN dnf clean all
+RUN rm -f /etc/yum.repos.d/*.repo.rpmnew
+
+# 3. sshd 只收金鑰、不收密碼，開機自動啟動
+COPY 10-cp.conf /etc/ssh/sshd_config.d/10-cp.conf
+RUN systemctl enable sshd
+
+# 4. 容器裡用不到的 systemd 服務關掉
+RUN systemctl mask systemd-logind.service getty.target console-getty.service systemd-udevd.service
+
+# 5. 所有 repo 關掉：和銀行的主機一樣，公開的 repo 不能用
+RUN sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo
+
 STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/sbin/init"]
 EOF
-podman build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | grep '^Successfully tagged' && podman run --rm lab-node:96 cat /etc/rocky-release
+
+podman build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | grep '^Successfully tagged'
+podman run --rm lab-node:96 cat /etc/rocky-release
 ```
 
 ```out
@@ -153,17 +205,32 @@ Rocky Linux release 9.6 (Blue Onyx)
 模擬的是銀行自己管的 httpd：只有 HTTPS，唯讀；部署帳號 `repodeploy` 可以用 ssh 寫 `/var/www/repo`，沒有 sudo、沒有 `createrepo_c`：
 
 ```bash
+cat > images/web/20-repo.conf <<'EOF'
+Match User repodeploy
+    AllowTcpForwarding no
+    X11Forwarding no
+EOF
+
 cat > images/web/Dockerfile <<'EOF'
 FROM lab-node:96
-RUN dnf -y --enablerepo=vault96-baseos,vault96-appstream install httpd mod_ssl && dnf clean all \
-    && sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/*.repo \
-    && useradd -m -s /bin/bash repodeploy && install -d -o repodeploy -g repodeploy -m 0755 /var/www/repo \
-    && rm -f /etc/httpd/conf.d/welcome.conf /etc/httpd/conf.d/ssl.conf \
-    && sed -i 's/^Listen 80$/# Listen 80/' /etc/httpd/conf/httpd.conf \
-    && printf 'Match User repodeploy\n    AllowTcpForwarding no\n    X11Forwarding no\n' > /etc/ssh/sshd_config.d/20-repo.conf \
-    && systemctl enable httpd
+
+# 1. 裝 httpd（只在 build 時打開 vault 的 repo）
+RUN dnf -y --enablerepo=vault96-baseos,vault96-appstream install httpd mod_ssl
+RUN dnf clean all
+
+# 2. 部署帳號 repodeploy：可以寫 /var/www/repo，ssh 不能轉發
+RUN useradd -m -s /bin/bash repodeploy
+RUN install -d -o repodeploy -g repodeploy -m 0755 /var/www/repo
+COPY 20-repo.conf /etc/ssh/sshd_config.d/20-repo.conf
+
+# 3. 只留 HTTPS：拿掉預設的歡迎頁、預設的 ssl.conf 和 80 埠，換成下面的 repo.conf
+RUN rm -f /etc/httpd/conf.d/welcome.conf /etc/httpd/conf.d/ssl.conf
+RUN sed -i 's/^Listen 80$/# Listen 80/' /etc/httpd/conf/httpd.conf
 COPY repo.conf /etc/httpd/conf.d/repo.conf
+RUN systemctl enable httpd
 EOF
+
+
 cat > images/web/repo.conf <<'EOF'
 Listen 443 https
 <VirtualHost *:443>
@@ -199,37 +266,71 @@ Successfully tagged localhost/lab-web:96
 RHEL 系的 Samba 沒有 AD DC 功能，所以這一台用 Debian。第一次啟動時建網域 `CORP.POC.LAB`，之後只是把 samba 跑著：
 
 ```bash
+cat > images/ad/10-cp.conf <<'EOF'
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+UseDNS no
+EOF
+
 cat > images/ad/Dockerfile <<'EOF'
 FROM debian:12-slim
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends samba samba-ad-dc samba-ad-provision winbind krb5-user ldb-tools ldap-utils openssh-server sudo procps ca-certificates openssl \
-    && rm -rf /var/lib/apt/lists/* && rm -f /etc/samba/smb.conf
-RUN install -d -m 0755 /run/sshd \
-    && printf 'PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf
+
+# 1. 裝 Samba AD DC 與管理工具
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends samba samba-ad-dc samba-ad-provision winbind krb5-user ldb-tools ldap-utils openssh-server sudo procps ca-certificates openssl
+RUN rm -rf /var/lib/apt/lists/*
+
+# 2. 套件附的 smb.conf 刪掉：第一次啟動建網域時會重新產生
+RUN rm -f /etc/samba/smb.conf
+
+# 3. sshd 只收金鑰
+RUN install -d -m 0755 /run/sshd
+COPY 10-cp.conf /etc/ssh/sshd_config.d/10-cp.conf
+
+# 4. 啟動程式（建網域、跑 samba）
 COPY entrypoint.sh /usr/local/sbin/ad-entrypoint
 RUN chmod 0755 /usr/local/sbin/ad-entrypoint
+
 VOLUME ["/var/lib/samba", "/etc/samba"]
 ENTRYPOINT ["/usr/local/sbin/ad-entrypoint"]
 EOF
+
 cat > images/ad/entrypoint.sh <<'EOF'
 #!/usr/bin/env bash
+# ad-entrypoint：第一次啟動時建網域，之後一直把 samba 跑著（samba 停了就 2 秒後再開）
 set -euo pipefail
+
+# 1. 這三個環境變數由 compose 給（AD_ADMIN_PASSWORD 來自 secrets.env），少一個就停
 : "${AD_REALM:?}" "${AD_DOMAIN:?}" "${AD_ADMIN_PASSWORD:?}"
-if [[ ! -f /var/lib/samba/private/sam.ldb ]]; then
+
+# 2. 還沒有網域資料庫：建網域（TLS 憑證檔之後由 5.3 放進 tls/）
+if [ ! -f /var/lib/samba/private/sam.ldb ]; then
   echo "[ad] provisioning domain ${AD_REALM}"
   rm -f /etc/samba/smb.conf
   samba-tool domain provision --use-rfc2307 --realm="${AD_REALM}" --domain="${AD_DOMAIN}" --server-role=dc \
     --dns-backend=SAMBA_INTERNAL --adminpass="${AD_ADMIN_PASSWORD}" --option="dns forwarder = 127.0.0.11" \
     --option="tls enabled = yes" --option="tls keyfile = tls/key.pem" --option="tls certfile = tls/cert.pem" --option="tls cafile = tls/ca.pem"
 fi
+
+# 3. Kerberos 設定用網域產生的那一份，再開 sshd
 cp -f /var/lib/samba/private/krb5.conf /etc/krb5.conf
 /usr/sbin/sshd
+
+# 4. 跑 samba；停了（例如 5.3 換憑證時 pkill）就 2 秒後再開
 while true; do
   echo "[ad] starting samba"
-  samba --foreground --no-process-group --debug-stdout || true
-  echo "[ad] samba exited, restarting in 2s"; sleep 2
+
+  if ! samba --foreground --no-process-group --debug-stdout; then
+    echo "[ad] samba ended with an error"
+  fi
+
+  echo "[ad] samba exited, restarting in 2s"
+  sleep 2
 done
 EOF
+
 podman build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | grep '^Successfully tagged'
 ```
 
@@ -242,16 +343,54 @@ Successfully tagged localhost/lab-ad:1
 **這一節在做什麼**（lab 專用）：建出模擬銀行負載平衡的 nginx 映像 `lab-lb:1`，5.4 節設定轉發到兩台 REST Proxy。前提：無。完成的樣子：build 印出 `Successfully tagged localhost/lab-lb:1`，接著印出 `4`（0.1–0.4 的四個映像都在）。
 
 ```bash
+cat > images/lb/10-cp.conf <<'EOF'
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+UseDNS no
+EOF
+
+# nginx.conf 最後要加的一段：L4（stream）轉發的設定都放在 /etc/nginx/stream.d/（5.4 節寫）
+cat > images/lb/stream.conf <<'EOF'
+
+stream {
+    include /etc/nginx/stream.d/*.conf;
+}
+EOF
+
+cat > images/lb/lb-entrypoint <<'EOF'
+#!/bin/sh
+# lb-entrypoint：先開 sshd，再讓 nginx 在前景跑
+/usr/sbin/sshd
+exec nginx -g "daemon off;"
+EOF
+
 cat > images/lb/Dockerfile <<'EOF'
 FROM nginx:1.28
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server sudo procps && rm -rf /var/lib/apt/lists/* \
-    && install -d -m 0755 /run/sshd /etc/nginx/stream.d \
-    && printf 'PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nUseDNS no\n' > /etc/ssh/sshd_config.d/10-cp.conf \
-    && printf '\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n' >> /etc/nginx/nginx.conf && rm -f /etc/nginx/conf.d/default.conf \
-    && printf '#!/bin/sh\n/usr/sbin/sshd\nexec nginx -g "daemon off;"\n' > /usr/local/sbin/lb-entrypoint && chmod 0755 /usr/local/sbin/lb-entrypoint
+
+# 1. 裝 sshd（LB 團隊的人要能登入）
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends openssh-server sudo procps
+RUN rm -rf /var/lib/apt/lists/*
+RUN install -d -m 0755 /run/sshd
+COPY 10-cp.conf /etc/ssh/sshd_config.d/10-cp.conf
+
+# 2. nginx：加上 stream 區塊、拿掉預設的網站
+RUN install -d -m 0755 /etc/nginx/stream.d
+COPY stream.conf /tmp/stream.conf
+RUN cat /tmp/stream.conf >> /etc/nginx/nginx.conf
+RUN rm -f /tmp/stream.conf /etc/nginx/conf.d/default.conf
+
+# 3. 啟動程式
+COPY lb-entrypoint /usr/local/sbin/lb-entrypoint
+RUN chmod 0755 /usr/local/sbin/lb-entrypoint
 ENTRYPOINT ["/usr/local/sbin/lb-entrypoint"]
 EOF
-podman build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | grep '^Successfully tagged' && podman images --format '{{.Repository}}:{{.Tag}}' | grep -cE '(^|/)lab-(node:96|web:96|ad:1|lb:1)$'
+
+podman build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | grep '^Successfully tagged'
+
+# 0.1–0.4 的四個映像都在：要印出 4
+podman images --format '{{.Repository}}:{{.Tag}}' | grep -cE '(^|/)lab-(node:96|web:96|ad:1|lb:1)$'
 ```
 
 ```out
@@ -268,7 +407,33 @@ Successfully tagged localhost/lab-lb:1
 正式環境這是銀行 CA 窗口的行內 PKI。lab 裡：用 openssl 建一個兩層 CA（根 CA 離線保存，簽發 CA 簽日常憑證）：
 
 ```bash
-cd ~/kafka-lab/ca && openssl genrsa -out root.key 4096 2>/dev/null && openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt -subj "/CN=PoC Bank Root CA/O=PoC Bank/C=TW" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash" && openssl genrsa -out issuing.key 4096 2>/dev/null && openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA 01/O=PoC Bank/C=TW" -out issuing.csr && printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' > issuing.ext && openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null && rm -f issuing.csr issuing.ext && openssl verify -CAfile root.crt issuing.crt && openssl x509 -in root.crt -noout -fingerprint -sha256
+cd ~/kafka-lab/ca
+
+# 1. 根 CA：私鑰與自簽的根憑證（20 年）
+openssl genrsa -out root.key 4096 2>/dev/null
+openssl req -x509 -new -key root.key -sha256 -days 7300 -out root.crt \
+  -subj "/CN=PoC Bank Root CA/O=PoC Bank/C=TW" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "subjectKeyIdentifier=hash"
+
+# 2. 簽發 CA：私鑰與憑證申請（CSR）
+openssl genrsa -out issuing.key 4096 2>/dev/null
+openssl req -new -key issuing.key -sha256 -subj "/CN=PoC Bank Issuing CA 01/O=PoC Bank/C=TW" -out issuing.csr
+
+# 3. 用根 CA 簽簽發 CA（10 年；pathlen:0 = 它只能簽一般憑證，不能再簽 CA）
+cat > issuing.ext <<'EOF'
+basicConstraints=critical,CA:TRUE,pathlen:0
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always
+EOF
+openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null
+rm -f issuing.csr issuing.ext
+
+# 4. 確認：簽發 CA 驗得過根 CA；印出根憑證的指紋
+openssl verify -CAfile root.crt issuing.crt
+openssl x509 -in root.crt -noout -fingerprint -sha256
 ```
 
 ```out
@@ -283,33 +448,120 @@ sha256 Fingerprint=…
 ```bash
 cat > ~/kafka-lab/ca/sign.sh <<'EOF'
 #!/usr/bin/env bash
-# sign.sh <csr> <out.crt>  - the bank's issuing policy
+# sign.sh <csr> <out.crt> — 銀行 CA 的簽發程序（lab 用）
+# 做什麼：檢查憑證申請（CSR）合不合規定；合格就用這個目錄的簽發 CA 簽一年，輸出「憑證＋簽發 CA」
+# 規定：CSR 的簽章正確、RSA 至少 2048 位元、有 CN、不是申請 CA、一定要帶 EKU 而且只能是 serverAuth／clientAuth；SAN 照 CSR 裡寫的
+# 改的時候要注意：Git Bash 的 openssl 是 Windows 程式，看不懂 /c/Users/... 這種路徑，所以給 openssl 的路徑都先用 to_win 轉
 set -euo pipefail
-d=$(cd "$(dirname "$0")" && pwd); csr=$1; out=$2
-# Git Bash: openssl is a native Windows build, so hand it Windows-style paths (no-op on Linux)
-command -v cygpath >/dev/null && { d=$(cygpath -m "$d"); csr=$(cygpath -m "$csr"); out=$(cygpath -m "$out"); }
-tmpf() { local t; t=$(mktemp); command -v cygpath >/dev/null && t=$(cygpath -m "$t"); echo "$t"; }
-ext() { openssl req -in "$csr" -noout -text | awk -v h="$1" 'f {gsub(/^ +/, ""); print; exit} index($0, h) {f=1}'; }
-openssl req -in "$csr" -noout -verify >/dev/null 2>&1 || { echo "REJECT: CSR signature invalid"; exit 1; }
-bits=$(openssl req -in "$csr" -noout -text | sed -n 's/.*Public-Key: (\([0-9]*\) bit).*/\1/p'); [ "${bits:-0}" -ge 2048 ] || { echo "REJECT: key < 2048"; exit 1; }
-subj=$(openssl req -in "$csr" -noout -subject -nameopt oneline | sed 's/^subject= *//'); [[ $subj == *"CN = "* ]] || { echo "REJECT: no CN"; exit 1; }
-[[ $(ext "Basic Constraints") == *CA:TRUE* ]] && { echo "REJECT: CA requested"; exit 1; }
-san=$(ext "Subject Alternative Name" | sed 's/IP Address:/IP:/g; s/, /,/g')
-eku=$(ext "Extended Key Usage" | sed 's/TLS Web Server Authentication/serverAuth/; s/TLS Web Client Authentication/clientAuth/; s/, /,/g')
-[ -n "$eku" ] || { echo "REJECT: extended key usage must be requested"; exit 1; }
-[[ $eku =~ ^(serverAuth|clientAuth)(,(serverAuth|clientAuth))?$ ]] || { echo "REJECT: EKU $eku not allowed"; exit 1; }
-e=$(tmpf); { printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$eku"; [ -n "$san" ] && printf 'subjectAltName=%s\n' "$san"; } > "$e"
-openssl x509 -req -in "$csr" -CA "$d/issuing.crt" -CAkey "$d/issuing.key" -CAcreateserial -days 365 -sha256 -extfile "$e" -out "$out.tmp" 2>/dev/null
-rm -f "$e"; cat "$out.tmp" "$d/issuing.crt" > "$out"; rm -f "$out.tmp"
+
+ca_dir=$(cd "$(dirname "$0")" && pwd)   # 簽發 CA 的檔案和這支腳本放在同一個目錄
+csr=$1
+out=$2
+
+# to_win <路徑>：Git Bash 上轉成 C:/Users/... 的寫法；沒有 cygpath（Linux）就原樣印出
+#   例：to_win /c/Users/me/ca → C:/Users/me/ca
+to_win() {
+  if command -v cygpath > /dev/null; then
+    cygpath -m "$1"
+  else
+    echo "$1"
+  fi
+}
+
+# csr_ext <標題>：CSR 裡某一個 extension 的內容（openssl 把內容印在標題的下一行）
+#   例：csr_ext "Subject Alternative Name" → DNS:repo01.poc.lab, DNS:repo01
+csr_ext() {
+  openssl req -in "$csr" -noout -text | awk -v h="$1" 'f {gsub(/^ +/, ""); print; exit} index($0, h) {f=1}'
+}
+
+ca_dir=$(to_win "$ca_dir")
+csr=$(to_win "$csr")
+out=$(to_win "$out")
+
+# 1. CSR 的簽章要正確
+if ! openssl req -in "$csr" -noout -verify > /dev/null 2>&1; then
+  echo "REJECT: CSR signature invalid"
+  exit 1
+fi
+
+# 2. 金鑰至少 2048 位元
+bits=$(openssl req -in "$csr" -noout -text | sed -n 's/.*Public-Key: (\([0-9]*\) bit).*/\1/p')
+if [ "${bits:-0}" -lt 2048 ]; then
+  echo "REJECT: key < 2048"
+  exit 1
+fi
+
+# 3. 要有 CN
+subj=$(openssl req -in "$csr" -noout -subject -nameopt oneline | sed 's/^subject= *//')
+if ! echo "$subj" | grep -q "CN = "; then
+  echo "REJECT: no CN"
+  exit 1
+fi
+
+# 4. 不能申請 CA
+basic=$(csr_ext "Basic Constraints")
+if echo "$basic" | grep -q "CA:TRUE"; then
+  echo "REJECT: CA requested"
+  exit 1
+fi
+
+# 5. EKU 一定要有，而且只能是 serverAuth、clientAuth 或兩個都有
+eku=$(csr_ext "Extended Key Usage" | sed 's/TLS Web Server Authentication/serverAuth/; s/TLS Web Client Authentication/clientAuth/; s/, /,/g')
+if [ -z "$eku" ]; then
+  echo "REJECT: extended key usage must be requested"
+  exit 1
+fi
+
+case "$eku" in
+  serverAuth | clientAuth | serverAuth,clientAuth | clientAuth,serverAuth) ;;
+  *)
+    echo "REJECT: EKU $eku not allowed"
+    exit 1
+    ;;
+esac
+
+# 6. 簽發用的 extension 檔：SAN 照 CSR 裡寫的（沒有就不加）
+san=$(csr_ext "Subject Alternative Name" | sed 's/IP Address:/IP:/g; s/, /,/g')
+ext_file=$(to_win "$(mktemp)")
+
+echo "basicConstraints=critical,CA:FALSE" > "$ext_file"
+echo "keyUsage=critical,digitalSignature,keyEncipherment" >> "$ext_file"
+echo "extendedKeyUsage=$eku" >> "$ext_file"
+echo "subjectKeyIdentifier=hash" >> "$ext_file"
+echo "authorityKeyIdentifier=keyid,issuer" >> "$ext_file"
+
+if [ -n "$san" ]; then
+  echo "subjectAltName=$san" >> "$ext_file"
+fi
+
+# 7. 簽一年；輸出的檔案是「憑證＋簽發 CA」
+openssl x509 -req -in "$csr" -CA "$ca_dir/issuing.crt" -CAkey "$ca_dir/issuing.key" -CAcreateserial -days 365 -sha256 -extfile "$ext_file" -out "$out.tmp" 2>/dev/null
+rm -f "$ext_file"
+
+cat "$out.tmp" "$ca_dir/issuing.crt" > "$out"
+rm -f "$out.tmp"
+
 echo "signed $(basename "$csr") -> $(basename "$out")  ($subj; EKU $eku)"
 EOF
-chmod +x ~/kafka-lab/ca/sign.sh && echo sign.sh ok
+
+chmod +x ~/kafka-lab/ca/sign.sh
+echo sign.sh ok
 ```
 
 用它幫 repo01 簽 HTTPS 憑證（銀行自己的伺服器，私鑰直接放到映像會掛載的目錄）：
 
 ```bash
-cd ~/kafka-lab && openssl req -new -newkey rsa:3072 -nodes -keyout images/web/tls/repo.key -out images/web/tls/repo.csr -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && bash ca/sign.sh images/web/tls/repo.csr images/web/tls/repo.crt && rm -f images/web/tls/repo.csr
+cd ~/kafka-lab
+
+# 1. repo01 的私鑰與憑證申請（主機名稱放在 SAN，用途只有 serverAuth）
+openssl req -new -newkey rsa:3072 -nodes -keyout images/web/tls/repo.key -out images/web/tls/repo.csr \
+  -subj "/CN=repo01.poc.lab/O=PoC Bank/C=TW" \
+  -addext "subjectAltName=DNS:repo01.poc.lab,DNS:repo01" \
+  -addext "extendedKeyUsage=serverAuth" 2>/dev/null
+
+# 2. CA 簽發，申請檔用完就刪
+bash ca/sign.sh images/web/tls/repo.csr images/web/tls/repo.crt
+rm -f images/web/tls/repo.csr
 ```
 
 ```out
@@ -325,7 +577,41 @@ signed repo.csr -> repo.crt  (CN = repo01.poc.lab, O = PoC Bank, C = TW; EKU ser
 14 台主機、一個不連外的內部網路。操作機有兩個專用的 volume：`ops-home`（掛在 `/root`，操作機上的工作目錄）和 `ops-secure`（掛在 `/secure/ssh`，模擬放 ssh 私鑰的**獨立 file system**：獨立的掛載點、容器重啟還在；LUKS 加密無法在 lab 模擬，所以沒有加密）。AD 的管理員密碼放在 `secrets.env`：
 
 ```bash
-cd ~/kafka-lab && [ -f secrets.env ] || { until p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20); [[ $p =~ [A-Z] && $p =~ [a-z] && $p =~ [0-9] ]]; do :; done; (umask 077; printf 'AD_ADMIN_PASSWORD=%s\n' "$p" > secrets.env); unset p; }; cat > compose.yml <<'EOF'
+cd ~/kafka-lab
+
+# good_password <密碼>：大寫、小寫、數字至少各有一個才算合格（AD 的密碼規則）
+good_password() {
+  if ! echo "$1" | grep -q '[A-Z]'; then
+    return 1
+  fi
+
+  if ! echo "$1" | grep -q '[a-z]'; then
+    return 1
+  fi
+
+  if ! echo "$1" | grep -q '[0-9]'; then
+    return 1
+  fi
+
+  return 0
+}
+
+# 1. AD 管理員密碼：20 個英數字，不合格就重產；只產生一次（已經有 secrets.env 就沿用）
+if [ ! -f secrets.env ]; then
+  ad_password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+
+  while ! good_password "$ad_password"; do
+    ad_password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+  done
+
+  touch secrets.env
+  chmod 600 secrets.env
+  echo "AD_ADMIN_PASSWORD=$ad_password" > secrets.env
+  unset ad_password
+fi
+
+# 2. 主機清單（compose 檔）
+cat > compose.yml <<'EOF'
 name: lab
 x-hosts: &hosts
   - "ops02.poc.lab=172.35.0.10"
@@ -440,6 +726,8 @@ volumes:
   ad-data:
   ad-etc:
 EOF
+
+# 3. 起整個 lab：數出幾台 Started（要是 14）
 podman compose -f compose.yml up -d 2>&1 | grep -c Started
 ```
 
@@ -462,7 +750,15 @@ lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓 Window
 下載機要能連外網，所以不在 `labnet` 裡；它的 `/out` 掛到 `~/kafka-lab/landing`，就是落地區。下載機用的 OS repo 也停在 9.6（vault），這樣第 2 章列給銀行的 OS 套件版本才是 9.6 的：
 
 ```bash
-podman run -d --restart unless-stopped --name dl01 --hostname dl01 -v "$(cygpath -m "$HOME/kafka-lab/landing"):/out" lab-node:96 sleep infinity >/dev/null && podman exec dl01 bash -c 'dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras; curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/'
+# 1. 起下載機：/out 掛到落地區
+landing=$(cygpath -m "$HOME/kafka-lab/landing")
+podman run -d --restart unless-stopped --name dl01 --hostname dl01 -v "$landing:/out" lab-node:96 sleep infinity > /dev/null
+
+# 2. 下載機的 OS repo 也用 vault 的 9.6
+podman exec dl01 dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras
+
+# 3. 確認連得到外網（要是 200）
+podman exec dl01 curl -s -o /dev/null -w "internet: %{http_code}\n" https://packages.confluent.io/rpm/8.2/
 ```
 
 ```out
@@ -495,11 +791,12 @@ podman exec -it lab-repo01-1 bash
 
 | 要做什麼 | 指令 | 說明 |
 |---|---|---|
-| 暫停 | `cd ~/kafka-lab && podman compose -f compose.yml stop` | 資料都在 volume 裡 |
-| 繼續 | `podman compose -f compose.yml start` | — |
-| Windows 重開機後 | 先 `podman machine start kafka-lab`（設了 0.0 的開機排程就不用）；14 台由 `podman-restart` 依 `restart: unless-stopped` 自己起來；下載機沒有 restart 政策，要手動 `podman start dl01` | Kafka 服務設了 enable 也會自己起來 |
+| 暫停 | `podman compose -f ~/kafka-lab/compose.yml stop` | 資料都在 volume 裡 |
+| 繼續 | `podman compose -f ~/kafka-lab/compose.yml start` | — |
+| Windows 重開機後 | `podman machine start kafka-lab`（machine 不會自己開）；14 台和下載機都帶 `restart: unless-stopped`，由 `podman-restart` 自己拉起來 | Kafka 服務設了 enable 也會自己起來 |
+| 關 Windows 之前 | `podman machine stop kafka-lab` | 不停就關機會留下孤兒 socket，下次 `podman compose` 壞掉（0.0 的陷阱） |
 | 操作機重開後 | 不用做 | `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見第 4 章） |
-| 全部清掉重來 | `podman compose -f compose.yml down -v && podman rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
+| 全部清掉重來 | 先 `podman compose -f ~/kafka-lab/compose.yml down -v`，再 `podman rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
 
 > 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：操作機的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 5、9 章會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
