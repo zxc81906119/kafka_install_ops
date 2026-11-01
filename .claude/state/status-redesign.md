@@ -23,6 +23,6 @@ Updated: 2026-11-01 00:00（**lab 使用中（Podman kafka-lab）**：手冊版 
 ## 環境狀態
 - lab：Podman machine `kafka-lab`，compose 專案 `lab`（14 台＋dl01），10-31 照手冊從零建。監控容器（lab-mon-*）B.2 已收；要再用跑 `bank-sim.sh monitoring`。license trial 到 2026-11-30。
 - lab 信任根是 G3（21.4 之後）；簽新憑證用 `~/kafka-lab/ca/g2/sign.sh`（中繼 G2 由 G3 簽）。
-- WSL2 11 GB（.wslconfig），Docker Desktop 不要同時開。絕不 `podman machine rm/reset kafka-lab`（volume `ops-secure`）。
+- 登入時由啟動資料夾捷徑跑 `~/kafka-lab/start-lab.ps1` 開 machine（先清孤兒 `kafka-lab-api.sock`）；關機前最好先 `podman machine stop kafka-lab`。WSL2 11 GB（.wslconfig）。絕不 `podman machine rm/reset kafka-lab`（volume `ops-secure`）。
 - 密碼檔：`~/kafka-lab/secrets.env`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
 - Git Bash 的 `python3` 是 Store 空殼：改檔用 node（替換字串用函式，避免 `$'`）；podman 指令前加 `MSYS_NO_PATHCONV=1`。
