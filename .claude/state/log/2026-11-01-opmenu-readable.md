@@ -22,3 +22,8 @@
 - 使用者提議（11-01）：手冊的手動指令之後也照同樣規則改，讓安裝與維運人員更好做事。等 OP menu 做完再討論範圍（400 多個指令塊，每章都要 lab 重跑）。
 - common.sh 全部改完：紀錄、交接檔、確認、v_*（多行的 v_match／v_in／v_topic／v_offset_to）、清理（pid 改用 cut、拆出 _process_alive）、token 換新、選單可見性、兩個閘門共用 _core_authorize、並行鎖、變更時窗（拆出 _minutes_of，用 heredoc 讀每個時段）。先寫 tests/test-change-window.sh（19 例）與 test-lock.sh（7 例）對舊版跑過確認案例正確，改完新版同樣全過；9 支測試全過。
 - lib 全部改完：defaults.sh 的 d／dd／_hosts_of 與兩段推算（新舊版 65 個設定值與來源逐一比對相同）、secrets/file.sh、hosts.sh（送到主機的遠端指令字串一字不改，test-sudo-forms 過）、kafka.sh（_curl_q 改 sed，" 與 \ 跳脫結果相同）、opmenu.sh 的載入／login／emergency_login／derive。OP menu 本身已沒有 eval；9 支測試全過。待 lab 逐項實跑。
+
+## lab 比對新舊版（11-01 晚，ops02：舊 /opt/opmenu、新 /root/opmenu-new）
+- 唯讀項目 alice 各跑一次、正規化時間後比對：10、12、13、14、15、16、17、19、23、41、43、44（CSV）完全相同；11 只差 HighWatermark（叢集持續增加的計數，正常）。44 的 CSV 新舊 sha256 相同。比對腳本在 scratchpad/opmenu-compare.sh（ops02 沒有 diff／cmp，改用 sha256＋awk 列出不同的行）。
+- 還沒做（下次）：變更類項目實跑（31 建 → 32 改 retention → 33 刪；34 建帳號 → 38 配額 → 35 輪替 → 37 下架；42 加／移除權限；36 重設 offset；22 重啟 REST；27 滾動重啟；91 緊急模式）；44 snapshot 和每日備份 sha256 比對（手冊 23.5）；全部過了再更新交付物（package.sh）與 /opt/opmenu。
+- 之後：使用者想把手冊的手動指令也改成同樣寫法，OP menu 做完再討論範圍。
