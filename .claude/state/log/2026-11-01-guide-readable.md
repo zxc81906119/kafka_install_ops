@@ -30,3 +30,5 @@
 - 使用者 11-01 晚授權（隔天早上回來看）：照順序自己做完：第三批比對修正 → commit → 第四批 29–31＋B（不重建）→ 比對修正 → commit → 重建 Word（build-docs）→ 最後在 lab 手動跑 26.4 叢集重置並驗收。不 push。
 - 整晚不睡眠：app 的 keep-awake（session_idle）＋一個背景 PowerShell 呼叫 SetThreadExecutionState，最長 9 小時；建 %TEMP%\claude-awake.stop 可提前結束。
 - 第三批 20–28 接著第 19 章的狀態實跑（run-customer-20-28-20261101-2208）：189 塊，rc=0 181、略過 8（26.4 七塊＋互動一塊）、失敗 0，scan-log 乾淨。逐塊比對：差異都是序號、日期、秒數、replica 數這類每次不同的值；23.5 metadata-backup.sh 與 44 快照 7 檔 sha256 相同，23.6 還原、24.3（新的 sudo find）、25.1／25.2、27、28 全部符合。只改 28.6 一行 out（cut -c1-120 截斷的位置）。
+- 第四批 29–31＋B 接著跑（run-customer-29-end-20261101-2355）：47 塊全部 rc=0、失敗 0，scan-log 乾淨。pkg-swap.sh／jdk-switch.sh／c3-change.sh／os-patch-host.sh 都照預期：8.3.2、JDK 25、OS 9.8、C3 2.5.1→2.6.1→2.6.0→2.6.1、kb04 回滾演練；附錄 B 覆蓋率 32／816／296 與手冊相同。只更新兩個實測數字：30.0 鏡像現在 156 個 RPM（合併 227）；29.2 c3-01 備份 36K（drop-in 現在有打包）。
+- 到這裡整本手冊 0–31＋B 都照新寫法在 lab 實跑過（26.4 除外，下一步手動驗）。

@@ -15593,8 +15593,8 @@ echo "$B"
 ```
 
 ```out
-kc01 28K  kc02 28K  kc03 28K  kb01 32K  kb02 32K  kb03 32K  kb04 32K  rest01 28K  rest02 28K  c3-01 32K
-/root/upgrade-backup/20261024-1401
+kc01 28K  kc02 28K  kc03 28K  kb01 32K  kb02 32K  kb03 32K  kb04 32K  rest01 28K  rest02 28K  c3-01 36K
+/root/upgrade-backup/20261101-2356
 ```
 
 ## 29.3 第一段：Control Center 先（2.5.1 → 2.6.1）
@@ -16520,11 +16520,11 @@ EOF
 ```
 
 ```out
-9.8 更新集合：154 個 RPM、79 MB（約 220 秒）；合併後的套件庫 225 個 RPM
-repo01 /os/：225 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
+9.8 更新集合：156 個 RPM、79 MB（約 100–220 秒）；合併後的套件庫 227 個 RPM
+repo01 /os/：227 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
 ```
 
-> 說明：更新集合是 154 個 RPM（124 個要更新的套件加上相依，2026-10-30 從 Rocky 9.8 鏡像實測；鏡像更新後數字會變），只有 79 MB，因為這批主機的套件只有最小安裝加上平台要用的工具；真正的 RHEL 主機裝的東西多，數字會大很多，請銀行的 OS 團隊用同樣的方法（在代表性的主機上 `dnf update --downloadonly`）估算。套件庫合併後同時有 9.6 和 9.8 的版本，dnf 會挑最新的。
+> 說明：更新集合是 156 個 RPM（124 個要更新的套件加上相依，2026-11-01 從 Rocky 9.8 鏡像實測，10-30 是 154 個；鏡像更新後數字會變），只有 79 MB，因為這批主機的套件只有最小安裝加上平台要用的工具；真正的 RHEL 主機裝的東西多，數字會大很多，請銀行的 OS 團隊用同樣的方法（在代表性的主機上 `dnf update --downloadonly`）估算。套件庫合併後同時有 9.6 和 9.8 的版本，dnf 會挑最新的。
 
 > 陷阱：dnf 會快取套件庫的中繼資料 48 小時，剛同步完主機可能還看到舊的清單。30.1 之後的指令都帶 `--refresh`。
 
