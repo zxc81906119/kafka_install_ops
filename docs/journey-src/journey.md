@@ -843,12 +843,13 @@ podman exec -it lab-repo01-1 bash
 - 綠色標籤 **我方**：小安敲的指令。橘色標籤 **銀行**：銀行各團隊的事，lab 裡由你代勞。
 - 每個指令上方都有一行「▶ 在哪台（用哪個帳號）執行」。要換機器的那一個指令（以及每章第一個指令）會附上 lab 裡切過去的指令，例如 `podman exec -it -w /root lab-ops02-1 bash`；從一台容器換到另一台時，先 `exit` 回到 Git Bash 再切。正式環境進操作機是在 CyberArk 的 PVWA 網頁選目標、由 PSMP 代登（進去是 root）；從操作機連其他主機一律用 cpuser 的金鑰 ssh。
 - 每個指令後面接「預期輸出」。看到的和預期不同就停下來，先弄懂再往下。
-- 指令都是一行可以整段貼上的；多行的 `heredoc`（`<<'EOF' … EOF`）要整段一起貼。
+- 一行一個指令，整塊貼上即可；`#` 開頭的是步驟說明，貼上也不會執行。寫檔用的 `heredoc`（`<<'EOF' … EOF`）要連同最後的 `EOF` 一起貼。
+- 「先檢查、再動手」的地方拆成兩塊：前一塊看到預期輸出，才做下一塊。檢查不過時，指令會印出原因並停在那裡：最後一行的 `false` 只是讓這一塊以失敗結束，不會關掉你的終端機。
 - 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。平台的密碼與金鑰只放在操作機 root 才讀得到的位置（`~/secrets`、`~/pki`、`/secure/ssh`），不放 CyberArk。需要人手動輸入時一律用**不顯示的寫法**（`read -rs`），PSMP 的錄影才不會錄到。
 - **主線是「先裝基底、再遷移」**：第 2–19 章裝的是安裝基底，第 29、30、31 章把它遷移到目標版本，每一段之後都跑第 19 章的驗收。兩組版本的來由與限制在下面「版本路徑」。
 - 主線是本案客戶的情境：Kafka 平台和銀行的 CyberArk 已經脫鉤，只剩「人員在 PVWA 登入、由 PSMP 代登進操作機（root）」這一件事。平台的密碼、金鑰、憑證都在操作機上由 root 保管（0600／0400），操作機到各主機的 ssh 金鑰也是操作機自己的（第 4 章）。
 
-- 指令很長是為了「整段貼上就能跑」。看不懂沒關係，先照做；每一章開頭說這章要做什麼，結尾說看到什麼代表成功。
+- 看不懂沒關係，先照做；每一塊用註解編了步驟（`# 1.`、`# 2.`），每一章開頭說這章要做什麼，結尾說看到什麼代表成功。
 
 > 陷阱：在各主機上（以 cpuser 登入）確認用的 `ls`、`stat` 看 `/etc/confluent/ssl`、`/var/lib/kafka` 這類 0750 的目錄要加 `sudo`，不然會 Permission denied，誤以為前一步失敗。操作機上你是 root，不需要。
 
@@ -949,7 +950,16 @@ podman exec -it lab-repo01-1 bash
 @role 小安 | dl01 | root
 
 ```bash
-mkdir -p /out/rpm /out/rpm-target /out/gpg-keys /out/tools && curl -fsSL https://packages.confluent.io/rpm/8.2/archive.key -o /out/gpg-keys/confluent.asc && curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key -o /out/gpg-keys/confluent-c3.asc && rpm --import /out/gpg-keys/confluent.asc /out/gpg-keys/confluent-c3.asc && rpm -q gpg-pubkey --qf '%{SUMMARY}\n' | grep -i confluent
+# 1. 放下載檔案的目錄
+mkdir -p /out/rpm /out/rpm-target /out/gpg-keys /out/tools
+
+# 2. 下載 Confluent 的簽章公鑰（Confluent Platform 一個網址、C3 一個網址）
+curl -fsSL https://packages.confluent.io/rpm/8.2/archive.key -o /out/gpg-keys/confluent.asc
+curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key -o /out/gpg-keys/confluent-c3.asc
+
+# 3. 匯入，確認 rpm 認得它
+rpm --import /out/gpg-keys/confluent.asc /out/gpg-keys/confluent-c3.asc
+rpm -q gpg-pubkey --qf '%{SUMMARY}\n' | grep -i confluent
 ```
 
 ```out
@@ -981,6 +991,8 @@ gpgcheck=1
 gpgkey=https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key
 enabled=1
 EOF
+
+# 要用的四個版本都在 repo 裡
 dnf list --showduplicates confluent-server confluent-control-center-next-gen | grep -E '8\.(2\.4|3\.2)|2\.(5\.1|6\.1)'
 ```
 
@@ -1004,19 +1016,27 @@ confluent-server.noarch                          1:8.3.2-1         confluent-8.3
 `--resolve` 會把 Confluent 自己的相依一起抓；因為下載機和正式主機是同樣最小安裝，它不會多抓也不會漏抓。**每一套只開自己的 repo**（`--disablerepo='*' --enablerepo=…`）：8.2 和 8.3 的 repo 同時開著時，`--resolve` 可能把另一版的 `confluent-common` 抓進來。先抓安裝基底到 `/out/rpm`：
 
 ```bash
-dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm --disablerepo='*' --enablerepo=confluent-8.2,confluent-c3 confluent-server-8.2.4 confluent-security-8.2.4 confluent-kafka-rest-8.2.4 confluent-cli-8.2.4 confluent-control-center-next-gen-2.5.1
+dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm \
+  --disablerepo='*' --enablerepo=confluent-8.2,confluent-c3 \
+  confluent-server-8.2.4 confluent-security-8.2.4 confluent-kafka-rest-8.2.4 confluent-cli-8.2.4 confluent-control-center-next-gen-2.5.1
 ```
 
 再抓遷移目標到 `/out/rpm-target`：
 
 ```bash
-dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm-target --disablerepo='*' --enablerepo=confluent-8.3,confluent-c3 confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2 confluent-control-center-next-gen-2.6.1
+dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm-target \
+  --disablerepo='*' --enablerepo=confluent-8.3,confluent-c3 \
+  confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2 confluent-control-center-next-gen-2.6.1
 ```
 
 每套約 3 GB。lab 裡：落地區是 Windows 資料夾，最後核對檔案那段會慢（看起來像卡在 99%），耐心等它結束。
 
 ```bash
-for d in rpm rpm-target; do echo "== $d"; ls /out/$d | sort; ls /out/$d | wc -l; done
+for d in rpm rpm-target; do
+  echo "== $d"
+  ls /out/$d | sort
+  ls /out/$d | wc -l
+done
 ```
 
 ```out
@@ -1058,7 +1078,11 @@ rpm -K /out/rpm/*.rpm /out/rpm-target/*.rpm
 Confluent 的 RPM 需要哪些非 Confluent 的東西？答案應該只有 bash 和 glibc：
 
 ```bash
-rpm -qpR /out/rpm/*.rpm /out/rpm-target/*.rpm 2>/dev/null | grep -vE '^(confluent-|rpmlib\(|config\()' | sort -u | xargs -d '\n' rpm -q --whatprovides | sort -u
+# 1. 所有 RPM 宣告的相依，去掉 Confluent 自己的和 rpm 內部用的
+needs=$(rpm -qpR /out/rpm/*.rpm /out/rpm-target/*.rpm 2>/dev/null | grep -vE '^(confluent-|rpmlib\(|config\()' | sort -u)
+
+# 2. 這些相依由哪些 OS 套件提供
+echo "$needs" | xargs -d '\n' rpm -q --whatprovides | sort -u
 ```
 
 ```out
@@ -1074,7 +1098,43 @@ glibc-2.34-168.el9_6.24.x86_64
 第 17 章的監控需要 JMX exporter（Prometheus 用的 Java agent jar）和 Confluent 官方的規則檔，這兩樣都不是 RPM，要另外抓。先抓 jar（1.7.0，從 GitHub release），核對 release 附的 sha256 與 GPG 簽章；舊版的 jar 先刪掉，第 17 章才不會同時抓到兩個：
 
 ```bash
-V=1.7.0 && J=jmx_prometheus_javaagent-$V.jar && B=https://github.com/prometheus/jmx_exporter/releases/download/$V && FPR=90E3CDDECF99D81C0309D74CCADDBDF51122242E && rm -f /out/tools/jmx_prometheus_javaagent-*.jar && curl -fsSL -o /out/tools/$J $B/$J && curl -fsSL -o /tmp/$J.sha256 $B/$J.sha256 && curl -fsSL -o /tmp/$J.asc $B/$J.asc && [ "$(sha256sum /out/tools/$J | cut -d' ' -f1)" = "$(cut -c1-64 /tmp/$J.sha256)" ] && echo jar-sha256-ok && curl -fsSL "https://keys.openpgp.org/vks/v1/by-fingerprint/$FPR" | gpg --import 2>/dev/null && gpg --status-fd 1 --verify /tmp/$J.asc /out/tools/$J 2>/dev/null | grep -q "VALIDSIG $FPR" && echo "jar-gpg-ok（簽章金鑰 $FPR）"; r=$?; rm -f /tmp/$J.sha256 /tmp/$J.asc; [ $r = 0 ]
+# 1. 版本、檔名、下載位置、簽章金鑰的指紋
+version=1.7.0
+jar=jmx_prometheus_javaagent-$version.jar
+base=https://github.com/prometheus/jmx_exporter/releases/download/$version
+signer=90E3CDDECF99D81C0309D74CCADDBDF51122242E
+
+# 2. 舊版的 jar 刪掉；下載 jar、它的 sha256 與簽章
+rm -f /out/tools/jmx_prometheus_javaagent-*.jar
+curl -fsSL -o /out/tools/$jar $base/$jar
+curl -fsSL -o /tmp/$jar.sha256 $base/$jar.sha256
+curl -fsSL -o /tmp/$jar.asc $base/$jar.asc
+
+# 3. 核對 sha256（對不上就刪掉 jar，不帶進行內）
+actual=$(sha256sum /out/tools/$jar | cut -d' ' -f1)
+expected=$(cut -c1-64 /tmp/$jar.sha256)
+
+if [ "$actual" = "$expected" ]; then
+  echo jar-sha256-ok
+else
+  echo "jar 的 sha256 對不上，已刪掉：不要帶進行內"
+  rm -f /out/tools/$jar
+  false
+fi
+
+# 4. 核對 GPG 簽章：公鑰依指紋從 keys.openpgp.org 取（簽章不對就刪掉 jar）
+curl -fsSL "https://keys.openpgp.org/vks/v1/by-fingerprint/$signer" | gpg --import 2>/dev/null
+
+if gpg --status-fd 1 --verify /tmp/$jar.asc /out/tools/$jar 2>/dev/null | grep -q "VALIDSIG $signer"; then
+  echo "jar-gpg-ok（簽章金鑰 $signer）"
+else
+  echo "jar 的簽章不是這把金鑰，已刪掉：不要帶進行內"
+  rm -f /out/tools/$jar
+  false
+fi
+
+# 5. 核對用的檔案刪掉
+rm -f /tmp/$jar.sha256 /tmp/$jar.asc
 ```
 
 ```out
@@ -1087,7 +1147,31 @@ jar-gpg-ok（簽章金鑰 90E3CDDECF99D81C0309D74CCADDBDF51122242E）
 Confluent 官方的監控檔（exporter 規則、告警規則、Grafana dashboard）在 GitHub 的 confluentinc/jmx-monitoring-stacks（Apache-2.0）。**固定在一個 commit**（`f376263f…`，2026-05-28），不跟 main 走：第 17 章的 dashboard 與規則是照這一版的指標名稱寫的。只取要用的路徑（32 個 dashboard、告警規則、controller／broker／REST 三份 exporter 規則），jar 不拿（用上面驗過的那個）。`COMMIT` 檔記下版本，之後每一關的 `SHA256SUMS` 也會涵蓋它們：
 
 ```bash
-SHA=f376263fc6d7270185ab6abab9a8c379079e2a92 && mkdir -p /out/monitoring /tmp/jms-x && curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$SHA.tar.gz" | tar -xz -C /tmp/jms-x --wildcards '*/LICENSE' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' '*/jmxexporter-prometheus-grafana/assets/prometheus/*' '*/shared-assets/jmx-exporter/kafka_broker.yml' '*/shared-assets/jmx-exporter/kafka_controller.yml' '*/shared-assets/jmx-exporter/confluent_rest.yml' '*/shared-assets/jmx-exporter/kafka_streams.yml' && rm -rf /out/monitoring/jmx-monitoring-stacks && mv /tmp/jms-x/jmx-monitoring-stacks-* /out/monitoring/jmx-monitoring-stacks && echo "$SHA" > /out/monitoring/jmx-monitoring-stacks/COMMIT && rm -rf /tmp/jms-x && echo "commit ${SHA:0:12}: $(find /out/monitoring -type f | wc -l) 個檔，dashboard $(ls /out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l) 個"
+# 1. 固定的 commit；暫時解開的目錄
+commit=f376263fc6d7270185ab6abab9a8c379079e2a92
+mkdir -p /out/monitoring /tmp/jms-x
+
+# 2. 下載這個 commit 的壓縮檔，只解開要用的路徑
+curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$commit.tar.gz" | tar -xz -C /tmp/jms-x --wildcards \
+  '*/LICENSE' \
+  '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' \
+  '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' \
+  '*/jmxexporter-prometheus-grafana/assets/prometheus/*' \
+  '*/shared-assets/jmx-exporter/kafka_broker.yml' \
+  '*/shared-assets/jmx-exporter/kafka_controller.yml' \
+  '*/shared-assets/jmx-exporter/confluent_rest.yml' \
+  '*/shared-assets/jmx-exporter/kafka_streams.yml'
+
+# 3. 換掉舊的一份，記下 commit
+rm -rf /out/monitoring/jmx-monitoring-stacks
+mv /tmp/jms-x/jmx-monitoring-stacks-* /out/monitoring/jmx-monitoring-stacks
+echo "$commit" > /out/monitoring/jmx-monitoring-stacks/COMMIT
+rm -rf /tmp/jms-x
+
+# 4. 結果：檔案數、dashboard 數
+files=$(find /out/monitoring -type f | wc -l)
+dashboards=$(ls /out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l)
+echo "commit $(echo $commit | cut -c1-12): $files 個檔，dashboard $dashboards 個"
 ```
 
 ```out
@@ -1097,7 +1181,8 @@ commit f376263fc6d7: 48 個檔，dashboard 32 個
 平台還需要幾個 OS 套件，由銀行的套件庫提供。先確認它們都在 RHEL 標準 repo 裡、在哪個 repo，做成清單交給銀行。**版本號是下載機的 OS repo（停在 9.6，0.7）的內容**：銀行的套件庫之後同步到 9.8 時這幾個會更新（30.5）：
 
 ```bash
-dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u | tee /out/os-packages.txt
+dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' \
+  chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u | tee /out/os-packages.txt
 ```
 
 ```out
@@ -1127,7 +1212,29 @@ python3-dnf-plugin-versionlock	4.3.0-20.el9	vault96-baseos
 正式環境 JDK 是銀行交付的；lab 沒有銀行，就用這台下載機從 Adoptium 抓 Temurin，連同官方的 sha256 一起放到 `/out/bank/`，當作「銀行給的檔案」。**要兩個**：JDK 21 給安裝基底（7.1 節）；JDK 25 留到遷移（29.7）才裝——8.2.x 不支援 Java 25，所以基底一定是 21，但 25 先一起帶進來，遷移時不用再送一次：
 
 ```bash
-mkdir -p /out/bank && for v in 21 25; do meta=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/$v/hotspot?os=linux&architecture=x64&image_type=jdk&vendor=eclipse") && url=$(echo "$meta" | grep -o '"link": *"[^"]*\.tar\.gz"' | head -1 | cut -d'"' -f4) && sha=$(echo "$meta" | grep -o '"checksum": *"[0-9a-f]\{64\}"' | head -1 | cut -d'"' -f4) && f=$(basename "$url") && curl -fsSL -o "/out/bank/$f" "$url" && echo "$sha  $f" > "/out/bank/$f.sha256" && (cd /out/bank && sha256sum -c --quiet "$f.sha256" && echo "jdk-ok: $f"); done
+mkdir -p /out/bank
+cd /out/bank
+
+for v in 21 25; do
+  # 1. 問 Adoptium：這一版最新的 tar 在哪裡、官方的 sha256 是多少
+  meta=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/$v/hotspot?os=linux&architecture=x64&image_type=jdk&vendor=eclipse")
+  url=$(echo "$meta" | grep -o '"link": *"[^"]*\.tar\.gz"' | head -1 | cut -d'"' -f4)
+  sha=$(echo "$meta" | grep -o '"checksum": *"[0-9a-f]\{64\}"' | head -1 | cut -d'"' -f4)
+  file=$(basename "$url")
+
+  # 2. 下載，官方的 sha256 存成旁邊的 .sha256 檔
+  curl -fsSL -o "$file" "$url"
+  echo "$sha  $file" > "$file.sha256"
+
+  # 3. 核對（對不上就刪掉）
+  if sha256sum -c --quiet "$file.sha256"; then
+    echo "jdk-ok: $file"
+  else
+    echo "$file 的 sha256 對不上，已刪掉"
+    rm -f "$file" "$file.sha256"
+    false
+  fi
+done
 ```
 
 ```out
@@ -1142,7 +1249,11 @@ jdk-ok: OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz
 @role 小安 | dl01 | root
 
 ```bash
-cd /out && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" | LC_ALL=C sort | xargs sha256sum > SHA256SUMS && wc -l SHA256SUMS
+cd /out
+
+# 落地區裡我方的檔案（不含銀行的 JDK、之後才送的 tools/opmenu），排好順序算 sha256
+find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
+wc -l SHA256SUMS
 ```
 
 ```out
@@ -1174,7 +1285,17 @@ cd /out && find rpm rpm-target tools gpg-keys monitoring -type f -not -path "too
 正式環境由行內的檔案交換平台把核准的檔案送到操作機的 `~/landing`（root 的家目錄底下）。lab 裡：用 `podman cp` 模擬這個平台（`podman cp` 不會自動建立目的目錄，所以先建 `~/landing`）；送進去之後把目錄設成唯讀（對 root 其實擋不住寫入，只是約定「落地區的檔案不改」）：
 
 ```bash
-podman exec lab-ops02-1 install -d -m 0700 /root/landing && podman cp "$(cygpath -m "$HOME/kafka-lab/landing")/." lab-ops02-1:/root/landing/ && podman exec lab-ops02-1 bash -c 'chmod -R a-w /root/landing && find /root/landing -type f | wc -l && du -sh /root/landing'
+# 1. 操作機上的落地區目錄（podman cp 不會自己建）
+podman exec lab-ops02-1 install -d -m 0700 /root/landing
+
+# 2. 整個落地區複製過去
+landing=$(cygpath -m "$HOME/kafka-lab/landing")
+podman cp "$landing/." lab-ops02-1:/root/landing/
+
+# 3. 設成唯讀；數檔案、看大小
+podman exec lab-ops02-1 chmod -R a-w /root/landing
+podman exec lab-ops02-1 bash -c 'find /root/landing -type f | wc -l'
+podman exec lab-ops02-1 du -sh /root/landing
 ```
 
 ```out
@@ -1191,7 +1312,15 @@ podman exec lab-ops02-1 install -d -m 0700 /root/landing && podman cp "$(cygpath
 這是第二道驗證（第一道是 dl01 上的 2.6）：證明搬運途中沒被動過，用的是一起送進來的 `SHA256SUMS`。看到 `73 files OK` 才往下；有任何一個檔不符就退回銀行重送，不要裝：
 
 ```bash
-cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) files OK"
+cd ~/landing
+
+# 不符的檔案會一個一個列出來（--quiet：相符的不印）
+if sha256sum -c --quiet SHA256SUMS; then
+  echo "$(wc -l < SHA256SUMS) files OK"
+else
+  echo "有檔案和 SHA256SUMS 不符：退回銀行重送，不要往下做"
+  false
+fi
 ```
 
 ```out
@@ -1201,7 +1330,8 @@ cd ~/landing && sha256sum -c --quiet SHA256SUMS && echo "$(wc -l < SHA256SUMS) f
 接著再驗一次原廠簽章。`rpm -K` 只認 rpm 資料庫裡的公鑰，所以先把隨包送進來的公鑰匯入（22 個 RPM 都要是 `digests signatures OK`）：
 
 ```bash
-rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc && rpm -K ~/landing/rpm/*.rpm ~/landing/rpm-target/*.rpm
+rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc
+rpm -K ~/landing/rpm/*.rpm ~/landing/rpm-target/*.rpm
 ```
 
 ```out
@@ -1216,7 +1346,33 @@ rpm --import ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.as
 延伸章節還會陸續帶檔案進來：16.3 的選單套件（`tools/opmenu`）、第 31 章單獨換 C3 版本時的單一 RPM。遷移用的新版 RPM 與 JDK 25 已經在第 2、3 章一起進來了（`rpm-target/`、`bank/`），第 29 章只是把它們上架。流程和第 3 章一樣（掃描、交換、進來後驗 sha256），只是一次送一個目錄。`~/landing` 是唯讀的，所以放進去再收回寫入權限（`D` 換成要送的目錄）；操作機上已經有同名的目錄會先清掉再送，所以同一個目錄換新版也是這一條。落地區還沒有那個目錄就什麼都不做：
 
 ```bash
-D=opmenu; [ -d "$HOME/kafka-lab/landing/tools/$D" ] || { echo "落地區還沒有 tools/$D（有檔案要送時再做）"; exit 0; }; podman exec lab-ops02-1 bash -c "chmod -R u+w /root/landing/tools/$D 2>/dev/null; rm -rf /root/landing/tools/$D" && podman cp "$(cygpath -m "$HOME/kafka-lab/landing/tools/$D")" lab-ops02-1:/root/landing/tools/ && podman exec lab-ops02-1 bash -c "chmod -R a-w /root/landing/tools/$D && cd /root/landing/tools/$D && ls && sha256sum -c --quiet SHA256SUMS && echo sha256-ok"
+D=opmenu   # 要送的目錄（落地區 tools/ 底下）
+src="$HOME/kafka-lab/landing/tools/$D"
+dest=/root/landing/tools/$D
+
+if [ ! -d "$src" ]; then
+  echo "落地區還沒有 tools/$D（有檔案要送時再做）"
+else
+  # 1. 操作機上同名的舊目錄先清掉（落地區是唯讀的，要先打開寫入權限）
+  if podman exec lab-ops02-1 test -d "$dest"; then
+    podman exec lab-ops02-1 chmod -R u+w "$dest"
+    podman exec lab-ops02-1 rm -rf "$dest"
+  fi
+
+  # 2. 送過去，再收回寫入權限
+  podman cp "$(cygpath -m "$src")" lab-ops02-1:/root/landing/tools/
+  podman exec lab-ops02-1 chmod -R a-w "$dest"
+
+  # 3. 在操作機上核對 sha256
+  podman exec lab-ops02-1 ls "$dest"
+
+  if podman exec -w "$dest" lab-ops02-1 sha256sum -c --quiet SHA256SUMS; then
+    echo sha256-ok
+  else
+    echo "sha256 對不上：請我方重送，不要裝"
+    false
+  fi
+fi
 ```
 
 ```out
@@ -1252,11 +1408,27 @@ lab 裡：正式環境才有的三樣東西，這樣模擬：
 每台主機（含操作機）以 root 做三件事：建帳號（UID／GID 固定 1500，不設密碼，useradd 預設就是鎖定）、sshd 設定、安裝期的全權 sudo。公鑰等操作機產生金鑰後（4.3）再放。lab 對每個容器各跑一次：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman exec -i lab-$h-1 bash -s <<'EOF'
-groupadd -g 1500 cpuser && useradd -u 1500 -g 1500 -m -s /bin/bash cpuser
-printf 'Match User cpuser\n    PasswordAuthentication no\n    AuthenticationMethods publickey\n' > /etc/ssh/sshd_config.d/50-cpuser.conf
-sshd -t && systemctl reload sshd
-printf 'cpuser ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/cpuser && chmod 0440 /etc/sudoers.d/cpuser && visudo -cf /etc/sudoers.d/cpuser >/dev/null
+# 每台主機上執行 EOF 之前的那一段（bash -e：其中任何一行失敗就停）
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  podman exec -i lab-$h-1 bash -e -s <<'EOF'
+# 1. 帳號：UID／GID 固定 1500，不設密碼（useradd 預設就是鎖定）
+groupadd -g 1500 cpuser
+useradd -u 1500 -g 1500 -m -s /bin/bash cpuser
+
+# 2. sshd：cpuser 不收密碼，只收金鑰
+cat > /etc/ssh/sshd_config.d/50-cpuser.conf <<'CONF'
+Match User cpuser
+    PasswordAuthentication no
+    AuthenticationMethods publickey
+CONF
+sshd -t
+systemctl reload sshd
+
+# 3. 安裝期的全權 sudo（交付時移除）
+echo 'cpuser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/cpuser
+chmod 0440 /etc/sudoers.d/cpuser
+visudo -cf /etc/sudoers.d/cpuser > /dev/null
+
 echo "$(hostname): $(id cpuser)"
 EOF
 done
@@ -1276,11 +1448,31 @@ ops02: uid=1500(cpuser) gid=1500(cpuser) groups=1500(cpuser)
 私鑰放在獨立的 file system `/secure/ssh`（正式環境由 OS 團隊掛載並加密、備份排除這個掛載點；沒掛載好就不要建，不然私鑰會落在系統碟）。先確認它是獨立的掛載點，再建金鑰：註解帶建立日期，換金鑰時用來分辨新舊兩把（20.5）。
 
 ```bash
-mountpoint /secure/ssh && install -d -m 0700 /secure/ssh && { [ -f /secure/ssh/cpuser_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -C "cpuser-ops-$(date +%Y%m%d)" -f /secure/ssh/cpuser_ed25519; } && chmod 0400 /secure/ssh/cpuser_ed25519 && stat -c '%U:%G %a %n' /secure/ssh /secure/ssh/cpuser_ed25519 /secure/ssh/cpuser_ed25519.pub
+mountpoint /secure/ssh
 ```
 
 ```out
 /secure/ssh is a mountpoint
+```
+
+看到 `is a mountpoint` 才建金鑰（印的是 `is not a mountpoint` 就停下來，請 OS 團隊先掛好）：
+
+```bash
+# 1. 放私鑰的目錄
+install -d -m 0700 /secure/ssh
+
+# 2. 建金鑰對（已經有就不重建）；註解帶建立日期，換金鑰時用來分辨新舊（20.5）
+if [ ! -f /secure/ssh/cpuser_ed25519 ]; then
+  ssh-keygen -q -t ed25519 -N '' -C "cpuser-ops-$(date +%Y%m%d)" -f /secure/ssh/cpuser_ed25519
+fi
+
+chmod 0400 /secure/ssh/cpuser_ed25519
+
+# 3. 確認擁有者與權限
+stat -c '%U:%G %a %n' /secure/ssh /secure/ssh/cpuser_ed25519 /secure/ssh/cpuser_ed25519.pub
+```
+
+```out
 root:root 700 /secure/ssh
 root:root 400 /secure/ssh/cpuser_ed25519
 root:root 644 /secure/ssh/cpuser_ed25519.pub
@@ -1289,14 +1481,21 @@ root:root 644 /secure/ssh/cpuser_ed25519.pub
 再告訴 ssh：連 `*.poc.lab`（含操作機自己，用 `localhost` 連時 ssh 也走這條）一律用 cpuser 與這把金鑰。之後所有 `ssh kb01.poc.lab`、`scp` 都不用再帶帳號與 `-i`：
 
 ```bash
-install -d -m 0700 ~/.ssh && { grep -q '^# cpuser-ops' ~/.ssh/config 2>/dev/null || cat >> ~/.ssh/config <<'EOF'
+install -d -m 0700 ~/.ssh
+
+# 已經加過（有 "# cpuser-ops" 那一行）就不再加
+if ! grep -q '^# cpuser-ops' ~/.ssh/config 2> /dev/null; then
+  cat >> ~/.ssh/config <<'EOF'
 # cpuser-ops：操作機連各主機一律用 cpuser 與這把金鑰
 Host *.poc.lab localhost
   User cpuser
   IdentityFile /secure/ssh/cpuser_ed25519
   IdentitiesOnly yes
 EOF
-} && chmod 0600 ~/.ssh/config && grep -c . ~/.ssh/config
+fi
+
+chmod 0600 ~/.ssh/config
+grep -c . ~/.ssh/config
 ```
 
 ```out
@@ -1320,7 +1519,22 @@ from="10.20.1.10,127.0.0.1,::1" ssh-ed25519 AAAA…（金鑰內容） cpuser-ops
 操作機連自己時，sshd 看到的來源可能是操作機本身的 IP、`127.0.0.1` 或 `::1`（用 `localhost` 連時 ssh 先走 IPv6），三個都要列。lab 的操作機 IP 是 172.35.0.10。目錄 0700、檔 0600、擁有者 cpuser：
 
 ```bash
-PUB=$(podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519.pub) && LINE="from=\"172.35.0.10,127.0.0.1,::1\" $PUB" && for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman exec -e LINE="$LINE" lab-$h-1 bash -c 'install -d -m 0700 -o cpuser -g cpuser /home/cpuser/.ssh && printf "%s\n" "$LINE" > /home/cpuser/.ssh/authorized_keys && chown cpuser:cpuser /home/cpuser/.ssh/authorized_keys && chmod 0600 /home/cpuser/.ssh/authorized_keys'; done && podman exec -e LINE="$LINE" lab-repo01-1 bash -c 'install -d -m 0700 -o repodeploy -g repodeploy /home/repodeploy/.ssh && printf "%s\n" "$LINE" > /home/repodeploy/.ssh/authorized_keys && chown repodeploy:repodeploy /home/repodeploy/.ssh/authorized_keys && chmod 0600 /home/repodeploy/.ssh/authorized_keys' && echo "$LINE" | sed 's/AAAA[^ ]*/AAAA…/'
+# 1. 要放的那一行：公鑰前面加 from=（只有操作機的位址能用）
+pub=$(podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519.pub)
+line="from=\"172.35.0.10,127.0.0.1,::1\" $pub"
+
+# 2. 每台主機 cpuser 的 authorized_keys（目錄 0700、檔 0600、擁有者 cpuser）
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  podman exec lab-$h-1 install -d -m 0700 -o cpuser -g cpuser /home/cpuser/.ssh
+  echo "$line" | podman exec -i lab-$h-1 install -m 0600 -o cpuser -g cpuser /dev/stdin /home/cpuser/.ssh/authorized_keys
+done
+
+# 3. repo01 的部署帳號 repodeploy 也用這一把
+podman exec lab-repo01-1 install -d -m 0700 -o repodeploy -g repodeploy /home/repodeploy/.ssh
+echo "$line" | podman exec -i lab-repo01-1 install -m 0600 -o repodeploy -g repodeploy /dev/stdin /home/repodeploy/.ssh/authorized_keys
+
+# 4. 放進去的那一行（金鑰內容省略）
+echo "$line" | sed 's/AAAA[^ ]*/AAAA…/'
 ```
 
 ```out
@@ -1334,10 +1548,28 @@ from="172.35.0.10,127.0.0.1,::1" ssh-ed25519 AAAA… cpuser-ops-20261027
 逐台連一次（第一次連線會把對方的主機金鑰記進 `known_hosts`），順便看帳號是 cpuser、UID 是 1500、有安裝期 sudo、密碼是鎖定的（`/etc/shadow` 的密碼欄以 `!` 開頭）、sshd 對 cpuser 關閉密碼驗證且只收 publickey：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new $h.poc.lab bash -s <<'EOF'
-echo "$(id -un) $(hostname) uid=$(id -u) sudo=$(sudo -n true 2>/dev/null && echo yes || echo no) 密碼欄=$(sudo getent shadow cpuser | cut -d: -f2 | cut -c1-2) sshd=$(sudo sshd -T -C user=cpuser,host=localhost,addr=127.0.0.1 | awk '/^passwordauthentication /{p=$2} /^authenticationmethods /{m=$2} END{print p, m}')"
+# 每台主機上執行 EOF 之前的那一段，各印一行
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new $h.poc.lab bash -s <<'EOF'
+# 1. 有沒有安裝期的 sudo
+if sudo -n true 2> /dev/null; then
+  has_sudo=yes
+else
+  has_sudo=no
+fi
+
+# 2. /etc/shadow 密碼欄的前兩個字（!! = 鎖定）
+password_field=$(sudo getent shadow cpuser | cut -d: -f2 | cut -c1-2)
+
+# 3. sshd 對 cpuser 實際生效的設定：要不要密碼、允許哪些驗證方式
+sshd_auth=$(sudo sshd -T -C user=cpuser,host=localhost,addr=127.0.0.1 | awk '/^passwordauthentication /{p=$2} /^authenticationmethods /{m=$2} END{print p, m}')
+
+echo "$(id -un) $(hostname) uid=$(id -u) sudo=$has_sudo 密碼欄=$password_field sshd=$sshd_auth"
 EOF
-done; ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new repodeploy@repo01.poc.lab 'hostname; ls /var/www/repo'
+done
+
+# repo01 的部署帳號也登得進去（/var/www/repo 這時還是空的）
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new repodeploy@repo01.poc.lab 'hostname; ls /var/www/repo'
 ```
 
 ```out
@@ -1356,7 +1588,30 @@ repo01
 `from=` 的用意：就算私鑰被複製到別處，也只有操作機能用。把私鑰副本放到 kb01、從 kb01 連 kb02，應該被拒；kb02 的 sshd 日誌會寫下「不是來自允許的主機」。驗完立刻刪掉副本：
 
 ```bash
-podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519 | podman exec -i lab-kb01-1 bash -c 'cat > /tmp/copied-key && chmod 0600 /tmp/copied-key' && podman exec lab-kb01-1 ssh -F /dev/null -i /tmp/copied-key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no cpuser@kb02.poc.lab true 2>&1 | tail -1; podman exec lab-kb01-1 rm -f /tmp/copied-key; podman exec lab-kb02-1 journalctl -u sshd --no-pager -n 30 | grep -o 'not from a permitted host.*' | tail -1 | cut -c1-90
+# 1. 把私鑰副本放到 kb01（模擬私鑰被複製）
+podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519 | podman exec -i lab-kb01-1 install -m 0600 /dev/stdin /tmp/copied-key
+
+# 2. 從 kb01 用這把副本連 kb02：應該被拒（失敗才是對的，所以放在 if 裡）
+if podman exec lab-kb01-1 ssh -F /dev/null -i /tmp/copied-key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no cpuser@kb02.poc.lab true 2> /tmp/ssh-result.txt; then
+  result=允許
+else
+  result=拒絕
+fi
+
+# 3. 驗完立刻刪掉副本
+podman exec lab-kb01-1 rm -f /tmp/copied-key
+
+# 4. ssh 最後一行訊息；被允許的話就是 from= 沒有生效
+tail -1 /tmp/ssh-result.txt
+rm -f /tmp/ssh-result.txt
+
+if [ "$result" = 允許 ]; then
+  echo "連進去了：from= 沒有生效，檢查 kb02 的 authorized_keys"
+  false
+fi
+
+# 5. kb02 的 sshd 日誌：不是來自允許的主機
+podman exec lab-kb02-1 journalctl -u sshd --no-pager -n 30 | grep -o 'not from a permitted host.*' | tail -1 | cut -c1-90
 ```
 
 ```out
@@ -1391,13 +1646,47 @@ not from a permitted host (host=172.35.0.31, ip=172.35.0.31, public key ED25…
 **這一節在做什麼**：讓每台主機能向行內的 OS 套件庫裝套件（第 7–8 章要用），並信任銀行的根憑證（之後 HTTPS 都靠它）。正式環境這是 Satellite 或 Nexus，銀行已經做好；lab 裡：用 repo01 的 `/os/` 路徑模擬。銀行的套件庫**起初是 9.6 的內容**（安裝基底，30.5 才同步到 9.8）。先在一個乾淨容器把需要的 OS 套件從 Rocky vault 的 9.6 抓下來並建索引，放在 `~/kafka-lab/bank-os/9.6`（這是銀行套件庫的內容，不是我們交付的檔案，所以不在落地區）。**先下載、再裝工具**，順序反了會漏掉工具自己的相依：
 
 ```bash
-cd ~/kafka-lab && mkdir -p bank-os/9.6 && podman run --rm -v "$(cygpath -m "$PWD/bank-os/9.6"):/out" lab-node:96 bash -c '
-set -e
-R="--disablerepo=* --enablerepo=vault96-baseos,vault96-appstream,vault96-extras"
-ok=0; for try in 1 2 3; do dnf -q $R download --resolve --arch x86_64 --arch noarch --destdir /out/Packages chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion && { ok=1; break; }; echo "鏡像站還沒同步好，60 秒後重試（第 $try 次）" >&2; dnf -q clean metadata; sleep 60; done; [ $ok = 1 ]
-dnf -q -y --disablerepo="*" install /out/Packages/*.rpm >/dev/null
+cd ~/kafka-lab
+mkdir -p bank-os/9.6
+out_dir=$(cygpath -m "$PWD/bank-os/9.6")
+
+# 1. 在乾淨的容器裡執行 EOF 之前的那一段（bash -e：其中任何一行失敗就停）；結果放在 bank-os/9.6
+podman run --rm -i -v "$out_dir:/out" lab-node:96 bash -e -s <<'EOF'
+# 只開 vault 的 9.6 倉庫
+repos="--disablerepo=* --enablerepo=vault96-baseos,vault96-appstream,vault96-extras"
+packages="chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion"
+
+# 1a. 下載（鏡像站有時還沒同步好：最多試 3 次，每次隔 60 秒）
+downloaded=no
+for try in 1 2 3; do
+  if dnf -q $repos download --resolve --arch x86_64 --arch noarch --destdir /out/Packages $packages; then
+    downloaded=yes
+    break
+  fi
+
+  echo "鏡像站還沒同步好，60 秒後重試（第 $try 次）" >&2
+  dnf -q clean metadata
+  sleep 60
+done
+
+if [ $downloaded != yes ]; then
+  echo "試了 3 次都下載失敗" >&2
+  exit 1   # 結束的是容器裡的這一段，不是你的終端機
+fi
+
+# 1b. 用剛下載的檔案裝工具（不連網）：先下載、再裝，順序反了會漏掉工具自己的相依
+dnf -q -y --disablerepo="*" install /out/Packages/*.rpm > /dev/null
+
+# 1c. 建索引、數套件
 createrepo_c -q /out
-ls /out/Packages | wc -l' && podman exec lab-repo01-1 install -d /var/www/repo/os && podman cp "$(cygpath -m "$PWD/bank-os/9.6")/." lab-repo01-1:/var/www/repo/os/ && podman exec lab-repo01-1 bash -c 'chown -R repodeploy:repodeploy /var/www/repo/os; ls /var/www/repo/os'
+ls /out/Packages | wc -l
+EOF
+
+# 2. 放上 repo01 的 /os/（擁有者是部署帳號 repodeploy）
+podman exec lab-repo01-1 install -d /var/www/repo/os
+podman cp "$out_dir/." lab-repo01-1:/var/www/repo/os/
+podman exec lab-repo01-1 chown -R repodeploy:repodeploy /var/www/repo/os
+podman exec lab-repo01-1 ls /var/www/repo/os
 ```
 
 ```out
@@ -1411,7 +1700,15 @@ repodata
 銀行的根憑證（0.5 建的 `ca/root.crt`）放進每台主機的信任清單，並給每台一份指向套件庫的 repo 設定：
 
 ```bash
-ROOT="$(cygpath -m "$HOME/kafka-lab/ca/root.crt")"; for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do podman cp "$ROOT" lab-$h-1:/etc/pki/ca-trust/source/anchors/bank-root.pem && podman exec lab-$h-1 bash -c 'update-ca-trust && cat > /etc/yum.repos.d/bank-os.repo <<EOF
+root_crt=$(cygpath -m "$HOME/kafka-lab/ca/root.crt")
+
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  # 1. 信任銀行的根憑證
+  podman cp "$root_crt" lab-$h-1:/etc/pki/ca-trust/source/anchors/bank-root.pem
+  podman exec lab-$h-1 update-ca-trust
+
+  # 2. 指向銀行套件庫的 repo 設定，匯入套件簽章的公鑰
+  podman exec -i lab-$h-1 install -m 0644 /dev/stdin /etc/yum.repos.d/bank-os.repo <<'EOF'
 [bank-os]
 name=Bank OS packages
 baseurl=https://repo01.poc.lab/os/
@@ -1419,7 +1716,11 @@ enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
 EOF
-rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9' && printf '%s ' "$h"; done; echo
+  podman exec lab-$h-1 rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+
+  printf '%s ' "$h"
+done
+echo
 ```
 
 ```out
@@ -1437,7 +1738,14 @@ ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
 @role 小安 | ops02 | root
 
 ```bash
-cd ~/landing/bank && sha256sum -c --quiet *.sha256 && ls
+cd ~/landing/bank
+
+if sha256sum -c --quiet *.sha256; then
+  ls
+else
+  echo "JDK 的 sha256 對不上：請銀行重送"
+  false
+fi
 ```
 
 ```out
@@ -1456,7 +1764,65 @@ OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz.sha256
 密碼先產生到檔案，用環境變數傳進指令，不打在畫面上。AD 預設的密碼複雜度要求大寫、小寫、數字至少各一，隨機抽到不符合的就重抽（不然帳號建不起來）：
 
 ```bash
-install -d -m 0700 /root/secrets && for k in bind users; do until p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20); [[ $p =~ [A-Z] && $p =~ [a-z] && $p =~ [0-9] ]]; do :; done; (umask 077; printf '%s' "$p" > /root/secrets/$k.pass); done; unset p; B=DC=corp,DC=poc,DC=lab; samba-tool ou create "OU=Confluent,$B" && for ou in Users Groups Service; do samba-tool ou create "OU=$ou,OU=Confluent,$B"; done && samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" --userou="OU=Service,OU=Confluent" --description="read-only LDAP bind for Confluent MDS" && for g in kafka-admins kafka-operators kafka-devs; do samba-tool group add "$g" --groupou="OU=Groups,OU=Confluent"; done && for p in alice:kafka-admins bob:kafka-operators carol:kafka-devs; do u=${p%%:*}; g=${p#*:}; samba-tool user create "$u" "$(cat /root/secrets/users.pass)" --userou="OU=Users,OU=Confluent" && samba-tool group addmembers "$g" "$u" || created=no; done; [ "${created:-yes}" = yes ] && samba-tool group listmembers kafka-admins
+# good_password <密碼>：大寫、小寫、數字至少各有一個才算合格（同 0.6）
+good_password() {
+  if ! echo "$1" | grep -q '[A-Z]'; then
+    return 1
+  fi
+
+  if ! echo "$1" | grep -q '[a-z]'; then
+    return 1
+  fi
+
+  if ! echo "$1" | grep -q '[0-9]'; then
+    return 1
+  fi
+
+  return 0
+}
+
+# 1. 兩個密碼檔：bind.pass 給 svc-mds-bind、users.pass 給三個測試人員共用（20 個英數字，不合格就重產）
+install -d -m 0700 /root/secrets
+
+for k in bind users; do
+  p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+
+  while ! good_password "$p"; do
+    p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+  done
+
+  install -m 0600 /dev/null /root/secrets/$k.pass
+  printf '%s' "$p" > /root/secrets/$k.pass
+done
+unset p
+
+# 2. OU：Confluent 底下分 Users、Groups、Service
+base=DC=corp,DC=poc,DC=lab
+samba-tool ou create "OU=Confluent,$base"
+
+for ou in Users Groups Service; do
+  samba-tool ou create "OU=$ou,OU=Confluent,$base"
+done
+
+# 3. MDS 查詢用的唯讀帳號
+samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" --userou="OU=Service,OU=Confluent" --description="read-only LDAP bind for Confluent MDS"
+
+# 4. 三個群組
+for g in kafka-admins kafka-operators kafka-devs; do
+  samba-tool group add "$g" --groupou="OU=Groups,OU=Confluent"
+done
+
+# 5. 三個測試人員，各放進一個群組（寫法：帳號:群組）
+for pair in alice:kafka-admins bob:kafka-operators carol:kafka-devs; do
+  user=$(echo "$pair" | cut -d: -f1)
+  group=$(echo "$pair" | cut -d: -f2)
+
+  samba-tool user create "$user" "$(cat /root/secrets/users.pass)" --userou="OU=Users,OU=Confluent"
+  samba-tool group addmembers "$group" "$user"
+done
+
+# 6. 確認：kafka-admins 裡有 alice
+samba-tool group listmembers kafka-admins
 ```
 
 ```out
@@ -1474,7 +1840,15 @@ alice
 LDAPS 的憑證要由銀行 CA 簽。先在 ad01 產生 CSR（一定要帶 `extendedKeyUsage`，CA 的政策會檢查）：
 
 ```bash
-mkdir -p /root/csr && cd /root/csr && openssl req -new -newkey rsa:2048 -nodes -keyout ad01.key -out ad01.csr -subj "/CN=ad01.poc.lab/O=PoC Bank/C=TW" -addext "subjectAltName=DNS:ad01.poc.lab,DNS:ad01" -addext "keyUsage=digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth" 2>/dev/null && echo csr-ok
+mkdir -p /root/csr
+cd /root/csr
+
+openssl req -new -newkey rsa:2048 -nodes -keyout ad01.key -out ad01.csr \
+  -subj "/CN=ad01.poc.lab/O=PoC Bank/C=TW" \
+  -addext "subjectAltName=DNS:ad01.poc.lab,DNS:ad01" \
+  -addext "keyUsage=digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=serverAuth" 2>/dev/null
+echo csr-ok
 ```
 
 ```out
@@ -1484,7 +1858,27 @@ csr-ok
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
 ```bash
-cd ~/kafka-lab && mkdir -p ca/exchange && podman cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01.csr")" && bash ca/sign.sh ca/exchange/ad01.csr ca/exchange/ad01-chain.crt && podman cp "$(cygpath -m "$PWD/ca/exchange/ad01-chain.crt")" lab-ad01-1:/var/lib/samba/private/tls/cert.pem && podman cp "$(cygpath -m "$PWD/ca/root.crt")" lab-ad01-1:/var/lib/samba/private/tls/ca.pem && podman exec lab-ad01-1 bash -c 'cp /root/csr/ad01.key /var/lib/samba/private/tls/key.pem && chmod 600 /var/lib/samba/private/tls/key.pem && chmod 644 /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/ca.pem && pkill -x samba; sleep 8; openssl s_client -connect localhost:636 -CAfile /var/lib/samba/private/tls/ca.pem </dev/null 2>/dev/null | grep "Verify return code"'
+cd ~/kafka-lab
+mkdir -p ca/exchange
+
+# 1. 取回 ad01 的申請檔，用銀行 CA 簽
+podman cp lab-ad01-1:/root/csr/ad01.csr "$(cygpath -m "$PWD/ca/exchange/ad01.csr")"
+bash ca/sign.sh ca/exchange/ad01.csr ca/exchange/ad01-chain.crt
+
+# 2. 憑證、根憑證、私鑰放進 samba 的 tls/（私鑰 0600）
+tls=/var/lib/samba/private/tls
+podman cp "$(cygpath -m "$PWD/ca/exchange/ad01-chain.crt")" lab-ad01-1:$tls/cert.pem
+podman cp "$(cygpath -m "$PWD/ca/root.crt")" lab-ad01-1:$tls/ca.pem
+podman exec lab-ad01-1 cp /root/csr/ad01.key $tls/key.pem
+podman exec lab-ad01-1 chmod 600 $tls/key.pem
+podman exec lab-ad01-1 chmod 644 $tls/cert.pem $tls/ca.pem
+
+# 3. 停掉 samba 讓它讀新憑證（啟動程式 2 秒後會自己再開），等它起來
+podman exec lab-ad01-1 pkill -x samba
+sleep 8
+
+# 4. 確認：LDAPS（636）出示的憑證驗得過根憑證
+podman exec lab-ad01-1 bash -c "openssl s_client -connect localhost:636 -CAfile $tls/ca.pem < /dev/null 2> /dev/null | grep 'Verify return code'"
 ```
 
 ```out
@@ -1494,10 +1888,19 @@ Verify return code: 0 (ok)
 
 @role 銀行 AD 團隊（lab 由 Lab 管理員扮演）、小安 | Windows 終端 | 本機
 
-AD 團隊把 svc-mds-bind 的密碼和測試人員的密碼交給小安。正式環境用銀行自己的交付方式（當面、加密郵件等），**不放進 CyberArk 或任何保管庫**。小安放進操作機的 `~/secrets/`（0700 目錄、0600 檔）：在操作機上每個檔執行一次 `(umask 077; IFS= read -rsp '貼上後按 Enter：' P && printf %s "$P" > ~/secrets/ldap-bind.pass; unset P; echo)`，`read -s` 讓貼上的密碼不顯示在畫面上（PSMP 錄影錄不到），`printf %s` 不多寫換行。lab 由 Windows 終端把 ad01 上的檔直接送進操作機，不經過任何中間資料夾：
+AD 團隊把 svc-mds-bind 的密碼和測試人員的密碼交給小安。正式環境用銀行自己的交付方式（當面、加密郵件等），**不放進 CyberArk 或任何保管庫**。小安放進操作機的 `~/secrets/`（0700 目錄、0600 檔），每個檔在操作機上依序執行四行（以 `ldap-bind.pass` 為例）：`install -m 0600 /dev/null ~/secrets/ldap-bind.pass`（先建一個權限 0600 的空檔）、`IFS= read -rsp '貼上後按 Enter：' P`（`-s` 讓貼上的密碼不顯示在畫面上，PSMP 錄影錄不到）、`printf %s "$P" > ~/secrets/ldap-bind.pass`（`%s` 不多寫換行）、`unset P`。lab 由 Windows 終端把 ad01 上的檔直接送進操作機，不經過任何中間資料夾：
 
 ```bash
-podman exec lab-ops02-1 install -d -m 0700 /root/secrets && for k in bind:ldap-bind users:ad-test-users; do podman exec lab-ad01-1 cat /root/secrets/${k%%:*}.pass | podman exec -i lab-ops02-1 bash -c "umask 077; cat > ~/secrets/${k#*:}.pass"; done; podman exec lab-ops02-1 ls -la /root/secrets | tail -n +4
+podman exec lab-ops02-1 install -d -m 0700 /root/secrets
+
+# 寫法：ad01 上的檔名:操作機上的檔名
+for pair in bind:ldap-bind users:ad-test-users; do
+  src=$(echo "$pair" | cut -d: -f1)
+  dst=$(echo "$pair" | cut -d: -f2)
+  podman exec lab-ad01-1 cat /root/secrets/$src.pass | podman exec -i lab-ops02-1 install -m 0600 /dev/stdin /root/secrets/$dst.pass
+done
+
+podman exec lab-ops02-1 ls -la /root/secrets | tail -n +4
 ```
 
 ```out
@@ -1522,7 +1925,22 @@ enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
 EOF
-rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9; dnf -q -y --disablerepo="*" --enablerepo=bank-os install chrony >/dev/null && printf 'local stratum 10\nallow 172.35.0.0/24\ndriftfile /var/lib/chrony/drift\n' > /etc/chrony.conf && systemctl enable --now chronyd >/dev/null 2>&1; sleep 2; systemctl is-active chronyd
+
+# 1. 套件簽章的公鑰；從這台自己的套件庫裝 chrony
+rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+dnf -q -y --disablerepo="*" --enablerepo=bank-os install chrony > /dev/null
+
+# 2. 當 NTP 伺服器：沒有上游時用本機時間，允許 lab 的網段來對時
+cat > /etc/chrony.conf <<'EOF'
+local stratum 10
+allow 172.35.0.0/24
+driftfile /var/lib/chrony/drift
+EOF
+
+# 3. 啟動，確認是 active
+systemctl enable --now chronyd > /dev/null 2>&1
+sleep 2
+systemctl is-active chronyd
 ```
 
 ```out
@@ -1534,17 +1952,39 @@ active
 負載平衡只做 L4 轉發，TLS 和 client 憑證在 REST Proxy 上處理。`rest.poc.lab` 指到 lb01：
 
 ```bash
-mkdir -p /etc/nginx/stream.d && cat > /etc/nginx/stream.d/cp.conf <<'EOF'
+mkdir -p /etc/nginx/stream.d
+
+cat > /etc/nginx/stream.d/cp.conf <<'EOF'
+# REST Proxy：兩台，同一個來源 IP 固定到同一台
 upstream cp_rest {
     hash $remote_addr consistent;
     server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s;
     server rest02.poc.lab:8082 max_fails=2 fail_timeout=10s;
 }
-server { listen 8082; proxy_pass cp_rest; proxy_connect_timeout 3s; proxy_timeout 10m; }
-upstream cp_c3 { server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s; }
-server { listen 9021; proxy_pass cp_c3; proxy_connect_timeout 3s; proxy_timeout 1h; }
+
+server {
+    listen 8082;
+    proxy_pass cp_rest;
+    proxy_connect_timeout 3s;
+    proxy_timeout 10m;
+}
+
+# Control Center：一台
+upstream cp_c3 {
+    server c3-01.poc.lab:9021 max_fails=2 fail_timeout=10s;
+}
+
+server {
+    listen 9021;
+    proxy_pass cp_c3;
+    proxy_connect_timeout 3s;
+    proxy_timeout 1h;
+}
 EOF
-nginx -t 2>&1 | tail -1 && nginx -s reload
+
+# 檢查語法，再讓 nginx 重新讀設定
+nginx -t 2>&1 | tail -1
+nginx -s reload
 ```
 
 ```out
@@ -1561,18 +2001,59 @@ C3 那段只是讓 Windows 瀏覽器透過 lab 的連接埠對應連到 C3；正
 ```bash
 cat > ~/kafka-lab/lb-member.sh <<'EOF'
 #!/usr/bin/env bash
-# lb-member.sh <rest01|rest02> down|up|status —— lab：扮演 LB 團隊停用／恢復一台 REST Proxy
-# 正式環境是 LB 團隊在行內的負載平衡設備上停用／啟用 pool member。nginx：server 後面加 down 再 reload，進行中的連線讓它跑完
-h=$1 act=${2:-status}; f=/etc/nginx/stream.d/cp.conf
-case $act in
-  down) e="/server $h.poc.lab:8082 /{/ down;/!s/;\$/ down;/}";;
-  up)   e="/server $h.poc.lab:8082 /s/ down;/;/";;
-  status) e="";;
-  *) echo "用法：$0 <rest01|rest02> down|up|status"; exit 2;;
+# lb-member.sh <rest01|rest02> down|up|status — lab：扮演 LB 團隊停用／恢復一台 REST Proxy
+# 做什麼：在 lb01 的 nginx 設定裡，那一台的 server 行加上（down）或拿掉（up）"down"，再讓 nginx 重新讀設定；status 只印目前狀態
+#   正式環境是 LB 團隊在行內的負載平衡設備上停用／啟用 pool member；nginx 重新讀設定時，進行中的連線會讓它跑完
+# 用到的設定：lb01 上的 /etc/nginx/stream.d/cp.conf（5.4 寫的），server 行長這樣：server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s;
+# 改的時候要注意：輸出的格式（例 "LB：rest01（停用） rest02"）手冊的預期輸出有用到
+export MSYS_NO_PATHCONV=1
+
+host=$1
+action=${2:-status}
+conf=/etc/nginx/stream.d/cp.conf
+
+# lb <指令...>：在 lb01 上執行一個指令
+lb() {
+  podman exec lab-lb01-1 "$@"
+}
+
+# 1. 停用或恢復：改那一台的 server 行
+case "$action" in
+  down)
+    # 還沒有 down 的才加：行尾的 ";" 換成 " down;"
+    lb sed -i "/server $host.poc.lab:8082 /{/ down;/!s/;\$/ down;/}" "$conf"
+    ;;
+  up)
+    lb sed -i "/server $host.poc.lab:8082 /s/ down;/;/" "$conf"
+    ;;
+  status)
+    ;;
+  *)
+    echo "用法：$0 <rest01|rest02> down|up|status"
+    exit 2
+    ;;
 esac
-MSYS_NO_PATHCONV=1 podman exec lab-lb01-1 sh -c "{ [ -z '$e' ] || { sed -i '$e' $f && nginx -t -q && nginx -s reload 2>/dev/null; }; } && sleep 1 && echo \"LB：\$(grep -oE 'server rest0[12][^;]*' $f | sed -E 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//; s/server //; s/ down/（停用）/' | paste -sd' ' -)\""
+
+# 2. 改過設定：先檢查語法，再讓 nginx 重新讀設定
+if [ "$action" != status ]; then
+  if ! lb nginx -t -q; then
+    echo "nginx 設定有誤，沒有套用"
+    exit 1
+  fi
+
+  lb nginx -s reload 2> /dev/null
+fi
+
+sleep 1
+
+# 3. 目前狀態：每一台縮成「主機名稱」或「主機名稱（停用）」
+#   例：server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s down → rest01（停用）
+members=$(lb grep -oE 'server rest0[12][^;]*' "$conf" | sed -E 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//; s/server //; s/ down/（停用）/' | paste -sd' ' -)
+echo "LB：$members"
 EOF
-chmod +x ~/kafka-lab/lb-member.sh && bash ~/kafka-lab/lb-member.sh rest01 status
+
+chmod +x ~/kafka-lab/lb-member.sh
+bash ~/kafka-lab/lb-member.sh rest01 status
 ```
 
 ```out
@@ -1588,7 +2069,8 @@ LB：rest01 rest02
 repo01 只有 httpd，沒有 `createrepo_c`，所以索引在操作機建好，連 RPM 一起推上去。先從銀行套件庫裝工具：
 
 ```bash
-dnf -q -y --refresh install createrepo_c && createrepo_c --version
+dnf -q -y --refresh install createrepo_c
+createrepo_c --version
 ```
 
 ```out
@@ -1600,7 +2082,23 @@ Version: 0.20.1 …
 組目錄、建索引：
 
 ```bash
-mkdir -p ~/repo/confluent ~/repo/gpg-keys ~/repo/tools && cp ~/landing/rpm/*.rpm ~/repo/confluent/ && cp ~/landing/gpg-keys/*.asc ~/repo/gpg-keys/ && cp ~/landing/tools/*.jar ~/repo/tools/ && cp ~/landing/SHA256SUMS ~/repo/ && createrepo_c ~/repo/confluent && test -f ~/repo/confluent/repodata/repomd.xml && echo repodata-ok
+# 1. 要上架的東西：安裝基底的 RPM、原廠公鑰、jar、雜湊清單
+mkdir -p ~/repo/confluent ~/repo/gpg-keys ~/repo/tools
+cp ~/landing/rpm/*.rpm ~/repo/confluent/
+cp ~/landing/gpg-keys/*.asc ~/repo/gpg-keys/
+cp ~/landing/tools/*.jar ~/repo/tools/
+cp ~/landing/SHA256SUMS ~/repo/
+
+# 2. 建 dnf 的索引
+createrepo_c ~/repo/confluent
+
+# 3. 確認索引產生了
+if [ -f ~/repo/confluent/repodata/repomd.xml ]; then
+  echo repodata-ok
+else
+  echo "沒有產生索引（repodata/repomd.xml）"
+  false
+fi
 ```
 
 ```out
@@ -1611,7 +2109,12 @@ repodata-ok
 用 tar 串流透過 ssh 推給部署帳號，只會解在 `/var/www/repo` 底下，銀行的 `os/` 不受影響：
 
 ```bash
-tar -C ~/repo -cf - . | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/repo -xpf -' && ssh repodeploy@repo01.poc.lab 'ls /var/www/repo; ls /var/www/repo/confluent | wc -l'
+# 1. 在操作機打包、經 ssh 交給部署帳號，在 repo01 解開
+tar -C ~/repo -cf - . | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/repo -xpf -'
+
+# 2. 確認：上面有哪些目錄、confluent/ 底下有幾項（11 個 RPM ＋ repodata）
+ssh repodeploy@repo01.poc.lab 'ls /var/www/repo'
+ssh repodeploy@repo01.poc.lab 'ls /var/www/repo/confluent | wc -l'
 ```
 
 ```out
@@ -1622,7 +2125,8 @@ SHA256SUMS  confluent  gpg-keys  os  tools
 從操作機用 HTTPS 讀讀看，預期 11 個套件：
 
 ```bash
-dnf -q --repofrompath=cp-test,https://repo01.poc.lab/confluent/ --repo=cp-test --setopt=cp-test.gpgcheck=0 list available | grep -c confluent
+dnf -q --repofrompath=cp-test,https://repo01.poc.lab/confluent/ --repo=cp-test --setopt=cp-test.gpgcheck=0 \
+  list available | grep -c confluent
 ```
 
 ```out
@@ -1646,13 +2150,24 @@ dnf -q --repofrompath=cp-test,https://repo01.poc.lab/confluent/ --repo=cp-test -
 先看壓縮檔的頂層目錄名稱，並準備 `profile.d` 的檔案（`bank/` 裡同一個主版本有新舊幾版時，`sort -V | tail -1` 挑版本最新的）：
 
 ```bash
-JDK_TAR=$(ls ~/landing/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1) && JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1) && echo "tar=$(basename $JDK_TAR) dir=$JDK_DIR" && install -d -m 0700 ~/jdk && cat > ~/jdk/java.sh <<'EOF'
+# 1. bank/ 裡版本最新的 JDK 21 tar，和它解開後的頂層目錄名稱
+JDK_TAR=$(ls ~/landing/bank/OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1)
+JDK_DIR=$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1)
+echo "tar=$(basename $JDK_TAR) dir=$JDK_DIR"
+
+# 2. 要放進 /etc/profile.d 的 java.sh
+install -d -m 0700 ~/jdk
+cat > ~/jdk/java.sh <<'EOF'
 # JDK for Confluent Platform (/opt/java/current; 21 at install, 25 after the chapter 29 migration). Services set JAVA_HOME in their systemd drop-in.
-[ -n "$JAVA_HOME" ] || export JAVA_HOME=/opt/java/current
+if [ -z "$JAVA_HOME" ]; then
+  export JAVA_HOME=/opt/java/current
+fi
 EOF
-printf 'JDK_TAR=%s
-JDK_DIR=%s
-' "$JDK_TAR" "$JDK_DIR" > ~/jdk/jdk.env && echo java.sh ok
+
+# 3. 記下這兩個變數（之後離開再回來也接得上）
+echo "JDK_TAR=$JDK_TAR" > ~/jdk/jdk.env
+echo "JDK_DIR=$JDK_DIR" >> ~/jdk/jdk.env
+echo java.sh ok
 ```
 
 ```out
@@ -1663,7 +2178,22 @@ java.sh ok
 先在操作機本機裝一台（`jdk.env` 記住了上一步的兩個變數，之後離開再回來也接得上）：
 
 ```bash
-source ~/jdk/jdk.env && install -d -m 0755 /opt/java && tar -xzf "$JDK_TAR" -C /opt/java && chown -R root:root /opt/java && ln -sfn "/opt/java/$JDK_DIR" /opt/java/current && alternatives --install /usr/bin/java java /opt/java/current/bin/java 2100 && alternatives --install /usr/bin/keytool keytool /opt/java/current/bin/keytool 2100 && install -m 0644 ~/jdk/java.sh /etc/profile.d/java.sh && java -version 2>&1 | head -1
+source ~/jdk/jdk.env
+
+# 1. 解到 /opt/java/<版本目錄>，/opt/java/current 指向它
+install -d -m 0755 /opt/java
+tar -xzf "$JDK_TAR" -C /opt/java
+chown -R root:root /opt/java
+ln -sfn "/opt/java/$JDK_DIR" /opt/java/current
+
+# 2. 用 alternatives 登記 java、keytool（優先順序 2100）
+alternatives --install /usr/bin/java java /opt/java/current/bin/java 2100
+alternatives --install /usr/bin/keytool keytool /opt/java/current/bin/keytool 2100
+
+# 3. 登入時設好 JAVA_HOME
+install -m 0644 ~/jdk/java.sh /etc/profile.d/java.sh
+
+java -version 2>&1 | head -1
 ```
 
 ```out
@@ -1673,7 +2203,33 @@ openjdk version "21.0.x" … LTS
 其他 10 台照做：
 
 ```bash
-source ~/jdk/jdk.env && for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q "$JDK_TAR" ~/jdk/java.sh $h.poc.lab:/tmp/ && ssh $h.poc.lab "sudo install -d -m 0755 /opt/java && sudo tar -xzf /tmp/$(basename $JDK_TAR) -C /opt/java && sudo chown -R root:root /opt/java && sudo ln -sfn /opt/java/$JDK_DIR /opt/java/current && sudo alternatives --install /usr/bin/java java /opt/java/current/bin/java 2100 && sudo alternatives --install /usr/bin/keytool keytool /opt/java/current/bin/keytool 2100 && sudo install -m 0644 /tmp/java.sh /etc/profile.d/java.sh && rm -f /tmp/$(basename $JDK_TAR) /tmp/java.sh && echo \"\$(hostname): done\""; done; for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname): $(java -version 2>&1 | head -1) JAVA_HOME=$JAVA_HOME"'; done
+source ~/jdk/jdk.env
+tar_name=$(basename "$JDK_TAR")
+
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  # 1. tar 和 java.sh 送到那台的 /tmp
+  scp -q "$JDK_TAR" ~/jdk/java.sh $h.poc.lab:/tmp/
+
+  # 2. 在那台執行 EOF 之前的那一段，和上面操作機的做法一樣（$1 = tar 檔名、$2 = 版本目錄；bash -e：任何一行失敗就停）
+  ssh $h.poc.lab bash -e -s -- "$tar_name" "$JDK_DIR" <<'EOF'
+sudo install -d -m 0755 /opt/java
+sudo tar -xzf /tmp/$1 -C /opt/java
+sudo chown -R root:root /opt/java
+sudo ln -sfn /opt/java/$2 /opt/java/current
+
+sudo alternatives --install /usr/bin/java java /opt/java/current/bin/java 2100
+sudo alternatives --install /usr/bin/keytool keytool /opt/java/current/bin/keytool 2100
+
+sudo install -m 0644 /tmp/java.sh /etc/profile.d/java.sh
+rm -f /tmp/$1 /tmp/java.sh
+echo "$(hostname): done"
+EOF
+done
+
+# 3. 11 台都確認：java 在 PATH 上（alternatives）、登入就有 JAVA_HOME（profile.d）
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab 'echo "$(hostname): $(java -version 2>&1 | head -1) JAVA_HOME=$JAVA_HOME"'
+done
 ```
 
 ```out
@@ -1694,7 +2250,21 @@ kc01: openjdk version "21.0.x" … LTS JAVA_HOME=/opt/java/current
 **主機基本事實**（`/tmp` 不能 `noexec`、至少 2 GB）。過關條件：每台 `tmp_noexec=0`、`tmp_free` 不小於 2048、OS 版本與銀行說的一致：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'printf "%-7s %s cpu=%s mem=%sMB tmp_free=%sMB tmp_noexec=%s\n" "$(hostname)" "$(. /etc/os-release; echo $ID-$VERSION_ID)" "$(nproc)" "$(free -m | awk "/Mem:/{print \$2}")" "$(df -m /tmp | awk "NR==2{print \$4}")" "$(findmnt -no OPTIONS /tmp | grep -c noexec)"'; done
+# 每台主機上執行 EOF 之前的那一段，各印一行
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -s <<'EOF'
+# OS 版本（例 rocky-9.6）
+. /etc/os-release
+os="$ID-$VERSION_ID"
+
+# 記憶體、/tmp 的剩餘空間（MB）；/tmp 掛載選項裡有沒有 noexec（1 = 有）
+mem=$(free -m | awk '/Mem:/{print $2}')
+tmp_free=$(df -m /tmp | awk 'NR==2{print $4}')
+tmp_noexec=$(findmnt -no OPTIONS /tmp | grep -c noexec)
+
+printf "%-7s %s cpu=%s mem=%sMB tmp_free=%sMB tmp_noexec=%s\n" "$(hostname)" "$os" "$(nproc)" "$mem" "$tmp_free" "$tmp_noexec"
+EOF
+done
 ```
 
 ```out
@@ -1705,7 +2275,20 @@ ops02   rocky-9.6 cpu=8 mem=10953MB tmp_free=2048MB tmp_noexec=0
 **資料碟的檔案系統**（原廠只支援 XFS、ext4；正式環境資料碟要先由主機團隊掛在 `/var/lib/kafka`，還沒掛就會看到 `/var/lib`，也就是 OS 碟）：
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'd=/var/lib/kafka; [ -e $d ] || d=/var/lib; printf "%-5s %s fstype=%s free=%sGB\n" "$(hostname)" "$d" "$(df -T $d | awk "NR==2{print \$2}")" "$(df -BG --output=avail $d | tail -1 | tr -dc 0-9)"'; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  ssh $h.poc.lab bash -s <<'EOF'
+# 資料碟掛好了就是 /var/lib/kafka；還沒掛（目錄還不存在）就看 /var/lib
+dir=/var/lib/kafka
+if [ ! -e $dir ]; then
+  dir=/var/lib
+fi
+
+fstype=$(df -T $dir | awk 'NR==2{print $2}')
+free_gb=$(df -BG --output=avail $dir | tail -1 | tr -dc 0-9)
+
+printf "%-5s %s fstype=%s free=%sGB\n" "$(hostname)" "$dir" "$fstype" "$free_gb"
+EOF
+done
 ```
 
 ```out
@@ -1718,7 +2301,11 @@ kc01  /var/lib fstype=overlay free=712GB
 **時鐘誤差**（TLS 與 MDS token 要求 2 秒內；各台與操作機相差超過 2 秒就請銀行修 NTP）：
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do echo "$h skew=$(( $(ssh $h.poc.lab date +%s) - $(date +%s) ))s"; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  remote=$(ssh $h.poc.lab date +%s)
+  here=$(date +%s)
+  echo "$h skew=$(( remote - here ))s"
+done
 ```
 
 ```out
@@ -1729,7 +2316,32 @@ kc01 skew=0s
 **DNS、套件庫、AD 連線**。過關條件：每台 `all resolved`、`os=200`、`confluent=200`，AD 那段 `Verify return code: 0 (ok)`（代表 LDAPS 憑證鏈信任成功）：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'bad=""; for n in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 repo01 ad01 lb01; do getent hosts $n.poc.lab >/dev/null || bad="$bad $n"; done; echo "$(hostname): ${bad:-all resolved} os=$(curl -s -o /dev/null -w %{http_code} https://repo01.poc.lab/os/repodata/repomd.xml) confluent=$(curl -s -o /dev/null -w %{http_code} https://repo01.poc.lab/confluent/repodata/repomd.xml)"'; done; for h in kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'echo "$(hostname): $(openssl s_client -connect ad01.poc.lab:636 </dev/null 2>/dev/null | grep "Verify return code")"'; done
+# 1. 每台：所有主機名稱都解析得到、兩個套件庫的索引都拿得到（200）
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -s <<'EOF'
+# 解析不到的主機名稱列出來；全部解析得到就印 all resolved
+bad=""
+for n in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 repo01 ad01 lb01; do
+  if ! getent hosts $n.poc.lab > /dev/null; then
+    bad="$bad $n"
+  fi
+done
+
+if [ -z "$bad" ]; then
+  bad="all resolved"
+fi
+
+os=$(curl -s -o /dev/null -w %{http_code} https://repo01.poc.lab/os/repodata/repomd.xml)
+confluent=$(curl -s -o /dev/null -w %{http_code} https://repo01.poc.lab/confluent/repodata/repomd.xml)
+
+echo "$(hostname): $bad os=$os confluent=$confluent"
+EOF
+done
+
+# 2. broker 連得到 AD 的 LDAPS，而且憑證鏈信任成功
+for h in kb01 kb02 kb03 kb04; do
+  ssh $h.poc.lab 'echo "$(hostname): $(openssl s_client -connect ad01.poc.lab:636 < /dev/null 2> /dev/null | grep "Verify return code")"'
+done
 ```
 
 ```out
@@ -1744,7 +2356,19 @@ kb01: Verify return code: 0 (ok)
 **主機是乾淨的**（沒裝過 Confluent、沒有資料目錄；有殘留的舊資料會讓第 10 章的格式化出問題）：
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname): confluent_pkgs=$(rpm -qa "confluent-*" | wc -l) data_dir=$([ -e /var/lib/kafka ] && echo exists || echo none)"'; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -s <<'EOF'
+packages=$(rpm -qa "confluent-*" | wc -l)
+
+if [ -e /var/lib/kafka ]; then
+  data_dir=exists
+else
+  data_dir=none
+fi
+
+echo "$(hostname): confluent_pkgs=$packages data_dir=$data_dir"
+EOF
+done
 ```
 
 ```out
@@ -1762,14 +2386,41 @@ kc01: confluent_pkgs=0 data_dir=none
 **核心參數**：
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'case $(hostname) in kc*) extra="vm.max_map_count = 262144";; kb*) extra="vm.max_map_count = 262144
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -s <<'EOF'
+# 1. 每台都有的兩行
+common="net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096"
+
+# 2. 依角色再加的（REST Proxy、C3 沒有）
+case $(hostname) in
+  kc*)
+    extra="vm.max_map_count = 262144"
+    ;;
+  kb*)
+    extra="vm.max_map_count = 262144
 vm.swappiness = 1
 vm.dirty_background_ratio = 5
 vm.dirty_ratio = 60
 net.core.rmem_max = 2097152
 net.core.wmem_max = 2097152
 net.ipv4.tcp_rmem = 4096 65536 2097152
-net.ipv4.tcp_wmem = 4096 65536 2097152";; *) extra="";; esac; sudo install -d -m 0755 /etc/sysctl.d && printf "# Confluent Platform\nnet.core.somaxconn = 4096\nnet.ipv4.tcp_max_syn_backlog = 4096\n%s\n" "$extra" | sudo tee /etc/sysctl.d/90-confluent.conf >/dev/null; sudo sysctl -q --system 2>&1 | grep -c "sysctl:" | sed "s/^/$(hostname): errors=/"'; done
+net.ipv4.tcp_wmem = 4096 65536 2097152"
+    ;;
+  *)
+    extra=""
+    ;;
+esac
+
+# 3. 寫進 /etc/sysctl.d/90-confluent.conf
+sudo install -d -m 0755 /etc/sysctl.d
+printf "# Confluent Platform\n%s\n%s\n" "$common" "$extra" | sudo tee /etc/sysctl.d/90-confluent.conf > /dev/null
+
+# 4. 套用，數有幾個設不進去
+errors=$(sudo sysctl -q --system 2>&1 | grep -c "sysctl:")
+echo "$(hostname): errors=$errors"
+EOF
+done
 ```
 
 ```out
@@ -1782,7 +2433,19 @@ kb01: errors=2    （kb01–kb04 都是 2：容器限制 net.core.rmem_max / wme
 **程序限制、THP、時區、journald**：
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'printf "@confluent soft nofile 128000\n@confluent hard nofile 128000\n@confluent soft nproc 65536\n@confluent hard nproc 65536\n" | sudo tee /etc/security/limits.d/90-confluent.conf >/dev/null && echo "$(hostname): limits ok"'; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -e -s <<'EOF'
+# confluent 群組（服務帳號都在裡面）可開的檔案數與程序數
+sudo tee /etc/security/limits.d/90-confluent.conf > /dev/null <<'LIMITS'
+@confluent soft nofile 128000
+@confluent hard nofile 128000
+@confluent soft nproc 65536
+@confluent hard nproc 65536
+LIMITS
+
+echo "$(hostname): limits ok"
+EOF
+done
 ```
 
 ```out
@@ -1791,7 +2454,10 @@ kc01: limits ok
 ```
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do ssh $h.poc.lab 'sudo tee /etc/systemd/system/disable-thp.service >/dev/null <<EOF
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
+  ssh $h.poc.lab bash -s <<'EOF'
+# 開機時關掉 THP 的 systemd 單元（容器裡會自動跳過：ConditionVirtualization）
+sudo tee /etc/systemd/system/disable-thp.service > /dev/null <<'UNIT'
 [Unit]
 Description=Disable transparent hugepages (Confluent Platform)
 DefaultDependencies=no
@@ -1805,8 +2471,13 @@ ExecStart=/bin/sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled; 
 
 [Install]
 WantedBy=basic.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable disable-thp.service > /dev/null 2>&1
+echo "$(hostname): thp unit enabled"
 EOF
-sudo systemctl daemon-reload && sudo systemctl enable disable-thp.service >/dev/null 2>&1; echo "$(hostname): thp unit enabled"'; done
+done
 ```
 
 ```out
@@ -1815,7 +2486,22 @@ kc01: thp unit enabled
 ```
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo ln -sfn /usr/share/zoneinfo/Asia/Taipei /etc/localtime && sudo install -d /etc/systemd/journald.conf.d && printf "[Journal]\nSystemMaxUse=1G\n" | sudo tee /etc/systemd/journald.conf.d/90-confluent.conf >/dev/null && sudo systemctl restart systemd-journald && echo "$(hostname): $(date +%Z)"'; done
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -e -s <<'EOF'
+# 1. 時區
+sudo ln -sfn /usr/share/zoneinfo/Asia/Taipei /etc/localtime
+
+# 2. journald 最多用 1 GB
+sudo install -d /etc/systemd/journald.conf.d
+sudo tee /etc/systemd/journald.conf.d/90-confluent.conf > /dev/null <<'CONF'
+[Journal]
+SystemMaxUse=1G
+CONF
+sudo systemctl restart systemd-journald
+
+echo "$(hostname): $(date +%Z)"
+EOF
+done
 ```
 
 ```out
@@ -1826,7 +2512,30 @@ ops02: CST
 **時間同步**（指向行內 NTP，lab 是 repo01）：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo dnf -q -y install chrony >/dev/null && printf "server repo01.poc.lab iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\n" | sudo tee /etc/chrony.conf >/dev/null && sudo systemctl enable --now chronyd >/dev/null 2>&1 && sudo systemctl restart chronyd && echo "$(hostname): chrony configured"'; done; sleep 10; for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'echo "$(hostname): $(chronyc sources 2>/dev/null | grep "^\^\*" | awk "{print \$2, \$7}")"'; done
+# 1. 每台：裝 chrony、指向行內 NTP、啟動
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -e -s <<'EOF'
+sudo dnf -q -y install chrony > /dev/null
+
+sudo tee /etc/chrony.conf > /dev/null <<'CONF'
+server repo01.poc.lab iburst
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+CONF
+
+sudo systemctl enable --now chronyd > /dev/null 2>&1
+sudo systemctl restart chronyd
+echo "$(hostname): chrony configured"
+EOF
+done
+
+# 2. 等 10 秒讓 chrony 選定來源，再看每台選了誰（chronyc sources 裡 ^* 開頭的那一行）
+sleep 10
+
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab 'echo "$(hostname): $(chronyc sources 2> /dev/null | grep "^\^\*" | awk "{print \$2, \$7}")"'
+done
 ```
 
 ```out
@@ -1847,7 +2556,34 @@ kc01: repo01 -65ns[+3833ns]
 | C3 | 9021、9090、7071 | 維運人員的瀏覽器；C3 自己的 Prometheus；監控 |
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'case $(hostname) in kc*) p="9093 7071";; kb*) p="9092 9094 9095 9096 8090 7071";; rest*) p="8082 7071";; c3*) p="9021 9090 7071";; esac; sudo dnf -q -y install firewalld >/dev/null && sudo systemctl enable --now firewalld >/dev/null 2>&1; for s in cockpit dhcpv6-client; do sudo firewall-cmd -q --permanent --remove-service=$s 2>/dev/null; done; for x in $p; do sudo firewall-cmd -q --permanent --add-port=$x/tcp; done; sudo firewall-cmd -q --reload && echo "$(hostname): $(sudo firewall-cmd --list-ports)"'; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -s <<'EOF'
+# 1. 這個角色要開的埠（同上表）
+case $(hostname) in
+  kc*)   ports="9093 7071" ;;
+  kb*)   ports="9092 9094 9095 9096 8090 7071" ;;
+  rest*) ports="8082 7071" ;;
+  c3*)   ports="9021 9090 7071" ;;
+esac
+
+# 2. 裝 firewalld、開機啟動
+sudo dnf -q -y install firewalld > /dev/null
+sudo systemctl enable --now firewalld > /dev/null 2>&1
+
+# 3. 拿掉預設開放的服務（本來就沒開的話會失敗，不影響）
+for service in cockpit dhcpv6-client; do
+  sudo firewall-cmd -q --permanent --remove-service=$service 2> /dev/null
+done
+
+# 4. 開這個角色的埠，重新載入
+for port in $ports; do
+  sudo firewall-cmd -q --permanent --add-port=$port/tcp
+done
+sudo firewall-cmd -q --reload
+
+echo "$(hostname): $(sudo firewall-cmd --list-ports)"
+EOF
+done
 ```
 
 ```out
@@ -1870,7 +2606,18 @@ c3-01: 7071/tcp 9021/tcp 9090/tcp
 每台放原廠公鑰、寫 repo 設定（11 台含操作機，gpgcheck 開著）：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do scp -q ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc $h.poc.lab:/tmp/ && ssh $h.poc.lab 'sudo install -m 0644 /tmp/confluent.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent && sudo install -m 0644 /tmp/confluent-c3.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3 && rm -f /tmp/confluent*.asc && sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3 && sudo tee /etc/yum.repos.d/confluent-internal.repo >/dev/null <<EOF
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  # 1. 原廠公鑰送到那台的 /tmp
+  scp -q ~/landing/gpg-keys/confluent.asc ~/landing/gpg-keys/confluent-c3.asc $h.poc.lab:/tmp/
+
+  # 2. 在那台執行 EOF 之前的那一段：放公鑰、匯入、寫 repo 設定（bash -e：任何一行失敗就停）
+  ssh $h.poc.lab bash -e -s <<'EOF'
+sudo install -m 0644 /tmp/confluent.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent
+sudo install -m 0644 /tmp/confluent-c3.asc /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3
+rm -f /tmp/confluent*.asc
+sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent /etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3
+
+sudo tee /etc/yum.repos.d/confluent-internal.repo > /dev/null <<'REPO'
 [confluent-internal]
 name=Confluent Platform (internal repository)
 baseurl=https://repo01.poc.lab/confluent/
@@ -1878,8 +2625,14 @@ enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-confluent
        file:///etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3
+REPO
+
+# 看得到幾個 repo、幾把 Confluent 公鑰
+repos=$(dnf -q repolist | grep -c confluent-internal)
+keys=$(rpm -q gpg-pubkey --qf "%{SUMMARY}\n" | grep -ci confluent)
+echo "$(hostname): $repos repo, $keys keys"
 EOF
-echo "$(hostname): $(dnf -q repolist | grep -c confluent-internal) repo, $(rpm -q gpg-pubkey --qf "%{SUMMARY}\n" | grep -ci confluent) keys"'; done
+done
 ```
 
 ```out
@@ -1897,7 +2650,20 @@ ops02: 1 repo, 1 keys
 | C3 | confluent-control-center-next-gen + cyrus-sasl、openssl-devel | 無 |
 
 ```bash
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 ops02; do case $h in kc*|kb*) p="confluent-server-8.2.4 confluent-security-8.2.4";; rest*) p="confluent-kafka-rest-8.2.4 confluent-security-8.2.4";; c3*) p="confluent-control-center-next-gen-2.5.1 cyrus-sasl openssl-devel";; ops*) p="confluent-server-8.2.4 confluent-security-8.2.4 confluent-cli-8.2.4";; esac; ssh $h.poc.lab "sudo dnf -q -y --setopt=install_weak_deps=False install $p >/dev/null && echo \"\$(hostname): \$(rpm -qa 'confluent-*' | wc -l) confluent packages\""; done
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01 ops02; do
+  # 1. 這台要裝的套件（同上表）
+  case $h in
+    kc* | kb*) packages="confluent-server-8.2.4 confluent-security-8.2.4" ;;
+    rest*)     packages="confluent-kafka-rest-8.2.4 confluent-security-8.2.4" ;;
+    c3*)       packages="confluent-control-center-next-gen-2.5.1 cyrus-sasl openssl-devel" ;;
+    ops*)      packages="confluent-server-8.2.4 confluent-security-8.2.4 confluent-cli-8.2.4" ;;
+  esac
+
+  # 2. 裝，數裝好了幾個 confluent 套件
+  ssh $h.poc.lab "sudo dnf -q -y --setopt=install_weak_deps=False install $packages > /dev/null"
+  count=$(ssh $h.poc.lab "rpm -qa 'confluent-*' | wc -l")
+  echo "$h: $count confluent packages"
+done
 ```
 
 ```out
@@ -1911,7 +2677,34 @@ ops02: 10 confluent packages
 每台約一兩分鐘。鎖版本（只鎖 Confluent；C3 的兩個 OS 套件跟著 OS 修補，不鎖）。這個鎖在第 29 章遷移時逐台先解開、換完版本再鎖回（29.3–29.6）；第 30 章的 OS 更新（9.6 → 9.8）靠它確保 Confluent 不被動到：
 
 ```bash
-for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do ssh $h.poc.lab 'sudo dnf -q -y install python3-dnf-plugin-versionlock >/dev/null && for p in $(rpm -qa "confluent-*"); do sudo dnf -q versionlock add "$p" >/dev/null; done; echo "$(hostname): $(sudo dnf -q versionlock list | grep -c confluent) locked"'; done; for h in kb01 rest01 c3-01; do ssh $h.poc.lab 'echo "$(hostname): $(getent passwd cp-kafka cp-kafka-rest cp-control-center 2>/dev/null | cut -d: -f1 | tr "\n" " ") group=$(getent group confluent | cut -d: -f1) kafka_pkg=$(rpm -q confluent-server >/dev/null 2>&1 && echo yes || echo no)"'; done
+# 1. 每台：裝 versionlock 插件，鎖住這台的每一個 confluent 套件
+for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  ssh $h.poc.lab bash -e -s <<'EOF'
+sudo dnf -q -y install python3-dnf-plugin-versionlock > /dev/null
+
+for package in $(rpm -qa "confluent-*"); do
+  sudo dnf -q versionlock add "$package" > /dev/null
+done
+
+echo "$(hostname): $(sudo dnf -q versionlock list | grep -c confluent) locked"
+EOF
+done
+
+# 2. RPM 建好的服務帳號與群組；C3 主機沒有誤裝 Kafka
+for h in kb01 rest01 c3-01; do
+  ssh $h.poc.lab bash -s <<'EOF'
+accounts=$(getent passwd cp-kafka cp-kafka-rest cp-control-center 2> /dev/null | cut -d: -f1 | tr "\n" " ")
+group=$(getent group confluent | cut -d: -f1)
+
+if rpm -q confluent-server > /dev/null 2>&1; then
+  kafka_pkg=yes
+else
+  kafka_pkg=no
+fi
+
+echo "$(hostname): $accounts group=$group kafka_pkg=$kafka_pkg"
+EOF
+done
 ```
 
 ```out
@@ -1949,7 +2742,13 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 | svc-backup | 每日備份（第 23 章）匯出叢集中繼資料的唯讀身分 | clientAuth | 無 |
 
 ```bash
-install -d -m 0700 ~/pki ~/pki/keys ~/pki/requests ~/pki/incoming ~/pki/certs && (umask 077; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/pki/store.pass) && cat > ~/pki/requests.txt <<'EOF'
+# 1. 目錄；keystore 的密碼（24 個英數字，檔案 0600）
+install -d -m 0700 ~/pki ~/pki/keys ~/pki/requests ~/pki/incoming ~/pki/certs
+install -m 0600 /dev/null ~/pki/store.pass
+openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/pki/store.pass
+
+# 2. 申請清單：名稱、EKU、SAN（- = 沒有 SAN）
+cat > ~/pki/requests.txt <<'EOF'
 kafka-internal     serverAuth,clientAuth  kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
 cp-server          serverAuth             kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,ops02.poc.lab,ops02,lb01.poc.lab,lb01,rest.poc.lab,c3.poc.lab,localhost
 svc-rest           clientAuth             -
@@ -1960,7 +2759,35 @@ app-legacy-billing clientAuth             -
 opmenu-breakglass  clientAuth             -
 svc-backup         clientAuth             -
 EOF
-while read -r name eku san; do (umask 077; openssl genrsa -out ~/pki/keys/$name.key 2048 2>/dev/null); ext=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$eku"); [ "$san" != "-" ] && ext+=(-addext "subjectAltName=$(echo "$san" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -)"); openssl req -new -key ~/pki/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" "${ext[@]}" -out ~/pki/requests/$name.csr && echo "$name: csr ok"; done < ~/pki/requests.txt
+
+# san_list <逗號分隔的主機名稱>：換成 subjectAltName 的寫法
+#   例：san_list kc01.poc.lab,kc01 → DNS:kc01.poc.lab,DNS:kc01
+san_list() {
+  echo "$1" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -
+}
+
+# 3. 清單上每一張：私鑰（0600）與 CSR；有 SAN 的多加一行 subjectAltName
+while read -r name eku san; do
+  install -m 0600 /dev/null ~/pki/keys/$name.key
+  openssl genrsa -out ~/pki/keys/$name.key 2048 2> /dev/null
+
+  if [ "$san" = "-" ]; then
+    openssl req -new -key ~/pki/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" \
+      -addext "basicConstraints=critical,CA:FALSE" \
+      -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+      -addext "extendedKeyUsage=$eku" \
+      -out ~/pki/requests/$name.csr
+  else
+    openssl req -new -key ~/pki/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" \
+      -addext "basicConstraints=critical,CA:FALSE" \
+      -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+      -addext "extendedKeyUsage=$eku" \
+      -addext "subjectAltName=$(san_list "$san")" \
+      -out ~/pki/requests/$name.csr
+  fi
+
+  echo "$name: csr ok"
+done < ~/pki/requests.txt
 ```
 
 ```out
@@ -1971,7 +2798,10 @@ kafka-internal: csr ok
 送出前自己看一次 CN、SAN、EKU 是否和上表一致（銀行 CA 的政策會檢查 EKU，漏了會被退件）：
 
 ```bash
-for f in ~/pki/requests/*.csr; do echo "== $(basename $f)"; openssl req -in $f -noout -subject -text | grep -E "^subject=|Alternative|Extended Key" -A1 | grep -v "^--" | sed 's/^ */  /'; done
+for f in ~/pki/requests/*.csr; do
+  echo "== $(basename $f)"
+  openssl req -in $f -noout -subject -text | grep -E "^subject=|Alternative|Extended Key" -A1 | grep -v "^--" | sed 's/^ */  /'
+done
 ```
 
 ## 9.2 銀行 CA 簽發
@@ -1981,7 +2811,24 @@ for f in ~/pki/requests/*.csr; do echo "== $(basename $f)"; openssl req -in $f -
 正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5 建好的 `sign.sh`，9 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和 5.3 節簽給 ad01 的那張混在一起）：
 
 ```bash
-cd ~/kafka-lab && rm -rf ca/exchange/signed ca/exchange/requests && mkdir -p ca/exchange/signed && podman cp lab-ops02-1:/root/pki/requests "$(cygpath -m "$PWD/ca/exchange/")" && for f in ca/exchange/requests/*.csr; do n=$(basename $f .csr); bash ca/sign.sh "$f" "ca/exchange/signed/$n.crt"; done && for f in ca/exchange/signed/*.crt; do podman cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/incoming/; done && podman exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
+cd ~/kafka-lab
+
+# 1. 清掉上一次的，取回操作機上的申請檔
+rm -rf ca/exchange/signed ca/exchange/requests
+mkdir -p ca/exchange/signed
+podman cp lab-ops02-1:/root/pki/requests "$(cygpath -m "$PWD/ca/exchange/")"
+
+# 2. 逐一簽發
+for f in ca/exchange/requests/*.csr; do
+  name=$(basename $f .csr)
+  bash ca/sign.sh "$f" "ca/exchange/signed/$name.crt"
+done
+
+# 3. 簽好的放回操作機的 incoming/，數一下
+for f in ca/exchange/signed/*.crt; do
+  podman cp "$(cygpath -m "$f")" lab-ops02-1:/root/pki/incoming/
+done
+podman exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
 ```
 
 ```out
@@ -2003,7 +2850,25 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 拆開回覆（第一張是 leaf，其餘是中繼）：
 
 ```bash
-cd ~/pki && for n in $(awk '{print $1}' requests.txt); do awk -v n=$n 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$n.crt; mv incoming/$n.part1 incoming/$n.leaf.pem; cat incoming/$n.part[2-9] > incoming/$n.issuers.pem 2>/dev/null; rm -f incoming/$n.part*; echo "$n: $(grep -c 'BEGIN CERT' incoming/$n.issuers.pem) issuer(s)"; done
+cd ~/pki
+
+# split_reply <名稱>：銀行回覆的 incoming/<名稱>.crt 拆成 leaf（第一張）和 issuers（其餘的中繼 CA）
+#   例：incoming/svc-ops.crt → incoming/svc-ops.leaf.pem、incoming/svc-ops.issuers.pem
+split_reply() {
+  local name=$1
+
+  # 每遇到一行 BEGIN CERTIFICATE 就換寫下一個檔：.part1、.part2…
+  awk -v n=$name 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$name.crt
+
+  mv incoming/$name.part1 incoming/$name.leaf.pem
+  cat incoming/$name.part[2-9] > incoming/$name.issuers.pem 2> /dev/null
+  rm -f incoming/$name.part*
+}
+
+for name in $(awk '{print $1}' requests.txt); do
+  split_reply $name
+  echo "$name: $(grep -c 'BEGIN CERT' incoming/$name.issuers.pem) issuer(s)"
+done
 ```
 
 ```out
@@ -2014,7 +2879,81 @@ kafka-internal: 1 issuer(s)
 五項檢查：私鑰相符、CN、SAN、EKU、效期，再驗整條鏈到銀行根憑證。好結果是每一行的 key、cn、san、eku、chain 都是 `ok`，days 約 364（憑證效期一年）：
 
 ```bash
-cd ~/pki && while read -r name eku san; do leaf=incoming/$name.leaf.pem; k1=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16); k2=$(openssl pkey -in keys/$name.key -pubout 2>/dev/null | sha256sum | cut -c1-16); cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'); have_san=$(openssl x509 -in $leaf -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,); want_san=$([ "$san" = "-" ] && echo "" || echo "$san" | tr ',' '\n' | sort | paste -sd,); have_eku=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '); days=$(( ($(date -d "$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 )); chain=$(openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf 2>&1 | grep -c ": OK"); printf '%-19s key=%s cn=%s san=%s eku=%s days=%s chain=%s\n' $name $([ $k1 = $k2 ] && echo ok || echo MISMATCH) $([ "$cn" = "$name" ] && echo ok || echo "$cn") $([ "$have_san" = "$want_san" ] && echo ok || echo DIFF) "$have_eku" $days $([ $chain = 1 ] && echo ok || echo FAIL); done < requests.txt
+cd ~/pki
+
+# cert_pubkey <憑證>、key_pubkey <私鑰>：公鑰的 sha256 前 16 碼；兩個一樣 = 憑證和私鑰是一對
+cert_pubkey() {
+  openssl x509 -in "$1" -pubkey -noout | sha256sum | cut -c1-16
+}
+
+key_pubkey() {
+  openssl pkey -in "$1" -pubout 2> /dev/null | sha256sum | cut -c1-16
+}
+
+# cert_cn <憑證>：CN，例 kafka-internal
+cert_cn() {
+  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
+}
+
+# cert_san <憑證>：SAN 裡的主機名稱，排好順序、逗號分隔，例 kb01,kb01.poc.lab,…（沒有 SAN 就是空的）
+cert_san() {
+  openssl x509 -in "$1" -noout -ext subjectAltName 2> /dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,
+}
+
+# sorted_list <逗號分隔的清單>：排好順序，用來和 cert_san 比；"-"（沒有 SAN）印空的
+sorted_list() {
+  if [ "$1" = "-" ]; then
+    echo ""
+  else
+    echo "$1" | tr ',' '\n' | sort | paste -sd,
+  fi
+}
+
+# cert_eku <憑證>：用途，例 TLSWebServerAuthentication,TLSWebClientAuthentication
+cert_eku() {
+  openssl x509 -in "$1" -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '
+}
+
+# cert_days <憑證>：還有幾天到期
+cert_days() {
+  local end
+  end=$(openssl x509 -in "$1" -noout -enddate | cut -d= -f2)
+  echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+}
+
+while read -r name eku san; do
+  leaf=incoming/$name.leaf.pem
+
+  # 1. 私鑰相符
+  if [ "$(cert_pubkey $leaf)" = "$(key_pubkey keys/$name.key)" ]; then
+    key=ok
+  else
+    key=MISMATCH
+  fi
+
+  # 2. CN 就是申請的名稱（不是的話印出實際的 CN）
+  cn=$(cert_cn $leaf)
+  if [ "$cn" = "$name" ]; then
+    cn=ok
+  fi
+
+  # 3. SAN 和申請的一樣
+  if [ "$(cert_san $leaf)" = "$(sorted_list "$san")" ]; then
+    san_check=ok
+  else
+    san_check=DIFF
+  fi
+
+  # 4. 整條鏈驗得到銀行根憑證
+  if openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf > /dev/null 2>&1; then
+    chain=ok
+  else
+    chain=FAIL
+  fi
+
+  # 5. 一行結果（EKU 與剩幾天直接印出來看）
+  printf '%-19s key=%s cn=%s san=%s eku=%s days=%s chain=%s\n' $name $key "$cn" $san_check "$(cert_eku $leaf)" "$(cert_days $leaf)" $chain
+done < requests.txt
 ```
 
 ```out
@@ -2027,7 +2966,25 @@ kafka-internal      key=ok cn=ok san=ok eku=TLSWebServerAuthentication,TLSWebCli
 整理成正式檔案，做 PKCS12 keystore、truststore（只放銀行根憑證）、MDS token 金鑰對：
 
 ```bash
-cd ~/pki && for n in $(awk '{print $1}' requests.txt); do cat incoming/$n.leaf.pem incoming/$n.issuers.pem > certs/$n.crt; openssl pkcs12 -export -name $n -inkey keys/$n.key -in certs/$n.crt -out certs/$n.p12 -passout file:store.pass && chmod 0600 certs/$n.p12; done && cp /etc/pki/ca-trust/source/anchors/bank-root.pem certs/bank-root.pem && keytool -importcert -noprompt -alias bank-root -file certs/bank-root.pem -keystore certs/truststore.p12 -storetype PKCS12 -storepass:file store.pass && (umask 077; openssl genrsa -out keys/mds-token.key 2048 2>/dev/null) && openssl rsa -in keys/mds-token.key -pubout -out certs/mds-token-public.pem 2>/dev/null && ls certs | wc -l
+cd ~/pki
+
+# 1. 每一張：正式的 PEM（leaf＋中繼）與 PKCS12 keystore（0600）
+for name in $(awk '{print $1}' requests.txt); do
+  cat incoming/$name.leaf.pem incoming/$name.issuers.pem > certs/$name.crt
+  openssl pkcs12 -export -name $name -inkey keys/$name.key -in certs/$name.crt -out certs/$name.p12 -passout file:store.pass
+  chmod 0600 certs/$name.p12
+done
+
+# 2. truststore：只放銀行根憑證
+cp /etc/pki/ca-trust/source/anchors/bank-root.pem certs/bank-root.pem
+keytool -importcert -noprompt -alias bank-root -file certs/bank-root.pem -keystore certs/truststore.p12 -storetype PKCS12 -storepass:file store.pass
+
+# 3. MDS 簽 token 用的金鑰對（不經銀行；私鑰 0600）
+install -m 0600 /dev/null keys/mds-token.key
+openssl genrsa -out keys/mds-token.key 2048 2> /dev/null
+openssl rsa -in keys/mds-token.key -pubout -out certs/mds-token-public.pem 2> /dev/null
+
+ls certs | wc -l
 ```
 
 ```out
