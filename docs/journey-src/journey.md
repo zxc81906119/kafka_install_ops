@@ -50,7 +50,7 @@ Docker Compose version v5.x.x
 >
 > `podman compose` 每次會先印一行 `>>>> Executing external compose provider "…docker-compose.exe" … <<<<`：只是提示用的是 Podman Desktop 裝的那一份，不影響結果。docker-compose 的版本跟著 Podman Desktop 的擴充更新（2026-10-31 是 v5.6.1）。
 >
-> 陷阱：`podman machine start` 印出 `API forwarding for Docker API clients is not available … win-sshproxy.exe failed to start` 時，`podman` 本身照常可用，但 `podman compose` 會失敗（`failed to connect to the docker API at npipe:…`）。原因多半是 WSL 曾被強制關掉，留下一個孤兒 socket 檔 `%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock`（Windows 事件記錄裡是 `bind: Only one usage of each socket address`）。把那個檔刪掉（Git Bash `rm` 刪不掉時，從任一個 WSL 發行版 `rm /mnt/c/Users/<你>/AppData/Local/Temp/podman/kafka-lab-api.sock`），再 `podman machine stop kafka-lab && podman machine start kafka-lab`，看到 `API forwarding listening on` 就好了。
+> 陷阱：`podman machine start` 印出 `API forwarding for Docker API clients is not available … win-sshproxy.exe failed to start` 時，`podman` 本身照常可用，但 `podman compose` 會失敗（`failed to connect to the docker API at npipe:…`）。原因是負責轉發的 `win-sshproxy` 上次被強制結束（machine 還在跑就直接關機或重開 Windows），留下一個孤兒 socket 檔 `%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock`（Windows 事件記錄裡是 `bind: Only one usage of each socket address`）；`podman machine stop` 正常結束時會自己清掉它。所以**關 Windows 之前先 `podman machine stop kafka-lab`**。已經撞到了：把那個檔刪掉（Git Bash `rm`，或 PowerShell `Remove-Item`），再 `podman machine stop kafka-lab && podman machine start kafka-lab`，看到 `API forwarding listening on` 就好了。
 >
 > 陷阱：Podman 的安裝程式會重設 WSL，正在跑的其他 WSL 發行版（例如 Docker Desktop）會被關掉。
 >

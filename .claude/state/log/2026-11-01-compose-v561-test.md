@@ -8,3 +8,4 @@
 - `hostname -f` 只回短名：和舊版 v5.5.1 建的 lab 一樣（Podman 不套用 domainname，FQDN 靠 extra_hosts），不是 v5.6.1 的問題；腳本沒用 hostname -f。
 - 沒測到：真的對 lab 做 `down -v`／`up -d`（會清掉平台），留到腳本版從零實跑（bank-sim reset）。
 - 記錄：CLAUDE.md gotcha、手冊 0.0 加一條陷阱。
+- 原因更正（實測）：正常 `podman machine stop` → socket 檔被清掉、下次 start 正常；直接砍 win-sshproxy（等同 machine 還在跑就關 Windows）→ 檔留下、下次 start 出現 `API forwarding … not available`。今早的孤兒檔多半是昨晚直接關機留下的，不一定是 Docker 反安裝。PowerShell Remove-Item 刪得掉。手冊 0.0、CLAUDE.md 已更正：關機前先 podman machine stop。
