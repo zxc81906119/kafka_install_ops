@@ -187,7 +187,14 @@ STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/sbin/init"]
 EOF
 
-podman build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" 2>&1 | grep '^Successfully tagged'
+# 建映像：完整的輸出寫在 images/build-node.log；成功只印最後的 Successfully tagged，失敗就印最後 20 行
+if podman build -t lab-node:96 "$(cygpath -m "$PWD/images/node")" > images/build-node.log 2>&1; then
+  grep "^Successfully tagged" images/build-node.log
+else
+  tail -20 images/build-node.log
+  false
+fi
+
 podman run --rm lab-node:96 cat /etc/rocky-release
 ```
 
@@ -250,7 +257,13 @@ Listen 443 https
     </Directory>
 </VirtualHost>
 EOF
-podman build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" 2>&1 | grep '^Successfully tagged'
+# 建映像：完整的輸出寫在 images/build-web.log；成功只印最後的 Successfully tagged，失敗就印最後 20 行
+if podman build -t lab-web:96 "$(cygpath -m "$PWD/images/web")" > images/build-web.log 2>&1; then
+  grep "^Successfully tagged" images/build-web.log
+else
+  tail -20 images/build-web.log
+  false
+fi
 ```
 
 ```out
@@ -331,7 +344,13 @@ while true; do
 done
 EOF
 
-podman build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" 2>&1 | grep '^Successfully tagged'
+# 建映像：完整的輸出寫在 images/build-ad.log；成功只印最後的 Successfully tagged，失敗就印最後 20 行
+if podman build -t lab-ad:1 "$(cygpath -m "$PWD/images/ad")" > images/build-ad.log 2>&1; then
+  grep "^Successfully tagged" images/build-ad.log
+else
+  tail -20 images/build-ad.log
+  false
+fi
 ```
 
 ```out
@@ -387,7 +406,13 @@ RUN chmod 0755 /usr/local/sbin/lb-entrypoint
 ENTRYPOINT ["/usr/local/sbin/lb-entrypoint"]
 EOF
 
-podman build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" 2>&1 | grep '^Successfully tagged'
+# 建映像：完整的輸出寫在 images/build-lb.log；成功只印最後的 Successfully tagged，失敗就印最後 20 行
+if podman build -t lab-lb:1 "$(cygpath -m "$PWD/images/lb")" > images/build-lb.log 2>&1; then
+  grep "^Successfully tagged" images/build-lb.log
+else
+  tail -20 images/build-lb.log
+  false
+fi
 
 # 0.1–0.4 的四個映像都在：要印出 4
 podman images --format '{{.Repository}}:{{.Tag}}' | grep -cE '(^|/)lab-(node:96|web:96|ad:1|lb:1)$'

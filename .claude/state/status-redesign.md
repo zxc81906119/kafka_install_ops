@@ -23,7 +23,7 @@ Updated: 2026-11-01 晚（**lab 使用中（Podman kafka-lab），machine 開著
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。
 
 ## 環境狀態
-- lab：Podman machine `kafka-lab`，compose 專案 `lab`（14 台＋dl01），10-31 照手冊從零建。監控容器（lab-mon-*）B.2 已收；要再用跑 `bank-sim.sh monitoring`。license trial 到 2026-11-30。
+- lab：**使用中（redesign，11-01 晚起）：run-full.sh 從零跑 0–9（手冊改寫第一批驗證）**；之前那套 0→B 的 lab 已拆掉。Podman machine `kafka-lab`，compose 專案 `lab`（14 台＋dl01）。監控容器用 `bank-sim.sh monitoring`。
 - lab 信任根是 G3（21.4 之後）；簽新憑證用 `~/kafka-lab/ca/g2/sign.sh`（中繼 G2 由 G3 簽）。
 - machine 不自動開（使用者 11-01）：要用時自己 `podman machine start kafka-lab`，關機前 `podman machine stop kafka-lab`。Podman Desktop 的 engine autostart 已關（Start on login 還開著）。`~/kafka-lab/start-lab.ps1` 只當修復工具（compose 因孤兒 kafka-lab-api.sock 壞掉時手動跑），啟動捷徑已刪。WSL2 11 GB（.wslconfig）。絕不 `podman machine rm/reset kafka-lab`（volume `ops-secure`）。
 - 密碼檔：`~/kafka-lab/secrets.env`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
