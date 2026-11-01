@@ -18,7 +18,7 @@ Updated: 2026-11-01 00:00（**lab 使用中（Podman kafka-lab）**：手冊版 
 3. ~~移除 Docker Desktop~~ **做完**（10-31 晚，殘餘全清，C 槽剩約 290 GB）；compose 改用 Podman Desktop 的 Compose 擴充（v5.6.1），手冊 0.0 已改。第 0 章的 `podman compose up/down` 在 v5.6.1 上還沒從零實跑。
 4. OP menu 改成新手看得懂的寫法（log/2026-11-01-opmenu-readable.md）：框架＋第 21 項已改、測試與 lab 實跑通過，等使用者看過風格再改其餘 26 項。ops02 /root/opmenu-new 是試跑用的新版（/opt/opmenu 沒動）。
 5. 待決定：稽核寫入失敗是否用 `confluent-event-logger` 的 producer 指標告警（redesign/README.md 394 之後）。
-5. 舊待修清單（10-31 Docker 逐章時記的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas）：Podman 這輪沒再出現問題，要不要結案待看。
+6. 舊待修清單（10-31 Docker 逐章時記的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas）：Podman 這輪沒再出現問題，要不要結案待看。
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。
 
 ## 環境狀態
