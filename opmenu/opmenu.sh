@@ -19,84 +19,199 @@
 set -uo pipefail
 OPMENU_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export OPMENU_HOME
-for _c in "${OPMENU_CONF:-}" /etc/opmenu/opmenu.conf "$OPMENU_HOME/opmenu.conf"; do [ -n "$_c" ] && [ -f "$_c" ] && { . "$_c"; break; }; done
+# ── 載入設定與共用程式 ──
+# 設定檔：OPMENU_CONF 指定的、/etc/opmenu/opmenu.conf、程式目錄裡的 opmenu.conf，用找到的第一個
+for _conf in "${OPMENU_CONF:-}" /etc/opmenu/opmenu.conf "$OPMENU_HOME/opmenu.conf"; do
+  if [ -n "$_conf" ] && [ -f "$_conf" ]; then
+    . "$_conf"
+    break
+  fi
+done
+unset _conf
+
 . "$OPMENU_HOME/lib/defaults.sh"
 . "$OPMENU_HOME/lib/common.sh"
-if [ "${OPMENU_ALLOW_ENV_OVERRIDE:-0}" != 1 ]; then unset OPMENU_USER OPMENU_PASS OPMENU_YES OPMENU_REASON; fi   # 測試用的環境變數只在設定檔明確允許時才接受
+
+# 測試用的環境變數（帳密、略過確認、原因）只在設定檔明確允許時才接受
+if [ "${OPMENU_ALLOW_ENV_OVERRIDE:-0}" != 1 ]; then
+  unset OPMENU_USER OPMENU_PASS OPMENU_YES OPMENU_REASON
+fi
+
 . "$OPMENU_HOME/lib/kafka.sh"
 . "$OPMENU_HOME/lib/hosts.sh"
-. "$OPMENU_HOME/lib/secrets/file.sh" || { echo "找不到 lib/secrets/file.sh"; exit 1; }
-if ! load_items "$OPMENU_HOME/items"; then   # 讀選單對照表 items/menu.list、載入每個項目檔
+
+if ! . "$OPMENU_HOME/lib/secrets/file.sh"; then
+  echo "找不到 lib/secrets/file.sh"
   exit 1
 fi
 
-# ── 登入:操作者本人的 AD 帳密 → 向 MDS 換 token;產生只有自己能讀的 Kafka 連線設定檔(記憶體檔案系統);推算沒填的設定 ──
+# 讀選單對照表 items/menu.list、載入每個項目檔
+if ! load_items "$OPMENU_HOME/items"; then
+  exit 1
+fi
+
+# ── 登入 ──
+# login：操作者本人的 AD 帳密 → 向 MDS 換 token；產生只有自己讀得到的 Kafka 連線設定檔（記憶體檔案系統）；推算沒填的設定
+#   MDS 連不上時改走緊急主機模式（emergency_login）；帳密不對就結束
 login() {
-  local pass="${OPMENU_PASS:-}"
-  OP_SID="$(date +%s)-$$"
-  if [ "${OPMENU_USER_FROM_OS:-0}" = 1 ]; then OP_USER="$(id -un)"; echo "操作者(作業系統登入帳號):$OP_USER"
+  local password="${OPMENU_PASS:-}"
+
+  OP_SID="$(date +%s)-$$"   # 這次登入的編號（紀錄裡的 sid）
+
+  # 1. 帳號：設定成「用作業系統登入帳號」就直接用；否則請操作者輸入 AD 帳號
+  if [ "${OPMENU_USER_FROM_OS:-0}" = 1 ]; then
+    OP_USER="$(id -un)"
+    echo "操作者(作業系統登入帳號):$OP_USER"
   else
-    OP_USER="${OPMENU_USER:-}"; if [ -z "$OP_USER" ]; then read -r -p "AD 帳號: " OP_USER; fi
-    [[ "$OP_USER" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] || { echo "${CR}帳號含不允許的字元${C0}"; exit 1; }
+    OP_USER="${OPMENU_USER:-}"
+    if [ -z "$OP_USER" ]; then
+      read -r -p "AD 帳號: " OP_USER
+    fi
+
+    if ! [[ "$OP_USER" =~ ^[A-Za-z0-9._@-]{1,64}$ ]]; then
+      echo "${CR}帳號含不允許的字元${C0}"
+      exit 1
+    fi
   fi
-  if [ -z "$pass" ]; then read -r -s -p "AD 密碼: " pass; echo; fi
+
+  # 2. 密碼（輸入時不顯示）
+  if [ -z "$password" ]; then
+    read -r -s -p "AD 密碼: " password
+    echo
+  fi
+
+  # 3. 暫存檔：之後建的檔案都只有自己讀得到；先清掉上次被強制結束留下的
   umask 077
   core_sweep_residue
   OP_CLIENT_CONF="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"
   OP_LAST_RAW="$(mktemp "$OPMENU_TMPDIR/opmenu.$$.XXXXXXXX")"
-  trap core_cleanup EXIT; trap 'core_cleanup; exit 130' INT; trap 'core_cleanup; exit 143' TERM; trap 'core_cleanup; exit 129' HUP
+
+  # 離開時（正常結束、Ctrl+C、被終止、斷線）一律清理
+  trap core_cleanup EXIT
+  trap 'core_cleanup; exit 130' INT
+  trap 'core_cleanup; exit 143' TERM
+  trap 'core_cleanup; exit 129' HUP
+
+  # 4. Kafka 連線設定：用 AD 帳密走 LDAP listener（SASL PLAIN over TLS）
   cat > "$OP_CLIENT_CONF" <<EOC
 security.protocol=SASL_SSL
 sasl.mechanism=PLAIN
-sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="$OP_USER" password="$pass";
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="$OP_USER" password="$password";
 ssl.truststore.location=$(be_truststore_path)
 ssl.truststore.type=PKCS12
 ssl.truststore.password=$(be_truststore_password)
 EOC
-  local lrc; OP_TOKEN="$(be_mds_login "$OP_USER" "$pass")"; lrc=$?
-  if [ $lrc -eq 2 ]; then unset pass; emergency_login; return 0   # MDS 連不上：看能不能進緊急主機模式（不行就在裡面結束）
-  elif [ $lrc -ne 0 ]; then echo "${CR}登入失敗:帳號或密碼不正確。${C0}"; core_log AUTH_FAIL login ""; exit 1; fi
+
+  # 5. 向 MDS 換 token：2 = MDS 連不上（改走緊急主機模式）；其他非 0 = 帳密不對
+  local login_rc
+  OP_TOKEN="$(be_mds_login "$OP_USER" "$password")"
+  login_rc=$?
+
+  if [ $login_rc -eq 2 ]; then
+    unset password
+    emergency_login   # 進不了緊急主機模式時，裡面會直接結束
+    return 0
+  fi
+
+  if [ $login_rc -ne 0 ]; then
+    echo "${CR}登入失敗:帳號或密碼不正確。${C0}"
+    core_log AUTH_FAIL login ""
+    exit 1
+  fi
+
   OP_TOKEN_AT=$(date +%s)
-  derive || { core_log DERIVE_FAIL login ""; exit 1; }
-  unset pass
+
+  # 6. 推算沒填的設定（cluster ID、主機清單…）
+  if ! derive; then
+    core_log DERIVE_FAIL login ""
+    exit 1
+  fi
+
+  unset password
   export OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_TOKEN OP_TOKEN_AT OP_SID
 }
 
-# 緊急主機模式：MDS 連不上時，AD 身分驗證與權限查詢都做不了。
-# 不看任何群組：操作者都是經 PSMP 登入的 root，作業系統群組擋不住（root 能自己加入），所以 2026-10-29 定案直接開放（OPMENU_EMERGENCY_HOST=0 可關）。
-# 只能做 OPMENU_EMERGENCY_ITEMS 這幾個主機類項目，必填原因；操作者標成「未經 AD 驗證」，每一筆紀錄都看得出是緊急模式（紀錄也送 syslog 時，共用帳號改不到）。
+# emergency_login：緊急主機模式。MDS 連不上時，AD 身分驗證與權限查詢都做不了。
+#   不看任何群組：操作者都是經 PSMP 登入的 root，作業系統群組擋不住（root 能自己加入），所以 2026-10-29 定案直接開放（OPMENU_EMERGENCY_HOST=0 可關）。
+#   只能做 OPMENU_EMERGENCY_ITEMS 這幾個主機類項目，必填原因；操作者標成「未經 AD 驗證」，每一筆紀錄都看得出是緊急模式（紀錄也送 syslog 時，共用帳號改不到）。
 emergency_login() {
   core_log MDS_DOWN login ""
   echo "${CR}無法連到 MDS（Kafka 的權限服務），AD 登入做不了。${C0}"
   echo "Kafka 類的緊急操作（topic、設定、SCRAM 帳號）改用手把手 28.6 的 kafka-admin（SCRAM,9095,不經 MDS 與 AD）；用過當天照 20.2 換密碼。"
-  if [ "${OPMENU_EMERGENCY_HOST:-1}" != 1 ]; then echo "緊急主機模式已關閉（OPMENU_EMERGENCY_HOST=0）：請確認 cluster 狀態或通知管理員。"; core_log DENIED "emergency host mode" "disabled"; exit 1; fi
+
+  # 1. 設定關掉了就結束
+  if [ "${OPMENU_EMERGENCY_HOST:-1}" != 1 ]; then
+    echo "緊急主機模式已關閉（OPMENU_EMERGENCY_HOST=0）：請確認 cluster 狀態或通知管理員。"
+    core_log DENIED "emergency host mode" "disabled"
+    exit 1
+  fi
+
+  # 2. 原因（至少 4 個字）
   local reason="${OPMENU_REASON:-}"
-  [ -n "$reason" ] || read -r -p "緊急主機模式：請輸入原因（事故單號或說明）: " reason
-  if [ ${#reason} -lt 4 ]; then echo "原因太短，不進入緊急主機模式"; exit 1; fi
-  derive_local || exit 1   # ssh 允許的主機清單（不用 MDS）
+  if [ -z "$reason" ]; then
+    read -r -p "緊急主機模式：請輸入原因（事故單號或說明）: " reason
+  fi
+
+  if [ ${#reason} -lt 4 ]; then
+    echo "原因太短，不進入緊急主機模式"
+    exit 1
+  fi
+
+  # 3. ssh 允許的主機清單（不用 MDS）
+  if ! derive_local; then
+    exit 1
+  fi
+
+  # 4. 標成緊急模式、記紀錄
   OP_EMERGENCY_HOST=1
   OP_USER="$OP_USER(緊急,未經AD驗證)"
   export OP_EMERGENCY_HOST OP_USER OP_CLIENT_CONF OP_LAST_RAW OP_SID
+
   core_log EMERGENCY_HOST login "$reason"
   echo "${CY}已進入緊急主機模式：只能做 $OPMENU_EMERGENCY_ITEMS（看日誌、磁碟、收集診斷、重啟服務）；每一步都留紀錄。${C0}"
 }
 
-# 登入後推算沒填的設定(opmenu.conf 有填的一律優先)。刻意不從 cluster 推算 broker 與主機清單:它們是重啟、ssh 的允許清單,必須是審過的固定設定
+# derive：登入後推算沒填的設定（opmenu.conf 有填的一律優先）
+#   刻意不從 cluster 推算 broker 與主機清單：它們是重啟、ssh 的允許清單，必須是審過的固定設定
 derive() {
   local id
-  if [ -z "${OPMENU_KAFKA_CLUSTER_ID:-}" ]; then   # 要問 MDS
-    id="$(be_cluster_id)"; [ -n "$id" ] || { echo "${CR}無法從 MDS 取得 cluster ID,請在 opmenu.conf 設定 OPMENU_KAFKA_CLUSTER_ID${C0}"; return 1; }
+
+  # cluster ID 沒填：問 MDS
+  if [ -z "${OPMENU_KAFKA_CLUSTER_ID:-}" ]; then
+    id="$(be_cluster_id)"
+
+    if [ -z "$id" ]; then
+      echo "${CR}無法從 MDS 取得 cluster ID,請在 opmenu.conf 設定 OPMENU_KAFKA_CLUSTER_ID${C0}"
+      return 1
+    fi
+
     dd OPMENU_KAFKA_CLUSTER_ID "$id"
   fi
+
   derive_local
 }
-# 只靠設定檔就算得出來的部分（不用 MDS）：ssh 允許的主機清單、replication 上限。緊急主機模式也要做
+
+# derive_local：只靠設定檔就算得出來的部分（不用 MDS），緊急主機模式也要做：
+#   ssh 允許的主機清單 OPMENU_HOSTS（broker、輔助服務、controller 的主機）、replication factor 上限（不超過 broker 台數）
 derive_local() {
-  local n
-  [ -n "${OPMENU_BROKER_SERVICES:-}" ] || { echo "${CR}請在 opmenu.conf 設定 OPMENU_BROKER_SERVICES(可重啟的 broker,主機:服務名)${C0}"; return 1; }
+  local broker_count
+
+  if [ -z "${OPMENU_BROKER_SERVICES:-}" ]; then
+    echo "${CR}請在 opmenu.conf 設定 OPMENU_BROKER_SERVICES(可重啟的 broker,主機:服務名)${C0}"
+    return 1
+  fi
+
   dd OPMENU_HOSTS "$(_hosts_of $OPMENU_BROKER_SERVICES ${OPMENU_AUX_SERVICES:-} ${OPMENU_CONTROLLER_HOSTS:-})"
-  n=$(printf '%s\n' $OPMENU_BROKER_SERVICES | wc -l)
-  if [ "${OP_SRC[OPMENU_REPLICATION]:-}" = default ] && [ "$n" -lt "$OPMENU_REPLICATION" ]; then OPMENU_REPLICATION=$n; OP_SRC[OPMENU_REPLICATION]=derived; export OPMENU_REPLICATION; fi
+
+  # replication factor 用預設值、而且 broker 台數比它少：降成台數
+  broker_count=$(echo $OPMENU_BROKER_SERVICES | wc -w)
+
+  if [ "${OP_SRC[OPMENU_REPLICATION]:-}" = default ] && [ "$broker_count" -lt "$OPMENU_REPLICATION" ]; then
+    OPMENU_REPLICATION=$broker_count
+    OP_SRC[OPMENU_REPLICATION]=derived
+    export OPMENU_REPLICATION
+  fi
+
   return 0
 }
 

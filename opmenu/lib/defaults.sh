@@ -1,11 +1,71 @@
 # defaults.sh — 所有可調整的設定與預設值,集中在這裡。
 # 實際環境請在 opmenu.conf 覆寫(opmenu.conf 先載入,這裡只填沒設定的);不要改這個檔案。
-# 寫法 [ -n "${X:-}" ] || X='...' 是刻意的:避免 ${X:=...} 在值含有 } 時被截斷。
-declare -A OP_SRC=()   # 每個設定的值從哪來:conf = opmenu.conf;default = 預設;derived = 登入後從 cluster 或其他設定推算(顯示在項目 19)
-d() { local n="$1" v="$2"; if [ -n "${!n:-}" ]; then OP_SRC[$n]=conf; else printf -v "$n" '%s' "$v"; OP_SRC[$n]=default; fi; export "$n"; }
-# 能由其他設定算出來的值:opmenu.conf 沒填才算(dd <名稱> <算出來的值>;空值視為算不出來,維持沒設定)
-dd() { local n="$1" v="$2"; [ -z "${!n:-}" ] || return 0; [ -n "$v" ] || return 0; printf -v "$n" '%s' "$v"; OP_SRC[$n]=derived; export "$n"; }
-_hosts_of() { local x out=" "; for x in "$@"; do x="${x%%:*}"; x="${x#https://}"; [[ "$out" == *" $x "* ]] || out+="$x "; done; echo "${out# }" | sed 's/ $//'; }   # 取主機名、去掉埠與服務名、去重
+# 下面每一行「d <設定名稱> <預設值>  # 說明」就是一個設定；想知道某個設定做什麼，在這個檔案找它的名字。
+
+# OP_SRC[設定名稱]：每個設定的值從哪來（顯示在項目 19）
+#   conf = opmenu.conf 設的；default = 這裡的預設值；derived = 由其他設定或登入後從 cluster 推算的
+declare -A OP_SRC=()
+
+# d <設定名稱> <預設值>：opmenu.conf 已經設了就用它的，沒設才用預設值
+#   ${!name} 是「名稱存在 name 裡的那個變數」的值；printf -v "$name" 是「把值存進名稱叫 $name 的變數」
+d() {
+  local name="$1"
+  local value="$2"
+
+  if [ -n "${!name:-}" ]; then
+    OP_SRC[$name]=conf
+  else
+    printf -v "$name" '%s' "$value"
+    OP_SRC[$name]=default
+  fi
+
+  export "$name"
+}
+
+# dd <設定名稱> <算出來的值>：能由其他設定算出來的值，opmenu.conf 沒填才用算出來的；算出來是空的就維持沒設定
+dd() {
+  local name="$1"
+  local value="$2"
+
+  if [ -n "${!name:-}" ]; then
+    return 0
+  fi
+
+  if [ -z "$value" ]; then
+    return 0
+  fi
+
+  printf -v "$name" '%s' "$value"
+  OP_SRC[$name]=derived
+  export "$name"
+}
+
+# _hosts_of <主機:埠或主機:服務…>：取出主機名稱（去掉冒號後面的部分），去掉重複，用空白接起來
+#   例：_hosts_of kb01:9096 kb02:9096 kb01:confluent-server → kb01 kb02
+_hosts_of() {
+  local item host hosts=""
+
+  for item in "$@"; do
+    host=$(echo "$item" | cut -d: -f1)
+
+    if ! _hosts_contains "$hosts" "$host"; then
+      hosts="$hosts $host"
+    fi
+  done
+
+  echo $hosts
+}
+
+# _hosts_contains "<主機清單>" <主機>：清單裡已經有這台就回 0
+_hosts_contains() {
+  local existing
+  for existing in $1; do
+    if [ "$existing" = "$2" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 # ── 環境 ──
 d OPMENU_BACKEND         vm                # 只有 vm(2026-10-22 起:操作機本機跑 Kafka 工具、ssh 到各主機)
@@ -25,9 +85,17 @@ d OPMENU_TLS_ENDPOINTS   ''                                             # 17 檢
 d OPMENU_TRUSTSTORE      "$OPMENU_CERT_DIR/truststore.p12"                   # 操作者連線用的 truststore(只放銀行根憑證)
 d OPMENU_TRUSTSTORE_PASSWORD_FILE "$OPMENU_CERT_DIR/truststore.pass"
 d OPMENU_CA_PEM          "$OPMENU_CERT_DIR/ca.pem"                           # curl 呼叫 MDS 用(銀行根憑證)
-if [ -z "${OPMENU_MDS_URL:-}" ]; then   # 由 bootstrap 的主機推算 MDS 位址
-  _m=""; for _h in $(_hosts_of ${OPMENU_BOOTSTRAP//,/ }); do _m+="https://$_h:$OPMENU_MDS_PORT,"; done
-  dd OPMENU_MDS_URL "${_m%,}"; unset _m _h
+# OPMENU_MDS_URL 沒填：由 bootstrap 的每台主機加上 OPMENU_MDS_PORT 推算，例 https://kb01:8090,https://kb02:8090
+if [ -z "${OPMENU_MDS_URL:-}" ]; then
+  _derived=""
+  for _host in $(_hosts_of $(echo "$OPMENU_BOOTSTRAP" | tr ',' ' ')); do
+    if [ -n "$_derived" ]; then
+      _derived="$_derived,"
+    fi
+    _derived="${_derived}https://$_host:$OPMENU_MDS_PORT"
+  done
+  dd OPMENU_MDS_URL "$_derived"
+  unset _derived _host
 fi
 
 # ── node 與服務 ──
@@ -89,7 +157,15 @@ d OPMENU_ROLLING_TIMEOUT 600                                            # 27 滾
 d OPMENU_REVIEW_ROLES    'SystemAdmin ClusterAdmin SecurityAdmin UserAdmin AuditAdmin ResourceOwner Operator DeveloperManage DeveloperWrite DeveloperRead'   # 44 權限覆核匯出要列的 role
 d OPMENU_ROLLING_SETTLE  45                                             # 27 滾動重啟:每台重啟後先等幾秒才開始判斷(要超過 broker 被判定離線、ISR 縮減的時間,預設分別約 9 秒、30 秒;不等的話剛重啟時會誤判成健康)
 d OPMENU_ROLLING_STABLE  2                                              # 27 滾動重啟:連續幾次檢查都健康才換下一台
-if [ -z "${OPMENU_BREAKGLASS_BOOTSTRAP:-}" ]; then   # 由 bootstrap 的主機推算 TOKEN listener 位址
-  _b=""; for _h in $(_hosts_of ${OPMENU_BOOTSTRAP//,/ }); do _b+="$_h:$OPMENU_TOKEN_PORT,"; done
-  dd OPMENU_BREAKGLASS_BOOTSTRAP "${_b%,}"; unset _b _h
+# OPMENU_BREAKGLASS_BOOTSTRAP 沒填：由 bootstrap 的每台主機加上 TOKEN listener 的埠推算，例 kb01:9094,kb02:9094
+if [ -z "${OPMENU_BREAKGLASS_BOOTSTRAP:-}" ]; then
+  _derived=""
+  for _host in $(_hosts_of $(echo "$OPMENU_BOOTSTRAP" | tr ',' ' ')); do
+    if [ -n "$_derived" ]; then
+      _derived="$_derived,"
+    fi
+    _derived="$_derived$_host:$OPMENU_TOKEN_PORT"
+  done
+  dd OPMENU_BREAKGLASS_BOOTSTRAP "$_derived"
+  unset _derived _host
 fi

@@ -9,31 +9,50 @@
 # 設定（opmenu.conf）：
 #   OPMENU_BREAKGLASS_PEM  緊急憑證 PEM(私鑰 + 憑證鏈)的檔案路徑
 
-secrets_name() { echo "file (操作機上 0600 的檔案)"; }
+secrets_name() {
+  echo "file (操作機上 0600 的檔案)"
+}
 
+# secret_get <檔案路徑>：檢查通過才把內容印出來；任何一項不通過就印原因到 stderr、回 1
 secret_get() {
-  local file=$1 mode owner
+  local file="$1"
+  local mode owner
+
+  # 1. 有指定、而且檔案存在
   if [ -z "$file" ]; then
     echo "沒有指定檔案路徑" >&2
     return 1
   fi
+
   if [ ! -f "$file" ]; then
     echo "找不到檔案：$file" >&2
     return 1
   fi
-  mode=$(stat -c '%a' "$file" 2>/dev/null) || { echo "讀不到檔案屬性：$file" >&2; return 1; }
-  owner=$(stat -c '%u' "$file" 2>/dev/null)
+
+  # 2. 權限要是 0600 或 0400、owner 要是執行者本人
+  mode=$(stat -c '%a' "$file" 2> /dev/null)
+  if [ $? -ne 0 ]; then
+    echo "讀不到檔案屬性：$file" >&2
+    return 1
+  fi
+
+  owner=$(stat -c '%u' "$file" 2> /dev/null)
+
   if [ "$mode" != 600 ] && [ "$mode" != 400 ]; then
     echo "檔案權限必須是 0600 或 0400（現在是 $mode），拒絕使用：$file" >&2
     return 1
   fi
+
   if [ "$owner" != "$(id -u)" ]; then
     echo "檔案的 owner 必須是執行者本人，拒絕使用：$file" >&2
     return 1
   fi
+
+  # 3. 不能是空的
   if [ ! -s "$file" ]; then
     echo "檔案是空的：$file" >&2
     return 1
   fi
+
   cat "$file"
 }

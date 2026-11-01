@@ -21,3 +21,4 @@
 - 語法 27/27、7 支測試全過；項目裡已沒有 eval、&& {、<<<、${x%…}。
 - 使用者提議（11-01）：手冊的手動指令之後也照同樣規則改，讓安裝與維運人員更好做事。等 OP menu 做完再討論範圍（400 多個指令塊，每章都要 lab 重跑）。
 - common.sh 全部改完：紀錄、交接檔、確認、v_*（多行的 v_match／v_in／v_topic／v_offset_to）、清理（pid 改用 cut、拆出 _process_alive）、token 換新、選單可見性、兩個閘門共用 _core_authorize、並行鎖、變更時窗（拆出 _minutes_of，用 heredoc 讀每個時段）。先寫 tests/test-change-window.sh（19 例）與 test-lock.sh（7 例）對舊版跑過確認案例正確，改完新版同樣全過；9 支測試全過。
+- lib 全部改完：defaults.sh 的 d／dd／_hosts_of 與兩段推算（新舊版 65 個設定值與來源逐一比對相同）、secrets/file.sh、hosts.sh（送到主機的遠端指令字串一字不改，test-sudo-forms 過）、kafka.sh（_curl_q 改 sed，" 與 \ 跳脫結果相同）、opmenu.sh 的載入／login／emergency_login／derive。OP menu 本身已沒有 eval；9 支測試全過。待 lab 逐項實跑。
