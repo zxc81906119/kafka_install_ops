@@ -14,3 +14,14 @@
 - 第二批（10–19）文字改完：111 塊 bash -n 過（16.3 的 <交付物的目錄> 佔位符除外）；scanchains（scratchpad）掃 0–19 已無 &&／||／一行三個以上分號。重點：16.3 安裝拆成「核對雜湊」與「換掉 /opt/opmenu」兩塊；16.4 kb04 sudo 試驗改 heredoc；17.7／17.8 的 Python 從 bash -c "…\"…" 改成 bash -s <<'EOF' 與小函式（first_post／show_default／show_json），17.8 解析段在容器實測輸出正確；19.1／19.2 的 chk bash -c 改成 check＋一項一個小函式（22、16 項不變），19.2 的 <(…) 改 mktemp 暫存檔；19.5 out 原本被誤改成「第 4 章G」→ 6.9G。
 - 新發現（寫進 redesign 寫法補充）：trap ERR 下 `x=$(curl …)` 在服務還沒起來時會讓執行器停下；13 的 C3 等待、11.2 的 alice 登入、19.4 冷開機的 REST 都改成函式放進 if／echo 參數。grep -c 可能為 0 的計數改 awk。
 - 下一步：拆 lab 從零跑 0–19（第二批驗證）。監控映像檔本機都有，不用重新拉；JDK 會從 Adoptium 重新下載（2.5）。
+- 第二批從零實跑（run-customer-0-19-20261101-2112）在背景跑的同時，改第三批 20–28 的文字（使用者 11-01：趁跑的時候改後面的章節）。
+- 20–28 改完：scanchains 掃 20–28 只剩 awk 程式裡的 `||`／`;`（25 章 5 處，屬誤報）；每塊 bash -n 過；內嵌腳本（metadata-backup.sh、metadata-restore.sh、license-check.sh、cluster-restore-all.sh）抽出來 bash -n 過。重點：23.3 metadata-backup.sh 重寫但 awk／sed／sort 一字不改（輸出要和 OP menu 44 快照逐位元組相同）；23.6、26.4 的還原腳本改成三分支 if 建 binding（create_binding 只在 50003 重送）、`read <<<` 改兩次 sed -n、`<(…)` 改 mktemp；24.2／28 的 Prometheus 查詢改 `podman run -i … bash -s <<'EOF'` 與小函式；25 章遠端格式化改 `ssh h sudo bash -e -s -- $CLUSTER_ID <<'EOF'`＋run() 小函式；24.3 檢查 kb01 目錄的 `sudo ls -d …*` 改 `sudo find -name`（舊寫法萬用字元由 cpuser 展開，永遠印「不存在」）；28 快照的 MDS 改 printf（存進變數時 curl 連不上會讓那行算失敗）。
+- 26.4（整本實跑不執行）的 7 塊沒辦法靠 run-full 驗：要另外在 lab 手動跑一次（第三批跑完之後、第四批之前）。
+- 工具（scratchpad）：replblocks.js（依章內塊號整塊換掉）、blocksyntax.js（每塊寫成檔給 bash -n）；兩支都要跳過 code fence 裡的 `# 1. …` 註解再找下一章。
+- 第四批 29–31＋B 文字也改完（同一段時間）：整本 421 塊，scanchains 只剩 awk 程式裡的誤報；run-chapter 產生的整本執行檔每組 bash -n 過（16.3 佔位符除外）。
+  - 29 章：換套件抽成 `~/conf/pkg-swap.sh <版本> <install|downgrade>`（broker、controller、操作機、REST 的 -c/-b、29.8 回滾都用它），切 JDK 抽成 `~/conf/jdk-switch.sh <tar 檔名>`；c3-change.sh 重寫（遠端段改 heredoc，換套件失敗會停）；controller 的「leader 最後」寫成 next_controller 小函式（附例子）。
+  - 29.2 備份順手修正：`$(ls -d etc/systemd/system/confluent-*.service.d)` 是在 cpuser 的家目錄展開，drop-in 從來沒被打包；改成絕對路徑再去掉開頭的 /。
+  - 30 章：os-patch-host.sh、os-reboot.sh 重寫（失敗訊息改到 stderr，`result=$(ssh …)` 失敗時執行器會停、訊息看得到）；30.0 的容器腳本改 `bash -e -s`＋repo 檔 heredoc。
+  - 31 章、附錄 B：拆行；31.3 先檢查 c3-change.sh 存在。22.7 的 `sh -c 'cd … && promtool'` 改 `podman exec -w`。
+- 第四批跑之前要先問使用者：30.0 會從 Rocky 重新下載 9.8 更新集合（約 79 MB）、31.1 dl01 會下載 C3 2.6.0 RPM（約 1 GB）。
+- 使用者決定（11-01）：第三批不從 0 重建，0–19 跑完、比對通過後直接 `run-full.sh customer 20 28` 接著跑；中途失敗、或 0–19 比對後改了會影響 lab 狀態的指令，才從 0 重建。第四批同理（接著從 29 跑）。
