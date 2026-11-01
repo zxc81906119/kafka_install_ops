@@ -51,7 +51,40 @@ Docker Compose version v5.x.x
 > `podman compose` 每次會先印一行 `>>>> Executing external compose provider "…docker-compose.exe" … <<<<`：只是提示用的是 Podman Desktop 裝的那一份，不影響結果。docker-compose 的版本跟著 Podman Desktop 的擴充更新（2026-10-31 是 v5.6.1）。
 >
 > 陷阱：`podman machine start` 印出 `API forwarding for Docker API clients is not available … win-sshproxy.exe failed to start` 時，`podman` 本身照常可用，但 `podman compose` 會失敗（`failed to connect to the docker API at npipe:…`）。原因是負責轉發的 `win-sshproxy` 上次被強制結束（machine 還在跑就直接關機或重開 Windows），留下一個孤兒 socket 檔 `%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock`（Windows 事件記錄裡是 `bind: Only one usage of each socket address`）；`podman machine stop` 正常結束時會自己清掉它。所以**關 Windows 之前先 `podman machine stop kafka-lab`**。已經撞到了：把那個檔刪掉（Git Bash `rm`，或 PowerShell `Remove-Item`），再 `podman machine stop kafka-lab && podman machine start kafka-lab`，看到 `API forwarding listening on` 就好了。
->
+
+不想每次手動刪檔，可以寫一支小修復腳本放在 `~/kafka-lab/start-lab.ps1`（只用英文字元：Windows PowerShell 5.1 讀沒有 BOM 的中文 .ps1 會語法錯誤）。它在沒有 `win-sshproxy` 時刪掉那個孤兒檔；machine 已經在跑但沒有轉發就先停掉；再開 machine，結果寫在旁邊的 `start-lab.log`。平常用不到，撞到上面的警告時才跑：
+
+```bash
+cat > ~/kafka-lab/start-lab.ps1 <<'EOF'
+# start-lab.ps1 - start the Podman machine kafka-lab with working Docker API forwarding (needed by podman compose).
+# If Windows was shut down while the machine was running, win-sshproxy was killed and left an orphaned AF_UNIX socket
+# (%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock); the next start then has no npipe and `podman compose` fails.
+# This script removes that file when no win-sshproxy is running, and (re)starts the machine. Log: start-lab.log next to this file.
+$ErrorActionPreference = 'Continue'
+$podman = Join-Path $env:LOCALAPPDATA 'Programs\Podman\podman.exe'
+if (-not (Test-Path $podman)) { $podman = 'podman' }
+$sock   = Join-Path $env:LOCALAPPDATA 'Temp\podman\kafka-lab-api.sock'
+$log    = Join-Path $PSScriptRoot 'start-lab.log'
+function Log($m) { $line = "{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $m; $line | Out-File -FilePath $log -Append -Encoding utf8; $line }
+
+$state = (& $podman machine inspect kafka-lab --format '{{.State}}' 2>$null)
+$proxy = Get-Process -Name win-sshproxy -ErrorAction SilentlyContinue
+if ($state -eq 'running' -and $proxy) { Log "already running with API forwarding (win-sshproxy pid $($proxy.Id))"; exit 0 }
+if (-not $proxy -and (Test-Path $sock)) { Remove-Item $sock -Force; Log "removed orphaned $sock" }
+if ($state -eq 'running') { Log "running without API forwarding: stopping first"; & $podman machine stop kafka-lab 2>&1 | ForEach-Object { Log "  $_" } }
+& $podman machine start kafka-lab 2>&1 | ForEach-Object { Log "  $_" }
+$proxy = Get-Process -Name win-sshproxy -ErrorAction SilentlyContinue
+Log ("result: machine " + (& $podman machine inspect kafka-lab --format '{{.State}}' 2>$null) + ", API forwarding " + $(if ($proxy) { "ok" } else { "MISSING" }))
+EOF
+echo "start-lab.ps1：$(wc -l < ~/kafka-lab/start-lab.ps1) 行"
+```
+
+```out
+start-lab.ps1：19 行
+```
+
+撞到時先關掉 Podman Desktop（它也會讀 machine 的狀態檔：lab 實測同時開著時撞到一次 `Error writing machine starting state … Access is denied`，之後 `podman machine list` 一直顯示 Currently starting），再在 PowerShell 執行（或在 Git Bash 前面加 `powershell `）：`powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\kafka-lab\start-lab.ps1"`，最後一行是 `result: machine running, API forwarding ok` 就好了。
+
 > 陷阱：Podman 的安裝程式會重設 WSL，正在跑的其他 WSL 發行版（例如 Docker Desktop）會被關掉。
 >
 > 硬體：16 GB 記憶體的筆電（上面的 `.wslconfig` 給 WSL 11 GB）；磁碟至少留 80 GB（2026-10-31 整本跑完：machine 的 `ext4.vhdx` 約 58 GB、`~/kafka-lab` 約 7 GB）。本書在 Podman 6.1.4、Windows 11 實測。
