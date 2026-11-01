@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-11-01 00:00（**lab 使用中（Podman kafka-lab）**：手冊版 0 → B 完成；腳本已改成 7071 只用 HTTPS（4b63317），還沒從零實跑）
+Updated: 2026-11-01（**lab 使用中（Podman kafka-lab），machine 已停**：手冊版 0 → B 完成；OP menu 新寫法框架＋21 完成、風格已確認，下次改其餘 26 項）
 
 ## 現在在做什麼
 手冊版在 Podman 上逐章實跑＋逐章自檢（是否符合最終設計，不只指令對）**全部完成**：第 0–31 章與附錄 B（log/2026-10-31-podman-walkthrough.md 逐章紀錄）。沒有進行中的工作。
@@ -16,7 +16,7 @@ Updated: 2026-11-01 00:00（**lab 使用中（Podman kafka-lab）**：手冊版 
 1. ~~改腳本版 7071 只用 HTTPS~~ **做完**（4b63317：17-jmx-exporter.sh、19-acceptance.sh、jmx-header.yml、prometheus-scrape.yml；重跑會清掉舊的 jmx-scrape.pass／salt）。
 2. 腳本版在 Podman 上從零實跑（`install/lab/run-customer.sh`）：使用者 10-31 決定改天跑。跑之前先決定 C3 2.6.0 RPM（1 GB）要不要重抓（建議改 run-customer.sh 沿用落地區已驗章的檔）；這次也會驗到 v5.6.1 的 `podman compose down -v／up -d`。
 3. ~~移除 Docker Desktop~~ **做完**（10-31 晚，殘餘全清，C 槽剩約 290 GB）；compose 改用 Podman Desktop 的 Compose 擴充（v5.6.1），手冊 0.0 已改。第 0 章的 `podman compose up/down` 在 v5.6.1 上還沒從零實跑。
-4. OP menu 改成新手看得懂的寫法（log/2026-11-01-opmenu-readable.md）：框架＋第 21 項已改、測試與 lab 實跑通過，等使用者看過風格再改其餘 26 項。ops02 /root/opmenu-new 是試跑用的新版（/opt/opmenu 沒動）。
+4. OP menu 改成新手看得懂的寫法（log/2026-11-01-opmenu-readable.md）：框架＋第 21 項已改，**風格使用者已確認（11-01，含不相關的行之間空一行）**。下次：照同樣規則改其餘 26 項與 lib 其他函式，改完跑 7 支測試、lab 實跑、更新交付物（package.sh）。ops02 /root/opmenu-new 是試跑用的新版（/opt/opmenu 沒動）。
 5. 待決定：稽核寫入失敗是否用 `confluent-event-logger` 的 producer 指標告警（redesign/README.md 394 之後）。
 6. 舊待修清單（10-31 Docker 逐章時記的 4.5、10.4、13、14、16.5 out 小差異；18.4 稽核 topic min.insync.replicas）：Podman 這輪沒再出現問題，要不要結案待看。
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。

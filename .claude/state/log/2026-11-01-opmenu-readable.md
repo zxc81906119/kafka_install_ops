@@ -13,3 +13,4 @@
 - 注意：在 ops02 上用 heredoc 餵多個指令時，ssh 會吃掉後面的 stdin；選單呼叫要 </dev/null。
 - 下一步：使用者看過 21 的風格後，再改其餘 26 項與 lib 的其他函式；改完更新交付物（package.sh）與手冊 16 章的 out（若有變）。
 - 使用者（11-01）：不相關的行之間要有空白行。21、load_items、core_run／_core_run、core_log_result、be_service_restart、show_menu／menu／main 已加；規則補進 redesign 與 opmenu README；7 支測試全過。
+- 使用者確認風格 OK（11-01），出門前關機；下次實作其餘 26 項。machine 已由 Claude 停掉。
