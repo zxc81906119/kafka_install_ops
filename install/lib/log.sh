@@ -12,6 +12,8 @@
 #   ask_bank "第一行" "第二行" …  印出「請銀行做」清單（我方不代做；空字串的行會略過）
 #   wait_for_bank             銀行還沒做完：停止這支步驟（rc 2）；install.sh 看到 rc 2 會提示做完後重跑
 #   finish_step               收尾：有 fail 就 die；全部通過就寫 <步驟名>.done 標記（install.sh --list 看這個）
+#   mds_write <指令…>         寫 MDS（建／刪 role binding），只有 50003 才再送一次
+#   retry <次數> <秒數> <指令…>  失敗就隔一下再試
 
 LOG_DIR=${LOG_DIR:-$HOME/install-logs}
 STEP_NAME=${STEP_NAME:-$(basename "${BASH_SOURCE[-1]}" .sh)}   # 呼叫這個 lib 的步驟檔名，例如 10-kafka
@@ -23,14 +25,26 @@ log()     { printf '%s %s\n' "$(date +%T)" "$*" | tee -a "$LOG_FILE"; }
 section() { log "== $*"; }
 ok()      { log "ok   $*"; }
 warn()    { log "WARN $*"; }
-fail()    { log "FAIL $*"; FAIL_COUNT=$((FAIL_COUNT + 1)); }
-die()     { log "FAIL $*"; log "停在 $STEP_NAME；紀錄檔：$LOG_FILE"; exit 1; }
+
+fail() {
+  log "FAIL $*"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+}
+
+die() {
+  log "FAIL $*"
+  log "停在 $STEP_NAME；紀錄檔：$LOG_FILE"
+  exit 1
+}
 
 ask_bank() {
   local line
+
   log "---- 請銀行做 ----"
   for line in "$@"; do
-    [ -n "$line" ] && log "  $line"
+    if [ -n "$line" ]; then
+      log "  $line"
+    fi
   done
   log "-------------------"
 }
@@ -41,31 +55,52 @@ wait_for_bank() {
 }
 
 finish_step() {
-  [ "$FAIL_COUNT" -gt 0 ] && die "$STEP_NAME：$FAIL_COUNT 項未通過"
+  if [ "$FAIL_COUNT" -gt 0 ]; then
+    die "$STEP_NAME：$FAIL_COUNT 項未通過"
+  fi
+
   log "$STEP_NAME 完成；紀錄檔：$LOG_FILE"
   touch "$LOG_DIR/$STEP_NAME.done"
 }
 
-# retry <最多幾次> <間隔秒數> <指令…>：失敗就隔一下再試（例如剛滾動重啟完、MDS 還在暖機時建 role binding）
 # mds_write <指令…>：寫 MDS（建／刪 role binding）。只有一種錯誤會再送一次，其他錯誤原樣回傳：
 #   MDS 寫 _confluent-metadata-auth 的內部 producer 是 retries=0、leader 資訊最多 5 分鐘才更新。auth topic 的 partition leader 搬家後
 #   （broker 重啟後的自動搬回偏好 broker），第一筆寫入會回 50003「not the current leader」；這次失敗會讓它更新 leader，第二筆就會送對（手把手 28.4）。
 mds_write() {
   local out rc
-  out=$("$@" 2>&1); rc=$?
-  if [ "$rc" != 0 ] && grep -q 'not the current leader' <<<"$out"; then
-    log "MDS 回 50003（auth topic 的 leader 剛搬家，MDS 內部不重試）：同一個請求再送一次"
-    out=$("$@" 2>&1); rc=$?
+
+  # 1. 送第一次
+  out=$("$@" 2>&1)
+  rc=$?
+
+  # 2. 只有「not the current leader」這種失敗才再送一次
+  if [ "$rc" != 0 ]; then
+    if grep -q 'not the current leader' <<<"$out"; then
+      log "MDS 回 50003（auth topic 的 leader 剛搬家，MDS 內部不重試）：同一個請求再送一次"
+      out=$("$@" 2>&1)
+      rc=$?
+    fi
   fi
+
+  # 3. 輸出與結束碼原樣交回去
   printf '%s\n' "$out"
   return "$rc"
 }
 
+# retry <最多幾次> <間隔秒數> <指令…>：失敗就隔一下再試（例如剛滾動重啟完、MDS 還在暖機時建 role binding）
 retry() {
-  local tries=$1 wait_seconds=$2 attempt; shift 2
+  local tries=$1 wait_seconds=$2 attempt
+  shift 2
+
   for attempt in $(seq 1 "$tries"); do
-    "$@" && return 0
-    [ "$attempt" -lt "$tries" ] && sleep "$wait_seconds"
+    if "$@"; then
+      return 0
+    fi
+
+    if [ "$attempt" -lt "$tries" ]; then
+      sleep "$wait_seconds"
+    fi
   done
+
   return 1
 }

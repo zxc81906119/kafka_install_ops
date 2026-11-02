@@ -15,30 +15,53 @@
 # envsubst 要的變數清單格式："${A} ${B} …"
 _envsubst_names() {
   local name list=""
-  for name in "$@"; do list+="\${$name} "; done
+
+  for name in "$@"; do
+    list+="\${$name} "
+  done
+
   echo "$list"
 }
 
 # 輸出檔裡還有沒換掉的 ${大寫變數}，表示呼叫時漏列了變數
 _check_no_leftover() {
   local out_file=$1 leftover
-  leftover=$(grep -c '\${[A-Za-z0-9_]*}' "$out_file" || true)
-  [ "$leftover" = 0 ] && return 0
+
+  leftover=$(awk '/\$\{[A-Za-z0-9_]*\}/ {c++} END {print c + 0}' "$out_file")
+
+  if [ "$leftover" = 0 ]; then
+    return 0
+  fi
+
   echo "render: $out_file 還有 $leftover 個沒換掉的 \${…}（呼叫時漏列變數？）" >&2
   return 1
 }
 
 render_template() {
-  local template=$1 out_file=$2; shift 2
-  (umask 077; envsubst "$(_envsubst_names "$@")" < "$template" > "$out_file")
+  local template=$1 out_file=$2
+  shift 2
+
+  (
+    umask 077
+    envsubst "$(_envsubst_names "$@")" < "$template" > "$out_file"
+  )
+
   _check_no_leftover "$out_file"
 }
 
 render_templates() {
   local out_file=$1 template
-  local names=(); shift
-  while [ "$1" != "--" ]; do names+=("$1"); shift; done
+  local names=()
+  shift
+
+  # 1. "--" 之前是變數名
+  while [ "$1" != "--" ]; do
+    names+=("$1")
+    shift
+  done
   shift   # 跳過 --
+
+  # 2. "--" 之後是範本，依序接起來
   (
     umask 077
     : > "$out_file"
@@ -47,6 +70,7 @@ render_templates() {
       echo >> "$out_file"
     done
   )
+
   _check_no_leftover "$out_file"
 }
 
@@ -58,8 +82,13 @@ PASSWORD_FIELD_REGEX='^[^#].*(password|credentials|jaas\.config) *= *[^$ ]'
 encrypt_passwords() {
   local props_file=$1 local_secrets_file=$2 remote_secrets_path=$3
   local password_keys
+
   password_keys=$(grep -E "$PASSWORD_FIELD_REGEX" "$props_file" | sed 's/ *=.*//' | paste -sd,)
-  [ -n "$password_keys" ] || return 0
+
+  if [ -z "$password_keys" ]; then
+    return 0
+  fi
+
   confluent secret file encrypt --config-file "$props_file" \
     --local-secrets-file "$local_secrets_file" --remote-secrets-file "$remote_secrets_path" \
     --config "$password_keys" >/dev/null
@@ -70,6 +99,7 @@ encrypt_passwords() {
 #   2. jaas.config 裡的 password="…"，值不是 ${…} 參照（像 ScramLoginModule required; 這種沒有密碼的 jaas 不算）
 count_plaintext_passwords() {
   local props_file=$1
+
   {
     grep -E '^[^#=]*(password|credentials) *= *[^$ ]' "$props_file" | grep -v 'jaas.config'
     grep -E '^[^#=]*jaas.config *=' "$props_file" | grep -E 'password="[^$]'
@@ -80,22 +110,41 @@ count_plaintext_passwords() {
 # 密文寫進 $SECRETS_DIR/security.properties（所有主機共用的那份）
 sp_encrypt_props() {
   local props_file=$1
+
   encrypt_passwords "$props_file" "$SECRETS_DIR/security.properties" /etc/confluent/secrets/security.properties
 }
 
-secrets_mode_in_use() { cat "$CONF_DIR/secrets.mode" 2>/dev/null || echo plain; }
+secrets_mode_in_use() {
+  if [ -f "$CONF_DIR/secrets.mode" ]; then
+    cat "$CONF_DIR/secrets.mode"
+  else
+    echo plain
+  fi
+}
 
 # 第 15 站做過以後，重跑第 10／12／13 站產生的設定是明文的；直接派送會把主機上的設定寫回明文。
 #   plain   不用處理
 #   sp      照第 15 站加密；呼叫的站要把 $SECRETS_DIR/security.properties 一起派送
 protect_rendered_props() {
   local props_file=$1 mode
+
   mode=$(secrets_mode_in_use)
+
   case $mode in
-    plain) return 0;;
-    sp) ;;
-    *) echo "密碼放法是 $mode：不認得" >&2; return 1;;
+    plain)
+      return 0
+      ;;
+    sp)
+      ;;
+    *)
+      echo "密碼放法是 $mode：不認得" >&2
+      return 1
+      ;;
   esac
-  CONFLUENT_SECURITY_MASTER_KEY=$(cat "$SECRETS_DIR/master.key") sp_encrypt_props "$props_file" || return 1
+
+  if ! CONFLUENT_SECURITY_MASTER_KEY=$(cat "$SECRETS_DIR/master.key") sp_encrypt_props "$props_file"; then
+    return 1
+  fi
+
   [ "$(count_plaintext_passwords "$props_file")" = 0 ]
 }

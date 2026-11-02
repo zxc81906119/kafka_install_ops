@@ -86,7 +86,7 @@ install/
 | `OPMENU_ENV_LABEL` | `LAB` | `PROD`／`UAT` | |
 | 主機、`DOMAIN`、`REPO_URL`、AD 的 DN、`NTP_SERVER`、`HEAP_*` | lab 值 | 實際值 | heap 依主機記憶體調整 |
 
-舊做法（cpadmin、私鑰貼進 ssh-agent）已在 lab 從零整套跑過（2026-10-24，CP 8.2.4）；2026-10-27 改成 cpuser＋`/secure/ssh` 金鑰檔＋root 操作機、2026-10-28 把主線改成「基底 8.2.4／9.6 → 遷移 8.3.2／9.8」後**尚未從零重跑**（需要先重建 lab）。選單重啟 broker（19.4）要人互動登入，列為人工驗收項目。
+舊做法（cpadmin、私鑰貼進 ssh-agent）已在 lab 從零整套跑過（2026-10-24，CP 8.2.4）；2026-10-27 改成 cpuser＋`/secure/ssh` 金鑰檔＋root 操作機、2026-10-28 把主線改成「基底 8.2.4／9.6 → 遷移 8.3.2／9.8」；2026-11-02 腳本全部改成新寫法後，在 Podman 上從零實跑整條主線（34 段）通過，另外實跑重跑 03–14、OP menu 回歸、金鑰輪替、26 站 reset。`21 chain`、`21 trust-sync` 這次沒有實跑。選單重啟 broker（19.4）要人互動登入，列為人工驗收項目。
 
 ## 安裝完之後還會用到的
 
@@ -105,7 +105,7 @@ install/
    同一段遠端指令要用好幾次（例如 15 站），先存成有名字的變數（`SETUP_SERVICE_ENV=$(cat <<EOF … EOF)`），再 `ssh_script 主機 … <<<"$SETUP_SERVICE_ENV"`。
 4. **名字寫完整**：路徑與常數用全大寫完整英文（`CERTS_DIR`、`FIRST_BROKER`、`ADMIN_CLIENT_CONF`），迴圈與暫存用小寫完整英文（`host`、`result`、`props_file`）；
    不用 `D`、`C`、`r`、`h` 這種單字母。各站共用的衍生值都在 `conf/site.env` 的下半段，先找那裡再自己取名。
-5. **判斷拆兩行**：先把結果放進變數，再 `if [ "$result" = "…" ]; then ok …; else fail …; fi`，或 `case $result in 模式) ok;; *) fail;; esac`；不疊 `&& … || …` 三層。
+5. **一行一個指令**（和手冊、OP menu 同一套，redesign/README.md「OP menu 寫給不熟 shell 的維護人員」）：判斷先把結果放進變數，再寫完整的多行 `if … then … fi` 或 `case`；不用 `&&`／`||` 串接指令（`[ a ] && [ b ]` 這種 if 條件可以）；函式裡照步驟編號註解；複雜的文字處理包成有名字的小函式並附輸入／輸出例子；計數可能是 0 時用 `awk '/…/ {c++} END {print c + 0}'`。
 6. **密碼**：從 0600 檔讀進變數、用完 `unset`；不放在 `ssh_script` 的參數（會出現在遠端的程序清單），不印出來。
 7. **只用 bash 與 RHEL 標準指令**：ssh、curl、openssl、sed、awk、grep、tar、dnf、systemctl，加上 Confluent 自己的 CLI。不用 python、node、jq；解析 JSON 用 grep／sed（例子：18 站稽核事件）。
 8. **每支結尾 `finish_step`**：有 `fail` 就整站失敗；銀行還沒做完用 `wait_for_bank`（rc 2）。
@@ -118,7 +118,7 @@ install/
 | `SECRETS_MODE=sp|plain` | 密碼放法：第 15 站 Secret Protection（只有 PAM）／不處理（不建議，15 站直接略過） |
 | `OPMENU` `JMX_EXPORTER` `AUDIT_LOG` | 16／17／18 站要不要做 |
 
-選單的緊急憑證（91）是操作機上的檔案 `~/secrets/opmenu-breakglass.pem`（0600、owner 是執行者，16 站組好、20 站換發時舊的另存 `.prev`），選單設定項 `OPMENU_BREAKGLASS_PEM` 可改路徑；主機用的 ssh 私鑰就是 `/secure/ssh` 的那個檔。兩者都不經 PVWA。
+選單的緊急憑證（91）是操作機上的檔案 `~/secrets/opmenu-breakglass.pem`（0600、owner 是執行者，16 站組好、21 站換發時舊的另存 `opmenu-breakglass.prev.pem`），選單設定項 `OPMENU_BREAKGLASS_PEM` 可改路徑；主機用的 ssh 私鑰就是 `/secure/ssh` 的那個檔。兩者都不經 PVWA。
 
 15 站一次把 15.1–15.5 做完，只滾動重啟一次；18 站依 `~/conf/secrets.mode`（15 站留下的）決定密碼怎麼放。
 

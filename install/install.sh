@@ -17,13 +17,31 @@ from_step=02
 to_step=99
 only_step=""
 list_only=0
+
 while [ $# -gt 0 ]; do
   case $1 in
-    --from) from_step=$2; shift 2;;
-    --to)   to_step=$2; shift 2;;
-    --only) only_step=$2; from_step=$2; to_step=$2; shift 2;;
-    --list) list_only=1; shift;;
-    *) echo "用法：$0 [--list] [--from NN] [--to NN] [--only NN]"; exit 1;;
+    --from)
+      from_step=$2
+      shift 2
+      ;;
+    --to)
+      to_step=$2
+      shift 2
+      ;;
+    --only)
+      only_step=$2
+      from_step=$2
+      to_step=$2
+      shift 2
+      ;;
+    --list)
+      list_only=1
+      shift
+      ;;
+    *)
+      echo "用法：$0 [--list] [--from NN] [--to NN] [--only NN]"
+      exit 1
+      ;;
   esac
 done
 
@@ -34,37 +52,69 @@ title_of() { sed -n '2s/^# //p' "$1" | sed 's/ ——.*//'; }
 if [ "$list_only" = 1 ]; then
   for step_file in "$INSTALL_DIR"/steps/[0-9][0-9]-*.sh; do
     step_name=$(basename "$step_file" .sh)
-    done_mark=$([ -f "$LOG_DIR/$step_name.done" ] && echo "done" || echo "-")
+
+    if [ -f "$LOG_DIR/$step_name.done" ]; then
+      done_mark="done"
+    else
+      done_mark=-
+    fi
+
     printf '%-24s %-6s %-6s %s\n' "$step_name" "$(where_of "$step_file")" "$done_mark" "$(title_of "$step_file")"
   done
   exit 0
 fi
 
 this_host=$(hostname -s)
+
 for step_file in "$INSTALL_DIR"/steps/[0-9][0-9]-*.sh; do
   step_name=$(basename "$step_file" .sh)
   step_number=${step_name%%-*}
-  # 站號一律當十進位數字比（10# 讓 08、09 不被當成八進位）：--from 9 和 --from 09 一樣
-  (( 10#$step_number < 10#$from_step )) && continue
-  (( 10#$step_number > 10#$to_step )) && continue
+
+  # 1. 不在範圍內的站略過。站號一律當十進位數字比（10# 讓 08、09 不被當成八進位）：--from 9 和 --from 09 一樣
+  if (( 10#$step_number < 10#$from_step )); then
+    continue
+  fi
+  if (( 10#$step_number > 10#$to_step )); then
+    continue
+  fi
+
+  # 2. 不是這台的步驟（例如下載機那支）一律略過，--only 也一樣
   run_on=$(where_of "$step_file")
-  if [ "$run_on" != "$this_host" ]; then   # --only 也一樣：不是這台的步驟（例如下載機那支）一律略過
+  if [ "$run_on" != "$this_host" ]; then
     echo "== $step_name：請在 $run_on 執行 bash steps/$step_name.sh（這台是 $this_host，略過）"
     continue
   fi
-  if grep -q '^# run: on-demand' "$step_file" && [ -z "$only_step" ]; then   # 不在安裝順序裡的（例如憑證輪替）：要用時直接執行那支
-    echo "== $step_name：要用時再執行（bash steps/$step_name.sh），照順序安裝時略過"
-    continue
+
+  # 3. 不在安裝順序裡的（例如憑證輪替）：要用時直接執行那支
+  if grep -q '^# run: on-demand' "$step_file"; then
+    if [ -z "$only_step" ]; then
+      echo "== $step_name：要用時再執行（bash steps/$step_name.sh），照順序安裝時略過"
+      continue
+    fi
   fi
+
+  # 4. 執行這一站
   echo
   echo "================ $step_name ================"
   bash "$step_file"
   exit_code=$?
+
+  # 5. 看結束碼：0 繼續、2 等銀行、其他失敗
   case $exit_code in
-    0) ;;
-    2) echo; echo "== $step_name 在等銀行。銀行做完後：bash $0 --from $step_number"; exit 2;;
-    *) echo; echo "== $step_name 失敗（rc=$exit_code）。修好後：bash $0 --from $step_number"; exit "$exit_code";;
+    0)
+      ;;
+    2)
+      echo
+      echo "== $step_name 在等銀行。銀行做完後：bash $0 --from $step_number"
+      exit 2
+      ;;
+    *)
+      echo
+      echo "== $step_name 失敗（rc=$exit_code）。修好後：bash $0 --from $step_number"
+      exit "$exit_code"
+      ;;
   esac
 done
+
 echo
 echo "全部完成。紀錄在 $LOG_DIR/"

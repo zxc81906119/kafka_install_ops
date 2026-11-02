@@ -5,7 +5,9 @@
 # 做什麼：派送憑證 → Prometheus／Alertmanager 的 TLS 與設定（*-generated.yml 要給 C3 自己能寫）
 #         → control-center.tpl 產生設定 → drop-in（含「等 MDS 起來才啟動」：C3 比 MDS 先起來會卡住不開 9021）
 #         → 依序啟動 prometheus、alertmanager、C3，等 UI 回 200。
-# 重跑：安全。第 15 站做過（Secret Protection）就照樣加密。
+# 需要什麼：第 10、11 站的 broker、MDS、RBAC；第 9 站的 svc-c3、c3-monitoring、cp-server 憑證
+# 產出什麼：~/conf/c3-01.control-center.properties、~/conf/prometheus-generated.yml
+# 能不能重跑：安全。第 15 站做過（Secret Protection）就照樣加密。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
 source "$INSTALL_DIR/lib/log.sh"
@@ -13,78 +15,151 @@ source "$INSTALL_DIR/lib/ssh.sh"
 source "$INSTALL_DIR/lib/render.sh"
 
 section "派送憑證（Prometheus／Alertmanager 是 Go 程式，吃 PEM：cp-server.crt／.key 當 server、c3-monitoring.crt／.key 給 Prometheus 連 Alertmanager 當 client、ca.pem；C3 自己用 svc-c3.p12）"
-copy_to_tmp "$C3_HOST" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/cp-server.p12" "$CERTS_DIR/cp-server.crt" "$KEYS_DIR/cp-server.key" \
-  "$CERTS_DIR/c3-monitoring.crt" "$KEYS_DIR/c3-monitoring.key" \
-  "$CERTS_DIR/bank-root.pem" "$CERTS_DIR/svc-c3.p12" "$CERTS_DIR/mds-token-public.pem" || die "scp 失敗"
+if ! copy_to_tmp "$C3_HOST" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/cp-server.p12" "$CERTS_DIR/cp-server.crt" "$KEYS_DIR/cp-server.key" \
+     "$CERTS_DIR/c3-monitoring.crt" "$KEYS_DIR/c3-monitoring.key" \
+     "$CERTS_DIR/bank-root.pem" "$CERTS_DIR/svc-c3.p12" "$CERTS_DIR/mds-token-public.pem"; then
+  die "scp 失敗"
+fi
+
 file_count=$(ssh_script "$C3_HOST" <<'EOF'
 sudo install -d -o root -g root -m 0755 /etc/confluent
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center
+
 for file in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do
   sudo install -o root -g confluent -m 0640 /tmp/$file /etc/confluent/ssl/
 done
+
+# 銀行根憑證：Prometheus、Alertmanager 要 PEM 檔，放成 ca.pem
 sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem
 rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/mds-token-public.pem
+
 sudo ls /etc/confluent/ssl | wc -l
 EOF
 )
-if [ "$file_count" = 9 ]; then ok "$C3_HOST: 9 files"; else die "$C3_HOST: $file_count files（預期 9）"; fi
+
+if [ "$file_count" = 9 ]; then
+  ok "$C3_HOST: 9 files"
+else
+  die "$C3_HOST: $file_count files（預期 9）"
+fi
 
 section "Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定"
 export C3_FQDN
-render_template "$TEMPLATE_DIR/prometheus-generated.yml" "$CONF_DIR/prometheus-generated.yml" C3_FQDN || die "render prometheus-generated.yml"
-copy_to_tmp "$C3_HOST" "$TEMPLATE_DIR/web-config-prom.yml" "$CONF_DIR/prometheus-generated.yml" "$TEMPLATE_DIR/prometheus.dropin" || die "scp"
+
+if ! render_template "$TEMPLATE_DIR/prometheus-generated.yml" "$CONF_DIR/prometheus-generated.yml" C3_FQDN; then
+  die "render prometheus-generated.yml"
+fi
+
+if ! copy_to_tmp "$C3_HOST" "$TEMPLATE_DIR/web-config-prom.yml" "$CONF_DIR/prometheus-generated.yml" "$TEMPLATE_DIR/prometheus.dropin"; then
+  die "scp"
+fi
+
 generated_owner=$(ssh_script "$C3_HOST" <<'EOF'
-cd /etc/confluent-control-center || exit 1
+if ! cd /etc/confluent-control-center; then
+  exit 1
+fi
+
+# 1. Prometheus 與 Alertmanager 的 TLS（兩個服務用同一份）、內建 Prometheus 的設定
 sudo install -o root -g confluent -m 0640 /tmp/web-config-prom.yml web-config-prom.yml
-sudo install -o root -g confluent -m 0640 /tmp/web-config-prom.yml web-config-am.yml        # Alertmanager 用同一份 TLS 設定
+sudo install -o root -g confluent -m 0640 /tmp/web-config-prom.yml web-config-am.yml
 sudo install -o root -g confluent -m 0640 /tmp/prometheus-generated.yml prometheus-generated.yml
-# 這四個檔 C3 啟動時自己會寫：擁有者不是 cp-control-center 就會 AccessDeniedException
+
+# 2. 這四個檔 C3 啟動時自己會寫：擁有者不是 cp-control-center 就會 AccessDeniedException
 for file in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do
   sudo chown cp-control-center:confluent $file
   sudo chmod 0640 $file
 done
+
+# 3. Prometheus 的 drop-in
 sudo install -d -m 0755 /etc/systemd/system/prometheus.service.d
 sudo install -m 0644 /tmp/prometheus.dropin /etc/systemd/system/prometheus.service.d/10-override.conf
 rm -f /tmp/web-config-prom.yml /tmp/prometheus-generated.yml /tmp/prometheus.dropin
 sudo systemctl daemon-reload
+
 sudo stat -c %U alertmanager-generated.yml
 EOF
 )
-if [ "$generated_owner" = cp-control-center ]; then ok "$C3_HOST: prometheus config ok（generated 檔屬 $generated_owner）"; else die "$C3_HOST: $generated_owner"; fi
+
+if [ "$generated_owner" = cp-control-center ]; then
+  ok "$C3_HOST: prometheus config ok（generated 檔屬 $generated_owner）"
+else
+  die "$C3_HOST: $generated_owner"
+fi
 
 section "C3 設定檔與 drop-in"
-export STORE_PASSWORD BROKER_TOKEN MDS_URLS HEAP=$HEAP_C3 MDS_FIRST=$FIRST_BROKER
+
+# 1. 範本要的變數；密碼從 0600 檔讀進變數，產生完就 unset
+export STORE_PASSWORD BROKER_TOKEN MDS_URLS
+export HEAP=$HEAP_C3
+export MDS_FIRST=$FIRST_BROKER
 STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
-render_template "$TEMPLATE_DIR/control-center.tpl" "$CONF_DIR/$C3_HOST.control-center.properties" STORE_PASSWORD BROKER_TOKEN MDS_URLS C3_FQDN \
-  || die "render control-center.properties"
+props_file=$CONF_DIR/$C3_HOST.control-center.properties
+
+if ! render_template "$TEMPLATE_DIR/control-center.tpl" "$props_file" STORE_PASSWORD BROKER_TOKEN MDS_URLS C3_FQDN; then
+  die "render control-center.properties"
+fi
 unset STORE_PASSWORD
-# 第 15 站做過的話（Secret Protection），產生的明文設定先照第 15 站加密，共用的密文檔一起派送
+
+# 2. 第 15 站做過的話（Secret Protection），產生的明文設定先照第 15 站加密，共用的密文檔一起派送
 secrets_mode=$(secrets_mode_in_use)
-extra_files=(); [ "$secrets_mode" = sp ] && extra_files=("$SECRETS_DIR/security.properties")
+extra_files=()
+if [ "$secrets_mode" = sp ]; then
+  extra_files=("$SECRETS_DIR/security.properties")
+fi
 log "密碼放法：$secrets_mode"
-protect_rendered_props "$CONF_DIR/$C3_HOST.control-center.properties" || die "密碼處理（$secrets_mode）"
-render_template "$TEMPLATE_DIR/control-center.dropin" "$CONF_DIR/$C3_HOST.dropin" HEAP MDS_FIRST || die "render dropin"
-copy_to_tmp "$C3_HOST" "$CONF_DIR/$C3_HOST.control-center.properties" "$CONF_DIR/$C3_HOST.dropin" "${extra_files[@]}" || die "scp"
+
+if ! protect_rendered_props "$props_file"; then
+  die "密碼處理（$secrets_mode）"
+fi
+
+# 3. drop-in、派送
+if ! render_template "$TEMPLATE_DIR/control-center.dropin" "$CONF_DIR/$C3_HOST.dropin" HEAP MDS_FIRST; then
+  die "render dropin"
+fi
+
+if ! copy_to_tmp "$C3_HOST" "$props_file" "$CONF_DIR/$C3_HOST.dropin" "${extra_files[@]}"; then
+  die "scp"
+fi
+
 # unresolved：還留著 ${…} 的行，config provider 的參照（securepass）不算
 result=$(ssh_script "$C3_HOST" HOST="$C3_HOST" <<'EOF'
 props=/etc/confluent/control-center/control-center.properties
+
+# 1. 設定檔放到定位
 sudo install -o root -g confluent -m 0640 /tmp/$HOST.control-center.properties $props
+
+# 2. 第 15 站做過才有密文檔
 if [ -f /tmp/security.properties ]; then
   sudo install -d -o root -g confluent -m 0750 /etc/confluent/secrets
-  sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties && rm -f /tmp/security.properties
+
+  if sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties; then
+    rm -f /tmp/security.properties
+  fi
 fi
+
+# 3. 資料目錄、drop-in
 sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/confluent/control-center
 sudo install -d -m 0755 /etc/systemd/system/confluent-control-center.service.d
 sudo install -m 0644 /tmp/$HOST.dropin /etc/systemd/system/confluent-control-center.service.d/10-override.conf
 rm -f /tmp/$HOST.control-center.properties /tmp/$HOST.dropin
 sudo systemctl daemon-reload
+
+# 4. 確認：沒換掉的 ${（要是 0）、ExecStart 指向我們的設定檔
 exec_file=$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties')
-echo "unresolved=$(sudo grep '\${' $props | grep -vc '\${securepass:') exec=$exec_file"
+unresolved=$(sudo awk '/\$\{/ && !/\$\{securepass:/ {count++} END {print count + 0}' $props)
+echo "unresolved=$unresolved exec=$exec_file"
 EOF
 )
-if [ "$result" = "unresolved=0 exec=/etc/confluent/control-center/control-center.properties" ]; then ok "$C3_HOST: $result"; else die "$C3_HOST: $result"; fi
+
+if [ "$result" = "unresolved=0 exec=/etc/confluent/control-center/control-center.properties" ]; then
+  ok "$C3_HOST: $result"
+else
+  die "$C3_HOST: $result"
+fi
 
 section "依序啟動，等 UI（第一次 30–120 秒；冷開機要等 MDS 可能到 3 分鐘）"
+
+# 1. 依序啟動 Prometheus、Alertmanager、C3（已經在跑的也重啟）
 states=$(ssh_script "$C3_HOST" <<'EOF'
 for unit in prometheus alertmanager confluent-control-center; do
   sudo systemctl enable --now $unit >/dev/null 2>&1
@@ -95,28 +170,66 @@ done
 EOF
 )
 log "$states"
+
+# 2. 內建 Prometheus 就緒（它要求 client 憑證，用 c3-monitoring 的）
 prometheus_ready=$(curl -s -o /dev/null -m 10 -w '%{http_code}' --cert "$CERTS_DIR/c3-monitoring.crt" --key "$KEYS_DIR/c3-monitoring.key" "https://$C3_FQDN:9090/-/ready")
-if [ "$prometheus_ready" = 200 ]; then ok "prometheus=$prometheus_ready"; else fail "prometheus=$prometheus_ready"; fi
+
+if [ "$prometheus_ready" = 200 ]; then
+  ok "prometheus=$prometheus_ready"
+else
+  fail "prometheus=$prometheus_ready"
+fi
+
+# 3. 等 C3 畫面回 200：每 10 秒試一次，最多 30 次
 for attempt in $(seq 1 30); do
   c3_ui=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$C3_FQDN:9021/")
-  [ "$c3_ui" = 200 ] && break
-  sleep 10
-done
-if [ "$c3_ui" = 200 ]; then ok "c3 ui=200，約 $((attempt * 10)) 秒"; else fail "c3 ui=$c3_ui（sudo journalctl -u confluent-control-center -n 100）"; fi
 
-# 指標要帶 kafka_broker_id 標籤（prometheus-generated.yml 的 otlp.promote_resource_attributes）。沒有的話，C3 畫面上建的
-# trigger 永遠比對不到資料、告警不會觸發，而畫面看起來一切正常。c3 主機的 9090 要 mTLS，用它自己的憑證在本機查
-labelled_nodes=$(ssh_script "$C3_HOST" C3_FQDN="$C3_FQDN" <<'EOF'
-query='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
-for attempt in $(seq 1 18); do
-  count=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/c3-monitoring.crt --key /etc/confluent/ssl/c3-monitoring.key \
-    --data-urlencode "query=$query" "https://$C3_FQDN:9090/api/v1/query" | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
-  [ -n "$count" ] && [ "$count" -gt 0 ] && break
+  if [ "$c3_ui" = 200 ]; then
+    break
+  fi
+
   sleep 10
 done
-echo "${count:-0}"
+
+if [ "$c3_ui" = 200 ]; then
+  ok "c3 ui=200，約 $((attempt * 10)) 秒"
+else
+  fail "c3 ui=$c3_ui（sudo journalctl -u confluent-control-center -n 100）"
+fi
+
+# 4. 指標要帶 kafka_broker_id 標籤（prometheus-generated.yml 的 otlp.promote_resource_attributes）。沒有的話，C3 畫面上依叢集、
+#    broker 篩選的圖表都比對不到資料，而畫面看起來一切正常。c3 主機的 9090 要 mTLS，用它自己的憑證在本機查
+labelled_nodes=$(ssh_script "$C3_HOST" C3_FQDN="$C3_FQDN" <<'EOF'
+# 有幾個 node id 的指標帶 kafka_broker_id 標籤
+query='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
+
+# 每 10 秒問一次內建 Prometheus，最多問 18 次；大於 0 就停（查不到結果時當成 0）
+count=0
+for attempt in $(seq 1 18); do
+  answer=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/c3-monitoring.crt --key /etc/confluent/ssl/c3-monitoring.key \
+    --data-urlencode "query=$query" "https://$C3_FQDN:9090/api/v1/query" | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
+
+  if [ -n "$answer" ]; then
+    count=$answer
+  fi
+
+  if [ "$count" -gt 0 ]; then
+    break
+  fi
+
+  sleep 10
+done
+
+echo "$count"
 EOF
 )
-if [ "${labelled_nodes:-0}" -gt 0 ]; then ok "指標帶 kafka_broker_id 標籤的節點數：$labelled_nodes"; else fail "指標沒有 kafka_broker_id 標籤：檢查 prometheus-generated.yml 的 otlp.promote_resource_attributes，以及 broker 的 telemetry 有沒有送到 C3"; fi
+
+if [ "${labelled_nodes:-0}" -gt 0 ]; then
+  ok "指標帶 kafka_broker_id 標籤的節點數：$labelled_nodes"
+else
+  fail "指標沒有 kafka_broker_id 標籤：檢查 prometheus-generated.yml 的 otlp.promote_resource_attributes，以及 broker 的 telemetry 有沒有送到 C3"
+fi
+
 log "瀏覽器開 https://$C3_FQDN:9021（lab：https://localhost:19021），用 alice 登入（密碼在 $SECRETS_DIR/ad-test-users.pass）"
+
 finish_step
