@@ -16819,56 +16819,20 @@ kc01 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務
 
 @role 小安 | ops02 | root
 
-REST 兩台先更新套件（這時不重啟），C3 修補期間畫面短暫不能用（只有一台），操作機最後、自己修自己；REST 的重啟在下面照 12.1 做：
+順序是 REST 一台做完再換下一台 → C3 → 操作機。每台都是「更新、照判斷重開或重啟、確認健康」做完整才換下一台；操作機排最後，因為它要重開機時，其他主機的工作都要先做完（這段指令就是在它上面跑的）。
+
+先更新 rest01，結果存起來，下面重啟時看要不要 `-r`：
 
 ```bash
-# 1. REST 兩台：只更新套件，這時不重啟；結果存起來，下面重啟時看要不要 -r
-for h in rest01 rest02; do
-  ssh $h.poc.lab bash -s < ~/conf/os-patch-host.sh > ~/conf/patch-$h.out
-  cat ~/conf/patch-$h.out
-done
-
-# 2. C3：更新、照判斷做（要重開機就重開；C3 的服務要重啟就三個依序重啟）
-result=$(ssh c3-01.poc.lab bash -s < ~/conf/os-patch-host.sh)
-echo "$result"
-
-if echo "$result" | grep -q '要重開機：是'; then
-  bash ~/conf/os-reboot.sh c3-01
-elif echo "$result" | grep -qE 'confluent-control-center|prometheus|alertmanager'; then
-  for u in prometheus alertmanager confluent-control-center; do
-    ssh c3-01.poc.lab "sudo systemctl restart $u"
-  done
-fi
-
-# c3_code：C3 畫面的 HTTP 狀態碼
-c3_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
-
-# 3. 等 C3 畫面 200：每 5 秒看一次，最多 60 次；再看 REST 經 LB 與 C3
-for i in $(seq 1 60); do
-  if [ "$(c3_code)" = 200 ]; then
-    break
-  fi
-
-  sleep 5
-done
-
-echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(c3_code)"
-
-# 4. 操作機最後、自己修自己（root 直接跑）
-bash ~/conf/os-patch-host.sh
+ssh rest01.poc.lab bash -s < ~/conf/os-patch-host.sh > ~/conf/patch-rest01.out
+cat ~/conf/patch-rest01.out
 ```
 
 ```out
 rest01 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
-rest02 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
-c3-01 更新 126 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：2.6.1
-  REST 經 LB=200 C3=200
-ops02 更新 120 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
 ```
 
-REST Proxy 的套件上面已經更新（JVM 不受影響）；重啟（或要重開機的話重開機）照 12.1 一台一台來。小版本更新時兩台一定是「要重開機：是」，這五步要做（`-r` 在 lab 的容器上自動改成重啟服務）；每月修補兩台都是「要重開機：否、要重啟的平台服務：無」時可以略過：
+套件更新不影響跑著的 JVM；重啟（或要重開機的話重開機）照 12.1 的步驟。小版本更新時一定是「要重開機：是」，下面三塊要做（`-r` 在 lab 的容器上自動改成重啟服務）；每月修補看到「要重開機：否、要重啟的平台服務：無」時，這台可以略過：
 
 @role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -16883,7 +16847,7 @@ LB：rest01（停用） rest02
 @role 小安 | ops02 | root
 
 ```bash
-# 30.4 存下的結果是「要重開機：是」就加 -r（lab 的容器上 rest-restart.sh 會自己改成重啟服務）
+# 剛才存下的結果是「要重開機：是」就加 -r（lab 的容器上 rest-restart.sh 會自己改成重啟服務）
 if grep -q '要重開機：是' ~/conf/patch-rest01.out; then
   ~/conf/rest-restart.sh rest01 -r
 else
@@ -16899,11 +16863,32 @@ rest01：排空等了 0 秒，重啟後 REST 200（約 10 秒）
 
 ```bash
 bash ~/kafka-lab/lb-member.sh rest01 up
-bash ~/kafka-lab/lb-member.sh rest02 down
 ```
 
 ```out
 LB：rest01 rest02
+```
+
+@role 小安 | ops02 | root
+
+換 rest02，一樣先更新：
+
+```bash
+ssh rest02.poc.lab bash -s < ~/conf/os-patch-host.sh > ~/conf/patch-rest02.out
+cat ~/conf/patch-rest02.out
+```
+
+```out
+rest02 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest02 down
+```
+
+```out
 LB：rest01 rest02（停用）
 ```
 
@@ -16932,6 +16917,47 @@ LB：rest01 rest02
 ```
 
 @role 小安 | ops02 | root
+
+接著是 C3（只有一台，修補期間畫面短暫不能用），操作機最後、自己修自己：
+
+```bash
+# 1. C3：更新、照判斷做（要重開機就重開；C3 的服務要重啟就三個依序重啟）
+result=$(ssh c3-01.poc.lab bash -s < ~/conf/os-patch-host.sh)
+echo "$result"
+
+if echo "$result" | grep -q '要重開機：是'; then
+  bash ~/conf/os-reboot.sh c3-01
+elif echo "$result" | grep -qE 'confluent-control-center|prometheus|alertmanager'; then
+  for u in prometheus alertmanager confluent-control-center; do
+    ssh c3-01.poc.lab "sudo systemctl restart $u"
+  done
+fi
+
+# c3_code：C3 畫面的 HTTP 狀態碼
+c3_code() {
+  curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/
+}
+
+# 2. 等 C3 畫面 200：每 5 秒看一次，最多 60 次；再看 REST 經 LB 與 C3
+for i in $(seq 1 60); do
+  if [ "$(c3_code)" = 200 ]; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(c3_code)"
+
+# 3. 操作機最後、自己修自己（root 直接跑）；要重開機的話，等這一節和驗收都做完再重開
+bash ~/conf/os-patch-host.sh
+```
+
+```out
+c3-01 更新 126 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：2.6.1
+  REST 經 LB=200 C3=200
+ops02 更新 120 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務：無；confluent 版本：8.3.2
+```
 
 > 每月修補的實測（2026-10-25，同一小版本內，lab）：11 台各 6 個 OS 套件（含 openssh-server，修補過程中 ssh 連線不斷），Confluent 版本都沒變、不用重開機、沒有平台服務要重啟；之後第 19 章驗收全過。openssh-server 更新後 sshd 由 RPM 自己重啟，所以 `-s` 雖然會列 sshd，這裡只看平台服務。
 

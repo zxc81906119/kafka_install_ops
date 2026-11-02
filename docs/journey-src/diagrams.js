@@ -258,12 +258,12 @@ D.secretprotection = () => svg(800, 300, [
 
 // 14. OP menu: who runs what, where the secrets come from
 D.opmenu = () => svg(800, 310, [
-  box(20, 50, 150, 62, "維運人員", ["經 PVWA + PSMP 登入操作機(root)", "輸入自己的 AD 帳密"], "gray"),
+  box(20, 50, 150, 62, "維運人員", ["經 PVWA＋PSMP 登入", "輸入自己的 AD 帳密"], "gray"),
   box(220, 50, 200, 62, "OP menu(操作機)", ["全部項目都顯示,沒權限的做了被拒", "每步留紀錄:AD 帳號 + os=root"], "blue"),
   arrow(170, 81, 218, 81),
   box(470, 50, 150, 62, "MDS", ["AD 帳密換 token", "問:這個人能做什麼?"], "blue"),
   arrow(420, 81, 468, 81),
-  box(650, 50, 130, 62, "緊急憑證檔", ["~/secrets/opmenu-breakglass.pem", "root 0600,只有 91 用"], "amber"),
+  box(650, 50, 130, 62, "緊急憑證檔", ["~/secrets 的 pem 檔", "root 0600,只有 91 用"], "amber"),
   arrow(650, 60, 320, 48, "91 讀這個檔;本人先過管理員閘門", { via: [[635, 60], [635, 22], [320, 22]], lx: 478, ly: 16, dash: true }),
   box(220, 140, 200, 62, "Kafka 類項目", ["以本人身分走 LDAP listener", "RBAC 依 AD 群組決定"], "blue"),
   arrow(320, 112, 320, 138),
@@ -271,7 +271,7 @@ D.opmenu = () => svg(800, 310, [
   arrow(420, 171, 468, 171),
   box(20, 225, 170, 62, "操作機的 ssh 私鑰", ["/secure/ssh,root 0400", "不放保管庫、不經 agent"], "gray"),
   arrow(190, 256, 218, 256),
-  box(220, 225, 200, 62, "主機類項目(需 Operator)", ["ssh cpuser@主機", "sudo 逐一列出 restart / journalctl"], "blue"),
+  box(220, 225, 200, 62, "主機類項目(需 Operator)", ["ssh cpuser@主機", "sudo 逐一列出可用的指令"], "blue"),
   arrow(320, 202, 320, 223),
   box(470, 225, 150, 62, "各主機", ["cpuser,無 agent", "sudoers 兩段式"], "gray"),
   arrow(420, 256, 468, 256),
@@ -284,7 +284,7 @@ D.jmx = () => svg(820, 330, [
   box(36, 114, 238, 50, "broker ×4", ["官方 kafka_broker.yml"], "blue"),
   box(36, 172, 238, 50, "REST Proxy ×2", ["官方 confluent_rest.yml"], "blue"),
   box(36, 230, 238, 50, "Control Center", ["我方的小規則（JVM、Streams、Jetty）"], "blue"),
-  note(36, 298, ":7071 HTTPS + basic auth，憑證用這台的 keystore"),
+  note(36, 298, ":7071 只用 HTTPS，憑證用這台的 keystore"),
   region(330, 28, 470, 282, "銀行提供，我方交付設定", "amber"),
   box(350, 60, 190, 62, "Prometheus", ["4 個 job、env 標籤", "21 條告警規則"], "amber"),
   box(580, 60, 200, 62, "Alertmanager", ["兩種 webhook 格式", "default JSON／自訂 JSON"], "amber"),
@@ -299,7 +299,7 @@ D.jmx = () => svg(820, 330, [
 
 // 16. Audit log routing
 D.audit = () => svg(800, 260, [
-  box(20, 40, 170, 62, "每個 broker / controller", ["security event logger", "寫入者 User:confluent-audit"], "blue"),
+  box(20, 40, 170, 62, "broker、controller", ["security event logger", "寫入者 confluent-audit"], "blue"),
   box(260, 40, 200, 62, "router(一行 JSON)", ["payments.* 的 produce/consume", "與被拒的 describe → sensitive"], "blue"),
   arrow(190, 71, 258, 71),
   box(540, 30, 240, 50, "預設 topic", ["confluent-audit-log-events,留 90 天"], "amber"),
@@ -359,7 +359,7 @@ D.access = () => svg(800, 370, [
   arrow(676, 110, 676, 154),
   box(20, 156, 520, 62, '追溯：誰在什麼時間進了操作機的 root', ['CyberArk 的登入紀錄 + PSMP 錄影；各主機端只有 cpuser 的操作紀錄', '沒有另外的堡壘機；私鑰不放 CyberArk、不備份，操作機重建就重新產生'], 'gray', { dash: true }),
   region(20, 252, 760, 104, '每台主機（含操作機自己）：cpuser，UID 1500，密碼鎖定，sshd 只收金鑰', 'blue'),
-  box(36, 282, 228, 62, 'authorized_keys', ['from="操作機 IP,127.0.0.1,::1" + 公鑰', 'OS 團隊依變更單放'], 'blue'),
+  box(36, 282, 228, 62, 'authorized_keys', ['from=操作機 IP 與本機 + 公鑰', 'OS 團隊依變更單放'], 'blue'),
   box(286, 282, 228, 62, 'sudoers 兩段', ['安裝期：cpuser 全權', '交付後：cpuser-ops 逐一列出'], 'blue'),
   box(536, 282, 228, 62, '看到什麼', ['操作紀錄是 cpuser', '真正的「人」在操作機那一層'], 'blue'),
   arrow(676, 218, 676, 250), note(690, 238, 'ssh cpuser@主機', 11),
@@ -407,7 +407,7 @@ D.landing = () => svg(800, 436, [
 
 // 1.4 version path: base vs target per layer, with the chapter that moves it
 D.versionpath = () => svg(800, 330, [
-  ctext(95, 24, '層', { bold: true, fill: '#444441', size: 13 }), ctext(240, 24, '安裝基底（第 1–20 章）', { bold: true, fill: '#444441', size: 13 }),
+  ctext(95, 24, '層', { bold: true, fill: '#444441', size: 13 }), ctext(240, 24, '安裝基底（第 2–19 章）', { bold: true, fill: '#444441', size: 13 }),
   ctext(405, 24, '誰、哪一節動它', { bold: true, fill: '#444441', size: 13 }), ctext(560, 24, '遷移目標', { bold: true, fill: '#444441', size: 13 }),
   box(20, 42, 150, 54, 'Control Center', ['最先升'], 'gray'),
   box(180, 42, 120, 54, '2.5.1', [], 'blue'), arrow(300, 69, 510, 69), ctext(405, 56, '① 29.3 節　原廠要求 C3 先升', { size: 12 }), box(510, 42, 100, 54, '2.6.1', [], 'teal'),
@@ -551,7 +551,7 @@ D.c3roles = () => svg(800, 392, [
   arrow(145, 104, 145, 126, '查', { lx: 160, ly: 118 }),
   region(295, 14, 210, 300, '各 Java 程序', 'blue'),
   box(310, 46, 180, 74, 'TelemetryReporter', ['controller、broker', '指標以 OTLP 送給 C3'], 'blue'),
-  box(310, 186, 180, 94, 'JMX exporter :7071', ['controller、broker、', 'REST Proxy、C3', 'HTTPS + basic auth'], 'teal'),
+  box(310, 186, 180, 94, 'JMX exporter :7071', ['controller、broker、', 'REST Proxy、C3', '只用 HTTPS'], 'teal'),
   region(530, 14, 250, 300, '銀行的監控（行內）', 'amber'),
   box(546, 46, 218, 58, '行內 Prometheus', ['每 30 秒抓 :7071，4 個 job'], 'amber'),
   box(546, 128, 218, 58, '行內 Alertmanager', ['21 條規則 → webhook'], 'amber'),
@@ -587,7 +587,7 @@ D.opmenuflow = () => svg(800, 440, [
   arrow(250, 51, 283, 51), arrow(515, 51, 548, 51),
   box(20, 160, 230, 96, 'Kafka 類', ['topic、權限、lag、稽核', '以本人身分走 LDAP 9096', 'RBAC 由 Kafka 強制，繞不過'], 'blue'),
   box(285, 160, 230, 96, '主機類（要 Operator）', ['先問 MDS：本人有權限嗎', '用 /secure/ssh 的金鑰 ssh cpuser', '這一關是流程控管，不是硬性隔離'], 'blue'),
-  box(550, 160, 230, 96, '91 緊急模式', ['先問 MDS：本人是不是管理員', '讀 ~/secrets/opmenu-breakglass.pem，以備用身分執行一個指令', '必填原因，記為 EMERGENCY'], 'coral'),
+  box(550, 160, 230, 96, '91 緊急模式', ['先問 MDS：本人是不是管理員', '以備用憑證的身分執行一個指令', '必填原因，記為 EMERGENCY'], 'coral'),
   arrow(665, 82, 135, 158, null, { via: [[665, 120], [135, 120]] }), arrow(665, 82, 400, 158, null, { via: [[665, 120], [400, 120]] }), arrow(665, 82, 665, 158),
   box(20, 290, 230, 62, 'broker', ['每個動作 Kafka 端記的是本人'], 'gray'),
   arrow(135, 256, 135, 288),
@@ -751,13 +751,13 @@ D.restore = () => svg(800, 420, [
   box(24, 204, 172, 44, 'users.txt', ['SCRAM 帳號清單、配額'], 'amber'),
   box(24, 256, 172, 44, 'acls、broker-configs…', ['演練不含；照樣可重建'], 'gray', { dash: true }),
   box(270, 48, 230, 96, '重建 topic', ['kafka-topics --create', '--partitions／--replication-factor', 'kafka-configs --alter --add-config'], 'teal'),
-  box(270, 152, 230, 44, '重建 role binding', ['confluent iam rbac role-binding create'], 'purple'),
+  box(270, 152, 230, 44, '重建 role binding', ['iam rbac role-binding create'], 'purple'),
   box(270, 204, 230, 96, '重建 SCRAM 帳號', ['kafka-configs --alter --add-config', 'SCRAM-SHA-512=[password=…]＋配額', '密碼來自操作機 ~/secrets（備份沒有）'], 'amber'),
   arrow(196, 70, 268, 80), arrow(196, 122, 268, 110), arrow(196, 174, 268, 174), arrow(196, 226, 268, 236),
   box(560, 48, 220, 96, '驗證', ['describe：partition、RF、設定一致', 'role-binding list：條數一致', '帳號從 9095 寫一筆、讀回一筆'], 'blue'),
   arrow(500, 96, 558, 96), arrow(500, 174, 558, 110), arrow(500, 252, 558, 130),
   box(560, 204, 220, 96, '整個叢集沒了？', ['第 8–13 章重裝', '再照這三條路把中繼資料倒回去', '訊息內容靠 RF 3，不在備份裡'], 'coral', { dash: true }),
-  box(10, 334, 770, 70, '備份裡沒有的東西', ['訊息內容（靠 replication factor 3）、SCRAM 密碼（操作機 ~/secrets，銀行備份機制）、各主機的設定檔與憑證（29.2 的備份、銀行主機備份）', '所以還原演練的範圍是「中繼資料」：topic、權限、帳號'], 'gray'),
+  box(10, 334, 770, 70, '備份裡沒有的東西', ['訊息內容（靠 replication factor 3）、SCRAM 密碼（操作機 ~/secrets）、各主機的設定檔與憑證（29.2 的備份、銀行主機備份）', '所以還原演練的範圍是「中繼資料」：topic、權限、帳號'], 'gray'),
 ].join(''));
 
 // 22 application SCRAM rotation with an A/B pair (20.6)
@@ -777,35 +777,35 @@ D.disk = () => svg(800, 440, [
   region(10, 12, 780, 118, "24.1 看用量：三個地方，從操作機就看得到", "teal"),
   box(26, 44, 240, 72, "kafka-log-dirs --describe", ["每個 broker、每個 partition 的位元組數", "整理後：每台合計、最大的 topic"], "teal"),
   box(286, 44, 230, 72, "df -h /var/lib/kafka", ["每台 broker 的資料盤還剩多少", "cpuser 不用 sudo（看的是掛載點）"], "teal"),
-  box(536, 44, 240, 72, "銀行 Prometheus", ["kafka_log_log_size：每個 topic 占多少", "kafka_log_logmanager_logdirectoryoffline"], "teal"),
+  box(536, 44, 240, 72, "銀行 Prometheus", ["kafka_log_log_size：每個 topic 占多少", "logmanager_logdirectoryoffline"], "teal"),
   region(10, 146, 780, 96, "24.2 告警：資料盤的三種訊號", "amber"),
   box(26, 178, 240, 50, "KafkaLogDirOffline（我方規則）", ["broker 報 log dir 離線 → 立刻 critical"], "amber"),
-  box(286, 178, 230, 50, "資料盤用量 > 80%（銀行主機監控）", ["node_exporter 的 filesystem 指標；給範例規則"], "amber"),
+  box(286, 178, 230, 50, "資料盤用量 > 80%（銀行主機監控）", ["node_exporter 指標；給範例規則"], "amber"),
   box(536, 178, 240, 50, "停掉的 broker（第 17 章既有）", ["TargetDown、UnderReplicated 一起響"], "gray"),
   region(10, 258, 780, 170, "24.3 快滿時的順序：先爭取空間，再處理根因", "coral"),
-  box(26, 290, 170, 80, "① 找最大的 topic", ["24.1 的清單", "通常是沒設 retention 的 topic"], "coral"), num(26, 290, "1"),
-  box(216, 290, 180, 80, "② 縮短 retention", ["kafka-configs 改 retention.ms", "只刪關掉的 segment", "最多等 5 分鐘才真的刪"], "coral"), num(216, 290, "2"),
+  box(26, 290, 170, 80, "① 找最大的 topic", ["24.1 的清單", "常是沒設 retention 的"], "coral"), num(26, 290, "1"),
+  box(216, 290, 180, 80, "② 縮短 retention", ["kafka-configs 改 retention", "只刪關掉的 segment", "最多等 5 分鐘才真的刪"], "coral"), num(216, 290, "2"),
   box(416, 290, 180, 80, "③ 把 partition 搬走", ["kafka-reassign-partitions", "指定新的 replica 名單", "搬完舊 broker 上的檔自己消失"], "blue"), num(416, 290, "3"),
-  box(616, 290, 160, 80, "④ 擴容或加 broker", ["銀行 OS 團隊放大資料盤", "或 25.2.3 加 broker、SBC 搬"], "blue"), num(616, 290, "4"),
+  box(616, 290, 160, 80, "④ 擴容或加 broker", ["銀行 OS 團隊放大資料盤", "或 25.2.3 加 broker"], "blue"), num(616, 290, "4"),
   arrow(196, 330, 214, 330), arrow(396, 330, 414, 330), arrow(596, 330, 614, 330),
-  box(26, 382, 750, 36, "不要做的事：手動 rm /var/lib/kafka/data 底下的檔（broker 會壞掉、ISR 掉出去）；也不要停 broker 來「省空間」", [], "gray"),
+  box(26, 382, 750, 36, "不要做的事：手動 rm /var/lib/kafka/data 底下的檔（broker 會壞）；也不要停 broker 來「省空間」", [], "gray"),
 ].join(""));
 
 // 24 troubleshooting triage (chapter 28): the first three checks, the platform snapshot, then branch by symptom
 D.triage = () => svg(800, 470, [
   box(20, 20, 230, 74, "① 告警或有人回報", ["Alertmanager 的告警名稱（第 17 章）", "或應用程式／C3 畫面看到的症狀"], "coral"), num(20, 20, "1"),
-  box(285, 20, 230, 74, "② 一分鐘快照（28.2）", ["quorum leader、broker 在線數", "under-replicated／offline、MDS、REST、C3"], "teal"), num(285, 20, "2"),
+  box(285, 20, 230, 74, "② 一分鐘快照（28.2）", ["quorum leader、broker 在線數", "under-rep／offline、MDS、REST、C3"], "teal"), num(285, 20, "2"),
   box(550, 20, 230, 74, "③ 那一台的三件事", ["systemctl is-active", "ExecStart 指向我們的設定？", "journalctl 最後 20 行的 ERROR"], "teal"), num(550, 20, "3"),
   arrow(250, 57, 283, 57), arrow(515, 57, 548, 57),
   region(20, 118, 760, 236, "④ 依症狀分支（28.1 速查表）", "blue"),
-  box(36, 150, 170, 90, "一台 broker 掉了", ["TargetDown＋UnderReplicated", "restart（選單 21）", "起不來 → 25.2 換"], "blue"),
-  box(222, 150, 170, 90, "沒有 leader／寫入失敗", ["ActiveControllerCount≠1", "OfflinePartitions、UnderMinIsr", "controller quorum（25.1）"], "blue"),
+  box(36, 150, 170, 90, "一台 broker 掉了", ["TargetDown、UnderRep", "restart（選單 21）", "起不來 → 25.2 換"], "blue"),
+  box(222, 150, 170, 90, "沒有 leader／寫入失敗", ["ActiveControllerCount≠1", "Offline、UnderMinIsr", "controller quorum（25.1）"], "blue"),
   box(408, 150, 170, 90, "人員登不進", ["MDS 401、AD 636 不通", "11.2：應用程式不受影響", "kafka-admin 緊急帳號"], "purple"),
   box(594, 150, 170, 90, "憑證過期", ["TLS handshake 失敗", "21 章換發；22 章提前告警", "truststore 也要看"], "purple"),
   box(36, 254, 170, 86, "REST 經 LB 失敗", ["LB 的 pool member 狀態", "12.1：單台 curl 8082", "client 憑證對不對"], "amber"),
-  box(222, 254, 170, 86, "C3 畫面空白／舊資料", ["ControlCenterStreams*", "C3 比 MDS 先起來（14.3）", "restart confluent-control-center"], "amber"),
+  box(222, 254, 170, 86, "C3 畫面空白／舊資料", ["ControlCenterStreams*", "C3 比 MDS 先起來（14.3）", "重啟 C3 服務"], "amber"),
   box(408, 254, 170, 86, "磁碟滿／快滿", ["第 24 章", "找最大 topic、縮 retention", "搬 partition、擴容"], "amber"),
-  box(594, 254, 170, 86, "ISR 一直縮小、延遲高", ["IsrShrinking、ProduceLatency", "磁碟延遲、網路、GC", "JvmHeapHigh → 調 -Xmx"], "amber"),
+  box(594, 254, 170, 86, "ISR 一直縮小、延遲高", ["IsrShrink、ProduceLatency", "磁碟延遲、網路、GC", "JvmHeapHigh → 調 -Xmx"], "amber"),
   box(20, 378, 370, 76, "⑤ 處理後回到 ②", ["快照全綠、告警解除才算結案", "動到設定的改法記進變更單"], "teal"),
   box(410, 378, 370, 76, "⑥ 自己解不掉：收集 diagnostics（選單 18）", ["各台最近日誌、topics、consumer groups、磁碟", "交二線或原廠；28.5 列清單"], "gray"),
 ].join(""));
@@ -829,7 +829,7 @@ D.onboard = () => svg(800, 470, [
 // 26 certificate expiry monitoring (chapter 22): two layers plus the menu, and what happens when an alert fires
 D.certexpiry = () => svg(800, 430, [
   region(10, 12, 780, 150, "① 銀行 Prometheus：blackbox_exporter 探每個 TLS 端點「實際出示」的憑證", "teal"),
-  box(26, 44, 230, 100, "端點清單（scrape-blackbox.yml）", ["controller 9093、broker 9092/9094/9095/8090", "REST 8082（兩台＋LB）、C3 9021", "AD 636（銀行的，順便看）"], "teal"),
+  box(26, 44, 230, 100, "端點清單（scrape-blackbox.yml）", ["controller 9093、broker 四個埠", "REST 8082（兩台＋LB）、C3 9021", "AD 636（銀行的，順便看）"], "teal"),
   box(286, 44, 230, 100, "blackbox tls 模組", ["TCP＋TLS 握手，用銀行根驗鏈", "不用 client 憑證：mTLS 的 listener", "也會先出示自己的憑證"], "teal"),
   box(546, 44, 230, 100, "規則 confluent-alerts-cert.yml", ["剩 < 60 天 warning（for 1h）", "剩 < 14 天 critical", "探不到 → CertificateProbeFailed"], "amber"),
   arrow(256, 94, 284, 94), arrow(516, 94, 544, 94),
@@ -861,7 +861,7 @@ D.rbacmodel = () => svg(800, 610, [
   region(484, 34, 296, 250, '綁整個 cluster（不能指定資源）', 'purple'),
   box(498, 64, 130, 46, 'SystemAdmin', ['全部'], 'purple'), box(638, 64, 130, 46, 'ClusterAdmin', ['叢集與 topic 管理'], 'purple'),
   box(498, 120, 130, 46, 'UserAdmin', ['管 role binding'], 'purple'), box(638, 120, 130, 46, 'SecurityAdmin', ['只能看 binding'], 'purple'),
-  box(498, 176, 130, 46, 'AuditAdmin', ['稽核日誌設定'], 'purple'), box(638, 176, 130, 46, 'Operator', ['看 topic、管 connector'], 'purple'),
+  box(498, 176, 130, 46, 'AuditAdmin', ['稽核日誌設定'], 'purple'), box(638, 176, 130, 46, 'Operator', ['看 topic、connector'], 'purple'),
   note(498, 248, '都沒有讀、寫訊息的權限（SystemAdmin 除外）', 11),
   region(484, 300, 296, 220, '綁資源（LITERAL 或 PREFIXED）', 'teal'),
   box(498, 330, 130, 52, 'ResourceOwner', ['全部＋再授權給別人'], 'teal'), box(638, 330, 130, 52, 'DeveloperManage', ['建、刪、看設定'], 'teal'),
