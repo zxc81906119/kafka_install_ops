@@ -18,7 +18,8 @@ run_17() {
   echo
 
   # 2. license：即時讀
-  local claims expires type days
+  local claims type days
+  local expires=""   # 讀不到 license 時保持空的，下面才走第 3 步（沒有初值的話 set -u 會在這裡中止）
 
   claims=$(k_license_claims)
   if [ $? -eq 0 ]; then
