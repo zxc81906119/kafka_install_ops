@@ -11,6 +11,7 @@ dependencies are already installed (`npm ci` only on a fresh clone).
 | Document | Source | Command (from repo root) |
 |---|---|---|
 | `docs/Confluent-RPM安裝流程.pptx` | `docs/deck-src/install.js`, `install-steps.js` | `cd docs/deck-src && node install.js "../Confluent-RPM安裝流程.pptx"` |
+| `docs/Confluent-手冊導覽.pptx` | `docs/deck-src/guide-slides.js`, `journey-src/diagrams.js` | see `docs/deck-src/README.md` (`guide.js`, then `guide-build.ps1` in PowerPoint with the company template) |
 | `docs/Confluent-安裝旅程-手把手.docx` | `docs/journey-src/journey.md`, `diagrams.js` | `cd docs/journey-src && node build.js` |
 | `docs/Confluent-請銀行確認的事項.docx` | `docs/questions-src/questions.md` | `cd docs/questions-src && node build.js` |
 
