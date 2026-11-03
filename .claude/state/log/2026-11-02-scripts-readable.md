@@ -15,3 +15,8 @@
 - 待使用者決定：30.4 順序（腳本：每台更新加重啟、操作機最後；手冊：REST 先只更新，C3、操作機做完才重啟 REST）。
 - 使用者決定（11-02）：手冊 30.4 改成腳本的順序（REST 一台做完整再換下一台 → C3 → 操作機），README 的差異拿掉。指令都是原本驗過的，只調順序；lab 已是 9.8，這個順序的手冊要等下次從零才能照打實跑（腳本版已實跑過同一順序）。
 - 使用者決定（11-02）：變更分成幾個 commit，不 push。
+- 最終程式碼從零再跑（final-run，使用者 11-02 同意）：第一次在第 14 段冷開機時 WSL VM 卡死（Wsl/Service/0x8007274c，podman 連不上、wsl --terminate 也沒回應），Windows 可用記憶體 0.4／15.7 GB，推測是記憶體吃緊（未證實）。使用者同意 wsl --shutdown（Ubuntu 一起關）→ machine stop → 舊 win-sshproxy 占住 pipe（could not start api proxy），要先 Stop-Process 再 stop／刪 sock／start。之後從零重跑，並記錄記憶體。
+- 記憶體（11-02）：第二次跑時 commit 31.0/32.5 GB、可用 0.1–0.6 GB，使用者關掉 Minecraft 與 Chrome 後 commit 23.8 GB，之後第 14 段冷開機正常。第一次卡死很可能就是這個原因（第一次沒量到 commit，未完全證實）。
+- 使用者 16:42 要關機出門：停在第 23 段開頭（遷移流量結果拿到後），之後 machine stop；回來用 final-resume.sh 接著跑。
+- 最終實跑（11-02 15:14 到 11-03 前，中間關機一次）：腳本第 1–31 段（IDEMPOTENCE=1）＋手冊第 30 章照打（15 塊 rc=0，30.4 新順序輸出與 out 相符，只有秒數不同）＋腳本第 33–34 段＋21 trust-sync、21 chain（中繼沿用私鑰由同一根重簽，端點抽查出示新中繼）。驗收 9 次都 44/44，第 6 段後 0 個 FAIL；流量 遷移 9276 筆遺失 0／REST 1744 失敗 0，OS 更新 4935 筆遺失 0／REST 889 失敗 0。關機重開後驗收 44/44。
+- 這輪沒重跑（上一輪用相同程式碼跑過）：30-os-patch.sh、OP menu 回歸、MDS 金鑰輪替、26 站 reset。21 trust-sync／chain 沒有換新的根。

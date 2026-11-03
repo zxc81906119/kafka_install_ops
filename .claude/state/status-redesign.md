@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-11-02 下午（lab 閒置（redesign）：腳本版驗證全部跑完；變更都未 commit）
+Updated: 2026-11-03 凌晨（lab 閒置（redesign）：最終實跑全部跑完；machine 還開著）
 
 ## 現在在做什麼
 腳本版（install/）照手冊寫法改寫完成並實跑通過（log/2026-11-02-scripts-readable.md）；手冊導覽簡報完成（docs/Confluent-手冊導覽.pptx）。全部未 commit，等使用者決定。待決定：30.4 順序腳本與手冊不同。
@@ -25,7 +25,7 @@ Updated: 2026-11-02 下午（lab 閒置（redesign）：腳本版驗證全部跑
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。
 
 ## 環境狀態
-- lab：**閒置（redesign 最後用）**：腳本版跑完，最後做了 26 站 reset、重新交付 OP menu（opmenu-20261102.6fa2b757）並驗收；狀態＝重置後的 8.3.2／JDK 25／OS 9.8，MDS token 金鑰已換過，lab-mon-* 還在跑（下次 down -v 前先 monitoring-stop）。machine 還開著。
+- lab：**閒置（redesign 最後用）**：最終實跑跑完，狀態＝8.3.2／JDK 25／OS 9.8／C3 2.6.1，中繼已換成重簽的（21 chain），lab-mon-* 還在跑（下次 down -v 前 bank-sim reset 會先收）。machine 還開著，不用時 machine stop。
 - lab 信任根是 G3（21.4 之後）；簽新憑證用 `~/kafka-lab/ca/g2/sign.sh`（中繼 G2 由 G3 簽）。
 - machine 不自動開（使用者 11-01）：要用時自己 `podman machine start kafka-lab`，關機前 `podman machine stop kafka-lab`。Podman Desktop 的 engine autostart 已關（Start on login 還開著）。`~/kafka-lab/start-lab.ps1` 只當修復工具（compose 因孤兒 kafka-lab-api.sock 壞掉時手動跑），啟動捷徑已刪。WSL2 11 GB（.wslconfig）。絕不 `podman machine rm/reset kafka-lab`（volume `ops-secure`）。
 - 密碼檔：`~/kafka-lab/secrets.env`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
