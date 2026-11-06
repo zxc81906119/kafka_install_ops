@@ -12,7 +12,9 @@
 # 能不能重跑：可以。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
-export JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+export JAVA_HOME=/opt/java/current
+export KAFKA_HEAP_OPTS=-Xmx256m
+export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 LOAD_DIR=$HOME/load
 LOAD_TOPIC=orders.load                                 # app-orders 有 orders.* 的寫讀與建立權限
@@ -64,9 +66,14 @@ start_load() {
       echo "$sequence"
       echo "$sequence" >> "$LOAD_DIR/produced.seq"
       sleep 0.2
-    done | kafka-console-producer --bootstrap-server "$CLIENT_BOOTSTRAP" --producer.config "$SCRAM_CLIENT_CONF" --topic "$LOAD_TOPIC" \
-      --producer-property acks=all --producer-property enable.idempotence=true \
-      --producer-property delivery.timeout.ms=300000 --producer-property retries=2147483647 > "$LOAD_DIR/producer.log" 2>&1
+    done | kafka-console-producer \
+      --bootstrap-server "$CLIENT_BOOTSTRAP" \
+      --producer.config "$SCRAM_CLIENT_CONF" \
+      --topic "$LOAD_TOPIC" \
+      --producer-property acks=all \
+      --producer-property enable.idempotence=true \
+      --producer-property delivery.timeout.ms=300000 \
+      --producer-property retries=2147483647 > "$LOAD_DIR/producer.log" 2>&1
   ) < /dev/null > /dev/null 2>&1 &
   echo $! > "$LOAD_DIR/producer.pid"
 
@@ -75,8 +82,12 @@ start_load() {
     source "$CONF_DIR/kraft.env"   # CLUSTER_ID
 
     while [ -f "$LOAD_DIR/running" ]; do
-      http_code=$(rest_app_curl -s -o /dev/null -m 10 -w '%{http_code}' --cacert "$BANK_ROOT_CA" -X POST -H 'Content-Type: application/json' \
-        -d '{"value":{"type":"JSON","data":{"src":"load"}}}' "https://$REST_VIP:8082/v3/clusters/$CLUSTER_ID/topics/$REST_TOPIC/records")
+      http_code=$(rest_app_curl -s -o /dev/null -m 10 -w '%{http_code}' \
+        --cacert "$BANK_ROOT_CA" \
+        -X POST \
+        -H 'Content-Type: application/json' \
+        -d '{"value":{"type":"JSON","data":{"src":"load"}}}' \
+        "https://$REST_VIP:8082/v3/clusters/$CLUSTER_ID/topics/$REST_TOPIC/records")
       echo "$(date +%T) $http_code" >> "$LOAD_DIR/rest.log"
       sleep 1
     done
@@ -107,7 +118,16 @@ stop_load() {
 # since_start_numbers <start 的毫秒>：讀 stdin 的 console-consumer 輸出，只留 start 之後寫進去的編號
 #   輸入：CreateTime:1761700000000<TAB>123 → 輸出：123
 since_start_numbers() {
-  awk -F'\t' -v since="$1" '{created=$1; sub(/^CreateTime:/, "", created)} created >= since && $2 ~ /^[0-9]+$/ {print $2}'
+  # lint-ok: 要比較時間數字，grep 做不到；輸入輸出例子寫在函式上面
+  awk -F'\t' -v since="$1" '
+    {
+      created = $1
+      sub(/^CreateTime:/, "", created)
+    }
+    created >= since && $2 ~ /^[0-9]+$/ { # lint-ok: awk 語法
+      print $2
+    }
+  '
 }
 
 report_load() {
@@ -122,8 +142,14 @@ report_load() {
   since=${since:-0}
 
   # 1. 只算這次 start 之後寫進去的（CreateTime ≥ start），編號去重後和送出的比
-  kafka-console-consumer --bootstrap-server "$CLIENT_BOOTSTRAP" --consumer.config "$SCRAM_CLIENT_CONF" --topic "$LOAD_TOPIC" \
-    --group "orders-load-report-$$" --from-beginning --timeout-ms 30000 --property print.timestamp=true 2> /dev/null \
+  kafka-console-consumer \
+    --bootstrap-server "$CLIENT_BOOTSTRAP" \
+    --consumer.config "$SCRAM_CLIENT_CONF" \
+    --topic "$LOAD_TOPIC" \
+    --group "orders-load-report-$$" \
+    --from-beginning \
+    --timeout-ms 30000 \
+    --property print.timestamp=true 2> /dev/null \
     | since_start_numbers "$since" \
     | sort -n -u > "$LOAD_DIR/consumed.seq"
 
@@ -143,6 +169,7 @@ report_load() {
   echo "REST（經負載平衡）：成功 $rest_ok 次、失敗 $rest_failed 次"
 
   if [ "$rest_failed" -gt 0 ]; then
+    # lint-ok: 第 2 欄不是 200 的行，取前 5 行
     awk '$2 != "200"' "$LOAD_DIR/rest.log" | head -5
   fi
 

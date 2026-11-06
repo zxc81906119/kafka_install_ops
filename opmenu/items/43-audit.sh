@@ -172,6 +172,12 @@ run_43() {
   return $rc
 }
 
+# _item43_first <一行 JSON> <樣式>：印出第一個符合樣式的片段
+#   例：_item43_first "$line" '"time":"[^"]*"' → "time":"2026-11-01T01:02:03.456Z"
+_item43_first() {
+  echo "$1" | grep -o "$2" | head -1
+}
+
 # _item43_print_event <一行 JSON>：從一筆稽核事件取出時間、主體、方法、操作、資源、結果，印成一行
 #
 # 輸入（一行 JSON，這裡只列用到的欄位），例如：
@@ -183,12 +189,16 @@ _item43_print_event() {
   local line="$1"
   local time principal method operation resource granted verdict
 
-  time=$(echo "$line" | grep -o '"time":"[^"]*"' | head -1 | cut -d'"' -f4)
-  principal=$(echo "$line" | grep -o '"principal":"[^"]*"' | head -1 | cut -d'"' -f4)
-  method=$(echo "$line" | grep -o '"methodName":"[^"]*"' | head -1 | cut -d'"' -f4)
-  operation=$(echo "$line" | grep -o '"operation":"[^"]*"' | head -1 | cut -d'"' -f4)
-  resource=$(echo "$line" | grep -o '"resourceName":"[^"]*"' | tail -1 | cut -d'"' -f4)
-  granted=$(echo "$line" | grep -o '"granted":[a-z]*' | head -1 | cut -d: -f2)
+  # "欄位":"值" 用雙引號切開，第 4 段就是值
+  time=$(_item43_first "$line" '"time":"[^"]*"' | cut -d'"' -f4)
+  principal=$(_item43_first "$line" '"principal":"[^"]*"' | cut -d'"' -f4)
+  method=$(_item43_first "$line" '"methodName":"[^"]*"' | cut -d'"' -f4)
+  operation=$(_item43_first "$line" '"operation":"[^"]*"' | cut -d'"' -f4)
+  granted=$(_item43_first "$line" '"granted":[a-z]*' | cut -d: -f2)
+
+  # resourceName 可能有多個，要最後一個
+  resource=$(echo "$line" | grep -o '"resourceName":"[^"]*"' | tail -1)
+  resource=$(echo "$resource" | cut -d'"' -f4)
 
   # 事件時間是 UTC，換成操作機的本地時間；換不了就去掉小數點後面
   local local_time
@@ -202,5 +212,11 @@ _item43_print_event() {
     verdict=ALLOWED
   fi
 
-  printf '%s %-16s %-20s %-14s %-26s %s\n' "$local_time" "$principal" "$method" "$operation" "$resource" "$verdict"
+  printf '%s %-16s %-20s %-14s %-26s %s\n' \
+    "$local_time" \
+    "$principal" \
+    "$method" \
+    "$operation" \
+    "$resource" \
+    "$verdict"
 }

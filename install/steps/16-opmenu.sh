@@ -5,15 +5,15 @@
 # 何時用：OPMENU=1。選單裝在操作機（人員經 PSMP 登入就是 root，直接跑選單），主機上不放代理程式，只靠 sudoers 限制 cpuser 能跑的指令。
 # 做什麼：
 #   16.1 確認銀行送來選單套件
-#   16.2 綁 conf/rbac-opmenu.txt 的 role binding；緊急憑證 PEM（私鑰＋憑證）由我方組好放 ~/secrets/opmenu-breakglass.pem（0600）
+#   16.2 綁 conf/rbac-opmenu.txt 的 role binding；緊急憑證 PEM（私鑰＋憑證）由我方組好放 ~/secrets/svc-ops.pem（0600）
 #   16.3 裝選單：/opt/opmenu、/etc/opmenu（設定、身分、truststore、known_hosts）、/var/log/opmenu
 #   16.4 各主機加上 cpuser 的窄 sudo 規則 /etc/sudoers.d/cpuser-ops（逐一列出服務與指令寫法；全權那份由 OS 團隊在安裝完成後收回）
 #   16.5 試跑：選單全部顯示，沒權限的做了被 Kafka／MDS 拒絕
 #   16.6 收尾：沒有 ssh-agent、/dev/shm 與 /tmp 沒有私鑰
 # 注意：操作者在操作機上是 root，選單的「主機權限閘門」（問 MDS 本人有沒有 Operator）是流程控管、不是硬性隔離；
 #       追溯靠 CyberArk 的登入紀錄與 PSMP 錄影，Kafka 動作的權限與稽核由 Kafka 端依本人 AD 身分強制。
-# 需要什麼：第 11 站的 RBAC 與 AD 群組、第 9 站的 opmenu-breakglass 憑證、第 4 站的 cpuser 金鑰、落地區的選單套件（opmenu/package.sh 產生）
-# 產出什麼：/opt/opmenu、/etc/opmenu/*、/var/log/opmenu、~/secrets/opmenu-breakglass.pem、各主機 /etc/sudoers.d/cpuser-ops
+# 需要什麼：第 11 站的 RBAC 與 AD 群組、第 9 站的 svc-ops 憑證、第 4 站的 cpuser 金鑰、落地區的選單套件（opmenu/package.sh 產生）
+# 產出什麼：/opt/opmenu、/etc/opmenu/*、/var/log/opmenu、~/secrets/svc-ops.pem、各主機 /etc/sudoers.d/cpuser-ops
 # 能不能重跑：安全（選單目錄整個換新；role binding 重建是 no-op）。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
@@ -35,7 +35,9 @@ run_menu_as() {
   local person=$1
   shift
 
-  env OPMENU_USER="$person" OPMENU_PASS="$(cat "$SECRETS_DIR/ad-test-users.pass")" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" \
+  env OPMENU_USER="$person" \
+      OPMENU_PASS="$(cat "$SECRETS_DIR/ad-test-users.pass")" \
+      OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" \
       JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 </dev/null \
     | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'
 }
@@ -77,8 +79,11 @@ breakglass_pem_ok() {
   return 0
 }
 
+sudo_request="16.4 OS 團隊：各主機 $SSH_USER 的 sudo 改成兩段式（永久只留 /etc/sudoers.d/$SSH_USER-ops "
+sudo_request+="逐一列出的 restart／status／journalctl；安裝期的全權 /etc/sudoers.d/$SSH_USER 做完收回）。"
+
 ask_bank "16.3 選單套件 opmenu-*.tar.gz 隨落地區送到 $OPMENU_PACKAGE_DIR/。" \
-         "16.4 OS 團隊：各主機 $SSH_USER 的 sudo 改成兩段式（永久只留 /etc/sudoers.d/$SSH_USER-ops 逐一列出的 restart／status／journalctl；安裝期的全權 /etc/sudoers.d/$SSH_USER 做完收回）。"
+         "$sudo_request"
 
 section "16.1 確認銀行的準備"
 if package_checksum_ok "$OPMENU_PACKAGE_DIR"; then
@@ -92,7 +97,7 @@ if [ "$FAIL_COUNT" != 0 ]; then
   wait_for_bank
 fi
 
-section "16.2 role binding（conf/rbac-opmenu.txt：緊急身分 SystemAdmin、維運群組補 DescribeConfigs）"
+section "16.2 role binding（conf/rbac-opmenu.txt：維運群組補 DescribeConfigs）"
 if ! confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
      --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1; then
   die "confluent login 失敗"
@@ -151,16 +156,17 @@ for host in $CLUSTER_HOSTS; do
   cluster_fqdns+=("$(fqdn "$host")")
 done
 
-ssh-keyscan -t ed25519 "${cluster_fqdns[@]}" 2>/dev/null | grep -v "^#" | sort | install -m 0644 /dev/stdin /etc/opmenu/known_hosts
+scanned_keys=$(ssh-keyscan -t ed25519 "${cluster_fqdns[@]}" 2>/dev/null | grep -v "^#")
+sort <<<"$scanned_keys" | install -m 0644 /dev/stdin /etc/opmenu/known_hosts
 
 # 4. /var/log/opmenu：選單紀錄與匯出檔
 install -d -m 0750 -o root -g root /var/log/opmenu
 
 # 5. 緊急憑證 PEM（91 用）：私鑰＋憑證串成一個檔，放操作機 ~/secrets（0600、root 才讀得到）；選單讀檔時會檢查權限與 owner
-BREAKGLASS_PEM=$SECRETS_DIR/opmenu-breakglass.pem
+BREAKGLASS_PEM=$SECRETS_DIR/svc-ops.pem
 install -d -m 0700 "$SECRETS_DIR"
 install -m 0600 /dev/null "$BREAKGLASS_PEM"
-cat "$KEYS_DIR/opmenu-breakglass.key" "$CERTS_DIR/opmenu-breakglass.crt" > "$BREAKGLASS_PEM"
+cat "$KEYS_DIR/svc-ops.key" "$CERTS_DIR/svc-ops.crt" > "$BREAKGLASS_PEM"
 
 if breakglass_pem_ok "$BREAKGLASS_PEM"; then
   ok "緊急憑證 PEM：$BREAKGLASS_PEM（0600）"
@@ -198,7 +204,9 @@ for host in $CONTROLLERS; do
 done
 CONTROLLER_HOSTS=${CONTROLLER_HOSTS# }
 
-if ! render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" ENV_LABEL BREAKGLASS_PEM BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES CONTROLLER_HOSTS LB_FQDN SSH_USER SSH_KEY; then
+if ! render_template "$TEMPLATE_DIR/opmenu.conf" "$CONF_DIR/opmenu.conf" \
+     ENV_LABEL BREAKGLASS_PEM BOOTSTRAP_LDAP BROKER_SERVICES AUX_SERVICES \
+     CONTROLLER_HOSTS LB_FQDN SSH_USER SSH_KEY; then
   die "render opmenu.conf"
 fi
 
@@ -323,7 +331,8 @@ if shred -u "$HOME"/opmenu-handover/"$SECOND_SCRAM_APP"-b-*.pass 2>/dev/null; th
 fi
 
 # 5. 13：在線成員數。開一個 60 秒的 consumer（svc-ops 的管理連線：這時還沒有應用程式的 client 設定，第 19 站才產生）
-timeout 60 kafka-console-consumer --bootstrap-server "$BROKER_TOKEN" --consumer.config "$ADMIN_CLIENT_CONF" --topic orders.events --group orders-optest >/dev/null 2>&1 &
+timeout 60 kafka-console-consumer --bootstrap-server "$BROKER_TOKEN" --consumer.config "$ADMIN_CLIENT_CONF" \
+  --topic orders.events --group orders-optest >/dev/null 2>&1 &
 sleep 20
 
 group_out=$(run_menu_as bob 13 orders-optest | grep '^==')
@@ -379,7 +388,7 @@ else
   fail "17 沒有 license 到期日：$license_line"
 fi
 
-# 健康檢查、重啟、緊急模式要動主機（ssh 用 $SSH_KEY）或用緊急憑證（讀 ~/secrets/opmenu-breakglass.pem、要人填原因），非互動試跑做不了
+# 健康檢查、重啟、緊急模式要動主機（ssh 用 $SSH_KEY）或用緊急憑證（讀 ~/secrets/svc-ops.pem、要人填原因），非互動試跑做不了
 warn "重啟、看日誌要由維運人員互動登入試跑（手把手 16.5）；緊急模式要互動填原因"
 
 section "16.6 收尾檢查"

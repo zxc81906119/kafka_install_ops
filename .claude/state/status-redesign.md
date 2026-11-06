@@ -1,6 +1,6 @@
 # Status — branch `redesign`
 
-Updated: 2026-11-03 凌晨（lab 閒置（redesign）：最終實跑全部跑完；machine 還開著）
+Updated: 2026-11-06（指令可讀性整理完成並驗證：手冊從零全跑 0 失敗；腳本版第 1–35 段全部通過（中途兩次因記憶體不足的 WSL 狀況續跑）；文件與簡報已更新重建；全部未 commit）
 
 ## 現在在做什麼
 腳本版（install/）照手冊寫法改寫完成並實跑通過（log/2026-11-02-scripts-readable.md）；手冊導覽簡報完成（docs/Confluent-手冊導覽.pptx）。全部未 commit，等使用者決定。待決定：30.4 順序腳本與手冊不同。
@@ -15,6 +15,7 @@ Updated: 2026-11-03 凌晨（lab 閒置（redesign）：最終實跑全部跑完
 - 下載（使用者同意）：prom/blackbox-exporter:v0.25.0、Rocky 9.8 更新集合 156 個 RPM／79 MB。C3 2.6.0 RPM 沿用 10-30 的檔（重驗簽章）。
 
 ## 下一步（候選）
+0. **回來先談（使用者 11-04 交代）**：AD 登入 cn、大小寫實測、OP menu 權限查詢、AD 長時間失敗的說法與告警、請銀行確認事項；細節見 log/2026-11-03-lab-wiped.md 最後一段。
 1. ~~改腳本版 7071 只用 HTTPS~~ **做完**（4b63317：17-jmx-exporter.sh、19-acceptance.sh、jmx-header.yml、prometheus-scrape.yml；重跑會清掉舊的 jmx-scrape.pass／salt）。
 2. 腳本版在 Podman 上從零實跑（`install/lab/run-customer.sh`）：使用者 10-31 決定改天跑。跑之前先決定 C3 2.6.0 RPM（1 GB）要不要重抓（建議改 run-customer.sh 沿用落地區已驗章的檔）；這次也會驗到 v5.6.1 的 `podman compose down -v／up -d`。
 3. ~~移除 Docker Desktop~~ **做完**（10-31 晚，殘餘全清，C 槽剩約 290 GB）；compose 改用 Podman Desktop 的 Compose 擴充（v5.6.1），手冊 0.0 已改。第 0 章的 `podman compose up/down` 在 v5.6.1 上還沒從零實跑。
@@ -25,8 +26,15 @@ Updated: 2026-11-03 凌晨（lab 閒置（redesign）：最終實跑全部跑完
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。
 
 ## 環境狀態
-- lab：**閒置（redesign 最後用）**：最終實跑跑完，狀態＝8.3.2／JDK 25／OS 9.8／C3 2.6.1，中繼已換成重簽的（21 chain），lab-mon-* 還在跑（下次 down -v 前 bank-sim reset 會先收）。machine 還開著，不用時 machine stop。
-- lab 信任根是 G3（21.4 之後）；簽新憑證用 `~/kafka-lab/ca/g2/sign.sh`（中繼 G2 由 G3 簽）。
+- 2026-11-06 14:00：lab 閒置（腳本版跑完，平台在 8.3.2／C3 2.6.1／JDK 25／OS 9.8，第 32 章告警已裝）；machine 開著。
+- lab：**使用者同意 Claude 實測（可破壞）**：8.2.4，第 12、13、17 章已跑、14–16 未做；kc／kb 已套 cn＋mapping＋filter；c3-01 留著 C3 Prometheus 測試設定（見 log/2026-11-03-lab-wiped.md 最後一段）。OP menu 交付物在 ~/opmenu-delivery。
 - machine 不自動開（使用者 11-01）：要用時自己 `podman machine start kafka-lab`，關機前 `podman machine stop kafka-lab`。Podman Desktop 的 engine autostart 已關（Start on login 還開著）。`~/kafka-lab/start-lab.ps1` 只當修復工具（compose 因孤兒 kafka-lab-api.sock 壞掉時手動跑），啟動捷徑已刪。WSL2 11 GB（.wslconfig）。絕不 `podman machine rm/reset kafka-lab`（volume `ops-secure`）。
 - 密碼檔：`~/kafka-lab/secrets.env`；ops02 `~/secrets/`、`~/pki/store.pass`、私鑰 `/secure/ssh`（volume `ops-secure`）。
 - Git Bash 的 `python3` 是 Store 空殼：改檔用 node（替換字串用函式，避免 `$'`）；podman 指令前加 `MSYS_NO_PATHCONV=1`。
+
+- 2026-11-04 c3-01 測試狀態：`alertmanager-custom` 已改用 `/usr/local/bin/alertmanager-0.34.1`，停 rest01 的 OPEN／RESOLVED 與字串型別都驗過；rest01 已開回。細節見 log/2026-11-03-lab-wiped.md。
+- 2026-11-05 發現：手冊第 13 章的 C3 設定下，C3 連不上 MDS（client 憑證用了 cp-server）；根因與 lab 暫時修法見 log/2026-11-03-lab-wiped.md，手冊與腳本待修。
+- 2026-11-05 lab 使用中（redesign，手冊從零實跑，接著腳本版實跑）。手冊、腳本、問題清單、圖已改（憑證各元件自用、第 32 章 C3 告警、OP menu 用 token sub、帶身分的 C3 驗收），都還沒 commit。
+- 2026-11-05 憑證再縮減：拿掉 c3-monitoring、opmenu-breakglass（共 7 張）；手冊、腳本、選單、問題清單已改；接著手冊從零全跑、再腳本版全跑。
+- 2026-11-05 14:3x：12:18 那輪手冊全跑因工作階段結束而中斷（38 塊、0 失敗），machine 也停了；重新開機、清 lab 後再跑一次。
+- 2026-11-05 使用者說晚點再測：手冊全跑已手動停止（lab 停在第 15.5 節中途，不可接著用）。下一步：使用者說了再從零跑手冊（run-full.sh customer），接著 run-customer.sh。下次跑之前：machine 若停著要先 start；清 lab 見 log/2026-11-05-c3-client-cert.md。全部還沒 commit。

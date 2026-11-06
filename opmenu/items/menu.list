@@ -35,4 +35,4 @@
 42|4|y|y|42-grant-revoke.sh|指派或移除權限|只能綁 AD 群組,不能綁個人;可指派的 role 限於 OPMENU_ROLES_ALLOWED
 43|4|y|n|43-audit.sh|查詢與匯出 audit 紀錄|最近 N 分鐘的 audit 事件,可選一般、敏感(_sensitive:敏感 topic 的讀寫)或兩個都看,依主體(例 alice)與結果(DENIED 或 ALLOWED)篩選,畫面顯示最後 50 筆;最後問要不要把篩選結果存成檔案交給 auditor(需 audit topic〔prefix,含 _sensitive〕與 audit- consumer group prefix 的 DeveloperRead)
 44|4|n|n|44-permission-review.sh|匯出權限清單(permission review)/變更前快照|列出各 role 的所有 principal 與資源範圍(CSV),交給定期權限覆核;加 snapshot 再匯出 topic、設定、帳號與配額、ACL、role binding、features(變更前快照,檔名與格式同每日備份,可直接用手把手 23.6、26.4 還原);需 SecurityAdmin 或 UserAdmin
-91|4|y|y|91-emergency.sh|緊急模式(以備用憑證執行一個指令)|只在一般權限無法處理時使用;工具與動作限於 OPMENU_EMERGENCY_ACTIONS;必填原因;逐條記錄;事後必須檢討。憑證(User:opmenu-breakglass,SystemAdmin)從操作機上 0600 的檔案讀(OPMENU_BREAKGLASS_PEM),用完即丟
+91|4|y|y|91-emergency.sh|緊急模式(以備用憑證執行一個指令)|只在一般權限無法處理時使用;工具與動作限於 OPMENU_EMERGENCY_ACTIONS;必填原因;逐條記錄;事後必須檢討。憑證(User:svc-ops,SystemAdmin)從操作機上 0600 的檔案讀(OPMENU_BREAKGLASS_PEM),用完即丟

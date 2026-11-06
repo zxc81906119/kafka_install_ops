@@ -50,7 +50,8 @@ cli_as() {
 
   install -d -m 0700 "$cli_home"
 
-  if ! HOME=$cli_home confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
+  if ! HOME=$cli_home confluent login --url "$MDS_URL" \
+    --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
     --client-cert-path "$CERTS_DIR/$cert_name.crt" --client-key-path "$KEYS_DIR/$cert_name.key" >/dev/null 2>&1; then
     return 1
   fi
@@ -59,7 +60,7 @@ cli_as() {
 }
 
 grant() {
-  local cluster first_topic reply acl_count
+  local cluster first_topic reply acl_count first_line
 
   # 1. client 設定：管理用的那份複製一份，keystore 換成 svc-backup 的（檔案 0600）
   section "23.1 svc-backup 憑證與 client 設定"
@@ -81,26 +82,34 @@ grant() {
   section "23.2 最小權限：SecurityAdmin＋兩條 ACL"
   cluster=$(cluster_id)
 
-  if mds_write cli_as svc-ops iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster "$cluster" >/dev/null; then
+  if mds_write cli_as svc-ops iam rbac role-binding create \
+       --principal User:svc-backup --role SecurityAdmin --kafka-cluster "$cluster" >/dev/null; then
     ok "SecurityAdmin"
   else
     fail "SecurityAdmin role binding"
   fi
 
   # 3. 兩條 ACL：所有 topic、cluster 本身的 Describe 與 DescribeConfigs
-  if ! kafka-acls "${ADMIN_ARGS[@]}" --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --topic '*' >/dev/null 2>&1; then
+  if ! kafka-acls "${ADMIN_ARGS[@]}" --add --allow-principal User:svc-backup \
+       --operation Describe --operation DescribeConfigs --topic '*' >/dev/null 2>&1; then
     fail "ACL"
-  elif ! kafka-acls "${ADMIN_ARGS[@]}" --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --cluster >/dev/null 2>&1; then
+  elif ! kafka-acls "${ADMIN_ARGS[@]}" --add --allow-principal User:svc-backup \
+       --operation Describe --operation DescribeConfigs --cluster >/dev/null 2>&1; then
     fail "ACL"
   else
-    acl_count=$(kafka-acls "${ADMIN_ARGS[@]}" --list --principal User:svc-backup 2>/dev/null | awk '/operation=/ {c++} END {print c + 0}')
+    acl_count=$(kafka-acls "${ADMIN_ARGS[@]}" --list --principal User:svc-backup 2>/dev/null \
+      | awk '/operation=/ {c++} END {print c + 0}')
     ok "ACL：$acl_count 條"
   fi
 
   # 4. 反向：讀訊息要被拒
   section "23.2 反向：讀不到訊息、建不了 topic、改不了 role binding"
-  first_topic=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk 'NF{print $1; exit}')
-  reply=$(kafka-console-consumer --bootstrap-server "$BROKER_TOKEN" --consumer.config "$BACKUP_CLIENT_CONF" --topic "$first_topic" --from-beginning --max-messages 1 --timeout-ms 10000 2>&1)
+  # topics.txt 第一個不是註解、不是空白的行，取第一欄
+  first_line=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | grep '[^[:space:]]' | head -1)
+  first_topic=$(awk '{print $1}' <<<"$first_line")
+  reply=$(kafka-console-consumer --bootstrap-server "$BROKER_TOKEN" \
+    --consumer.config "$BACKUP_CLIENT_CONF" \
+    --topic "$first_topic" --from-beginning --max-messages 1 --timeout-ms 10000 2>&1)
 
   if grep -q AuthorizationException <<<"$reply"; then
     ok "讀訊息被拒"
@@ -109,7 +118,8 @@ grant() {
   fi
 
   # 5. 反向：建 topic 要被拒
-  reply=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$BACKUP_CLIENT_CONF" --create --topic backup-sneak --partitions 1 --replication-factor 3 2>&1)
+  reply=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$BACKUP_CLIENT_CONF" \
+    --create --topic backup-sneak --partitions 1 --replication-factor 3 2>&1)
 
   if grep -q AuthorizationException <<<"$reply"; then
     ok "建 topic 被拒"
@@ -118,7 +128,8 @@ grant() {
   fi
 
   # 6. 反向：改 role binding 要被拒
-  reply=$(cli_as svc-backup iam rbac role-binding create --principal User:svc-backup --role SystemAdmin --kafka-cluster "$cluster" 2>&1)
+  reply=$(cli_as svc-backup iam rbac role-binding create \
+    --principal User:svc-backup --role SystemAdmin --kafka-cluster "$cluster" 2>&1)
 
   if grep -q 403 <<<"$reply"; then
     ok "改 role binding 被拒（403）"
@@ -157,7 +168,31 @@ features_list() {
 #             (principal=User:svc-backup, host=*, operation=DESCRIBE, permissionType=ALLOW)
 #   輸出：TOPIC|*|LITERAL|User:svc-backup|*|DESCRIBE|ALLOW
 acl_lines() {
-  kafka-acls "${BACKUP_ARGS[@]}" --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | LC_ALL=C sort
+  kafka-acls "${BACKUP_ARGS[@]}" --list | acl_text_to_lines | LC_ALL=C sort
+}
+
+# acl_text_to_lines：把 kafka-acls --list 的輸出（stdin）轉成一條一行，輸入輸出的例子見 acl_lines
+#   遇到資源那一行就記下資源（r），遇到 principal 那一行就印「r|這一條的內容」
+acl_text_to_lines() {
+  # lint-ok: 要記住上一個資源、改寫多個欄位，grep／cut 做不到；函式上面有輸入輸出例子
+  awk '
+    /^Current ACLs for resource/ {
+      s = $0
+      sub(/.*resourceType=/, "", s)
+      sub(/\)`:.*/, "", s)
+      gsub(/, name=|, patternType=/, "|", s)
+      r = s
+      next
+    }
+    /principal=/ {
+      s = $0
+      sub(/^[ \t]*\(principal=/, "", s)
+      sub(/\)[ \t]*$/, "", s)
+      # lint-ok: 這行的 | 是 awk 的「或」，不是管線
+      gsub(/, host=|, operation=|, permissionType=/, "|", s)
+      print r "|" s
+    }
+  '
 }
 
 # users_list：每個帳號的 SCRAM（只有機制與迭代次數，沒有密碼）與配額，排好順序
@@ -169,20 +204,34 @@ users_list() {
 #   例：User:svc-backup
 principals_with_bindings() {
   local cluster=$1
-  local roles role
+  local roles role bindings_json="" role_json
 
+  # 1. 有哪些角色
   roles=$(cli_as svc-backup iam rbac role list -o json | grep -o '"name": *"[A-Za-z]*"' | cut -d'"' -f4)
 
+  # 2. 每個角色的 binding（JSON）接起來
   for role in $roles; do
-    cli_as svc-backup iam rbac role-binding list --role "$role" --kafka-cluster "$cluster" -o json 2>/dev/null
-  done | grep -o '"principal": *"[^"]*"' | cut -d'"' -f4 | LC_ALL=C sort -u
+    role_json=$(cli_as svc-backup iam rbac role-binding list \
+      --role "$role" --kafka-cluster "$cluster" -o json 2>/dev/null)
+    bindings_json+="$role_json"$'\n'
+  done
+
+  # 3. 取出 principal，排序、去掉重複
+  grep -o '"principal": *"[^"]*"' <<<"$bindings_json" | cut -d'"' -f4 | LC_ALL=C sort -u
 }
 
 # bindings_of <principal> <cluster id>：這個 principal 的每條 binding 一行，去掉表頭與對齊空白、排好順序
 #   輸入：  User:svc-backup | SecurityAdmin | Cluster       |      |
 #   輸出：User:svc-backup|SecurityAdmin|Cluster||
 bindings_of() {
-  cli_as svc-backup iam rbac role-binding list --principal "$1" --kafka-cluster "$2" | tail -n +3 | sed 's/ *| */|/g; s/^ *//; s/ *$//' | LC_ALL=C sort
+  cli_as svc-backup iam rbac role-binding list --principal "$1" --kafka-cluster "$2" \
+    | binding_table_to_lines \
+    | LC_ALL=C sort
+}
+
+# binding_table_to_lines：stdin 的 role-binding 表格，去掉兩行表頭與對齊空白（例子見 bindings_of）
+binding_table_to_lines() {
+  tail -n +3 | sed 's/ *| */|/g; s/^ *//; s/ *$//'
 }
 
 # rbac_sections：每個有 binding 的 principal 一段：「== principal」，底下是它的每一條 binding
@@ -198,7 +247,7 @@ rbac_sections() {
 }
 
 run_backup() {
-  local out failed="" file line_count principal_count
+  local out failed="" file file_name line_count principal_count
 
   if [ ! -s "$BACKUP_CLIENT_CONF" ]; then
     die "沒有 $BACKUP_CLIENT_CONF：先跑 bash $0 grant"
@@ -220,7 +269,10 @@ run_backup() {
 
   # 3. 這次每個檔的 sha256（比對兩天的備份就看它）
   (
-    cd "$out" || exit 1
+    if ! cd "$out"; then
+      exit 1
+    fi
+
     sha256sum -- *.txt > SHA256SUMS
   )
 
@@ -230,7 +282,8 @@ run_backup() {
   # 5. 每個檔幾行
   for file in "$out"/*.txt; do
     line_count=$(wc -l < "$file")
-    log "$(printf '%-18s %4s 行' "$(basename "$file")" "$line_count")"
+    file_name=$(basename "$file")
+    log "$(printf '%-18s %4s 行' "$file_name" "$line_count")"
   done
 
   # 6. 結果寫 syslog
@@ -297,14 +350,21 @@ EOF
 #   輸入（兩個檔各一行）：aaa…  acls.txt
 #   輸出：acls.txt           相同
 sums_comparison() {
-  local older_sums newer_sums
+  local older_sums newer_sums file_name older_sum newer_sum
 
   older_sums=$(mktemp)
   newer_sums=$(mktemp)
   sort -k2 "$1" > "$older_sums"
   sort -k2 "$2" > "$newer_sums"
 
-  join -1 2 -2 2 "$older_sums" "$newer_sums" | awk '{printf "%-18s %s\n", $1, ($2 == $3 ? "相同" : "有變")}'
+  # join 的輸出：檔名 舊的sha256 新的sha256
+  join -1 2 -2 2 "$older_sums" "$newer_sums" | while read -r file_name older_sum newer_sum; do
+    if [ "$older_sum" = "$newer_sum" ]; then
+      printf '%-18s %s\n' "$file_name" "相同"
+    else
+      printf '%-18s %s\n' "$file_name" "有變"
+    fi
+  done
 
   rm -f "$older_sums" "$newer_sums"
 }
@@ -325,7 +385,7 @@ new_topics() {
 }
 
 compare() {
-  local backup_count older newer line added
+  local backup_count older newer older_path newer_path line added
 
   # 1. 最近的兩份
   backup_count=$(ls -d "$BACKUP_ROOT"/20* 2>/dev/null | wc -l)
@@ -334,8 +394,10 @@ compare() {
     die "$BACKUP_ROOT 裡不到兩次備份"
   fi
 
-  older=$(basename "$(ls -d "$BACKUP_ROOT"/20* | tail -2 | head -1)")
-  newer=$(basename "$(ls -d "$BACKUP_ROOT"/20* | tail -1)")
+  older_path=$(ls -d "$BACKUP_ROOT"/20* | tail -2 | head -1)
+  newer_path=$(ls -d "$BACKUP_ROOT"/20* | tail -1)
+  older=$(basename "$older_path")
+  newer=$(basename "$newer_path")
   section "23.5 比對 $older → $newer"
 
   # 2. 每個檔：依檔名把兩份 SHA256SUMS 接起來
@@ -357,7 +419,10 @@ compare() {
 #   輸入：Topic: orders.events	TopicId: …	PartitionCount: 3	ReplicationFactor: 3	Configs: …
 #   topic_field 目錄 orders.events PartitionCount → 3
 topic_field() {
-  grep -P "^Topic: $2\t" "$1/topics.txt" | head -1 | sed -n "s/.*$3: \([0-9]*\).*/\1/p"
+  local first_line
+
+  first_line=$(grep -P "^Topic: $2\t" "$1/topics.txt" | head -1)
+  grep -o "$3: [0-9]*" <<<"$first_line" | tail -1 | cut -d' ' -f2
 }
 
 # topic_dynamic_configs <備份目錄> <topic>：topic-configs.txt 裡這個 topic 的動態設定，一行一個 key=value
@@ -365,6 +430,7 @@ topic_field() {
 #           retention.ms=3600000 sensitive=false synonyms={…}
 #   輸出：retention.ms=3600000
 topic_dynamic_configs() {
+  # lint-ok: 要找出「某一個 topic 那一段」到下一段之前，grep／cut 做不到；函式上面有輸入輸出例子
   awk -v t="$2" '$0 == "Dynamic configs for topic " t " are:"{p=1;next} /^Dynamic configs/{p=0} p{print $1}' "$1/topic-configs.txt"
 }
 
@@ -385,6 +451,7 @@ binding_args() {
 # rbac_section_of_user <備份目錄> <帳號>：rbac.txt 裡這個帳號那一段（「== User:<帳號>」到下一個「== 」之前）
 #   輸出：User:app-orders-a|DeveloperRead|Topic|orders.|PREFIXED
 rbac_section_of_user() {
+  # lint-ok: 要找出「某一個帳號那一段」到下一段之前，grep／cut 做不到；函式上面有輸出例子
   awk -v u="User:$2" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$1/rbac.txt"
 }
 
@@ -395,7 +462,11 @@ scram_iterations() {
 
 # set_scram_password <帳號> <iterations=N> <密碼檔>：建 SCRAM 帳號。出錯時 kafka-configs 會印出密碼，所以輸出丟掉
 set_scram_password() {
-  kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$1" --add-config "SCRAM-SHA-512=[$2,password=$(cat "$3")]" >/dev/null 2>&1
+  local password
+
+  password=$(cat "$3")
+  kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$1" \
+    --add-config "SCRAM-SHA-512=[$2,password=$password]" >/dev/null 2>&1
 }
 
 # 23.6 還原：從備份目錄重建 topic（partition 數、RF、動態設定）、一個 principal 的 role binding、SCRAM 帳號（迭代次數、配額）。
@@ -429,7 +500,9 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
       config_args+=(--config "$config_value")
     done
 
-    if kafka-topics "${ADMIN_ARGS[@]}" --create --topic "$topic" --partitions "$partitions" --replication-factor "$replication_factor" "${config_args[@]}" >/dev/null 2>&1; then
+    if kafka-topics "${ADMIN_ARGS[@]}" --create --topic "$topic" \
+         --partitions "$partitions" --replication-factor "$replication_factor" \
+         "${config_args[@]}" >/dev/null 2>&1; then
       ok "topic $topic：partitions=$partitions rf=$replication_factor 動態設定 $(( ${#config_args[@]} / 2 )) 個"
     else
       fail "topic $topic 建不回來"
@@ -438,7 +511,8 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
 
   # 2. 這個帳號的 role binding、SCRAM、配額
   if [ "$user" != - ]; then
-    local binding_count=0 principal role resource_type resource_name pattern iterations quota cluster bindings_file binding_arguments
+    local binding_count=0 principal role resource_type resource_name pattern
+    local iterations quota cluster bindings_file binding_arguments
 
     cluster=$(cluster_id)
     bindings_file=$(mktemp)
@@ -476,7 +550,8 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
     fi
 
     if [ -n "$quota" ]; then
-      if kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$user" --add-config "$quota" >/dev/null 2>&1; then
+      if kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$user" \
+           --add-config "$quota" >/dev/null 2>&1; then
         ok "配額：$quota"
       else
         fail "配額 $quota"
@@ -486,16 +561,27 @@ restore() {   # restore <備份目錄> <topic|-> <帳號|->
 
   # 3. 驗證：還原之後實際看到的樣子
   if [ "$topic" != - ]; then
-    summary=$(kafka-topics "${ADMIN_ARGS[@]}" --describe --topic "$topic" 2>/dev/null | head -1 | grep -o 'PartitionCount: [0-9]*.ReplicationFactor: [0-9]*' | tr '\t' ' ')
-    topic_configs=$(kafka-configs "${ADMIN_ARGS[@]}" --describe --entity-type topics --entity-name "$topic" 2>/dev/null | grep -o '^  [a-z.]*=[^ ]*' | tr -d ' ' | paste -sd, -)
+    local describe_line config_lines
+
+    # describe 第一行：partition 數與 RF
+    describe_line=$(kafka-topics "${ADMIN_ARGS[@]}" --describe --topic "$topic" 2>/dev/null | head -1)
+    summary=$(grep -o 'PartitionCount: [0-9]*.ReplicationFactor: [0-9]*' <<<"$describe_line" | tr '\t' ' ')
+
+    # 動態設定：key=value 用逗號接起來
+    config_lines=$(kafka-configs "${ADMIN_ARGS[@]}" --describe --entity-type topics --entity-name "$topic" 2>/dev/null \
+      | grep -o '^  [a-z.]*=[^ ]*')
+    topic_configs=$(tr -d ' ' <<<"$config_lines" | paste -sd, -)
     log "describe：$summary；$topic_configs"
   fi
 
   if [ "$user" != - ]; then
     local bindings_now settings_now
 
-    bindings_now=$(cli_as svc-ops iam rbac role-binding list --principal "User:$user" --kafka-cluster "$cluster" 2>/dev/null | awk -v p="User:$user" 'index($0, p) {c++} END {print c + 0}')
-    settings_now=$(kafka-configs "${ADMIN_ARGS[@]}" --describe --entity-type users --entity-name "$user" 2>/dev/null | awk '/./ {c++} END {print c + 0}')
+    bindings_now=$(cli_as svc-ops iam rbac role-binding list \
+        --principal "User:$user" --kafka-cluster "$cluster" 2>/dev/null \
+      | awk -v p="User:$user" 'index($0, p) {c++} END {print c + 0}')
+    settings_now=$(kafka-configs "${ADMIN_ARGS[@]}" --describe --entity-type users --entity-name "$user" 2>/dev/null \
+      | awk '/./ {c++} END {print c + 0}')
     log "binding：$bindings_now 條；帳號設定：$settings_now 行"
   fi
 
@@ -520,12 +606,25 @@ scram_users() {
 #   輸入：Quota configs for user-principal 'app-orders-a' are producer_byte_rate=1048576.0, consumer_byte_rate=2097152.0
 #   輸出：app-orders-a producer_byte_rate=1048576,consumer_byte_rate=2097152
 quota_lines() {
-  grep "^Quota configs for user-principal" "$1/users.txt" | sed "s/^Quota configs for user-principal '\([^']*\)' are /\1 /; s/\.0\b//g; s/, /,/g"
+  # 依序：拿掉開頭到帳號前的引號；帳號後的「' are 」換成一個空白；1048576.0 → 1048576；「, 」→「,」
+  grep "^Quota configs for user-principal" "$1/users.txt" \
+    | sed "s/^Quota configs for user-principal '//; s/' are / /; s/\.0\b//g; s/, /,/g"
 }
 
 # acl_operation_name <DESCRIBE_CONFIGS 這種寫法>：kafka-acls 要的寫法，例：DescribeConfigs
 acl_operation_name() {
-  awk -v s="$1" 'BEGIN{n=split(tolower(s),a,"_"); for(i=1;i<=n;i++) printf "%s", toupper(substr(a[i],1,1)) substr(a[i],2)}'
+  local lower_name=${1,,} result="" word
+  local -a words
+
+  # 1. 全部小寫後，依底線拆成一個一個字
+  IFS='_' read -ra words <<<"$lower_name"
+
+  # 2. 每個字第一個字母大寫，接起來
+  for word in "${words[@]}"; do
+    result+=${word^}
+  done
+
+  printf '%s' "$result"
 }
 
 # restore_acls <備份目錄>：acls.txt 一條一行：資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY
@@ -581,7 +680,8 @@ restore_acls() {
       fi
     fi
 
-    if kafka-acls "${ADMIN_ARGS[@]}" --add "${who[@]}" --operation "$operation_name" "${resource[@]}" >/dev/null 2>&1; then
+    if kafka-acls "${ADMIN_ARGS[@]}" --add "${who[@]}" \
+         --operation "$operation_name" "${resource[@]}" >/dev/null 2>&1; then
       count=$((count + 1))
     else
       fail "ACL $resource_type:$name $principal $operation"
@@ -589,6 +689,15 @@ restore_acls() {
   done < "$dir/acls.txt"
 
   ok "ACL：$count 條"
+}
+
+# broker_default_configs <備份目錄>：broker-configs.txt 裡叢集層級的預設值，一行一個 key=value
+#   輸入：Default configs for brokers are:
+#           log.retention.ms=3600000 sensitive=false synonyms={…}
+#   輸出：log.retention.ms=3600000
+broker_default_configs() {
+  # lint-ok: 要取「標題那一行之後」每行的第一欄，grep／cut 做不到；函式上面有輸入輸出例子
+  awk '/^Default configs for brokers/{p=1;next} p{print $1}' "$1/broker-configs.txt"
 }
 
 # 26.4 叢集重置之後全部建回來：應用程式 topic（名稱有「.」、不是底線開頭）、全部 role binding、SCRAM 帳號（密碼讀 ~/secrets）、配額、ACL、broker 動態設定。
@@ -618,7 +727,9 @@ restore_all() {   # restore_all <備份目錄>
       config_args+=(--config "$config_value")
     done
 
-    if kafka-topics "${ADMIN_ARGS[@]}" --create --if-not-exists --topic "$topic" --partitions "$partitions" --replication-factor "$replication_factor" "${config_args[@]}" >/dev/null 2>&1; then
+    if kafka-topics "${ADMIN_ARGS[@]}" --create --if-not-exists --topic "$topic" \
+         --partitions "$partitions" --replication-factor "$replication_factor" \
+         "${config_args[@]}" >/dev/null 2>&1; then
       count=$((count + 1))
     else
       fail "topic $topic"
@@ -698,7 +809,8 @@ restore_all() {   # restore_all <備份目錄>
   quota_lines "$dir" > "$quotas_file"
 
   while read -r user quota; do
-    if kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$user" --add-config "$quota" >/dev/null 2>&1; then
+    if kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$user" \
+         --add-config "$quota" >/dev/null 2>&1; then
       count=$((count + 1))
     else
       fail "配額 $user"
@@ -714,8 +826,9 @@ restore_all() {   # restore_all <備份目錄>
   # 6. broker 動態設定（叢集層級的預設值）
   count=0
 
-  for config_value in $(awk '/^Default configs for brokers/{p=1;next} p{print $1}' "$dir/broker-configs.txt"); do
-    if kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type brokers --entity-default --add-config "$config_value" >/dev/null 2>&1; then
+  for config_value in $(broker_default_configs "$dir"); do
+    if kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type brokers --entity-default \
+         --add-config "$config_value" >/dev/null 2>&1; then
       count=$((count + 1))
     else
       fail "broker 設定 $config_value"
@@ -731,16 +844,22 @@ drill_remove_bindings() {
   local user=$1 topic=$2 cluster=$3 role
 
   for role in DeveloperRead DeveloperWrite; do
-    mds_write cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cluster" --force >/dev/null 2>&1
+    mds_write cli_as svc-ops iam rbac role-binding delete \
+      --principal "User:$user" --role "$role" --resource "Topic:$topic" \
+      --kafka-cluster "$cluster" --force >/dev/null 2>&1
   done
 
-  mds_write cli_as svc-ops iam rbac role-binding delete --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cluster" --force >/dev/null 2>&1
+  mds_write cli_as svc-ops iam rbac role-binding delete \
+    --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix \
+    --kafka-cluster "$cluster" --force >/dev/null 2>&1
 }
 
 # drill_remove_account <帳號>：刪掉演練帳號（SCRAM 憑據和配額要分開刪，合在一起 kafka-configs 會整句拒絕）
 drill_remove_account() {
-  kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$1" --delete-config SCRAM-SHA-512 >/dev/null 2>&1
-  kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$1" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
+  kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$1" \
+    --delete-config SCRAM-SHA-512 >/dev/null 2>&1
+  kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$1" \
+    --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
 }
 
 # 23.6 演練（lab 與驗收用）：建演練物件 → 備份 → 誤刪 → 還原 → 用該帳號寫讀一筆 → 清掉
@@ -749,13 +868,15 @@ drill() {
   local user=app-restore
   local cluster dir client_conf role
   local topic_lines principal_lines topics_left bindings_left settings_left left got=0
+  local user_password scram_module
 
   cluster=$(cluster_id)
 
   # 1. 建演練物件：topic 帶動態設定、帳號帶配額、三條 binding
   section "23.6 還原演練：建演練物件（topic 帶動態設定、帳號帶配額、三條 binding）、備份"
 
-  if ! kafka-topics "${ADMIN_ARGS[@]}" --create --if-not-exists --topic "$topic" --partitions 3 --replication-factor 3 --config retention.ms=3600000 >/dev/null 2>&1; then
+  if ! kafka-topics "${ADMIN_ARGS[@]}" --create --if-not-exists --topic "$topic" \
+       --partitions 3 --replication-factor 3 --config retention.ms=3600000 >/dev/null 2>&1; then
     die "建 $topic 失敗"
   fi
 
@@ -768,17 +889,22 @@ drill() {
     die "建 SCRAM $user 失敗"
   fi
 
-  if ! kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$user" --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null 2>&1; then
+  if ! kafka-configs "${ADMIN_ARGS[@]}" --alter --entity-type users --entity-name "$user" \
+       --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' >/dev/null 2>&1; then
     die "配額失敗"
   fi
 
   for role in DeveloperRead DeveloperWrite; do
-    if ! mds_write cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role "$role" --resource "Topic:$topic" --kafka-cluster "$cluster" >/dev/null 2>&1; then
+    if ! mds_write cli_as svc-ops iam rbac role-binding create \
+         --principal "User:$user" --role "$role" --resource "Topic:$topic" \
+         --kafka-cluster "$cluster" >/dev/null 2>&1; then
       die "binding $role 失敗"
     fi
   done
 
-  if ! mds_write cli_as svc-ops iam rbac role-binding create --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster "$cluster" >/dev/null 2>&1; then
+  if ! mds_write cli_as svc-ops iam rbac role-binding create \
+       --principal "User:$user" --role DeveloperRead --resource Group:restore- --prefix \
+       --kafka-cluster "$cluster" >/dev/null 2>&1; then
     die "binding Group 失敗"
   fi
 
@@ -805,9 +931,13 @@ drill() {
   drill_remove_account "$user"
 
   # 4. 三樣都沒了
-  topics_left=$(kafka-topics "${ADMIN_ARGS[@]}" --list 2>/dev/null | awk -v t="$topic" '$0 == t {c++} END {print c + 0}')
-  bindings_left=$(cli_as svc-ops iam rbac role-binding list --principal "User:$user" --kafka-cluster "$cluster" 2>/dev/null | awk -v p="User:$user" 'index($0, p) {c++} END {print c + 0}')
-  settings_left=$(kafka-configs "${ADMIN_ARGS[@]}" --describe --entity-type users --entity-name "$user" 2>/dev/null | awk '/./ {c++} END {print c + 0}')
+  topics_left=$(kafka-topics "${ADMIN_ARGS[@]}" --list 2>/dev/null \
+    | awk -v t="$topic" '$0 == t {c++} END {print c + 0}')
+  bindings_left=$(cli_as svc-ops iam rbac role-binding list \
+      --principal "User:$user" --kafka-cluster "$cluster" 2>/dev/null \
+    | awk -v p="User:$user" 'index($0, p) {c++} END {print c + 0}')
+  settings_left=$(kafka-configs "${ADMIN_ARGS[@]}" --describe --entity-type users --entity-name "$user" 2>/dev/null \
+    | awk '/./ {c++} END {print c + 0}')
   left="topic $topics_left binding $bindings_left 帳號設定 $settings_left"
 
   if [ "$left" = "topic 0 binding 0 帳號設定 0" ]; then
@@ -823,10 +953,16 @@ drill() {
   section "23.6 驗證：$user 從 9095 寫一筆、讀回一筆；再清掉演練物件"
   client_conf=$(mktemp)
   grep -v '^sasl.jaas.config' "$CONF_DIR/${SCRAM_APPS%% *}.properties" > "$client_conf"
-  printf 'sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\n' "$user" "$(cat "$SECRETS_DIR/$user.pass")" >> "$client_conf"
+  user_password=$(cat "$SECRETS_DIR/$user.pass")
+  scram_module=org.apache.kafka.common.security.scram.ScramLoginModule
+  printf 'sasl.jaas.config=%s required username="%s" password="%s";\n' \
+    "$scram_module" "$user" "$user_password" >> "$client_conf"
 
-  if echo "restore-$(date +%s)" | kafka-console-producer --bootstrap-server "$BROKER_CLIENT" --producer.config "$client_conf" --topic "$topic" >/dev/null 2>&1; then
-    got=$(kafka-console-consumer --bootstrap-server "$BROKER_CLIENT" --consumer.config "$client_conf" --topic "$topic" --group restore-check --from-beginning --max-messages 1 --timeout-ms 20000 2>/dev/null | awk '/restore-/ {c++} END {print c + 0}')
+  if echo "restore-$(date +%s)" | kafka-console-producer --bootstrap-server "$BROKER_CLIENT" \
+       --producer.config "$client_conf" --topic "$topic" >/dev/null 2>&1; then
+    got=$(kafka-console-consumer --bootstrap-server "$BROKER_CLIENT" --consumer.config "$client_conf" \
+        --topic "$topic" --group restore-check --from-beginning --max-messages 1 --timeout-ms 20000 2>/dev/null \
+      | awk '/restore-/ {c++} END {print c + 0}')
   fi
 
   rm -f "$client_conf"
@@ -874,6 +1010,7 @@ case $ACTION in
     [ "$FAIL_COUNT" = 0 ]
     ;;
   *)
-    die "用法：bash $0 grant|run|schedule|compare|restore <備份目錄> <topic|-> <帳號|->|drill|restore-all <備份目錄>"
+    usage='grant|run|schedule|compare|restore <備份目錄> <topic|-> <帳號|->|drill|restore-all <備份目錄>'
+    die "用法：bash $0 $usage"
     ;;
 esac

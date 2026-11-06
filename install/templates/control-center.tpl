@@ -41,7 +41,7 @@ public.key.path=/etc/confluent/ssl/mds-token-public.pem
 ############################# HTTPS UI #############################
 confluent.controlcenter.rest.listeners=https://0.0.0.0:9021
 confluent.controlcenter.rest.ssl.keystore.type=PKCS12
-confluent.controlcenter.rest.ssl.keystore.location=/etc/confluent/ssl/cp-server.p12
+confluent.controlcenter.rest.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
 confluent.controlcenter.rest.ssl.keystore.password=${STORE_PASSWORD}
 confluent.controlcenter.rest.ssl.key.password=${STORE_PASSWORD}
 confluent.controlcenter.rest.ssl.truststore.type=PKCS12

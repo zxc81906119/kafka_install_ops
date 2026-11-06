@@ -21,7 +21,10 @@ landing_checksums_ok() {
   )
 }
 
-ask_bank "3.1 資安：落地區所有檔案（rpm/ 安裝基底、rpm-target/ 遷移目標、tools/、gpg-keys/、monitoring/、SHA256SUMS、bank/ 的兩個 JDK）上傳行內惡意程式掃描平台取得 OK 報告；" \
+scan_request="3.1 資安：落地區所有檔案（rpm/ 安裝基底、rpm-target/ 遷移目標、tools/、gpg-keys/、monitoring/、SHA256SUMS、"
+scan_request+="bank/ 的兩個 JDK）上傳行內惡意程式掃描平台取得 OK 報告；"
+
+ask_bank "$scan_request" \
          "    開單附安裝檔、掃描報告、SHA256SUMS。注意 confluent-security（約 1 GB）、C3（約 1 GB）單檔超過 1 GB，先確認平台上限；兩套合計約 6 GB。" \
          "3.2 檔案交換：核准後把整個落地區送到操作機 $LANDING（唯讀 a-w）。"
 
@@ -45,7 +48,8 @@ if ! rpm --import "$LANDING/gpg-keys/confluent.asc" "$LANDING/gpg-keys/confluent
 fi
 
 rpm_count=$(ls "$LANDING"/rpm/*.rpm "$LANDING"/rpm-target/*.rpm | wc -l)
-bad_signature_count=$(rpm -K "$LANDING"/rpm/*.rpm "$LANDING"/rpm-target/*.rpm | awk '!/digests signatures OK$/ {count++} END {print count + 0}')
+bad_signature_count=$(rpm -K "$LANDING"/rpm/*.rpm "$LANDING"/rpm-target/*.rpm \
+  | awk '!/digests signatures OK$/ {c++} END {print c + 0}')
 
 if [ "$bad_signature_count" = 0 ]; then
   ok "rpm -K：兩套共 $rpm_count 個 RPM 都是 digests signatures OK"

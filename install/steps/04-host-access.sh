@@ -61,11 +61,20 @@ chmod 0600 ~/.ssh/config
 public_key_line=$(authorized_keys_line)
 ok "公鑰行（整行、不換行，放進每台 cpuser 的 authorized_keys）：$public_key_line"
 
+sshd_request="        /etc/ssh/sshd_config.d/50-cpuser.conf 寫 Match User $SSH_USER / PasswordAuthentication no / "
+sshd_request+="AuthenticationMethods publickey，重載 sshd。"
+
+key_request="    4.3 上面那一行公鑰行放進 /home/$SSH_USER/.ssh/authorized_keys（目錄 0700、檔 0600、擁有者 $SSH_USER）；"
+key_request+="$REPO_HOST 上 $REPO_DEPLOY_USER 的 authorized_keys 也放同一行。"
+
+sudo_request="        安裝與升級期的 sudo：/etc/sudoers.d/$SSH_USER 寫 $SSH_USER ALL=(ALL) NOPASSWD: ALL"
+sudo_request+="（0440，visudo -cf 檢查）；交付時移除（第 16、19 站）。"
+
 ask_bank "第 4 章 OS 團隊（依變更單；每台主機，含操作機自己 $OPS_HOST）：" \
          "    4.1 建本機帳號 $SSH_USER：UID／GID 固定 $SSH_USER_ID、家目錄 /home/$SSH_USER、shell /bin/bash、密碼保持鎖定（不要設密碼）。" \
-         "        /etc/ssh/sshd_config.d/50-cpuser.conf 寫 Match User $SSH_USER / PasswordAuthentication no / AuthenticationMethods publickey，重載 sshd。" \
-         "    4.3 上面那一行公鑰行放進 /home/$SSH_USER/.ssh/authorized_keys（目錄 0700、檔 0600、擁有者 $SSH_USER）；$REPO_HOST 上 $REPO_DEPLOY_USER 的 authorized_keys 也放同一行。" \
-         "        安裝與升級期的 sudo：/etc/sudoers.d/$SSH_USER 寫 $SSH_USER ALL=(ALL) NOPASSWD: ALL（0440，visudo -cf 檢查）；交付時移除（第 16、19 站）。"
+         "$sshd_request" \
+         "$key_request" \
+         "$sudo_request"
 
 section "4.4 確認：每台都能用 $SSH_USER 的金鑰登入、有安裝期 sudo、密碼鎖定且 sshd 只收金鑰（第一次會把主機金鑰記進 known_hosts）"
 for host in $ALL_HOSTS; do
@@ -86,7 +95,10 @@ uid=$(id -u)
 lock_state=$(sudo -n getent shadow "$me" 2>/dev/null | cut -d: -f2 | cut -c1)
 
 # 3. sshd 對這個帳號實際生效的設定：要不要密碼、允許哪些驗證方式
-sshd_state=$(sudo -n sshd -T -C "user=$me,host=localhost,addr=127.0.0.1" 2>/dev/null | awk '/^passwordauthentication /{password=$2} /^authenticationmethods /{methods=$2} END{print password, methods}')
+sshd_settings=$(sudo -n sshd -T -C "user=$me,host=localhost,addr=127.0.0.1" 2>/dev/null)
+password_setting=$(awk '/^passwordauthentication / {print $2}' <<<"$sshd_settings")
+methods_setting=$(awk '/^authenticationmethods / {print $2}' <<<"$sshd_settings")
+sshd_state="$password_setting $methods_setting"
 
 echo "$me $(hostname) $sudo_state $uid $lock_state $sshd_state"
 EOF

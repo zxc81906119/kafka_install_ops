@@ -96,7 +96,7 @@ async function main() {
   const slides = [];
 
   slides.push({ kind: "cover", title: "Confluent Platform 手冊導覽", sub: "離線銀行環境的安裝、維運與升級遷移" });
-  slides.push({ kind: "outline", title: "大綱", items: ["開場：任務、環境與版本路徑", "安裝篇：第 2–19 章", "維運篇：第 20–28 章", "升級遷移篇：第 29–31 章", "手冊的驗證狀態"] });
+  slides.push({ kind: "outline", title: "大綱", items: ["開場：任務、環境與版本路徑", "安裝篇：第 2–19 章", "維運篇：第 20–28 章", "升級遷移篇：第 29–32 章", "手冊的驗證狀態"] });
   slides.push({
     kind: "contents", tag: "手冊全貌", title: "手冊分成三篇，每一步都標明誰做、在哪台", color: PARTS.install.color,
     rows: CONTENTS.map((c) => ({ name: PARTS[c.part].name, color: PARTS[c.part].color, range: c.range, desc: c.desc, items: c.items })),
@@ -112,7 +112,7 @@ async function main() {
   slides.push({ kind: "divider", title: "維運篇", sub: "第 20–28 章\n上線後的輪替、監控、備份、節點與故障處理" });
   for (const s of OPS) slides.push(await prepare(s, "ops"));
 
-  slides.push({ kind: "divider", title: "升級遷移篇", sub: "第 29–31 章\n從基底遷移到目標版本，每一段都再驗收" });
+  slides.push({ kind: "divider", title: "升級遷移篇", sub: "第 29–32 章\n從基底遷移到目標版本，每一段都再驗收" });
   for (const s of MIGRATE) slides.push(await prepare(s, "migrate"));
 
   slides.push(await prepare(CLOSING, "close"));

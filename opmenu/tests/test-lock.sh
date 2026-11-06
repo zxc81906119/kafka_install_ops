@@ -2,7 +2,10 @@
 # 測並行鎖（core_lock_acquire／core_lock_release）：有人拿著時拒絕、拿的人的行程已經不在就接手、放掉後可以再拿。
 # 不需要叢集。鎖放在暫存目錄。
 #   ./test-lock.sh      全部通過印 "ALL PASS",有失敗回傳 1
-cd "$(dirname "$0")/.." || exit 1
+if ! cd "$(dirname "$0")/.."; then
+  exit 1
+fi
+
 export OPMENU_HOME="$PWD" OPMENU_LOG="$(mktemp)" OPMENU_SYSLOG=0
 . lib/defaults.sh
 . lib/common.sh

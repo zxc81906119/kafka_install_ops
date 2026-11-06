@@ -34,7 +34,9 @@ run_32() {
 
   # 2. 讀目前的值（讀不到就顯示「未知」）
   local current
-  current=$(be_kafka kafka-configs --describe --entity-type topics --entity-name "$topic" --all 2>/dev/null | grep -o 'retention.ms=[0-9-]*' | head -1)
+  current=$(be_kafka kafka-configs --describe --entity-type topics --entity-name "$topic" --all 2>/dev/null \
+    | grep -o 'retention.ms=[0-9-]*' \
+    | head -1)
 
   if [ -z "$current" ]; then
     current="未知"

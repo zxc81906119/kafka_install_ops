@@ -6,27 +6,64 @@
 #
 # 印出：非 0 的 rc／STOP、可疑的輸出行（前面標是哪一塊）。可疑字樣都是「預期外」的；文件本來就預期會被拒的
 # 反向測試（→ 401、被拒、AuthorizationException、TLS 直接拒絕…）先排除。結束碼：0 沒有可疑、1 有。
-[ $# -ge 1 ] || { echo "用法：bash $0 <紀錄檔>…"; exit 2; }
+if [ $# -lt 1 ]; then
+  echo "用法：bash $0 <紀錄檔>…"
+  exit 2
+fi
 
-SUSPICIOUS='a password is required|Permission denied|FAIL |FAIL$|MDS=000|REST=000|UI=000|=000 |驗不過|No such file|ERROR|Error:|登入失敗|login: 401|login after [a-z ]*: 401|AUTH_FAIL|MISMATCH|=DIFF|=OLD|chain=FAIL|missing operand|command not found|syntax error|unexpected EOF|Traceback|Connection refused|timed out|沒有回應|STOP at'
+SUSPICIOUS='a password is required|Permission denied|FAIL |FAIL$|MDS=000|REST=000|UI=000|=000 |驗不過'
+SUSPICIOUS+='|No such file|ERROR|Error:|登入失敗|login: 401|login after [a-z ]*: 401|AUTH_FAIL|MISMATCH'
+SUSPICIOUS+='|=DIFF|=OLD|chain=FAIL|missing operand|command not found|syntax error|unexpected EOF'
+SUSPICIOUS+='|Traceback|Connection refused|timed out|沒有回應|STOP at'
 # 檢查的標籤後面沒有值（「alice 建 topic：」後面空白＝指令沒有輸出，多半是前提不成立）：不受下面的排除影響
 EMPTY_VALUE='：[[:space:]]*$'
 # 反向測試與已知無害的訊息（新增排除前先確認那行在文件裡就是預期輸出）
-EXPECTED='anon=401|http=000 metrics=|→ 401|other-cert=401|no-cert=000|TLS 直接拒絕|（應被拒）|被拒|AuthorizationException|DENIED +x[0-9]|ignore[.]partial[.]result|LDAP_BIND_PASSWORD|讀訊息：|建 topic：|改 role binding：|^ok   |Permission denied [(]publickey[)]|"severity": "ERROR"|ProblemSeverity|kb0[1-4]=000 |ERROR 行）：0；| 8090=000 9095=通'
+EXPECTED='anon=401|http=000 metrics=|→ 401|other-cert=401|no-cert=000|TLS 直接拒絕|（應被拒）|被拒'
+EXPECTED+='|AuthorizationException|DENIED +x[0-9]|ignore[.]partial[.]result|LDAP_BIND_PASSWORD'
+EXPECTED+='|讀訊息：|建 topic：|改 role binding：|^ok   |Permission denied [(]publickey[)]'
+EXPECTED+='|"severity": "ERROR"|ProblemSeverity|kb0[1-4]=000 |ERROR 行）：0；| 8090=000 9095=通'
 
-status=0
-for log in "$@"; do
-  echo "== $log"
-  bad_rc=$(grep -cE '===== rc=[1-9]|^STOP at' "$log")
-  blocks=$(grep -c '^===== BLOCK' "$log"); passed=$(grep -c '===== rc=0' "$log"); skipped=$(grep -c '^===== BLOCK .* skipped' "$log")
-  echo "   塊：$blocks（rc=0 $passed、略過 $skipped、失敗 $bad_rc）"
-  [ "$bad_rc" = 0 ] || { grep -E '===== rc=[1-9]|^STOP at' "$log" | head -5 | sed 's/^/   /'; status=1; }
-  hits=$(awk -v s="$SUSPICIOUS" -v e="$EXPECTED" -v v="$EMPTY_VALUE" '
+# suspicious_lines <紀錄檔>：印出可疑的輸出行，前面標是哪一塊
+#   輸入的兩行：===== BLOCK 5.1 …  接著  ls: No such file
+#   輸出的一行：   5.1 … | ls: No such file
+# 這段 awk 邊讀邊記住目前在哪一塊，同時比對兩組 regex，grep 做不到，所以保留 awk
+suspicious_lines() {
+  awk -v s="$SUSPICIOUS" -v e="$EXPECTED" -v v="$EMPTY_VALUE" '
     /^===== BLOCK/ { block = substr($0, 13, 70); next }
     /^===== rc=/   { next }
     $0 ~ v { printf "   %s | %s（冒號後沒有值）\n", block, substr($0, 1, 140); next }
     /^FAIL / { printf "   %s | %s\n", block, substr($0, 1, 140); next }   # 檢查清單自己標的 FAIL：內容再像預期（例如「→ 401」）也一律算可疑
-    $0 ~ s && $0 !~ e { printf "   %s | %s\n", block, substr($0, 1, 140) }' "$log")
-  if [ -n "$hits" ]; then echo "   可疑的輸出（rc 可能是 0）："; echo "$hits" | head -40; status=1; else echo "   沒有可疑的輸出"; fi
+    $0 ~ s && $0 !~ e { printf "   %s | %s\n", block, substr($0, 1, 140) }' "$1"   # lint-ok: 這是 awk 語法的 &&，不是串接指令
+}
+
+status=0
+
+for log in "$@"; do
+  echo "== $log"
+
+  # 1. 各種塊的數量
+  bad_rc=$(grep -cE '===== rc=[1-9]|^STOP at' "$log")
+  blocks=$(grep -c '^===== BLOCK' "$log")
+  passed=$(grep -c '===== rc=0' "$log")
+  skipped=$(grep -c '^===== BLOCK .* skipped' "$log")
+  echo "   塊：$blocks（rc=0 $passed、略過 $skipped、失敗 $bad_rc）"
+
+  # 2. 失敗的塊
+  if [ "$bad_rc" != 0 ]; then
+    grep -E '===== rc=[1-9]|^STOP at' "$log" | head -5 | sed 's/^/   /'
+    status=1
+  fi
+
+  # 3. rc 是 0 但輸出可疑
+  hits=$(suspicious_lines "$log")
+
+  if [ -n "$hits" ]; then
+    echo "   可疑的輸出（rc 可能是 0）："
+    echo "$hits" | head -40
+    status=1
+  else
+    echo "   沒有可疑的輸出"
+  fi
 done
+
 exit $status

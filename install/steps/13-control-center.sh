@@ -5,7 +5,7 @@
 # 做什麼：派送憑證 → Prometheus／Alertmanager 的 TLS 與設定（*-generated.yml 要給 C3 自己能寫）
 #         → control-center.tpl 產生設定 → drop-in（含「等 MDS 起來才啟動」：C3 比 MDS 先起來會卡住不開 9021）
 #         → 依序啟動 prometheus、alertmanager、C3，等 UI 回 200。
-# 需要什麼：第 10、11 站的 broker、MDS、RBAC；第 9 站的 svc-c3、c3-monitoring、cp-server 憑證
+# 需要什麼：第 10、11 站的 broker、MDS、RBAC；第 9 站的 svc-c3 憑證
 # 產出什麼：~/conf/c3-01.control-center.properties、~/conf/prometheus-generated.yml
 # 能不能重跑：安全。第 15 站做過（Secret Protection）就照樣加密。
 set -uo pipefail
@@ -14,10 +14,12 @@ source "$INSTALL_DIR/lib/log.sh"
 source "$INSTALL_DIR/lib/ssh.sh"
 source "$INSTALL_DIR/lib/render.sh"
 
-section "派送憑證（Prometheus／Alertmanager 是 Go 程式，吃 PEM：cp-server.crt／.key 當 server、c3-monitoring.crt／.key 給 Prometheus 連 Alertmanager 當 client、ca.pem；C3 自己用 svc-c3.p12）"
-if ! copy_to_tmp "$C3_HOST" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/cp-server.p12" "$CERTS_DIR/cp-server.crt" "$KEYS_DIR/cp-server.key" \
-     "$CERTS_DIR/c3-monitoring.crt" "$KEYS_DIR/c3-monitoring.key" \
-     "$CERTS_DIR/bank-root.pem" "$CERTS_DIR/svc-c3.p12" "$CERTS_DIR/mds-token-public.pem"; then
+cert_title="派送憑證（Prometheus／Alertmanager 是 Go 程式，吃 PEM：svc-c3.crt／.key 當 server，"
+cert_title+="Prometheus 連 Alertmanager 也用它 連 Alertmanager 當 client、ca.pem；C3 自己用 svc-c3.p12）"
+section "$cert_title"
+if ! copy_to_tmp "$C3_HOST" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/svc-c3.p12" \
+     "$CERTS_DIR/svc-c3.crt" "$KEYS_DIR/svc-c3.key" \
+     "$CERTS_DIR/bank-root.pem" "$CERTS_DIR/mds-token-public.pem"; then
   die "scp 失敗"
 fi
 
@@ -25,22 +27,22 @@ file_count=$(ssh_script "$C3_HOST" <<'EOF'
 sudo install -d -o root -g root -m 0755 /etc/confluent
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center
 
-for file in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do
+for file in truststore.p12 svc-c3.p12 svc-c3.crt svc-c3.key mds-token-public.pem; do
   sudo install -o root -g confluent -m 0640 /tmp/$file /etc/confluent/ssl/
 done
 
 # 銀行根憑證：Prometheus、Alertmanager 要 PEM 檔，放成 ca.pem
 sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem
-rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/mds-token-public.pem
+rm -f /tmp/*.p12 /tmp/svc-c3.* /tmp/bank-root.pem /tmp/mds-token-public.pem
 
 sudo ls /etc/confluent/ssl | wc -l
 EOF
 )
 
-if [ "$file_count" = 9 ]; then
-  ok "$C3_HOST: 9 files"
+if [ "$file_count" = 6 ]; then
+  ok "$C3_HOST: 6 files"
 else
-  die "$C3_HOST: $file_count files（預期 9）"
+  die "$C3_HOST: $file_count files（預期 6）"
 fi
 
 section "Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定"
@@ -50,7 +52,8 @@ if ! render_template "$TEMPLATE_DIR/prometheus-generated.yml" "$CONF_DIR/prometh
   die "render prometheus-generated.yml"
 fi
 
-if ! copy_to_tmp "$C3_HOST" "$TEMPLATE_DIR/web-config-prom.yml" "$CONF_DIR/prometheus-generated.yml" "$TEMPLATE_DIR/prometheus.dropin"; then
+if ! copy_to_tmp "$C3_HOST" "$TEMPLATE_DIR/web-config-prom.yml" "$CONF_DIR/prometheus-generated.yml" \
+     "$TEMPLATE_DIR/prometheus.dropin"; then
   die "scp"
 fi
 
@@ -65,7 +68,8 @@ sudo install -o root -g confluent -m 0640 /tmp/web-config-prom.yml web-config-am
 sudo install -o root -g confluent -m 0640 /tmp/prometheus-generated.yml prometheus-generated.yml
 
 # 2. 這四個檔 C3 啟動時自己會寫：擁有者不是 cp-control-center 就會 AccessDeniedException
-for file in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do
+for file in alertmanager-generated.yml trigger_rules-generated.yml \
+            recording_rules-generated.yml prometheus-generated-local.yml; do
   sudo chown cp-control-center:confluent $file
   sudo chmod 0640 $file
 done
@@ -146,7 +150,7 @@ sudo systemctl daemon-reload
 
 # 4. 確認：沒換掉的 ${（要是 0）、ExecStart 指向我們的設定檔
 exec_file=$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties')
-unresolved=$(sudo awk '/\$\{/ && !/\$\{securepass:/ {count++} END {print count + 0}' $props)
+unresolved=$(sudo awk '/\$\{/ && !/\$\{securepass:/ {c++} END {print c + 0}' $props)
 echo "unresolved=$unresolved exec=$exec_file"
 EOF
 )
@@ -171,8 +175,9 @@ EOF
 )
 log "$states"
 
-# 2. 內建 Prometheus 就緒（它要求 client 憑證，用 c3-monitoring 的）
-prometheus_ready=$(curl -s -o /dev/null -m 10 -w '%{http_code}' --cert "$CERTS_DIR/c3-monitoring.crt" --key "$KEYS_DIR/c3-monitoring.key" "https://$C3_FQDN:9090/-/ready")
+# 2. 內建 Prometheus 就緒（它要求 client 憑證，用 svc-ops 的）
+prometheus_ready=$(curl -s -o /dev/null -m 10 -w '%{http_code}' \
+  --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key" "https://$C3_FQDN:9090/-/ready")
 
 if [ "$prometheus_ready" = 200 ]; then
   ok "prometheus=$prometheus_ready"
@@ -206,8 +211,12 @@ query='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
 # 每 10 秒問一次內建 Prometheus，最多問 18 次；大於 0 就停（查不到結果時當成 0）
 count=0
 for attempt in $(seq 1 18); do
-  answer=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/c3-monitoring.crt --key /etc/confluent/ssl/c3-monitoring.key \
-    --data-urlencode "query=$query" "https://$C3_FQDN:9090/api/v1/query" | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
+  response=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem \
+    --cert /etc/confluent/ssl/svc-c3.crt --key /etc/confluent/ssl/svc-c3.key \
+    --data-urlencode "query=$query" "https://$C3_FQDN:9090/api/v1/query")
+
+  # 取出查到的數字。例：..."value":[1762300000.1,"7"]... → 7（查不到就是空的）
+  answer=$(grep -o '"value":\[[0-9.]*,"[0-9]*"' <<<"$response" | tail -1 | cut -d'"' -f4)
 
   if [ -n "$answer" ]; then
     count=$answer
@@ -227,7 +236,14 @@ EOF
 if [ "${labelled_nodes:-0}" -gt 0 ]; then
   ok "指標帶 kafka_broker_id 標籤的節點數：$labelled_nodes"
 else
-  fail "指標沒有 kafka_broker_id 標籤：檢查 prometheus-generated.yml 的 otlp.promote_resource_attributes，以及 broker 的 telemetry 有沒有送到 C3"
+  no_label_hint="檢查 prometheus-generated.yml 的 otlp.promote_resource_attributes，以及 broker 的 telemetry 有沒有送到 C3"
+  fail "指標沒有 kafka_broker_id 標籤：$no_label_hint"
+fi
+
+if wait_c3_login; then
+  ok "alice 能從 C3 登入（C3 連得到 MDS）"
+else
+  fail "alice 不能從 C3 登入（$(c3_login_code)）：看 C3 日誌的 failed to connect to any MDS server，以及 C3 REST keystore 的憑證用途"
 fi
 
 log "瀏覽器開 https://$C3_FQDN:9021（lab：https://localhost:19021），用 alice 登入（密碼在 $SECRETS_DIR/ad-test-users.pass）"

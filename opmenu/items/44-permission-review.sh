@@ -105,7 +105,11 @@ _item44_snapshot() {
   done
 
   # 5. 算 sha256（比對用）
-  (cd "$dir" && sha256sum -- *.txt *.csv > SHA256SUMS)
+  (
+    if cd "$dir"; then
+      sha256sum -- *.txt *.csv > SHA256SUMS
+    fi
+  )
 
   if [ -n "$failed" ]; then
     echo "快照有失敗的項目:$failed(目錄 $dir)"
@@ -134,7 +138,9 @@ _item44_csv_rows() {
 # 失敗（查 MDS 不是 200）時印出原因、回傳 1
 _item44_review_csv() {
   local file="$1"
-  local role reply code body principal bindings resources resource
+  local scope role reply code body principal bindings role_pair resources resource
+
+  scope=$(k_scope)
 
   echo "role,principal,resource_type,resource_name,pattern_type" > "$file"
 
@@ -144,7 +150,7 @@ _item44_review_csv() {
     fi
 
     # 1. 這個 role 綁給了誰（回應的最後一行是「HTTP <狀態碼>」）
-    reply=$(be_mds POST "/security/1.0/lookup/role/$role" "$(k_scope)")
+    reply=$(be_mds POST "/security/1.0/lookup/role/$role" "$scope")
     code=$(echo "$reply" | tail -1 | sed 's/^HTTP //')
     body=$(echo "$reply" | sed '$d')
 
@@ -159,10 +165,11 @@ _item44_review_csv() {
         continue
       fi
 
-      bindings=$(be_mds POST "/security/1.0/lookup/rolebindings/principal/$principal" "$(k_scope)" | sed '$d')
+      bindings=$(be_mds POST "/security/1.0/lookup/rolebindings/principal/$principal" "$scope" | sed '$d')
 
       # 回應裡 "<role>":[ … ] 中括號裡的那一串是資源清單；空的代表綁在 cluster 層級
-      resources=$(echo "$bindings" | sed -n 's/.*"'"$role"'":\[\([^]]*\)\].*/\1/p')
+      role_pair=$(echo "$bindings" | grep -o "\"$role\":\\[[^]]*\\]" | tail -1)
+      resources=$(echo "$role_pair" | sed 's/^"[A-Za-z]*":\[//; s/\]$//')
 
       if [ -z "$resources" ]; then
         printf '"%s","%s","Cluster","",""\n' "$role" "$principal" >> "$file"
@@ -203,10 +210,13 @@ _item44_csv_line() {
 #   == User:svc-ops
 #   User:svc-ops|SystemAdmin|Cluster||
 _item44_rbac() {
-  local roles role principals principal
+  local scope roles_reply roles role role_reply principals principal
+
+  scope=$(k_scope)
 
   # 1. MDS 有哪些 role
-  roles=$(be_mds GET /security/1.0/roles | sed '$d' | grep -o '"name":"[A-Za-z]*"' | cut -d'"' -f4)
+  roles_reply=$(be_mds GET /security/1.0/roles | sed '$d')
+  roles=$(echo "$roles_reply" | grep -o '"name":"[A-Za-z]*"' | cut -d'"' -f4)
 
   if [ -z "$roles" ]; then
     return 1
@@ -215,7 +225,8 @@ _item44_rbac() {
   # 2. 每種 role 綁給了誰，合起來去掉重複、排序
   principals=$(
     for role in $roles; do
-      be_mds POST "/security/1.0/lookup/role/$role" "$(k_scope)" | sed '$d' | grep -o '"[A-Za-z]*:[^"]*"' | tr -d '"'
+      role_reply=$(be_mds POST "/security/1.0/lookup/role/$role" "$scope" | sed '$d')
+      echo "$role_reply" | grep -o '"[A-Za-z]*:[^"]*"' | tr -d '"'
     done | LC_ALL=C sort -u
   )
 
@@ -236,9 +247,10 @@ _item44_rbac() {
 #   {"DeveloperRead":[{"resourceType":"Topic","name":"orders.","patternType":"PREFIXED"}],"SystemAdmin":[]}
 _item44_bindings_of() {
   local principal="$1"
-  local body pairs pair role resources
+  local scope body pairs pair role resources
 
-  body=$(be_mds POST "/security/1.0/lookup/rolebindings/principal/$principal" "$(k_scope)" | sed '$d')
+  scope=$(k_scope)
+  body=$(be_mds POST "/security/1.0/lookup/rolebindings/principal/$principal" "$scope" | sed '$d')
 
   # 一組 "<role>":[ … ] 一行
   pairs=$(echo "$body" | grep -o '"[A-Za-z]*":\[[^]]*\]')
@@ -253,7 +265,7 @@ _item44_bindings_of() {
 
     # 空的 = cluster 層級
     if [ -z "$resources" ]; then
-      echo "$principal|$role|Cluster||"
+      printf '%s|%s|Cluster||\n' "$principal" "$role"
       continue
     fi
 
@@ -278,7 +290,7 @@ _item44_rbac_line() {
 }
 
 # _item44_acls：把 kafka-acls --list 的輸出改成一條 ACL 一行「資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY」
-#   和每日備份（install/steps/23-metadata-backup.sh 的 acls）用的是同一段 awk，改的話兩邊一起改。
+#   和每日備份（install/steps/23-metadata-backup.sh 的 acls）用的是同一段 awk（這裡分行排版），改的話兩邊一起改。
 #
 # 輸入，例如：
 #   Current ACLs for resource `ResourcePattern(resourceType=TOPIC, name=*, patternType=LITERAL)`:
@@ -286,5 +298,25 @@ _item44_rbac_line() {
 # 輸出，例如：
 #   TOPIC|*|LITERAL|User:svc-backup|*|DESCRIBE|ALLOW
 _item44_acls() {
-  awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}'
+  awk '
+    # 資源那一行：記下「資源類型|名稱|比對方式」
+    /^Current ACLs for resource/ {
+      s = $0
+      sub(/.*resourceType=/, "", s)
+      sub(/\)`:.*/, "", s)
+      gsub(/, name=|, patternType=/, "|", s)
+      r = s
+      next
+    }
+
+    # ACL 那一行：改成「principal|host|操作|ALLOW/DENY」，前面接上資源
+    /principal=/ {
+      s = $0
+      sub(/^[ \t]*\(principal=/, "", s)
+      sub(/\)[ \t]*$/, "", s)
+      # lint-ok: awk 的正規表示式，| 是「或」，不是管線
+      gsub(/, host=|, operation=|, permissionType=/, "|", s)
+      print r "|" s
+    }
+  '
 }

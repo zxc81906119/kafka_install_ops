@@ -21,7 +21,9 @@ run_14() {
   fi
 
   # 2. 這幾個設定的值（去掉後面 sensitive=… 那一串）
-  be_kafka kafka-configs --describe --entity-type topics --entity-name "$topic" --all | grep -E "retention.ms|cleanup.policy|min.insync.replicas" | sed -E 's/\s+sensitive=.*//'
+  be_kafka kafka-configs --describe --entity-type topics --entity-name "$topic" --all \
+    | grep -E 'retention.ms|cleanup.policy|min.insync.replicas' \
+    | sed -E 's/\s+sensitive=.*//'
 
   # 3. partition 數與 replication factor（describe 的第一行）
   be_kafka kafka-topics --describe --topic "$topic" | head -1

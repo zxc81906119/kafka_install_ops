@@ -17,7 +17,7 @@ C3 的版本由原廠相容表決定：2.5.x 支援 CP 到 8.2.x，2.6.x 支援�
 
 | 文件 | 給誰 | 來源 |
 |---|---|---|
-| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0 章建 lab、第 1–31 章、附錄 B 監控覆蓋率；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
+| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0 章建 lab、第 1–32 章、附錄 B 監控覆蓋率；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
 | `docs/Confluent-請銀行確認的事項.docx` | 銀行各團隊：待確認事項與我方預設 | `docs/questions-src/questions.md`（`node build.js`） |
 | `docs/Confluent-RPM安裝流程.pptx` | 銀行主管：RPM 安裝流程 14 頁 | `docs/deck-src/install.js`、`install-steps.js` |
 | `redesign/README.md` | 設計決策、教訓、待確認事項的紀錄 | 手寫 |
@@ -56,7 +56,7 @@ docs/journey-src/   手把手來源 journey.md、圖 diagrams.js、build.js；to
                     tools/run-full.sh（在 lab 照文件實跑）、tools/scan-log.sh（找 rc=0 但其實失敗的輸出）
 docs/questions-src/ 請銀行確認的事項（questions.md → build.js）
 docs/deck-src/      RPM 安裝流程簡報
-install/            照手冊一章一支的安裝腳本（install.sh、steps/02–30（檔名照章號；第 7、25 章各拆成 07-1/2/3、25-1/2）、conf/site.env），說明見 install/README.md
+install/            照手冊一章一支的安裝腳本（install.sh、steps/02–32（檔名照章號；第 7、25 章各拆成 07-1/2/3、25-1/2）、conf/site.env），說明見 install/README.md
                     install/lab/：lab 專用（bank-sim.sh 扮演銀行、run-customer.sh 從零跑整條主線＝基底＋遷移）
 opmenu/             維運選單（OP menu）原始碼；經離線引進流程送進操作機（手把手第 16 章）
 redesign/           設計討論紀錄
@@ -76,7 +76,7 @@ redesign/           設計討論紀錄
 |---|---|---|---|
 | 平台變更（安裝、升級、憑證輪替、controller 替換） | 操作機上的手動程序（或 `install/` 腳本） | 操作機 root，連各主機用 `cpuser`（安裝與升級期 sudo 全權） | 平台工程師，變更時段 |
 | 日常維運（查看、重啟、日誌、topic 與權限作業） | OP menu（操作機） | 操作機 root（經 PVWA＋PSMP 登入）；碰主機時用 `/secure/ssh` 的同一把金鑰以 cpuser ssh，sudo 只開逐一列出的寫法 | 依 AD 群組（Kafka RBAC） |
-| 緊急處理 | OP menu 緊急模式 | `opmenu-breakglass` 憑證（操作機 `~/secrets/opmenu-breakglass.pem`，root 0600） | 有權限的人，必填原因，記為 EMERGENCY |
+| 緊急處理 | OP menu 緊急模式 | `svc-ops` 憑證（操作機 `~/secrets/svc-ops.pem`，root 0600） | 有權限的人，必填原因，記為 EMERGENCY |
 
 - SSH 金鑰只有一組（cpuser）；主機上的公鑰只加 `from="操作機 IP,127.0.0.1,::1"`，指令範圍由 sudoers 收窄（交付後只留 `cpuser-ops`：每個服務、每種指令寫法逐一列出，不用 `confluent-*` 萬用字元，因為 sudoers 比對完整參數）。
 - Kafka 動作用本人 AD 帳密走 LDAP listener；碰主機之前，選單以本人 token 呼叫 MDS `PUT /security/1.0/authorize` 確認權限。選單紀錄與 Kafka 稽核日誌記的都是本人，紀錄同時送 syslog。

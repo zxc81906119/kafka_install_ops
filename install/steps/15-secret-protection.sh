@@ -132,9 +132,12 @@ export STORE_PASSWORD
 export LDAP_BIND_PASSWORD
 STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 LDAP_BIND_PASSWORD=$(cat "$SECRETS_DIR/ldap-bind.pass")
-export CONTROLLER_QUORUM BROKER_INTERNAL BROKER_TOKEN MDS_URLS AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN REST_VIP REST_APPS
+export CONTROLLER_QUORUM BROKER_INTERNAL BROKER_TOKEN MDS_URLS AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE \
+  AD_GROUP_SEARCH_BASE AD_GROUP_SEARCH_FILTER AD_GROUP_MEMBER_PATTERN C3_FQDN REST_VIP REST_APPS
 export HOST_FQDN NODE_ID RACK REST_ID
-TEMPLATE_VARS="HOST_FQDN NODE_ID RACK REST_ID STORE_PASSWORD LDAP_BIND_PASSWORD CONTROLLER_QUORUM BROKER_INTERNAL BROKER_TOKEN MDS_URLS AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN REST_VIP REST_APPS"
+TEMPLATE_VARS="HOST_FQDN NODE_ID RACK REST_ID STORE_PASSWORD LDAP_BIND_PASSWORD CONTROLLER_QUORUM BROKER_INTERNAL "
+TEMPLATE_VARS+="BROKER_TOKEN MDS_URLS AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE "
+TEMPLATE_VARS+="AD_GROUP_SEARCH_FILTER AD_GROUP_MEMBER_PATTERN C3_FQDN REST_VIP REST_APPS"
 
 # 2. 第 18 站做過的話，稽核日誌的設定片段要一起帶上（否則重跑這一站會把稽核設定蓋掉）
 audit_fragment=""
@@ -158,10 +161,12 @@ for host in $CLUSTER_HOSTS; do
   # shellcheck disable=SC2086
   case $host in
     kc*)
-      render_templates "$out_file" $TEMPLATE_VARS -- "$TEMPLATE_DIR/controller.tpl" "$TEMPLATE_DIR/common.tpl" $audit_fragment
+      render_templates "$out_file" $TEMPLATE_VARS -- \
+        "$TEMPLATE_DIR/controller.tpl" "$TEMPLATE_DIR/common.tpl" $audit_fragment
       ;;
     kb*)
-      render_templates "$out_file" $TEMPLATE_VARS -- "$TEMPLATE_DIR/broker.tpl" "$TEMPLATE_DIR/common.tpl" $audit_fragment
+      render_templates "$out_file" $TEMPLATE_VARS -- \
+        "$TEMPLATE_DIR/broker.tpl" "$TEMPLATE_DIR/common.tpl" $audit_fragment
       ;;
     rest*)
       render_template "$TEMPLATE_DIR/kafka-rest.tpl" "$out_file" $TEMPLATE_VARS
@@ -194,7 +199,7 @@ for host in $CLUSTER_HOSTS; do
     continue
   fi
 
-  encrypted_count=$(awk '/\$\{securepass:/ {count++} END {print count + 0}' "$props_file")
+  encrypted_count=$(awk '/\$\{securepass:/ {c++} END {print c + 0}' "$props_file")
   plaintext_count=$(count_plaintext_passwords "$props_file")
 
   if [ "$plaintext_count" = 0 ]; then
@@ -210,7 +215,7 @@ if [ "$FAIL_COUNT" != 0 ]; then
 fi
 
 # 5. security.properties 裡的密文筆數（_ 開頭的是 metadata，不算）
-secret_entries=$(awk '/^[^_].*ENC\[/ {count++} END {print count + 0}' "$LOCAL_SECRETS_FILE")
+secret_entries=$(awk '/^[^_].*ENC\[/ {c++} END {print c + 0}' "$LOCAL_SECRETS_FILE")
 ok "security.properties：$secret_entries 筆密文"
 
 # ---- 15.4 派送：每台主機上要做的事 ----
@@ -227,10 +232,11 @@ SETUP_SERVICE_ENV=$(cat <<'EOF'
 sudo install -o root -g root -m 0600 /tmp/service.env /etc/confluent/service.env
 rm -f /tmp/service.env
 
-printf '[Service]\nEnvironmentFile=/etc/confluent/service.env\n' | sudo tee /etc/systemd/system/$UNIT.service.d/20-secret-protection.conf >/dev/null
+printf '[Service]\nEnvironmentFile=/etc/confluent/service.env\n' \
+  | sudo tee /etc/systemd/system/$UNIT.service.d/20-secret-protection.conf >/dev/null
 sudo systemctl daemon-reload
 
-refs=$(sudo awk '/securepass:/ {count++} END {print count + 0}' "$PROPS")
+refs=$(sudo awk '/securepass:/ {c++} END {print c + 0}' "$PROPS")
 env_file=$(systemctl show $UNIT -p EnvironmentFiles --value | cut -d' ' -f1)
 echo "refs=$refs env=$env_file"
 EOF
@@ -251,7 +257,10 @@ for host in $CLUSTER_HOSTS; do
     continue
   fi
 
-  result=$(ssh_script "$host" HOST="$host" SPNAME="$sp_name" UNIT="$(unit_of "$host")" PROPS="$(props_path_of "$host")" REMOTE_SECRETS="$REMOTE_SECRETS_PATH" \
+  host_unit=$(unit_of "$host")
+  host_props_path=$(props_path_of "$host")
+  result=$(ssh_script "$host" HOST="$host" SPNAME="$sp_name" UNIT="$host_unit" PROPS="$host_props_path" \
+             REMOTE_SECRETS="$REMOTE_SECRETS_PATH" \
              <<<"$INSTALL_PROPERTIES
 $SETUP_SERVICE_ENV")
 
@@ -280,7 +289,10 @@ if ! rolling_restart controllers brokers c3 rests; then
 fi
 
 # 2. alice 用 AD 帳密登入 MDS（MDS 用解密後的 AD 查詢密碼去驗）
-alice_login=$(curl -s --cacert "$BANK_ROOT_CA" -u "alice:$(cat "$SECRETS_DIR/ad-test-users.pass")" -o /dev/null -w '%{http_code}' "$MDS_URL/security/1.0/authenticate")
+alice_password=$(cat "$SECRETS_DIR/ad-test-users.pass")
+alice_login=$(curl -s --cacert "$BANK_ROOT_CA" -u "alice:$alice_password" -o /dev/null -w '%{http_code}' \
+  "$MDS_URL/security/1.0/authenticate")
+unset alice_password
 
 if [ "$alice_login" = 200 ]; then
   ok "alice 登入 MDS：200"
@@ -296,7 +308,8 @@ ssh_run "$check_host" "sudo cat /etc/confluent/kafka/server.properties" > "$depl
 plaintext_count=$(count_plaintext_passwords "$deployed_props")
 rm -f "$deployed_props"
 
-master_key_files=$(ssh_run "$check_host" "sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l")
+count_command="sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2>/dev/null | wc -l"
+master_key_files=$(ssh_run "$check_host" "$count_command")
 
 if [ "$plaintext_count $master_key_files" = "0 1" ]; then
   ok "$check_host：明文密碼 0、磁碟上有 master key 的檔 $master_key_files 個"
@@ -306,7 +319,7 @@ fi
 
 # 4. master key 不會出現在 systemctl show（它在 EnvironmentFile 裡，不是 Environment=）；service.env 只有 root 讀得到
 service_env_check=$(ssh_script "$check_host" <<'EOF'
-in_systemctl_show=$(systemctl show confluent-server -p Environment --value | awk '/MASTER_KEY/ {count++} END {print count + 0}')
+in_systemctl_show=$(systemctl show confluent-server -p Environment --value | awk '/MASTER_KEY/ {c++} END {print c + 0}')
 service_env_owner=$(sudo stat -c "%U:%G %a" /etc/confluent/service.env)
 echo "in-systemctl-show=$in_systemctl_show service.env=$service_env_owner"
 EOF
@@ -326,18 +339,30 @@ if [ -s "$PASSPHRASE_FILE" ]; then
   export CONFLUENT_SECURITY_MASTER_KEY
   CONFLUENT_SECURITY_MASTER_KEY=$(cat "$MASTER_KEY_FILE")
 
-  right_passphrase_accepted=$(confluent secret file rotate --master-key --passphrase "$(cat "$PASSPHRASE_FILE")" --passphrase-new "check-$(openssl rand -hex 8)" \
-    --local-secrets-file "$rotate_dir/security.properties" -o yaml 2>&1 </dev/null | awk '/Save the master key/ {count++} END {print count + 0}')
-  wrong_passphrase_refused=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" \
-    --local-secrets-file "$rotate_dir/security.properties" -o yaml 2>&1 </dev/null | awk '/incorrect master key passphrase/ {count++} END {print count + 0}')
+  current_passphrase=$(cat "$PASSPHRASE_FILE")
+  new_passphrase="check-$(openssl rand -hex 8)"
+  right_passphrase_accepted=$(confluent secret file rotate --master-key \
+    --passphrase "$current_passphrase" --passphrase-new "$new_passphrase" \
+    --local-secrets-file "$rotate_dir/security.properties" -o yaml 2>&1 </dev/null \
+    | awk '/Save the master key/ {c++} END {print c + 0}')
 
+  wrong_passphrase="wrong-$(openssl rand -hex 8)"
+  new_passphrase="check-$(openssl rand -hex 8)"
+  wrong_passphrase_refused=$(confluent secret file rotate --master-key \
+    --passphrase "$wrong_passphrase" --passphrase-new "$new_passphrase" \
+    --local-secrets-file "$rotate_dir/security.properties" -o yaml 2>&1 </dev/null \
+    | awk '/incorrect master key passphrase/ {c++} END {print c + 0}')
+
+  unset current_passphrase new_passphrase wrong_passphrase
   unset CONFLUENT_SECURITY_MASTER_KEY
   rm -rf "$rotate_dir"
 
   if [ "$right_passphrase_accepted $wrong_passphrase_refused" = "1 1" ]; then
     ok "目前的 passphrase 還能輪替、錯的 passphrase 被拒"
   else
-    fail "passphrase 檢查：目前的能輪替 $right_passphrase_accepted、錯的被拒 $wrong_passphrase_refused（預期 1、1；前者 0 = master key 不是用 $PASSPHRASE_FILE 產生的，見手把手 15.6「遺失怎麼辦」）"
+    passphrase_result="目前的能輪替 $right_passphrase_accepted、錯的被拒 $wrong_passphrase_refused"
+    passphrase_hint="預期 1、1；前者 0 = master key 不是用 $PASSPHRASE_FILE 產生的，見手把手 15.6「遺失怎麼辦」"
+    fail "passphrase 檢查：$passphrase_result（$passphrase_hint）"
   fi
 else
   warn "沒有 $PASSPHRASE_FILE：服務照常，但不能用 20.3 的 rotate（手把手 15.6「遺失怎麼辦」）"

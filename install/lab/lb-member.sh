@@ -27,6 +27,7 @@ case "$action" in
   status)
     ;;
   *)
+    # lint-ok: 用法文字裡的 | 不是管線
     echo "用法：$0 <rest01|rest02> down|up|status"
     exit 2
     ;;
@@ -46,5 +47,7 @@ sleep 1
 
 # 3. 目前狀態：每一台縮成「主機名稱」或「主機名稱（停用）」
 #   例：server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s down → rest01（停用）
-members=$(lb grep -oE 'server rest0[12][^;]*' "$conf" | sed -E 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//; s/server //; s/ down/（停用）/' | paste -sd' ' -)
+members=$(lb grep -oE 'server rest0[12][^;]*' "$conf" \
+  | sed -E -e 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//' -e 's/server //' -e 's/ down/（停用）/' \
+  | paste -sd' ' -)
 echo "LB：$members"

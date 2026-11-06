@@ -29,21 +29,32 @@ REST_APP=$FIRST_REST_APP
 
 # leader_id：quorum 的 leader 是哪個 node id，例 2；空白 = controller 沒有 leader（最嚴重）
 leader_id() {
-  kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null | grep -oE '^LeaderId: *[0-9]+' | grep -oE '[0-9]+'
+  kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" \
+      --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null \
+    | grep -oE '^LeaderId: *[0-9]+' \
+    | grep -oE '[0-9]+'
 }
 
 # online：在線的 broker 短名，例 kb01 kb02 kb03
 online() {
-  kafka-broker-api-versions "${ADMIN[@]}" 2>/dev/null | grep -oE '^[a-z0-9.-]+:[0-9]+' | cut -d: -f1 | cut -d. -f1 | sort | paste -sd' '
+  local full_names
+
+  # 1. 工具輸出每台開頭的主機名稱，例：kb01.poc.lab:9094 → kb01.poc.lab
+  full_names=$(kafka-broker-api-versions "${ADMIN[@]}" 2>/dev/null | grep -oE '^[a-z0-9.-]+:[0-9]+' | cut -d: -f1)
+
+  # 2. 只留短名，排好順序放同一行
+  cut -d. -f1 <<<"$full_names" | sort | paste -sd' '
 }
 
 # under_rep、offline：under-replicated／沒有 leader 的 partition 數，例 0
 under_rep() {
-  kafka-topics "${ADMIN[@]}" --describe --under-replicated-partitions 2>/dev/null | awk '/Partition:/ {c++} END {print c + 0}'
+  kafka-topics "${ADMIN[@]}" --describe --under-replicated-partitions 2>/dev/null \
+    | awk '/Partition:/ {c++} END {print c + 0}'
 }
 
 offline() {
-  kafka-topics "${ADMIN[@]}" --describe --unavailable-partitions 2>/dev/null | awk '/Partition:/ {c++} END {print c + 0}'
+  kafka-topics "${ADMIN[@]}" --describe --unavailable-partitions 2>/dev/null \
+    | awk '/Partition:/ {c++} END {print c + 0}'
 }
 
 # mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼；連不上是 000
@@ -53,7 +64,11 @@ mds_code() {
 
 # rest_code：REST 經 LB 的 HTTP 狀態碼（用應用程式的憑證）
 rest_code() {
-  curl -s -m 30 -o /dev/null -w '%{http_code}' --cacert "$CERTS_DIR/bank-root.pem" --cert "$CERTS_DIR/$REST_APP.crt" --key "$KEYS_DIR/$REST_APP.key" "https://$REST_VIP:8082/v3/clusters"
+  curl -s -m 30 -o /dev/null -w '%{http_code}' \
+    --cacert "$CERTS_DIR/bank-root.pem" \
+    --cert "$CERTS_DIR/$REST_APP.crt" \
+    --key "$KEYS_DIR/$REST_APP.key" \
+    "https://$REST_VIP:8082/v3/clusters"
 }
 
 # c3_code：C3 畫面的 HTTP 狀態碼
@@ -134,7 +149,7 @@ EOF
 
 # drill <broker>：那台已被停掉，確認症狀
 drill() {
-  local broker=$1 online_list under_replicated offline_count code rest c3 missing
+  local broker=$1 online_list under_replicated offline_count code rest c3 missing replicas_and_isr
 
   if [ -z "$broker" ]; then
     die "用法：$0 drill <broker>"
@@ -149,7 +164,10 @@ drill() {
   code=$(mds_code "$broker")
   rest=$(rest_code)
   c3=$(c3_code)
-  missing=$(kafka-topics "${ADMIN[@]}" --describe --under-replicated-partitions 2>/dev/null | grep -oE 'Replicas: [0-9,]+\s+Isr: [0-9,]+' | head -1 | tr '\t' ' ')
+  replicas_and_isr=$(kafka-topics "${ADMIN[@]}" --describe --under-replicated-partitions 2>/dev/null \
+    | grep -oE 'Replicas: [0-9,]+\s+Isr: [0-9,]+' \
+    | head -1)
+  missing=$(tr '\t' ' ' <<<"$replicas_and_isr")
 
   log "broker 在線：$online_list；under-replicated：$under_replicated；offline：$offline_count；缺的例子：$missing"
   log "$broker 的 MDS：$code；REST 經 LB：$rest；C3：$c3"
@@ -192,7 +210,7 @@ drill() {
 
 # recover <broker>：重啟那一台（cpuser-ops 允許的寫法），等歸零
 recover() {
-  local broker=$1 attempt under_replicated code online_count
+  local broker=$1 attempt under_replicated code online_count online_list
 
   if [ -z "$broker" ]; then
     die "用法：$0 recover <broker>"
@@ -222,7 +240,8 @@ recover() {
   done
 
   # 3. 判斷
-  online_count=$(wc -w <<<"$(online)")
+  online_list=$(online)
+  online_count=$(wc -w <<<"$online_list")
 
   if [ "$under_replicated" = 0 ] && [ "$code" = 200 ]; then
     ok "約 $((attempt * 10)) 秒：under-replicated 0、$broker MDS 200、broker 在線 $online_count / $(wc -w <<<"$BROKERS")"
@@ -260,20 +279,29 @@ strip_colors() {
 # lab 才有測試人員的密碼檔；沒有就回 2，略過選單的檢查（正式環境由人實際登入確認）
 menu_as() {
   local user=$1
+  local test_password
   shift
 
   if [ ! -s "$SECRETS_DIR/ad-test-users.pass" ]; then
     return 2
   fi
 
-  env OPMENU_USER="$user" OPMENU_PASS="$(cat "$SECRETS_DIR/ad-test-users.pass")" OPMENU_YES=1 OPMENU_REASON="28.6 演練" JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run "$@" 2>&1 | strip_colors
+  test_password=$(cat "$SECRETS_DIR/ad-test-users.pass")
+
+  env OPMENU_USER="$user" \
+    OPMENU_PASS="$test_password" \
+    OPMENU_YES=1 \
+    OPMENU_REASON="28.6 演練" \
+    JAVA_HOME=/opt/java/current \
+    /opt/opmenu/opmenu.sh --run "$@" 2>&1 | strip_colors
 }
 
 # menu_emergency：MDS 連不上時選單直接進緊急主機模式（2026-10-29 起不看群組）；印 EMERGENCY_OK 代表符合預期
 menu_emergency() {
-  local log_output create_output
+  local log_output create_output first_broker
 
-  log_output=$(menu_as bob 23 "$(fqdn "${BROKERS%% *}"):confluent-server" 3)
+  first_broker=$(fqdn "${BROKERS%% *}")
+  log_output=$(menu_as bob 23 "$first_broker:confluent-server" 3)
   create_output=$(menu_as bob 31 orders.em 1)
 
   if ! grep -q '已進入緊急主機模式' <<<"$log_output"; then
@@ -297,7 +325,8 @@ kafka_admin_topic_ops() {
     return 1
   fi
 
-  if ! kafka-configs "$@" --alter --entity-type topics --entity-name orders.mds-down --add-config retention.ms=86400000 >/dev/null 2>&1; then
+  if ! kafka-configs "$@" --alter --entity-type topics --entity-name orders.mds-down \
+       --add-config retention.ms=86400000 >/dev/null 2>&1; then
     return 1
   fi
 
@@ -354,7 +383,8 @@ mds_down() {
   local kafka_admin=(--bootstrap-server "$BROKER_CLIENT" --command-config "$temp_dir/ka.properties")
 
   topic_count=$(kafka-topics "${kafka_admin[@]}" --list 2>/dev/null | wc -l)
-  under_replicated=$(kafka-topics "${kafka_admin[@]}" --describe --under-replicated-partitions 2>/dev/null | awk '/Partition:/ {c++} END {print c + 0}')
+  under_replicated=$(kafka-topics "${kafka_admin[@]}" --describe --under-replicated-partitions 2>/dev/null \
+    | awk '/Partition:/ {c++} END {print c + 0}')
   log "kafka-admin：topic $topic_count 個；under-replicated $under_replicated"
 
   if kafka_admin_topic_ops "${kafka_admin[@]}"; then
@@ -368,7 +398,7 @@ mds_down() {
 
 # mds_back：8090 開回之後，確認恢復，照 20.2 換 kafka-admin 密碼（用過就換）
 mds_back() {
-  local attempt codes menu_output menu_rc temp_dir
+  local attempt codes menu_output menu_rc temp_dir new_password
 
   section "28.6 恢復：MDS、選單、換 kafka-admin 密碼"
 
@@ -408,7 +438,11 @@ mds_back() {
   install -m 0600 /dev/null "$temp_dir/new.pass"
   openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > "$temp_dir/new.pass"
 
-  kafka-configs "${ADMIN[@]}" --alter --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat "$temp_dir/new.pass")]" --entity-type users --entity-name kafka-admin >/dev/null 2>&1
+  new_password=$(cat "$temp_dir/new.pass")
+
+  kafka-configs "${ADMIN[@]}" --alter \
+    --add-config "SCRAM-SHA-512=[iterations=8192,password=$new_password]" \
+    --entity-type users --entity-name kafka-admin >/dev/null 2>&1
 
   # 4. 新的登得進、舊的被拒，才把新密碼存回去
   ka_conf "$temp_dir/new.properties" "$temp_dir/new.pass"

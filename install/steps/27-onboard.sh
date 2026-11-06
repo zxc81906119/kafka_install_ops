@@ -38,7 +38,10 @@ cli() {
 
   install -d -m 0700 "$cli_home"
 
-  if ! HOME=$cli_home confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only --client-cert-path "$CERTS_DIR/svc-ops.crt" --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1; then
+  if ! HOME=$cli_home confluent login --url "$MDS_URL" \
+    --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
+    --client-cert-path "$CERTS_DIR/svc-ops.crt" \
+    --client-key-path "$KEYS_DIR/svc-ops.key" >/dev/null 2>&1; then
     return 1
   fi
 
@@ -47,12 +50,14 @@ cli() {
 
 # add_binding <帳號> <角色> <資源>：建一條前綴 binding；只有 50003 才重送（mds_write）
 add_binding() {
-  mds_write cli iam rbac role-binding create --principal "User:$1" --role "$2" --resource "$3" --prefix --kafka-cluster "$CID" >/dev/null 2>&1
+  mds_write cli iam rbac role-binding create \
+    --principal "User:$1" --role "$2" --resource "$3" --prefix --kafka-cluster "$CID" >/dev/null 2>&1
 }
 
 # binding_count <帳號>：這個帳號有幾條 binding，例 3
 binding_count() {
-  cli iam rbac role-binding list --principal "User:$1" --kafka-cluster "$CID" -o json 2>/dev/null | awk '/"role"/ {c++} END {print c + 0}'
+  cli iam rbac role-binding list --principal "User:$1" --kafka-cluster "$CID" -o json 2>/dev/null \
+    | awk '/"role"/ {c++} END {print c + 0}'
 }
 
 # new_password_file <檔案>：產生 24 碼隨機密碼存進這個檔（0600）
@@ -96,7 +101,9 @@ topics() {
         ;;
     esac
 
-    if kafka-topics "${ADMIN[@]}" --create --if-not-exists --topic "$topic" --partitions "${partitions:-3}" --replication-factor 3 --config "retention.ms=$(( ${days:-7} * 86400000 ))" >/dev/null 2>&1; then
+    if kafka-topics "${ADMIN[@]}" --create --if-not-exists --topic "$topic" \
+         --partitions "${partitions:-3}" --replication-factor 3 \
+         --config "retention.ms=$(( ${days:-7} * 86400000 ))" >/dev/null 2>&1; then
       ok "$topic：partitions ${partitions:-3}、RF 3、retention ${days:-7} 天"
     else
       fail "$topic 建立失敗"
@@ -106,7 +113,7 @@ topics() {
 
 # identity_scram <系統>：A／B 兩個帳號，權限一模一樣（kafka-configs 出錯會印出密碼，所以輸出全丟）
 identity_scram() {
-  local sys=$1 account role password_file
+  local sys=$1 account role password_file account_password
 
   section "27.3 SCRAM A／B 帳號、配額、binding（app-$sys-a／-b）"
 
@@ -119,12 +126,16 @@ identity_scram() {
     fi
 
     # 2. SCRAM 帳號與配額
-    if ! kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$account" --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat "$password_file")]" >/dev/null 2>&1; then
+    account_password=$(cat "$password_file")
+
+    if ! kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$account" \
+         --add-config "SCRAM-SHA-512=[iterations=8192,password=$account_password]" >/dev/null 2>&1; then
       fail "$account SCRAM"
       continue
     fi
 
-    if ! kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$account" --add-config "$QUOTA_SCRAM" >/dev/null 2>&1; then
+    if ! kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$account" \
+         --add-config "$QUOTA_SCRAM" >/dev/null 2>&1; then
       fail "$account 配額"
     fi
 
@@ -148,6 +159,8 @@ identity_scram() {
 split_reply() {
   local name=$1
 
+  # 每遇到一行 BEGIN CERTIFICATE 就換寫下一個檔：.part1、.part2…
+  # lint-ok: 依 BEGIN CERT 切成多個檔，grep／cut 做不到；函式上面有輸入輸出例子
   awk -v n="$name" 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' "incoming/$name.crt"
   mv "incoming/$name.part1" "incoming/$name.leaf.pem"
   cat "incoming/$name".part[2-9] > "incoming/$name.issuers.pem" 2>/dev/null
@@ -165,14 +178,17 @@ key_pubkey() {
 
 # cert_cn <憑證>：CN，例 app-shipping
 cert_cn() {
-  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
+  local subject_line
+
+  subject_line=$(openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname)
+  grep -o 'CN=[^,]*' <<<"$subject_line" | tail -1 | cut -d= -f2-
 }
 
 # identity_cert <系統>：CSR → 等銀行簽 → 檢查、.crt、.p12（自己的密碼，不用平台的 store.pass）→ binding、配額
 identity_cert() {
   local sys=$1
   local name="app-$sys"
-  local leaf key_result cn chain role
+  local leaf key_result cn chain role message
 
   section "27.3 憑證身分（$name）"
 
@@ -202,7 +218,9 @@ identity_cert() {
       die "CSR 失敗"
     fi
 
-    ask_bank "CA 窗口：簽 ~/pki/requests/$name.csr（clientAuth），憑證鏈放回 ~/pki/incoming/$name.crt（lab：bank-sim.sh sign-app $name）"
+    message="CA 窗口：簽 ~/pki/requests/$name.csr（clientAuth），憑證鏈放回 ~/pki/incoming/$name.crt"
+    message+="（lab：bank-sim.sh sign-app $name）"
+    ask_bank "$message"
     wait_for_bank "incoming/$name.crt"
   fi
 
@@ -217,7 +235,8 @@ identity_cert() {
   fi
 
   cn=$(cert_cn "$leaf")
-  chain=$(openssl verify -CAfile "$BANK_ROOT_CA" -untrusted "incoming/$name.issuers.pem" "$leaf" 2>&1 | awk '/: OK/ {c++} END {print c + 0}')
+  chain=$(openssl verify -CAfile "$BANK_ROOT_CA" -untrusted "incoming/$name.issuers.pem" "$leaf" 2>&1 \
+    | awk '/: OK/ {c++} END {print c + 0}')
 
   if [ "$key_result" != ok ] || [ "$cn" != "$name" ] || [ "$chain" != 1 ]; then
     die "憑證檢查失敗（key $key_result、CN $cn、chain $chain）"
@@ -232,7 +251,11 @@ identity_cert() {
     new_password_file "$SECRETS_DIR/$name-p12.pass"
   fi
 
-  if openssl pkcs12 -export -name "$name" -inkey "keys/$name.key" -in "certs/$name.crt" -out "certs/$name.p12" -passout "file:$SECRETS_DIR/$name-p12.pass"; then
+  if openssl pkcs12 -export -name "$name" \
+       -inkey "keys/$name.key" \
+       -in "certs/$name.crt" \
+       -out "certs/$name.p12" \
+       -passout "file:$SECRETS_DIR/$name-p12.pass"; then
     chmod 0600 "certs/$name.p12"
     ok "certs/$name.crt、certs/$name.p12（密碼 $SECRETS_DIR/$name-p12.pass）"
   else
@@ -246,7 +269,8 @@ identity_cert() {
     fi
   done
 
-  if ! kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$name" --add-config "$QUOTA_CERT" >/dev/null 2>&1; then
+  if ! kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$name" \
+       --add-config "$QUOTA_CERT" >/dev/null 2>&1; then
     fail "$name 配額"
   fi
 
@@ -366,8 +390,11 @@ verify_scram() {
 
   conf_file=$(scram_conf "app-$sys-a" "$SECRETS_DIR/app-$sys-a.pass")
 
-  if echo "$message" | kafka-console-producer --bootstrap-server "$BROKER_CLIENT" --producer.config "$conf_file" --topic "$topic" >/dev/null 2>&1; then
-    got=$(kafka-console-consumer --bootstrap-server "$BROKER_CLIENT" --consumer.config "$conf_file" --topic "$topic" --group "$sys-check" --from-beginning --max-messages 1 --timeout-ms 30000 2>/dev/null | awk -v m="$message" '$0 == m {c++} END {print c + 0}')
+  if echo "$message" | kafka-console-producer --bootstrap-server "$BROKER_CLIENT" \
+       --producer.config "$conf_file" --topic "$topic" >/dev/null 2>&1; then
+    got=$(kafka-console-consumer --bootstrap-server "$BROKER_CLIENT" --consumer.config "$conf_file" \
+        --topic "$topic" --group "$sys-check" --from-beginning --max-messages 1 --timeout-ms 30000 2>/dev/null \
+      | awk -v m="$message" '$0 == m {c++} END {print c + 0}')
   fi
 
   rm -f "$conf_file"
@@ -387,7 +414,12 @@ verify_cert() {
   cluster=$(cluster_id)
   body="{\"value\":{\"type\":\"JSON\",\"data\":\"$message\"}}"
   url=https://$REST_VIP:8082/v3/clusters/$cluster/topics/$topic/records
-  code=$(curl -s --cacert "$BANK_ROOT_CA" --cert "$CERTS_DIR/app-$sys.crt" --key "$KEYS_DIR/app-$sys.key" -X POST -H 'Content-Type: application/json' -d "$body" "$url" | grep -o '"error_code":[0-9]*' | cut -d: -f2)
+  code=$(curl -s --cacert "$BANK_ROOT_CA" \
+      --cert "$CERTS_DIR/app-$sys.crt" \
+      --key "$KEYS_DIR/app-$sys.key" \
+      -X POST -H 'Content-Type: application/json' -d "$body" "$url" \
+    | grep -o '"error_code":[0-9]*' \
+    | cut -d: -f2)
 
   if [ "$code" = 200 ]; then
     ok "app-$sys 經 REST Proxy／LB 寫入 $topic：error_code 200"
@@ -423,6 +455,7 @@ verify() {
 #     "pattern_type": "PREFIXED"
 #   → DeveloperRead|Topic|inventory.|PREFIXED
 bindings_from_json() {
+  # lint-ok: 要把好幾行的欄位組成一行，grep／cut 做不到；函式上面有輸入輸出例子
   awk -F'"' '
     /"role":/          {role = $4}
     /"resource_type":/ {type = $4}
@@ -430,6 +463,7 @@ bindings_from_json() {
     /"pattern_type":/  {pattern = $4}
     /}/ {
       if (role != "") {
+        # lint-ok: 這行的 | 是輸出的文字，不是管線
         print role "|" type "|" name "|" pattern
       }
       role = ""
@@ -445,7 +479,8 @@ remove_bindings() {
   local account=$1 list_file role resource_type resource_name pattern removed=0
 
   list_file=$(mktemp)
-  cli iam rbac role-binding list --principal "User:$account" --kafka-cluster "$CID" -o json 2>/dev/null | bindings_from_json > "$list_file"
+  cli iam rbac role-binding list --principal "User:$account" --kafka-cluster "$CID" -o json 2>/dev/null \
+    | bindings_from_json > "$list_file"
 
   while IFS='|' read -r role resource_type resource_name pattern; do
     if [ -z "$role" ]; then
@@ -453,11 +488,17 @@ remove_bindings() {
     fi
 
     if [ "$pattern" = PREFIXED ]; then
-      if mds_write cli iam rbac role-binding delete --principal "User:$account" --role "$role" --resource "$resource_type:$resource_name" --prefix --kafka-cluster "$CID" --force >/dev/null 2>&1; then
+      if mds_write cli iam rbac role-binding delete \
+           --principal "User:$account" --role "$role" \
+           --resource "$resource_type:$resource_name" --prefix \
+           --kafka-cluster "$CID" --force >/dev/null 2>&1; then
         removed=$((removed + 1))
       fi
     else
-      if mds_write cli iam rbac role-binding delete --principal "User:$account" --role "$role" --resource "$resource_type:$resource_name" --kafka-cluster "$CID" --force >/dev/null 2>&1; then
+      if mds_write cli iam rbac role-binding delete \
+           --principal "User:$account" --role "$role" \
+           --resource "$resource_type:$resource_name" \
+           --kafka-cluster "$CID" --force >/dev/null 2>&1; then
         removed=$((removed + 1))
       fi
     fi
@@ -481,7 +522,7 @@ retire() {
     die "用法：$0 retire <系統> scram|cert <topic>…"
   fi
 
-  local principal topic removed removed_total=0 principals done_message
+  local principal topic removed removed_total=0 principals done_message random_password
 
   CID=$(cluster_id)
 
@@ -498,10 +539,13 @@ retire() {
     removed=$(remove_bindings "$principal")
     removed_total=$((removed_total + removed))
 
-    kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$principal" --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
+    kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$principal" \
+      --delete-config producer_byte_rate,consumer_byte_rate,request_percentage >/dev/null 2>&1
 
     if [ "$kind" = scram ]; then
-      kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$principal" --add-config "SCRAM-SHA-512=[iterations=8192,password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)]" >/dev/null 2>&1
+      random_password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)
+      kafka-configs "${ADMIN[@]}" --alter --entity-type users --entity-name "$principal" \
+        --add-config "SCRAM-SHA-512=[iterations=8192,password=$random_password]" >/dev/null 2>&1
       rm -f "$SECRETS_DIR/$principal.pass"
     fi
   done
@@ -517,7 +561,11 @@ retire() {
   # 2. 憑證：從 requests.txt 拿掉、私鑰與憑證刪掉（到期不續）；CN 也從 REST 的白名單拿掉
   if [ "$kind" = cert ]; then
     sed -i "/^app-$sys /d" "$PKI_DIR/requests.txt"
-    rm -f "$PKI_DIR/keys/app-$sys.key" "$PKI_DIR/requests/app-$sys.csr" "$PKI_DIR/incoming/app-$sys".* "$PKI_DIR/certs/app-$sys.crt" "$PKI_DIR/certs/app-$sys.p12"
+    rm -f "$PKI_DIR/keys/app-$sys.key" \
+      "$PKI_DIR/requests/app-$sys.csr" \
+      "$PKI_DIR/incoming/app-$sys".* \
+      "$PKI_DIR/certs/app-$sys.crt" \
+      "$PKI_DIR/certs/app-$sys.p12"
     rm -f "$SECRETS_DIR/app-$sys-p12.pass"
     ok "憑證：requests.txt 那行、私鑰、CSR、憑證、p12 已拿掉（到期不續）"
 

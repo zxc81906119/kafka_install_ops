@@ -29,15 +29,16 @@ login_with_cert() {
 # roles_of_person <AD 帳號>：用本人的 AD 帳密登入 MDS，印他有哪些角色；登入失敗就什麼都不印
 #   例：alice → "role": "SystemAdmin"
 roles_of_person() {
-  local person=$1
+  local person=$1 bindings_json
 
   if ! CONFLUENT_PLATFORM_USERNAME=$person CONFLUENT_PLATFORM_PASSWORD=$(cat "$SECRETS_DIR/ad-test-users.pass") \
        confluent login --url "$MDS_URL" --certificate-authority-path "$CERTS_DIR/bank-root.pem" >/dev/null 2>&1; then
     return 1
   fi
 
-  confluent iam rbac role-binding list --principal "User:$person" --kafka-cluster "$CLUSTER_ID" -o json 2>/dev/null \
-    | grep -o '"role": *"[^"]*"' | sort -u | tr '\n' ' '
+  bindings_json=$(confluent iam rbac role-binding list --principal "User:$person" --kafka-cluster "$CLUSTER_ID" \
+    -o json 2>/dev/null)
+  grep -o '"role": *"[^"]*"' <<<"$bindings_json" | sort -u | tr '\n' ' '
 }
 
 section "bootstrap：kafka-internal（唯一的 super user）登入 MDS，建第一條 role binding：User:svc-ops → SystemAdmin"
@@ -47,7 +48,8 @@ if ! login_with_cert kafka-internal; then
   die "confluent login（kafka-internal 憑證）失敗"
 fi
 
-if mds_write confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then
+if mds_write confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin \
+     --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then
   ok "User:svc-ops SystemAdmin（由 kafka-internal 建立）"
 else
   die "建不了 svc-ops 的第一條 role binding"
@@ -176,8 +178,12 @@ while read -r app auth_type quota; do
 
   # 3. 設配額
   for account in $accounts; do
-    if kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --alter --entity-type users --entity-name "$account" \
-         --add-config "producer_byte_rate=$producer_rate,consumer_byte_rate=$consumer_rate,request_percentage=$request_percent" >/dev/null 2>&1 </dev/null; then
+    quota_config="producer_byte_rate=$producer_rate,consumer_byte_rate=$consumer_rate"
+    quota_config+=",request_percentage=$request_percent"
+
+    if kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" \
+         --alter --entity-type users --entity-name "$account" \
+         --add-config "$quota_config" >/dev/null 2>&1 </dev/null; then
       ok "$account quota $quota"
     else
       fail "$account quota"
@@ -192,7 +198,8 @@ while read -r topic partitions; do
   fi
 
   if kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --create --if-not-exists \
-       --topic "$topic" --partitions "$partitions" --replication-factor 3 --config min.insync.replicas=2 >/dev/null 2>&1 </dev/null; then
+       --topic "$topic" --partitions "$partitions" --replication-factor 3 \
+       --config min.insync.replicas=2 >/dev/null 2>&1 </dev/null; then
     ok "topic $topic（$partitions partitions）"
   else
     fail "topic $topic"

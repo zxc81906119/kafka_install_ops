@@ -176,11 +176,12 @@ initial_controllers_value() {
 
 # mds_ready_count：broker 裡 MDS 回 200 的台數，例：4
 mds_ready_count() {
-  local host code
+  local host code url
   local ready=0
 
   for host in $BROKERS; do
-    code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' --cacert "$BANK_ROOT_CA" "https://$(fqdn "$host"):8090/v1/metadata/id")
+    url=https://$(fqdn "$host"):8090/v1/metadata/id
+    code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' --cacert "$BANK_ROOT_CA" "$url")
 
     if [ "$code" = 200 ]; then
       ready=$((ready + 1))
@@ -203,11 +204,25 @@ fi
 
 # 2. 格式化（scram 那一行不印）
 # shellcheck disable=SC2206  # FORMAT_ARGS 要拆成多個參數
-tool=(env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-      kafka-storage format --cluster-id "$CLUSTER_ID" --config /etc/confluent/kafka/server.properties $FORMAT_ARGS "${scram_args[@]}")
+tool=(
+  env
+  JAVA_HOME=/opt/java/current
+  KAFKA_HEAP_OPTS=-Xmx256m
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+  kafka-storage format
+  --cluster-id "$CLUSTER_ID"
+  --config /etc/confluent/kafka/server.properties
+  $FORMAT_ARGS
+  "${scram_args[@]}"
+)
 
 if sudo test -e /etc/confluent/service.env; then
-  sudo bash -c 'set -a; . /etc/confluent/service.env; set +a; exec runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"' run "${tool[@]}" 2>&1 | grep -vi scram | tail -1
+  sudo bash -c '
+    set -a
+    . /etc/confluent/service.env
+    set +a
+    exec runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
+  ' run "${tool[@]}" 2>&1 | grep -vi scram | tail -1
 else
   sudo runuser -u cp-kafka -- "${tool[@]}" 2>&1 | grep -vi scram | tail -1
 fi
@@ -224,7 +239,7 @@ EOF
 reset_cluster() {
   local old_id new_id dir host unit result round ready broker_count leader_found
   local initial_controllers missing cli_home rest_code c3_code quorum_status
-  local topic_count principal_count acl_count
+  local topic_count principal_count acl_count c3_streams_find mds_url
 
   if [ ! -s "$CONF_DIR/kraft.env" ]; then
     die "找不到 $CONF_DIR/kraft.env"
@@ -297,8 +312,9 @@ reset_cluster() {
     fi
   done
 
-  ssh_run "$C3_HOST" 'sudo find /var/lib/confluent/control-center -mindepth 1 -maxdepth 1 -name "[0-9]*" -exec rm -rf {} +'
-  result=$(ssh_run "$C3_HOST" 'sudo find /var/lib/confluent/control-center -mindepth 1 -maxdepth 1 -name "[0-9]*" | wc -l')
+  c3_streams_find='sudo find /var/lib/confluent/control-center -mindepth 1 -maxdepth 1 -name "[0-9]*"'
+  ssh_run "$C3_HOST" "$c3_streams_find -exec rm -rf {} +"
+  result=$(ssh_run "$C3_HOST" "$c3_streams_find | wc -l")
 
   if [ "$result" = 0 ]; then
     ok "$C3_HOST Streams 狀態目錄剩 0 個（prometheus、alertmanager 留著）"
@@ -330,7 +346,8 @@ reset_cluster() {
       continue
     fi
 
-    result=$(ssh_script "$host" CLUSTER_ID="$new_id" FORMAT_ARGS="--initial-controllers $initial_controllers" <<<"$FORMAT_STORAGE")
+    result=$(ssh_script "$host" CLUSTER_ID="$new_id" \
+      FORMAT_ARGS="--initial-controllers $initial_controllers" <<<"$FORMAT_STORAGE")
     ssh_run "$host" 'rm -f /tmp/kafka-admin.pass'
 
     case $result in
@@ -372,7 +389,8 @@ reset_cluster() {
   leader_found=no
 
   for round in $(seq 1 60); do
-    quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
+    quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" \
+      --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
 
     if grep -q 'LeaderId: *[0-9]' <<<"$quorum_status"; then
       leader_found=yes
@@ -412,7 +430,8 @@ reset_cluster() {
   fi
 
   # MDS 看到的要是新的 cluster id
-  result=$(curl -s --cacert "$BANK_ROOT_CA" "https://$(fqdn "${BROKERS%% *}"):8090/v1/metadata/id" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+  mds_url=https://$(fqdn "${BROKERS%% *}"):8090
+  result=$(curl -s --cacert "$BANK_ROOT_CA" "$mds_url/v1/metadata/id" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 
   if [ "$result" = "$new_id" ]; then
     ok "MDS 看到的 cluster id = 新的"
@@ -424,13 +443,16 @@ reset_cluster() {
   section "26.4 第 6 步：第一條權限 svc-ops → SystemAdmin（kafka-internal 憑證，同第 11 站）"
   cli_home=$(mktemp -d)
 
-  if ! HOME=$cli_home confluent login --url "https://$(fqdn "${BROKERS%% *}"):8090" --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
-    --client-cert-path "$CERTS_DIR/kafka-internal.crt" --client-key-path "$KEYS_DIR/kafka-internal.key" >/dev/null 2>&1; then
+  if ! HOME=$cli_home confluent login --url "$mds_url" \
+    --certificate-authority-path "$CERTS_DIR/bank-root.pem" --certificate-only \
+    --client-cert-path "$CERTS_DIR/kafka-internal.crt" \
+    --client-key-path "$KEYS_DIR/kafka-internal.key" >/dev/null 2>&1; then
     rm -rf "$cli_home"
     die "kafka-internal 登不進 MDS"
   fi
 
-  if mds_write env HOME="$cli_home" confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$new_id" >/dev/null; then
+  if mds_write env HOME="$cli_home" confluent iam rbac role-binding create \
+       --principal User:svc-ops --role SystemAdmin --kafka-cluster "$new_id" >/dev/null; then
     ok "User:svc-ops SystemAdmin"
   else
     rm -rf "$cli_home"
@@ -456,7 +478,8 @@ reset_cluster() {
   ssh_run "$C3_HOST" 'sudo systemctl start confluent-control-center'
 
   for round in $(seq 1 84); do
-    rest_code=$(rest_app_curl -s -o /dev/null -m 5 -w '%{http_code}' --cacert "$BANK_ROOT_CA" "https://$REST_VIP:8082/v3/clusters")
+    rest_code=$(rest_app_curl -s -o /dev/null -m 5 -w '%{http_code}' --cacert "$BANK_ROOT_CA" \
+      "https://$REST_VIP:8082/v3/clusters")
     c3_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' --cacert "$BANK_ROOT_CA" "https://$C3_FQDN:9021/")
 
     if [ "$rest_code" = 200 ]; then
@@ -502,6 +525,7 @@ case $ACTION in
     finish_step
     ;;
   *)
-    die "用法：bash $0 status|check|schedule|reset"
+    usage='status|check|schedule|reset'
+    die "用法：bash $0 $usage"
     ;;
 esac

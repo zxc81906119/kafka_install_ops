@@ -26,7 +26,10 @@ _ssh() {
 
   # 2. 這次登入第一次 ssh：建一個只有自己讀得到的目錄放重用的連線
   if [ -z "${OP_SSH_CTL:-}" ]; then
-    OP_SSH_CTL=$(umask 077 && mktemp -d "$OPMENU_TMPDIR/opmenu-ssh.$$.XXXXXXXX")
+    OP_SSH_CTL=$(
+      umask 077
+      mktemp -d "$OPMENU_TMPDIR/opmenu-ssh.$$.XXXXXXXX"
+    )
     export OP_SSH_CTL
   fi
 
@@ -136,6 +139,8 @@ be_disk_usage() {
 
   for host in $OPMENU_HOSTS; do
     printf '%-28s ' "$host"
+    # 遠端 df 的最後一行：/dev/sda1 1.0T 50G 968G 5% /var/lib/kafka/data → 磁碟用量 5%  剩餘 968G
+    # lint-ok: 這段 awk 是送到主機上執行的字串，在遠端組好一行；拆到本機會改變 ssh 失敗時的輸出
     _ssh "$host" "df -h '$OPMENU_DATA_DIR' 2>/dev/null | tail -1 | awk '{print \"磁碟用量 \" \$5 \"  剩餘 \" \$4}'"
   done
 }
@@ -235,15 +240,25 @@ _tls_endpoints() {
   echo $list
 }
 
+# _cn_of：從 stdin 讀 openssl 印的 subject／issuer 那一行，印出 CN；沒有 CN 就整行原樣印出
+#   輸入：subject=CN=kb01.poc.lab,O=Bank
+#   輸出：kb01.poc.lab
+_cn_of() {
+  # lint-ok: 沒有 CN 時要原樣印出整行，grep -o 會印空的
+  sed 's/.*CN=\([^,]*\).*/\1/'
+}
+
 # be_cert_list：各端點「實際出示」的憑證（不是操作機上的檔案）：憑證名稱、簽發者、到期日、還剩多久
 be_cert_list() {
-  local endpoint pem subject issuer end_date status
+  local endpoint server_name pem subject issuer end_date status
 
   printf '%-28s %-16s %-26s %-26s %s\n' "端點" "憑證" "簽發者" "到期" "狀態"
 
   for endpoint in $(_tls_endpoints); do
     # 1. 連過去拿對方出示的憑證（-servername 用主機名稱）
-    pem=$(openssl s_client -connect "$endpoint" -servername "$(echo "$endpoint" | cut -d: -f1)" < /dev/null 2> /dev/null | openssl x509 2> /dev/null)
+    server_name=$(echo "$endpoint" | cut -d: -f1)
+    pem=$(openssl s_client -connect "$endpoint" -servername "$server_name" < /dev/null 2> /dev/null \
+      | openssl x509 2> /dev/null)
 
     if [ -z "$pem" ]; then
       printf '%-28s %s\n' "$endpoint" "連不上或沒有出示憑證"
@@ -251,8 +266,8 @@ be_cert_list() {
     fi
 
     # 2. 憑證名稱（CN）、簽發者、到期日
-    subject=$(echo "$pem" | openssl x509 -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
-    issuer=$(echo "$pem" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
+    subject=$(echo "$pem" | openssl x509 -noout -subject -nameopt sep_comma_plus,sname | _cn_of)
+    issuer=$(echo "$pem" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | _cn_of)
     end_date=$(echo "$pem" | openssl x509 -noout -enddate | cut -d= -f2)
 
     # 3. 還剩多久（-checkend <秒>：那麼多秒之後還有效就回 0）

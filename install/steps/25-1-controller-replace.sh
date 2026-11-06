@@ -46,12 +46,16 @@ controllers_except() {
 # quorum_line <bootstrap> <node id>：describe --replication 裡這個 node 的那一行
 #   例：3  eELCq6OM-4WuTdfGQSmOgQ  30989  0  …  Observer
 quorum_line() {
-  quorum "$1" describe --replication | awk -v id="$2" '$1 == id'
+  quorum "$1" describe --replication | grep -E "^[[:space:]]*$2[[:space:]]"
 }
 
 # lag_and_status <quorum_line 的輸出>：Lag 與最後一欄的狀態，例：0 Observer
 lag_and_status() {
-  awk '{print $4, $NF}' <<<"$1"
+  local lag status
+
+  lag=$(awk '{print $4}' <<<"$1")
+  status=$(awk '{print $NF}' <<<"$1")
+  echo "$lag $status"
 }
 
 # status_of <quorum_line 的輸出>：最後一欄的狀態，例：Follower
@@ -69,13 +73,23 @@ directory_id_of() {
 RUN_WITH_MASTER_KEY=$(cat <<'EOF'
 run() {
   if sudo test -e /etc/confluent/service.env; then
-    sudo bash -c 'set -a; . /etc/confluent/service.env; set +a; exec runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"' run "$@"
+    sudo bash -c '
+      set -a
+      . /etc/confluent/service.env
+      set +a
+      exec runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
+    ' run "$@"
   else
     sudo runuser -u cp-kafka -- "$@"
   fi
 }
 
-TOOL_ENV=(env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml)
+TOOL_ENV=(
+  env
+  JAVA_HOME=/opt/java/current
+  KAFKA_HEAP_OPTS=-Xmx256m
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+)
 EOF
 )
 
@@ -86,7 +100,9 @@ sudo systemctl stop confluent-server
 sudo find /var/lib/kafka/data -mindepth 1 -delete
 
 # 2. 以觀察者格式化（--no-initial-controllers：不是自己宣告成員）
-run "${TOOL_ENV[@]}" kafka-storage format --cluster-id "$CLUSTER_ID" --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1
+run "${TOOL_ENV[@]}" kafka-storage format --cluster-id "$CLUSTER_ID" \
+  --config /etc/confluent/kafka/server.properties \
+  --no-initial-controllers 2>&1 | tail -1
 
 # 3. 啟動，印新的 directory id
 sudo systemctl start confluent-server
@@ -104,16 +120,25 @@ sudo cat /etc/confluent/kafka/server.properties | sudo tee "$add_controller_conf
 echo security.protocol=SSL | sudo tee -a "$add_controller_conf" > /dev/null
 
 # 2. 加入 quorum
-run "${TOOL_ENV[@]}" kafka-metadata-quorum --bootstrap-controller "$BOOTSTRAP" --command-config "$add_controller_conf" add-controller 2>&1 | grep -v WARN | tail -1
+run "${TOOL_ENV[@]}" kafka-metadata-quorum --bootstrap-controller "$BOOTSTRAP" \
+  --command-config "$add_controller_conf" add-controller 2>&1 | grep -v WARN | tail -1
 
 # 3. 用完就刪
 sudo rm -f "$add_controller_conf"
 EOF
 )
 
+# controller_lines：describe --replication（stdin）只留表頭和 controller（node id 小於 100）那幾行
+#   輸入：NodeId DirectoryId …／1 eELC… ／101 aBcD…
+#   輸出：NodeId DirectoryId …／1 eELC…
+controller_lines() {
+  # lint-ok: 要留第一行、再用數字比較第一欄，grep／cut 做不到；上面有輸入輸出例子
+  awk 'NR == 1 || $1 < 100'
+}
+
 show_status() {
   section "25.1.1 quorum（NodeId DirectoryId LogEndOffset Lag … Status）"
-  quorum "$CONTROLLER_QUORUM" describe --replication | awk 'NR == 1 || $1 < 100' | while read -r line; do
+  quorum "$CONTROLLER_QUORUM" describe --replication | controller_lines | while read -r line; do
     log "$line"
   done
 }
@@ -126,7 +151,7 @@ metric_count() {
 # final_checks <controller>：那台的監控端點（官方規則有 startDelaySeconds: 120，剛啟動兩分鐘內是空的）與每台 MDS
 final_checks() {
   local host=$1
-  local round broker mds_status=""
+  local round broker broker_url http_code mds_status=""
 
   section "25.1.5 最後確認：$host 的監控端點、每台 MDS"
 
@@ -147,7 +172,9 @@ final_checks() {
   fi
 
   for broker in $BROKERS; do
-    mds_status="$mds_status$broker MDS=$(curl -s -o /dev/null -m 5 -w '%{http_code}' --cacert "$BANK_ROOT_CA" "https://$(fqdn "$broker"):8090/v1/metadata/id") "
+    broker_url=https://$(fqdn "$broker"):8090/v1/metadata/id
+    http_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' --cacert "$BANK_ROOT_CA" "$broker_url")
+    mds_status="$mds_status$broker MDS=$http_code "
   done
 
   log "$mds_status"
@@ -156,15 +183,16 @@ final_checks() {
 replace() {
   local host=$1
   local node_id others old_dir new_dir attempt line voters
-  local format_script add_script
+  local format_script add_script other_hosts member_lines controller_rows voter_ids
 
   if [[ " $CONTROLLERS " != *" $host "* ]]; then
     die "$host 不是 controller（site.env 的 CONTROLLERS）"
   fi
 
   node_id=$(node_id_of "$host")
-  # shellcheck disable=SC2046  # 主機名單要拆開
-  others=$(host_port_list 9093 $(controllers_except "$host"))
+  other_hosts=$(controllers_except "$host")
+  # shellcheck disable=SC2086  # 主機名單要拆開
+  others=$(host_port_list 9093 $other_hosts)
 
   if [ ! -s "$CONF_DIR/kraft.env" ]; then
     die "找不到 $CONF_DIR/kraft.env（第 10 站產生的 cluster id）"
@@ -174,20 +202,27 @@ replace() {
 
   # 1. 移出舊成員（node id＋舊的 directory id）；已經不是成員就略過
   section "25.1.3 移出舊成員 $node_id"
-  old_dir=$(quorum "$others" describe --replication | awk -v id="$node_id" '$1 == id && $NF != "Observer" {print $2}')
+  # 這個 node id 不是 Observer 的那一行（重做時新的 Observer 和舊成員可能同時在），第二欄是 directory id
+  member_lines=$(quorum_line "$others" "$node_id" | grep -vE 'Observer[[:space:]]*$')
+  old_dir=$(directory_id_of "$member_lines")
 
   if [ -n "$old_dir" ]; then
-    if ! grep -q Leader <<<"$(quorum "$others" describe --replication | awk 'NR > 1 && $1 < 100')"; then
+    # controller 那幾行（第一欄是一或兩位數）裡要有 Leader
+    controller_rows=$(quorum "$others" describe --replication | grep -E '^[[:space:]]*[0-9]{1,2}[[:space:]]')
+
+    if ! grep -q Leader <<<"$controller_rows"; then
       die "其他 controller 沒有 leader，不能動 quorum"
     fi
 
-    if ! quorum "$others" remove-controller --controller-id "$node_id" --controller-directory-id "$old_dir" >/dev/null; then
+    if ! quorum "$others" remove-controller --controller-id "$node_id" \
+         --controller-directory-id "$old_dir" >/dev/null; then
       die "remove-controller 失敗"
     fi
 
     ok "移出 $node_id / $old_dir"
     sleep 5
-    voters=$(quorum "$others" describe --status | grep CurrentVoters | grep -o '"id": [0-9]*' | cut -d' ' -f2 | paste -sd' ')
+    voter_ids=$(quorum "$others" describe --status | grep CurrentVoters | grep -o '"id": [0-9]*')
+    voters=$(cut -d' ' -f2 <<<"$voter_ids" | paste -sd' ')
     log "目前的成員：$voters"
   else
     ok "$node_id 已經不是成員（上一次做到一半？），接著做"
@@ -197,7 +232,9 @@ replace() {
   section "25.1.4 $host 清空、以觀察者格式化、啟動"
   format_script="$RUN_WITH_MASTER_KEY
 $FORMAT_AS_OBSERVER"
-  new_dir=$(ssh_script "$host" CLUSTER_ID="$CLUSTER_ID" <<<"$format_script" | tee -a "$LOG_FILE" | sed -n 's/^directory.id=//p')
+  new_dir=$(ssh_script "$host" CLUSTER_ID="$CLUSTER_ID" <<<"$format_script" \
+    | tee -a "$LOG_FILE" \
+    | sed -n 's/^directory.id=//p')
 
   if [ -z "$new_dir" ]; then
     die "$host 格式化失敗"

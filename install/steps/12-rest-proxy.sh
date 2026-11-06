@@ -19,7 +19,7 @@ fi
 
 section "派送憑證"
 for host in $RESTS; do
-  if ! copy_to_tmp "$host" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/cp-server.p12" "$CERTS_DIR/svc-rest.p12" "$CERTS_DIR/mds-token-public.pem"; then
+  if ! copy_to_tmp "$host" "$CERTS_DIR/truststore.p12" "$CERTS_DIR/svc-rest.p12" "$CERTS_DIR/mds-token-public.pem"; then
     fail "$host: scp"
     continue
   fi
@@ -28,7 +28,7 @@ for host in $RESTS; do
 sudo install -d -o root -g root -m 0755 /etc/confluent
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/kafka-rest
 
-for file in truststore.p12 cp-server.p12 svc-rest.p12 mds-token-public.pem; do
+for file in truststore.p12 svc-rest.p12 mds-token-public.pem; do
   sudo install -o root -g confluent -m 0640 /tmp/$file /etc/confluent/ssl/
 done
 
@@ -38,8 +38,8 @@ sudo ls /etc/confluent/ssl | wc -l
 EOF
 )
 
-  if [ "$file_count" = 4 ]; then
-    ok "$host: 4 files"
+  if [ "$file_count" = 3 ]; then
+    ok "$host: 3 files"
   else
     fail "$host: $file_count files"
   fi
@@ -67,7 +67,8 @@ for host in $RESTS; do
   REST_ID=$host
   props_file=$CONF_DIR/$host.kafka-rest.properties
 
-  if ! render_template "$TEMPLATE_DIR/kafka-rest.tpl" "$props_file" HOST_FQDN REST_ID STORE_PASSWORD BROKER_TOKEN MDS_URLS REST_VIP REST_APPS; then
+  if ! render_template "$TEMPLATE_DIR/kafka-rest.tpl" "$props_file" \
+       HOST_FQDN REST_ID STORE_PASSWORD BROKER_TOKEN MDS_URLS REST_VIP REST_APPS; then
     fail "$host: render"
     continue
   fi
@@ -111,7 +112,7 @@ sudo systemctl daemon-reload
 
 # 4. 確認：沒換掉的 ${（要是 0）、ExecStart 指向我們的設定檔
 exec_file=$(systemctl show confluent-kafka-rest -p ExecStart --value | grep -o '/etc/[^ ]*properties')
-unresolved=$(sudo awk '/\$\{/ && !/\$\{securepass:/ {count++} END {print count + 0}' $props)
+unresolved=$(sudo awk '/\$\{/ && !/\$\{securepass:/ {c++} END {print c + 0}' $props)
 echo "unresolved=$unresolved exec=$exec_file"
 EOF
 )
@@ -162,7 +163,8 @@ for host in $RESTS; do
   done
 
   # 2. 其他憑證、不帶憑證
-  with_other_cert=$(curl -s -o /dev/null -m 30 -w '%{http_code}' --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key" "$url")
+  with_other_cert=$(curl -s -o /dev/null -m 30 -w '%{http_code}' \
+    --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key" "$url")
   without_cert=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$url")
 
   # 3. 判斷結果

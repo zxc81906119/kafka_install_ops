@@ -50,11 +50,14 @@ run_35() {
   fi
 
   # 4. 顯示每個帳號上次輪替的時間（選單紀錄裡最後一筆 HANDOVER）
-  local account last
+  local account account_field last
   echo "-- 這組帳號上次輪替（選單紀錄）："
 
   for account in $pair; do
-    last=$(grep -F "| HANDOVER | " "$OPMENU_LOG" 2>/dev/null | grep -F "| $account |" | tail -1 | cut -d'|' -f1 | sed 's/ *$//')
+    # 這個帳號最後一筆 HANDOVER，再取第一欄（時間），去掉後面的空白
+    account_field="| $account |"
+    last=$(grep -F '| HANDOVER | ' "$OPMENU_LOG" 2>/dev/null | grep -F "$account_field" | tail -1)
+    last=$(echo "$last" | cut -d'|' -f1 | sed 's/ *$//')
     printf '  %-28s %s\n' "$account" "$last"
   done
 
@@ -98,7 +101,10 @@ _item35_set_password() {
   local password
   password=$(k_gen_pw)
 
-  if ! be_kafka kafka-configs --alter --add-config "SCRAM-SHA-512=[password=$password]" --entity-type users --entity-name "$account" > /dev/null; then
+  if ! be_kafka kafka-configs --alter \
+      --add-config "SCRAM-SHA-512=[password=$password]" \
+      --entity-type users \
+      --entity-name "$account" > /dev/null; then
     return 1
   fi
 

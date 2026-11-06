@@ -90,7 +90,11 @@ fi
 
 # 5. 等 REST 回 200：每 3 秒試一次，最多試 60 次
 for i in $(seq 1 60); do
-  code=$(curl -s -m 5 --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$host.poc.lab:8082/v3/clusters)
+  code=$(curl -s -m 5 \
+    --cert ~/pki/certs/app-legacy-billing.crt \
+    --key ~/pki/keys/app-legacy-billing.key \
+    -o /dev/null -w '%{http_code}' \
+    https://$host.poc.lab:8082/v3/clusters)
 
   if [ "$code" = 200 ]; then
     break

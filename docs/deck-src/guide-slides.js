@@ -79,7 +79,7 @@ const INSTALL = [
   { ch: "第 9 章", title: "所有內部連線都加密，並用憑證識別身分", diagram: "certs", blocks: [
     ["在做什麼", "我方產生私鑰與 CSR，銀行 CA 簽發，收回後逐張檢查再做成 keystore。"],
     ["原則", "私鑰不離開行內。"],
-    ["完成的樣子", "9 張憑證，效期一年；第 10–13 章的 TLS 都用這裡的產出。"],
+    ["完成的樣子", "7 張憑證，效期一年；第 10–13 章的 TLS 都用這裡的產出。"],
   ], notes: "憑證到期前的換發在第 21 章，提前知道到期在第 22 章。" },
   { ch: "第 9 章", title: "信任鏈：每個元件都驗得過銀行的根憑證", diagram: "trust", blocks: [
     ["為什麼重要", "簽回來的憑證要先驗鏈與用途，錯一張，後面服務就起不來。"],
@@ -95,10 +95,11 @@ const INSTALL = [
     ["看什麼", "quorum 有 leader、每個成員都追得上。"],
     ["之後用到", "第 25 章換 controller、第 29 章升級都依賴這個結構。"],
   ], notes: "手冊 10.4。" },
-  { ch: "第 11 章", title: "誰能做什麼：三種身分走三條路", diagram: "identity", blocks: [
+  { ch: "第 11 章", title: "誰能做什麼：每種身分怎麼連進來", diagram: "identity", blocks: [
     ["人", "用 AD 帳號；權限綁 AD 群組，不綁個人。"],
     ["應用程式", "直連用 SCRAM，經 REST Proxy 一律用 client 憑證。"],
-    ["平台服務", "用憑證，不用 AD。"],
+    ["平台服務", "用憑證向 MDS 換 token，不用 AD。"],
+    ["緊急帳號", "kafka-admin 用 SCRAM，AD、MDS 不通時仍可用。"],
   ], notes: "super.users 只有 kafka-internal；svc-ops、kafka-admin 都靠 RBAC 綁 SystemAdmin。" },
   { ch: "第 11 章", title: "管理身分用憑證換 token，再進叢集", diagram: "tokenflow", blocks: [
     ["在做什麼", "服務以憑證向 MDS 換 token，再連 TOKEN listener。"],
@@ -106,8 +107,9 @@ const INSTALL = [
   ], notes: "手冊第 11 章。" },
   { ch: "第 11 章", title: "權限從 AD 群組一路接到 Kafka 資源", diagram: "rbac", blocks: [
     ["怎麼授權", "每台 broker 依內部 topic 的 binding 自己判斷。"],
+    ["群組的限制", "不支援巢狀群組，KAFKA_* 群組要直接放人；只認使用者 OU 底下的帳號。"],
     ["演練過", "AD 不通時人員登不進來，但緊急帳號仍可用。"],
-  ], notes: "手冊 11.2 的 AD 斷線演練：MDS 或 AD 不通都不影響授權判斷。" },
+  ], notes: "手冊 11.2 的 AD 斷線演練：MDS 或 AD 不通都不影響授權判斷。群組的限制見第 10 章，子群組的成員登得進來但沒有權限，也沒有錯誤訊息。" },
   { ch: "第 12 章", title: "REST Proxy：只收憑證，前面由 LB 分流", diagram: "edge", blocks: [
     ["在做什麼", "兩台 REST Proxy，讓不方便直連的應用程式用 HTTP 存取 Kafka。"],
     ["安全", "沒有密碼登入；只放行白名單上的憑證，其他回 401。"],
@@ -115,9 +117,10 @@ const INSTALL = [
   ], notes: "完成的樣子：帶正確憑證經 LB 回 200，其他憑證 401，不帶憑證被 TLS 拒絕。" },
   { ch: "第 13 章", title: "Control Center：畫面用它，告警不用它", diagram: "c3roles", blocks: [
     ["在做什麼", "維運人員用 AD 帳號登入網頁看叢集狀況。"],
-    ["界線", "內建的 Prometheus 與 Alertmanager 只給 C3 畫面用；告警走銀行的監控。"],
-    ["完成的樣子", "可以用 AD 帳號登入，畫面有資料。"],
-  ], notes: "不在 C3 畫面建 alert trigger 或 action，理由見第 17 章。" },
+    ["界線", "內建的 Prometheus 與 Alertmanager 只給 C3 畫面用；告警走銀行的監控。銀行沒有 Prometheus 時的例外見第 32 章。"],
+    ["憑證", "C3 全部用自己的憑證（svc-c3），同時當伺服器與 client；連 MDS 的健康檢查也靠它。"],
+    ["完成的樣子", "可以用 AD 帳號從 C3 登入，畫面有資料。"],
+  ], notes: "不在 C3 畫面建 alert trigger 或 action，理由見第 17 章。驗收要帶身分登入，不能只看首頁：C3 連不上 MDS 時首頁照樣回 200。" },
   { ch: "第 14 章", title: "基本功能驗收：平台能用，但還不能交付", tiles: [
     ["7 台", "confluent-server 都在運作", "LuServer"],
     ["有 leader", "KRaft quorum 正常", "LuCrown"],
@@ -135,7 +138,7 @@ const INSTALL = [
   { ch: "第 16 章", title: "OP menu：維運人員用自己的 AD 帳號操作", diagram: "opmenu", blocks: [
     ["在做什麼", "文字選單涵蓋看狀態、重啟、看日誌、建 topic、查權限，不用記指令。"],
     ["權限", "沒權限的動作會被 Kafka／MDS 拒絕，紀錄和稽核記的都是本人。"],
-    ["緊急", "備用憑證必填原因，記為 EMERGENCY。"],
+    ["緊急", "以 svc-ops 憑證執行，必填原因，記為 EMERGENCY。"],
   ], notes: "手冊第 16 章。" },
   { ch: "第 16 章", title: "一次操作：從登入到留下紀錄", diagram: "opmenuflow", blocks: [
     ["碰主機", "以 cpuser 連線，sudo 只放行逐一列出的動作。"],
@@ -261,10 +264,15 @@ const MIGRATE = [
     ["什麼時候用", "C3 的版號獨立，改版比平台頻繁；出修補版或原廠要求時單獨處理。"],
     ["正式環境", "把版號換成新版，跳過回滾演練。"],
   ], notes: "手冊第 31 章。" },
+  { ch: "第 32 章", title: "沒有行內 Prometheus 時的 REST Proxy 告警", diagram: "c3alert", blocks: [
+    ["在做什麼", "C3 內建的 Prometheus 多抓 REST Proxy 的指標，我們的規則加上標籤，只送到另一台 Alertmanager，再發行內 omnibus 的 JSON。"],
+    ["不會誤發", "C3 畫面建的 trigger 沒有這個標籤，只會到內建那台，不會進 omnibus。"],
+    ["前提", "C3 升到 2.6.1 之後才做；2.5.1 附的 Alertmanager 會把字串欄位改成物件或數字。"],
+  ], notes: "銀行有 Prometheus 時走第 17 章；兩章可以並存。lab 實測停一台 REST Proxy 有 OPEN 與 RESOLVED，10 個欄位都是字串。" },
 ];
 
 const CLOSING = { ch: "手冊現況", title: "手冊的驗證狀態與 lab 驗不到的部分", tiles: [
-  ["33 章", "第 0–31 章與附錄 B 都在 lab 實跑過", "LuListChecks"],
+  ["34 章", "第 0–32 章與附錄 B 都在 lab 實跑過", "LuListChecks"],
   ["手動優先", "手冊教手動步驟，腳本走同一條路", "LuRoute"],
   ["待銀行", "換金鑰週期、master key 週期等待確認", "LuMessageCircleQuestion"],
 ], blocks: [
@@ -276,7 +284,7 @@ const CLOSING = { ch: "手冊現況", title: "手冊的驗證狀態與 lab 驗�
 const CONTENTS = [
   { part: "install", range: "第 2–19 章", desc: "從下載套件到交付驗收", items: "2 外網下載、3 送進銀行、4 主機存取、5 銀行準備、6 上架套件庫、7 主機準備、8 安裝套件、9 憑證、10 controller 與 broker、11 帳號與權限、12 REST Proxy、13 Control Center、14 基本驗收、15 Secret Protection、16 OP menu、17 監控、18 稽核日誌、19 驗收與收尾" },
   { part: "ops", range: "第 20–28 章", desc: "上線後的例行與異常處理", items: "20 密碼與金鑰輪替、21 憑證輪替、22 憑證到期監控、23 備份與還原、24 磁碟與容量、25 節點更換與增減、26 license、27 新應用上線、28 故障排查" },
-  { part: "migrate", range: "第 29–31 章", desc: "基底升到目標版本", items: "29 遷移 Confluent 與 JDK、30 OS 修補與小版本更新、31 單獨更換 C3" },
+  { part: "migrate", range: "第 29–32 章", desc: "基底升到目標版本；C3 2.6.1 之後的告警", items: "29 遷移 Confluent 與 JDK、30 OS 修補與小版本更新、31 單獨更換 C3、32 銀行沒有 Prometheus 時的 REST Proxy 告警" },
 ];
 
 // Commands inside the manual's diagrams, reworded for this deck (the manual's own diagrams stay as they are).
@@ -291,6 +299,7 @@ const REWORD = {
   opmenuflow: [["執行 /opt/opmenu/opmenu.sh", "啟動選單"], ["用 /secure/ssh 的金鑰 ssh cpuser", "用同一把金鑰以 cpuser 連主機"], ["restart、status、journalctl -n 200", "重啟、看狀態、看日誌"]],
   migrationflow: [["dnf downgrade 回 8.2.4", "套件退回 8.2.4"], ["kafka-features upgrade", "升級 metadata 版本"], ["--release-version 4.3", "（目標 4.3）"]],
   controllerswap: [["--no-initial-", "以觀察者"], [">controllers<", ">格式化<"]],
+  c3alert: [["job: rest-proxy；prometheus-generated.yml", "多抓 REST Proxy 的指標"], ["custom-rules-rest.yml", "我方的告警規則"], ["trigger_rules-", "C3 畫面建的"], [">generated.yml<", "><"], ["alert_relabel_configs", "依標籤分流"], ["127.0.0.1:9193，C3 內附 0.34.0", "C3 內附的另一份"]],
   brokerscale: [["kafka-remove-brokers", "由 Self-Balancing 搬走"], ["--delete --broker-id 104", "（以 kb04 為例）"], ["--no-initial-controllers", "以觀察者格式化"]],
   backup: [["metadata-backup.sh", "每日匯出"]],
   ospatch: [["不要靠 dnf history undo", "不要靠套件回退"], ["dnf update 只動", "更新只動"], ["dnf update", "更新 OS 套件"], ["--refresh", "（重讀索引）"], ["正式：systemctl reboot", "正式：重開機"], [">needs-restarting<", ">判斷影響範圍<"], ["-r：要不要重開機", "要不要重開機"], ["-s：哪些服務要重啟", "哪些服務要重啟"]],

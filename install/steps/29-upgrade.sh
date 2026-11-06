@@ -35,7 +35,8 @@ ACTION=${1:-plan}
 ONLY_HOSTS=${ONLY_HOSTS:-}          # 有值就只做這些主機（空白分隔）
 BACKUP_ROOT=$HOME/upgrade-backup
 # 8.3 不能再有的設定（基底 8.2 的範本本來就沒有，這裡是再確認一次）（留在設定檔裡 broker 會起不來）
-REMOVED_SETTINGS_REGEX='^(message.format.version|message.downconversion.enable|message.timestamp.difference.max.ms|log.message.format.version)'
+REMOVED_SETTINGS_REGEX='^(message.format.version|message.downconversion.enable|'
+REMOVED_SETTINGS_REGEX+='message.timestamp.difference.max.ms|log.message.format.version)'
 C3_PACKAGE=confluent-control-center-next-gen
 
 # selected <主機>：沒有 ONLY_HOSTS 時全部都做；有的話只做列出的
@@ -48,7 +49,8 @@ selected() {
 }
 
 quorum() {
-  kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" --command-config "$INTERNAL_CLIENT_CONF" "$@" 2>/dev/null
+  kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" \
+    --command-config "$INTERNAL_CLIENT_CONF" "$@" 2>/dev/null
 }
 
 features() {
@@ -57,7 +59,9 @@ features() {
 
 # under_replicated_count：under-replicated 的 partition 數，例 0
 under_replicated_count() {
-  kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe --under-replicated-partitions 2>/dev/null | awk '/Partition:/ {c++} END {print c + 0}'
+  kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" \
+      --describe --under-replicated-partitions 2>/dev/null \
+    | awk '/Partition:/ {c++} END {print c + 0}'
 }
 
 # current_leader：現在的 controller leader，例 kc02
@@ -75,7 +79,11 @@ current_leader() {
 
 # finalized_metadata_version：features 現在的 metadata 版本，例 CP-8.2-IV1A
 finalized_metadata_version() {
-  features describe | awk '/confluent.metadata.version/{for(i=1;i<=NF;i++) if($i=="FinalizedVersionLevel:") print $(i+1)}'
+  local feature_line
+
+  # 例：Feature: confluent.metadata.version  SupportedMinVersion: …  FinalizedVersionLevel: CP-8.2-IV1A  Epoch: 123
+  feature_line=$(features describe | grep 'confluent.metadata.version')
+  grep -oE '(^|[[:space:]])FinalizedVersionLevel:[[:space:]]+[^[:space:]]+' <<<"$feature_line" | awk '{print $2}'
 }
 
 # installed_c3_version：c3-01 上裝著的 C3 版本，例 2.5.1
@@ -86,11 +94,13 @@ installed_c3_version() {
 # ---- 健康：每台做完都要等到這裡回 0 才做下一台 ----
 
 wait_broker_healthy() {
-  local host=$1 attempt under_replicated
+  local host=$1 attempt under_replicated mds_url
+
+  mds_url=https://$(fqdn "$host"):8090/v1/metadata/id
 
   # 1. 等 MDS 回 200：每 5 秒看一次，最多 60 次
   for attempt in $(seq 1 60); do
-    if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8090/v1/metadata/id")" = 200 ]; then
+    if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$mds_url")" = 200 ]; then
       break
     fi
 
@@ -119,7 +129,8 @@ wait_controller_caught_up() {
   sleep 10
 
   for attempt in $(seq 1 60); do
-    lag=$(quorum describe --replication | awk -v id="$node_id" '$1 == id {print $4}')
+    # describe --replication 裡這個 node 那一行的第 4 欄（Lag）
+    lag=$(quorum describe --replication | grep -E "^[[:space:]]*$node_id[[:space:]]" | awk '{print $4}')
 
     if [ "$lag" = 0 ]; then
       return 0
@@ -132,10 +143,12 @@ wait_controller_caught_up() {
 }
 
 wait_rest_healthy() {
-  local host=$1 attempt
+  local host=$1 attempt rest_url
+
+  rest_url=https://$(fqdn "$host"):8082/v3/clusters
 
   for attempt in $(seq 1 60); do
-    if [ "$(rest_app_curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8082/v3/clusters")" = 200 ]; then
+    if [ "$(rest_app_curl -s -o /dev/null -m 5 -w '%{http_code}' "$rest_url")" = 200 ]; then
       return 0
     fi
 
@@ -157,7 +170,12 @@ wait_healthy() {
       wait_rest_healthy "$1"
       ;;
     c3*)
-      retry 40 10 curl -s -o /dev/null -f "https://$C3_FQDN:9021/"
+      if ! retry 40 10 curl -s -o /dev/null -f "https://$C3_FQDN:9021/"; then
+        return 1
+      fi
+
+      # 首頁不經過 MDS：再確認 alice 真的能從 C3 登入
+      wait_c3_login
       ;;
   esac
 }
@@ -218,7 +236,10 @@ sudo systemctl daemon-reload
 
 # 4. C3：RPM 換版本會把 C3 自己要寫的 generated 檔改回 root:root 644（lab 實測），改回來，不然之後改告警規則寫不進去
 if [ -d /etc/confluent-control-center ]; then
-  for file in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do
+  for file in alertmanager-generated.yml \
+              trigger_rules-generated.yml \
+              recording_rules-generated.yml \
+              prometheus-generated-local.yml; do
     sudo chown cp-control-center:confluent "/etc/confluent-control-center/$file"
     sudo chmod 0640 "/etc/confluent-control-center/$file"
   done
@@ -258,7 +279,12 @@ change_packages_and_restart() {
   esac
 
   # 1. 換套件；結果不是預期的那一行就不重啟
-  result=$(ssh_script "$host" VERSION="$version" DNF_ACTION="$dnf_action" UNIT="$unit" PROPS="$props" MAIN_PACKAGE="$main_package" <<<"$CHANGE_PACKAGES")
+  result=$(ssh_script "$host" \
+    VERSION="$version" \
+    DNF_ACTION="$dnf_action" \
+    UNIT="$unit" \
+    PROPS="$props" \
+    MAIN_PACKAGE="$main_package" <<<"$CHANGE_PACKAGES")
 
   if [ "$result" = "$version config=same exec=$props" ]; then
     ok "$host：$result"
@@ -350,7 +376,11 @@ plan() {
 
   # 1. 現在的版本與套件庫
   log "目前 metadata 版本：$(finalized_metadata_version)；quorum leader：$(current_leader)"
-  log "套件庫裡的 confluent-server：$(dnf -q --refresh list --showduplicates confluent-server 2>/dev/null | awk '/confluent-internal/{print $2}' | paste -sd' ')"
+  local repo_server_versions
+  repo_server_versions=$(dnf -q --refresh list --showduplicates confluent-server 2>/dev/null \
+    | awk '/confluent-internal/{print $2}' \
+    | paste -sd' ')
+  log "套件庫裡的 confluent-server：$repo_server_versions"
 
   repo_versions=$(dnf -q list --showduplicates confluent-server "$C3_PACKAGE" 2>/dev/null)
 
@@ -401,7 +431,9 @@ backup() {
   # master key（service.env）不進備份：master key 只放操作機 ~/secrets（0600）與各主機的 service.env，備份檔就不必當機敏資料保管
   # drop-in 目錄用絕對路徑找、再去掉開頭的 /（tar 用 -C /，要相對路徑）；$( ) 在那台主機上展開
   # shellcheck disable=SC2016  # 這段字串要送到那台主機才展開
-  tar_command='sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent $(ls -d /etc/systemd/system/confluent-*.service.d 2>/dev/null | cut -c2-)'
+  tar_command='sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent '
+  # shellcheck disable=SC2016  # 這段字串要送到那台主機才展開
+  tar_command+='$(ls -d /etc/systemd/system/confluent-*.service.d 2>/dev/null | cut -c2-)'
 
   # 1. 每台的 /etc/confluent 與 systemd drop-in，打包回操作機
   for host in $CLUSTER_HOSTS; do
@@ -513,7 +545,8 @@ packages() {
     die "confluent login（svc-ops）失敗"
   fi
 
-  if mds_write confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command \
+  if mds_write confluent iam rbac role-binding create \
+    --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command \
     --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1; then
     ok "User:svc-rest ResourceOwner Topic:_confluent-command"
   else
@@ -557,7 +590,10 @@ switch_jdk_on() {
     return 1
   fi
 
-  if ! linked=$(ssh_script "$host" JDK_TAR_NAME="$(basename "$JDK_TAR_PATH")" JDK_DIR="$JDK_DIR_NAME" <<<"$SWITCH_JDK"); then
+  local jdk_tar_name
+  jdk_tar_name=$(basename "$JDK_TAR_PATH")
+
+  if ! linked=$(ssh_script "$host" JDK_TAR_NAME="$jdk_tar_name" JDK_DIR="$JDK_DIR_NAME" <<<"$SWITCH_JDK"); then
     fail "$host：切 JDK 失敗"
     return 1
   fi
@@ -579,7 +615,9 @@ switch_jdk_on() {
   fi
 
   # 3. 那個服務正在跑的 java 執行檔
-  process_java=$(ssh_run "$host" "sudo readlink /proc/\$(systemctl show $unit -p MainPID --value)/exe")
+  local main_pid
+  main_pid=$(ssh_run "$host" "systemctl show $unit -p MainPID --value")
+  process_java=$(ssh_run "$host" "sudo readlink /proc/$main_pid/exe")
 
   if [ "$process_java" = "/opt/java/$JDK_DIR_NAME/bin/java" ]; then
     ok "$host：$linked，程序用 $process_java"
@@ -591,7 +629,10 @@ switch_jdk_on() {
 # jdk_sha256_ok <tar 檔名>：landing/bank/ 裡這個 tar 的 sha256 對不對（subshell：不改變目前的目錄）
 jdk_sha256_ok() {
   (
-    cd "$LANDING/bank" || exit 1
+    if ! cd "$LANDING/bank"; then
+      exit 1
+    fi
+
     sha256sum -c --quiet "$1.sha256"
   )
 }
@@ -777,7 +818,10 @@ adopt() {
 # rpm_target_sums_ok：落地區 SHA256SUMS 裡 rpm-target/ 那些行核對得上（subshell：不改變目前的目錄）
 rpm_target_sums_ok() {
   (
-    cd "$LANDING" || exit 1
+    if ! cd "$LANDING"; then
+      exit 1
+    fi
+
     grep " rpm-target/" SHA256SUMS | sha256sum -c --quiet
   )
 }
@@ -785,16 +829,21 @@ rpm_target_sums_ok() {
 # landing_dir_sums_ok <目錄名>：landing/<目錄名>/ 自己的 SHA256SUMS 核對得上（subshell：不改變目前的目錄）
 landing_dir_sums_ok() {
   (
-    cd "$LANDING/$1" || exit 1
+    if ! cd "$LANDING/$1"; then
+      exit 1
+    fi
+
     sha256sum -c --quiet SHA256SUMS
   )
 }
 
 # check_c3_dependencies <目錄名>：31.2。RPM 不替你查前置套件，所以印出 RPM 宣告的相依，並確認 c3-01 上兩個前置套件都在
 check_c3_dependencies() {
-  local source_dir=$1 declared installed
+  local source_dir=$1 declared installed requires
 
-  declared=$(rpm -qpR "$LANDING/$source_dir"/confluent-control-center-next-gen-*.rpm 2>/dev/null | grep -vE '^(rpmlib|/)' | sort -u | paste -sd';' -)
+  requires=$(rpm -qpR "$LANDING/$source_dir"/confluent-control-center-next-gen-*.rpm 2>/dev/null \
+    | grep -vE '^(rpmlib|/)')
+  declared=$(sort -u <<<"$requires" | paste -sd';' -)
   log "RPM 宣告的相依：$declared"
 
   if ! installed=$(ssh_run "$C3_HOST" 'rpm -q cyrus-sasl openssl-devel'); then
@@ -839,19 +888,25 @@ publish() {
   fi
 
   # 3. 只推 confluent/ 這個目錄到套件庫
-  if ! tar -C "$REPO_DIR" -cf - confluent | ssh_run_as "$REPO_DEPLOY_USER" "$REPO_HOST" 'tar -C /var/www/repo -xpf -'; then
+  if ! tar -C "$REPO_DIR" -cf - confluent \
+     | ssh_run_as "$REPO_DEPLOY_USER" "$REPO_HOST" 'tar -C /var/www/repo -xpf -'; then
     die "推送失敗"
   fi
 
   # 4. 確認套件庫裡有哪些版本（--refresh：剛推上去）
   if [ "$source_dir" != rpm-target ]; then
-    c3_versions=$(dnf -q --refresh --showduplicates list "$C3_PACKAGE" 2>/dev/null | awk '/confluent-internal/{print $2}' | sort -uV | paste -sd' ')
+    local c3_lines
+    c3_lines=$(dnf -q --refresh --showduplicates list "$C3_PACKAGE" 2>/dev/null | awk '/confluent-internal/{print $2}')
+    c3_versions=$(sort -uV <<<"$c3_lines" | paste -sd' ')
     ok "套件庫的 C3：$c3_versions"
     return 0
   fi
 
   # 例：1:8.2.4-1 1:8.3.2-1 → 8.2.4 8.3.2
-  server_versions=$(dnf -q --refresh --showduplicates list confluent-server 2>/dev/null | awk '/confluent-internal/{print $2}' | sed 's/^1://; s/-1$//' | sort -uV | paste -sd' ')
+  local server_lines
+  server_lines=$(dnf -q --refresh --showduplicates list confluent-server 2>/dev/null \
+    | awk '/confluent-internal/{print $2}')
+  server_versions=$(sed 's/^1://; s/-1$//' <<<"$server_lines" | sort -uV | paste -sd' ')
 
   if [[ " $server_versions " == *" $CP_TARGET_VERSION "* && " $server_versions " == *" $CP_VERSION "* ]]; then
     ok "套件庫的 confluent-server：$server_versions"
@@ -864,6 +919,7 @@ case $ACTION in
   plan|backup|adopt)
     "$ACTION"
     ;;
+  # lint-ok: case 的選項用 | 分隔，不是管線
   publish|packages|jdk|finalize|rollback|c3)
     shift
     "$ACTION" "$@"

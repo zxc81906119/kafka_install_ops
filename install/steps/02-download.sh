@@ -36,16 +36,18 @@ download_set() {
   dnf download --resolve --arch x86_64 --arch noarch --destdir "$destination" \
     --disablerepo='*' --enablerepo="confluent-$cp_major,confluent-c3" \
     "confluent-server-$cp_version" "confluent-security-$cp_version" "confluent-kafka-rest-$cp_version" \
-    "confluent-cli-$cp_version" "confluent-control-center-next-gen-$c3_version" 2>&1 | grep -v '^\[SKIPPED\]' | tee -a "$LOG_FILE"
+    "confluent-cli-$cp_version" "confluent-control-center-next-gen-$c3_version" 2>&1 \
+    | grep -v '^\[SKIPPED\]' | tee -a "$LOG_FILE"
 }
 
 # other_os_packages <RPM…>：這些 RPM 相依的 OS 套件名稱（去掉 Confluent 自己的和 rpm 內部用的），排好、空白分隔
 #   例：other_os_packages rpm/*.rpm → bash glibc
 other_os_packages() {
-  local needs
+  local needs package_names
 
   needs=$(rpm -qpR "$@" 2>/dev/null | grep -vE '^(confluent-|rpmlib\(|config\()' | sort -u)
-  xargs -d '\n' rpm -q --whatprovides <<<"$needs" | sed 's/-[0-9].*//' | sort -u | paste -sd' '
+  package_names=$(xargs -d '\n' rpm -q --whatprovides <<<"$needs" | sed 's/-[0-9].*//')
+  sort -u <<<"$package_names" | paste -sd' '
 }
 
 # jdk_checksum_ok <tar 檔名>：用旁邊的 .sha256 核對 bank/ 裡的 tar（sha256sum 要在檔案所在的目錄跑）
@@ -64,11 +66,14 @@ section "2.1 設定 Confluent repo、匯入原廠公鑰"
 mkdir -p "$DOWNLOAD_DIR"/{rpm,rpm-target,gpg-keys,tools}
 
 # 2. 下載 Confluent 的簽章公鑰（Confluent Platform 一個網址、C3 一個網址）
-if ! curl -fsSL "https://packages.confluent.io/rpm/$CP_MAJOR/archive.key" -o "$DOWNLOAD_DIR/gpg-keys/confluent.asc"; then
+cp_key_url="https://packages.confluent.io/rpm/$CP_MAJOR/archive.key"
+c3_key_url=https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key
+
+if ! curl -fsSL "$cp_key_url" -o "$DOWNLOAD_DIR/gpg-keys/confluent.asc"; then
   die "抓不到 archive.key（下載機沒有外網？）"
 fi
 
-if ! curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key -o "$DOWNLOAD_DIR/gpg-keys/confluent-c3.asc"; then
+if ! curl -fsSL "$c3_key_url" -o "$DOWNLOAD_DIR/gpg-keys/confluent-c3.asc"; then
   die "抓不到 C3 的 archive.key"
 fi
 
@@ -146,7 +151,8 @@ done
 
 section "2.3 驗原廠簽章、確認相依（非 Confluent 的相依應該只有 bash、glibc）"
 # 1. 每個 RPM 都要是 digests signatures OK：數不是的有幾個
-bad_signature_count=$(rpm -K "$DOWNLOAD_DIR"/rpm/*.rpm "$DOWNLOAD_DIR"/rpm-target/*.rpm | awk '!/digests signatures OK$/ {count++} END {print count + 0}')
+bad_signature_count=$(rpm -K "$DOWNLOAD_DIR"/rpm/*.rpm "$DOWNLOAD_DIR"/rpm-target/*.rpm \
+  | awk '!/digests signatures OK$/ {c++} END {print c + 0}')
 rpm_count=$(ls "$DOWNLOAD_DIR"/rpm/*.rpm "$DOWNLOAD_DIR"/rpm-target/*.rpm | wc -l)
 
 if [ "$bad_signature_count" = 0 ]; then
@@ -252,15 +258,18 @@ else
 
   # 3. 結果：檔案數、dashboard 數
   monitoring_file_count=$(find "$MONITORING_DIR_OUT" -type f | wc -l)
-  dashboard_count=$(ls "$MONITORING_DIR_OUT"/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l)
-  ok "jmx-monitoring-stacks commit ${MONITORING_STACKS_COMMIT:0:12}：$monitoring_file_count 個檔、dashboard $dashboard_count 個"
+  dashboards_dir=$MONITORING_DIR_OUT/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards
+  dashboard_count=$(ls "$dashboards_dir"/*.json | wc -l)
+  short_commit=${MONITORING_STACKS_COMMIT:0:12}
+  ok "jmx-monitoring-stacks commit $short_commit：$monitoring_file_count 個檔、dashboard $dashboard_count 個"
 fi
 
 # 平台需要的 OS 套件（由銀行的套件庫提供），列出在哪個 RHEL repo，交給銀行。
 # 下載機的 OS repo 要停在安裝基底的小版本（lab：Rocky vault $OS_BASE_VERSION，手把手 0.7；預設的 repo 會跟著最新的小版本走，版本號就不對了）。
 # 銀行套件庫之後同步到 OS_TARGET_VERSION 時這幾個會更新（手把手 30.5）
 dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' \
-  chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u > "$DOWNLOAD_DIR/os-packages.txt"
+  chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c \
+  | sort -u > "$DOWNLOAD_DIR/os-packages.txt"
 ok "OS 套件清單 $DOWNLOAD_DIR/os-packages.txt（$(wc -l < "$DOWNLOAD_DIR/os-packages.txt") 行）：交給銀行放進套件庫"
 
 if [ "$FETCH_JDK" = 1 ]; then
@@ -269,7 +278,10 @@ if [ "$FETCH_JDK" = 1 ]; then
 
   for jdk_major in "$JDK_MAJOR" "$JDK_TARGET_MAJOR"; do
     # 1. 問 Adoptium：這一版最新的 tar 在哪裡、官方的 sha256 是多少
-    if ! jdk_metadata=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/$jdk_major/hotspot?os=linux&architecture=x64&image_type=jdk&vendor=eclipse"); then
+    adoptium_url="https://api.adoptium.net/v3/assets/latest/$jdk_major/hotspot"
+    adoptium_url+="?os=linux&architecture=x64&image_type=jdk&vendor=eclipse"
+
+    if ! jdk_metadata=$(curl -fsSL "$adoptium_url"); then
       die "Adoptium API 連不到"
     fi
 
@@ -307,7 +319,9 @@ section "2.6 整批的雜湊清單（之後每一關都用它核對）"
     exit 1
   fi
 
-  find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
+  find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" \
+    | LC_ALL=C sort \
+    | xargs sha256sum > SHA256SUMS
 )
 ok "SHA256SUMS：$(wc -l < "$DOWNLOAD_DIR/SHA256SUMS") 個檔（JDK 是銀行的檔案，有自己的 .sha256，不列在這裡）"
 log "下載機的工作到此結束。接下來：掃描、開單、送進操作機 → 操作機跑 steps/03-intake.sh"

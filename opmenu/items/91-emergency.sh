@@ -1,6 +1,6 @@
 # 項目 91：緊急模式（以備用憑證執行一個指令）
 #
-# 做什麼：一般權限處理不了時，用備用憑證（User:opmenu-breakglass，SystemAdmin）跑一個 Kafka 工具指令。
+# 做什麼：一般權限處理不了時，用備用憑證（User:svc-ops，SystemAdmin）跑一個 Kafka 工具指令。
 #   工具與動作只限 OPMENU_EMERGENCY_ACTIONS 列的；必填原因；每一次都記一筆 EMERGENCY；事後必須檢討。
 #   憑證從操作機上 0600 的檔案讀（OPMENU_BREAKGLASS_PEM），用完即丟。
 # 用到的設定（opmenu.conf）：
@@ -86,6 +86,8 @@ _item91_allowed() {
 
   # 3. 逐一看參數：不能改連線設定；是「動作」的，要在允許的清單內
   local argument found_action=no
+  local action_words="--list --describe --create --alter --delete --add --remove --reset-offsets"
+  action_words="$action_words --execute --generate --verify describe add remove"
 
   for argument in "$@"; do
     case "$argument" in
@@ -95,14 +97,12 @@ _item91_allowed() {
         ;;
     esac
 
-    case "$argument" in
-      --list|--describe|--create|--alter|--delete|--add|--remove|--reset-offsets|--execute|--generate|--verify|describe|add|remove)
-        found_action=yes
-        if ! v_in "$argument" "$allowed" "$tool 的動作"; then
-          return 1
-        fi
-        ;;
-    esac
+    if _in_words "$argument" "$action_words"; then
+      found_action=yes
+      if ! v_in "$argument" "$allowed" "$tool 的動作"; then
+        return 1
+      fi
+    fi
   done
 
   # 4. 至少要有一個動作

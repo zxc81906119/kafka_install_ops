@@ -6,7 +6,7 @@ host.name=${REST_VIP}
 
 ############################# HTTPS + mandatory client certificates #############################
 ssl.keystore.type=PKCS12
-ssl.keystore.location=/etc/confluent/ssl/cp-server.p12
+ssl.keystore.location=/etc/confluent/ssl/svc-rest.p12
 ssl.keystore.password=${STORE_PASSWORD}
 ssl.key.password=${STORE_PASSWORD}
 ssl.truststore.type=PKCS12

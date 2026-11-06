@@ -14,7 +14,8 @@
 # 結束碼：0 乾淨；1 有問題（逐條列出 檔案:行:欄）
 # 能不能重跑：可以，只讀不改。
 set -uo pipefail
-INSTALL_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SCRIPT_DIR=$(dirname "$0")
+INSTALL_ROOT=$(realpath "$SCRIPT_DIR/..")
 LINT_IMAGE=${LINT_IMAGE:-koalaman/shellcheck:v0.10.0}
 
 # 沒有 shellcheck：每次呼叫改在 podman 裡跑（目前目錄唯讀掛進去、不連網；檔名都用相對路徑）
@@ -59,9 +60,9 @@ problem_count=0
 extract_remote_heredocs() {
   awk '
     NR == 1 { print "# shellcheck shell=bash"; next }
-    inside && $0 == "EOF" { inside = 0; print ""; next }
+    inside && $0 == "EOF" { inside = 0; print ""; next } # lint-ok: awk 程式，不是 shell
     inside { print; next }
-    /<<'\''EOF'\''/ && (/ssh_script/ || /=\$\(cat <<'\''EOF'\''/) && !/cat >/ { inside = 1; found = 1 }
+    /<<'\''EOF'\''/ && (/ssh_script/ || /=\$\(cat <<'\''EOF'\''/) && !/cat >/ { inside = 1; found = 1 } # lint-ok: awk 程式
     { print "" }
     END { exit found ? 0 : 1 }
   ' "$1"
@@ -90,7 +91,11 @@ echo "   ${#FRAGMENT_FILES[@]} 支有遠端 heredoc"
 
 # 遠端片段另外排除：SC2154（變數由 ssh_script 的 變數=值 帶過去，片段裡看不到賦值）
 if [ "${#FRAGMENT_FILES[@]}" -gt 0 ]; then
-  fragment_report=$(cd "$FRAGMENT_DIR" && shellcheck -S warning -e "$SHELLCHECK_EXCLUDES,SC2154" -s bash -f gcc ./* 2>&1)
+  # 在片段目錄裡跑：報告才是相對路徑
+  previous_dir=$PWD
+  cd "$FRAGMENT_DIR"
+  fragment_report=$(shellcheck -S warning -e "$SHELLCHECK_EXCLUDES,SC2154" -s bash -f gcc ./* 2>&1)
+  cd "$previous_dir"
 
   if [ -n "$fragment_report" ]; then
     sed 's|^\./||; s|__|/|g; s|^|   遠端 |' <<<"$fragment_report"
@@ -100,7 +105,9 @@ fi
 
 echo "== 3. 開 pipefail 的地方不寫「管線接 grep -q」"
 # 只看指令本身的行：去掉註解行，去掉送到別的 shell 的字串（bash -c "…"、as_root_on、ssh_run：那裡沒有 pipefail）
-pipe_grep_lines=$(grep -n -E '\|[[:space:]]*grep -[a-zA-Z]*q' "${SHELL_FILES[@]}" | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v -E 'bash -c "|as_root_on|ssh_run')
+all_lines=$(grep -n -E '\|[[:space:]]*grep -[a-zA-Z]*q' "${SHELL_FILES[@]}")
+not_comments=$(echo "$all_lines" | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#')
+pipe_grep_lines=$(echo "$not_comments" | grep -v -E 'bash -c "|as_root_on|ssh_run')
 
 if [ -n "$pipe_grep_lines" ]; then
   echo "$pipe_grep_lines"

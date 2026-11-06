@@ -67,7 +67,8 @@ for jdk_major in "$JDK_MAJOR" "$JDK_TARGET_MAJOR"; do
 done
 
 section "確認 5.3：LDAPS 憑證鏈、密碼檔"
-ldaps_verify=$(openssl s_client -connect "$AD_FQDN:$AD_LDAPS_PORT" -CAfile "$BANK_ROOT_CA" </dev/null 2>/dev/null | grep "Verify return code")
+ldaps_verify=$(openssl s_client -connect "$AD_FQDN:$AD_LDAPS_PORT" -CAfile "$BANK_ROOT_CA" </dev/null 2>/dev/null \
+  | grep "Verify return code")
 
 case $ldaps_verify in
   *"0 (ok)"*)

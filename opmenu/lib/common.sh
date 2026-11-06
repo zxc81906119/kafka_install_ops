@@ -90,13 +90,26 @@ core_log() {
   local what
   local note
   local line
+  local timestamp
+  local os_user
 
   what=$(v_sanitize_log "$2")
   note=$(v_sanitize_log "${3:-}")
 
   mkdir -p "$(dirname "$OPMENU_LOG")"
 
-  line=$(printf '%s | %s | %s | os=%s | %s | sid=%s | %s | %s' "$(date '+%F %T %z')" "$OPMENU_ENV_LABEL" "${OP_USER:-?}" "$(id -un)" "$what" "${OP_SID:--}" "$result" "$note")
+  timestamp=$(date '+%F %T %z')
+  os_user=$(id -un)
+
+  line=$(printf '%s | %s | %s | os=%s | %s | sid=%s | %s | %s' \
+    "$timestamp" \
+    "$OPMENU_ENV_LABEL" \
+    "${OP_USER:-?}" \
+    "$os_user" \
+    "$what" \
+    "${OP_SID:--}" \
+    "$result" \
+    "$note")
   printf '%s\n' "$line" >> "$OPMENU_LOG"
 
   if [ "${OPMENU_SYSLOG:-0}" = 1 ]; then
@@ -325,7 +338,10 @@ core_check_ssh_key() {
     return 0
   fi
 
-  echo "${CR}找不到主機用的 SSH 私鑰 ${OPMENU_SSH_KEY_FILE:-(OPMENU_SSH_KEY_FILE 未設定)}:確認放私鑰的獨立 file system(例如 /secure/ssh)已掛載,主機類動作暫時不可用${C0}"
+  local key_file="${OPMENU_SSH_KEY_FILE:-(OPMENU_SSH_KEY_FILE 未設定)}"
+  local hint="確認放私鑰的獨立 file system(例如 /secure/ssh)已掛載,主機類動作暫時不可用"
+
+  echo "${CR}找不到主機用的 SSH 私鑰 $key_file:$hint${C0}"
   return 1
 }
 
@@ -453,13 +469,13 @@ core_log_result() {
     return 0
   fi
 
-  if printf '%s' "$output" | grep -q -i "AuthorizationException\|not authorized\|Authorization failed\|HTTP 403"; then
+  if printf '%s' "$output" | grep -q -i 'AuthorizationException\|not authorized\|Authorization failed\|HTTP 403'; then
     echo "${CR}Kafka 拒絕:你的群組沒有這項權限,請依變更單申請。${C0}"
     core_log DENIED "$what" "$note"
     return 0
   fi
 
-  if printf '%s' "$output" | grep -q -i "SaslAuthenticationException\|Authentication failed\|HTTP 401"; then
+  if printf '%s' "$output" | grep -q -i 'SaslAuthenticationException\|Authentication failed\|HTTP 401'; then
     local token_age=0
     if [ -n "${OP_TOKEN_AT:-}" ]; then
       token_age=$(( $(date +%s) - OP_TOKEN_AT ))
@@ -480,6 +496,14 @@ core_log_result() {
   core_log FAIL "$what" "$note"
 
   return 0
+}
+
+# _conf_password <連線設定檔>：印出 sasl.jaas.config 那一行的密碼（檔案讀不到就什麼都不印）
+#   輸入：sasl.jaas.config=…PlainLoginModule required username="alice" password="S3cret-pw";
+#   輸出：S3cret-pw
+_conf_password() {
+  # lint-ok: 密碼可能含引號等任何字元，要一字不差取出，grep -o＋cut 會切錯
+  sed -n 's/^sasl\.jaas\.config=.* password="\(.*\)";$/\1/p' "$1" 2> /dev/null
 }
 
 # core_token_fresh <項目>:MDS token 用了超過「OPMENU_TOKEN_TTL − OPMENU_TOKEN_RENEW_MARGIN」就自動換新(每個動作開始前在主 shell 呼叫,
@@ -504,7 +528,7 @@ core_token_fresh() {
 
   # 2. 從這次登入的連線設定取出密碼，向 MDS 換新 token
   local password token rc
-  password=$(sed -n 's/^sasl\.jaas\.config=.* password="\(.*\)";$/\1/p' "$OP_CLIENT_CONF" 2> /dev/null)
+  password=$(_conf_password "$OP_CLIENT_CONF")
   token=$(be_mds_login "$OP_USER" "$password")
   rc=$?
   unset password
@@ -550,17 +574,48 @@ core_menu_permissions() {
 }
 
 # ── 權限閘門：用本人的 token 問 MDS「我能不能做這件事」；任何錯誤一律視為拒絕 ──
+# token_subject <token>：印出 token 的 sub（AD 回傳的帳號寫法）；解不出來回 1
+#   例：操作者打 alice 或 ALICE，銀行 AD 的 cn 是 ALICE → ALICE
+token_subject() {
+  local payload sub_fields subject
+  payload=$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')
+
+  # base64url 不補 =：補到長度是 4 的倍數才解得開
+  while [ $(( ${#payload} % 4 )) -ne 0 ]; do
+    payload="$payload="
+  done
+
+  # 解開後找 "sub":"<帳號>"（-a：解出來的可能不是文字，也當文字找）；取最後一個的第 4 段（用雙引號切）
+  sub_fields=$(printf '%s' "$payload" | base64 -d 2> /dev/null | grep -a -o '"sub":"[^"]*"')
+  subject=$(printf '%s\n' "$sub_fields" | tail -1 | cut -d'"' -f4)
+
+  if [ -z "$subject" ]; then
+    return 1
+  fi
+
+  printf '%s' "$subject"
+}
+
 # _core_authorize <資源類型:資源名稱:操作>：MDS 回 ALLOWED（而且 HTTP 200）才回 0
 #   例：_core_authorize "Topic:__opmenu-host-ops:Alter"
 _core_authorize() {
   local spec="$1"
-  local resource_type resource_name operation body reply
+  local resource_type resource_name operation format body reply
 
   resource_type=$(echo "$spec" | cut -d: -f1)
   resource_name=$(echo "$spec" | cut -d: -f2)
   operation=$(echo "$spec" | cut -d: -f3)
 
-  body=$(printf '{"userPrincipal":"User:%s","actions":[{"resourceType":"%s","resourceName":"%s","operation":"%s","scope":{"clusters":{"kafka-cluster":"%s"}}}]}' "$OP_USER" "$resource_type" "$resource_name" "$operation" "${OPMENU_KAFKA_CLUSTER_ID:-}")
+  format='{"userPrincipal":"User:%s","actions":[{"resourceType":"%s","resourceName":"%s",'
+  format="$format"'"operation":"%s","scope":{"clusters":{"kafka-cluster":"%s"}}}]}'
+
+  body=$(printf "$format" \
+    "$OP_USER" \
+    "$resource_type" \
+    "$resource_name" \
+    "$operation" \
+    "${OPMENU_KAFKA_CLUSTER_ID:-}")
+
   reply=$(be_mds PUT /security/1.0/authorize "$body" 2> /dev/null)
 
   if echo "$reply" | grep -qF '["ALLOWED"]'; then
@@ -703,13 +758,14 @@ core_window_ok() {
     now=$(date '+%u %H:%M')   # %u：星期一是 1、星期日是 7
   fi
 
-  local today yesterday now_minutes
+  local today yesterday now_clock now_minutes
   today=$(echo "$now" | cut -d' ' -f1)
-  now_minutes=$(_minutes_of "$(echo "$now" | cut -d' ' -f2)")
+  now_clock=$(echo "$now" | cut -d' ' -f2)
+  now_minutes=$(_minutes_of "$now_clock")
   yesterday=$(( (today + 5) % 7 + 1 ))   # 週一的前一天是週日（7）
 
   # 2. 一個時段一行（分號換成換行），逐一比對
-  local windows window days range start end
+  local windows window days range start_clock end_clock start end
   windows=$(echo "$OPMENU_CHANGE_WINDOW" | tr ';' '\n')
 
   while IFS= read -r window; do
@@ -722,8 +778,10 @@ core_window_ok() {
     # 「星期」是第一個字，「開始-結束」是最後一個字
     days=$(echo "$window" | awk '{print $1}')
     range=$(echo "$window" | awk '{print $NF}')
-    start=$(_minutes_of "$(echo "$range" | cut -d- -f1)")
-    end=$(_minutes_of "$(echo "$range" | cut -d- -f2)")
+    start_clock=$(echo "$range" | cut -d- -f1)
+    end_clock=$(echo "$range" | cut -d- -f2)
+    start=$(_minutes_of "$start_clock")
+    end=$(_minutes_of "$end_clock")
 
     if [ "$start" -le "$end" ]; then
       # 當天的時段：今天在星期範圍內，而且在開始與結束之間
@@ -776,7 +834,7 @@ _day_num() {
 _day_in() {
   local day="$1"
   local spec="$2"
-  local part first last current
+  local part first_name last_name first last current
 
   if [ "$spec" = '*' ]; then
     return 0
@@ -786,10 +844,13 @@ _day_in() {
   for part in $(echo "$spec" | tr ',' ' '); do
     case "$part" in
       *-*)
-        if ! first=$(_day_num "$(echo "$part" | cut -d- -f1)"); then
+        first_name=$(echo "$part" | cut -d- -f1)
+        last_name=$(echo "$part" | cut -d- -f2)
+
+        if ! first=$(_day_num "$first_name"); then
           continue
         fi
-        if ! last=$(_day_num "$(echo "$part" | cut -d- -f2)"); then
+        if ! last=$(_day_num "$last_name"); then
           continue
         fi
 

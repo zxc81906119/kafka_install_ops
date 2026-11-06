@@ -53,7 +53,8 @@ section "開始量流量"
 # 流量 2：SCRAM producer，每秒 5 筆，跑 15 分鐘（最後看送失敗幾筆）
 APP_CONF=$CONF_DIR/$FIRST_SCRAM_APP.properties
 timeout 900 kafka-producer-perf-test --topic orders.events --num-records 4500 --throughput 5 --record-size 100 \
-  --producer.config "$APP_CONF" --producer-props bootstrap.servers="$BROKER_CLIENT" acks=all retries=2147483647 delivery.timeout.ms=120000 \
+  --producer.config "$APP_CONF" \
+  --producer-props bootstrap.servers="$BROKER_CLIENT" acks=all retries=2147483647 delivery.timeout.ms=120000 \
   > "$WORK/scram-producer.log" 2>&1 &
 producer_pid=$!
 
@@ -68,7 +69,8 @@ producer_pid=$!
 
     # 流量 3：每 5 輪
     if [ $((round % 5)) = 0 ]; then
-      if timeout 30 kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --list > /dev/null 2>&1; then
+      if timeout 30 kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --list \
+          > /dev/null 2>&1; then
         echo "$(date +%s) admin ok" >> "$PROBE_LOG"
       else
         echo "$(date +%s) admin FAIL" >> "$PROBE_LOG"
@@ -123,23 +125,25 @@ section "結果"
 # probe.log 的一行：<unix 秒> rest <HTTP 碼>、<unix 秒> admin ok|FAIL
 #   rest_failures：REST 失敗的那些行
 rest_failures() {
-  awk '$2 == "rest" && $3 != "200"' "$PROBE_LOG"
+  grep -E '^[^ ]+ rest ' "$PROBE_LOG" | grep -v ' rest 200$'
 }
 
 #   admin_failures：管理 client 失敗的那些行
 admin_failures() {
-  awk '$2 == "admin" && $3 == "FAIL"' "$PROBE_LOG"
+  grep -E '^[^ ]+ admin FAIL$' "$PROBE_LOG"
 }
 
 # 1. REST 經負載平衡
 rest_total=$(awk '$2 == "rest" {c++} END {print c + 0}' "$PROBE_LOG")
-rest_bad=$(rest_failures | awk 'END {print NR}')
+rest_bad=$(rest_failures | wc -l)
 rest_detail=""
 
 if [ "$rest_bad" -gt 0 ]; then
   first_bad=$(rest_failures | head -1 | cut -d' ' -f1)
   last_bad=$(rest_failures | tail -1 | cut -d' ' -f1)
-  rest_codes=$(rest_failures | awk '{print $3}' | sort | uniq -c | paste -sd' ')
+  # 失敗碼各出現幾次，例如：3 000 1 502（uniq -c 的結果接成一行）
+  rest_code_list=$(rest_failures | awk '{print $3}' | sort)
+  rest_codes=$(uniq -c <<<"$rest_code_list" | paste -sd' ')
   rest_detail="（切換開始後第 $((first_bad - switch_at)) 秒到第 $((last_bad - switch_at)) 秒；失敗碼 $rest_codes）"
 fi
 
@@ -147,7 +151,7 @@ log "REST 經負載平衡：$rest_total 次，失敗 $rest_bad 次$rest_detail"
 
 # 2. 管理 client
 admin_total=$(awk '$2 == "admin" {c++} END {print c + 0}' "$PROBE_LOG")
-admin_bad=$(admin_failures | awk 'END {print NR}')
+admin_bad=$(admin_failures | wc -l)
 admin_detail=""
 
 if [ "$admin_bad" -gt 0 ]; then
@@ -164,7 +168,10 @@ producer_errors=$(awk 'tolower($0) ~ /error|exception/ {c++} END {print c + 0}' 
 log "SCRAM producer：$producer_summary；錯誤 $producer_errors 行"
 
 # 4. 切換後的登入與畫面
-alice_login=$(curl -s --cacert "$BANK_ROOT_CA" -u "alice:$(cat "$SECRETS_DIR/ad-test-users.pass")" -o /dev/null -w '%{http_code}' "$MDS_URL/security/1.0/authenticate")
+alice_password=$(cat "$SECRETS_DIR/ad-test-users.pass")
+alice_login=$(curl -s --cacert "$BANK_ROOT_CA" -u "alice:$alice_password" -o /dev/null -w '%{http_code}' \
+  "$MDS_URL/security/1.0/authenticate")
+unset alice_password
 c3_ui=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$C3_FQDN:9021/")
 log "切換後：alice 登入 MDS $alice_login、C3 UI $c3_ui"
 

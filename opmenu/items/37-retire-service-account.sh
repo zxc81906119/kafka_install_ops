@@ -39,7 +39,8 @@ run_37() {
   local suffix accounts=""
 
   for suffix in $OPMENU_SVC_PAIR; do
-    if be_kafka kafka-configs --describe --entity-type users --entity-name "$base$suffix" 2>/dev/null | grep -q 'SCRAM-SHA-512='; then
+    if be_kafka kafka-configs --describe --entity-type users --entity-name "$base$suffix" 2>/dev/null \
+        | grep -q 'SCRAM-SHA-512='; then
       accounts="$accounts $base$suffix"
     fi
   done

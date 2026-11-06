@@ -1,0 +1,10 @@
+[Unit]
+Description=Second Alertmanager (custom JSON webhook), fed by the Control Center embedded Prometheus
+After=network-online.target
+[Service]
+User=cp-control-center
+Group=confluent
+ExecStart=/usr/libexec/confluent-control-center/linux_amd64/alertmanager/alertmanager-amd64 --config.file=/etc/confluent/alertmanager-custom/alertmanager.yml --storage.path=/var/lib/alertmanager-custom --web.listen-address=127.0.0.1:9193 --cluster.listen-address=
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target

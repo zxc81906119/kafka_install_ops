@@ -63,7 +63,9 @@ else
   reboot=yes
 fi
 
-services=$(sudo dnf needs-restarting -s 2>/dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u | paste -sd, -)
+# 要重啟的服務名稱（排序、去重複），再接成逗號分隔：例 confluent-server,prometheus
+matched=$(sudo dnf needs-restarting -s 2>/dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u)
+services=$(echo "$matched" | paste -sd, -)
 
 if [ -z "$services" ]; then
   services=none
@@ -110,12 +112,19 @@ EOF
 )
 
 quorum() {
-  kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" --command-config "$INTERNAL_CLIENT_CONF" "$@" 2>/dev/null
+  kafka-metadata-quorum \
+    --bootstrap-controller "$CONTROLLER_QUORUM" \
+    --command-config "$INTERNAL_CLIENT_CONF" \
+    "$@" 2>/dev/null
 }
 
 # under_replicated_count：under-replicated 的 partition 數，例 0
 under_replicated_count() {
-  kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe --under-replicated-partitions 2>/dev/null | awk '/Partition:/ {c++} END {print c + 0}'
+  kafka-topics \
+    --bootstrap-server "$BROKER_TOKEN" \
+    --command-config "$ADMIN_CLIENT_CONF" \
+    --describe --under-replicated-partitions 2>/dev/null \
+    | awk '/Partition:/ {c++} END {print c + 0}'
 }
 
 # current_leader：現在的 controller leader，例 kc02
@@ -132,11 +141,13 @@ current_leader() {
 }
 
 wait_broker_healthy() {
-  local host=$1 attempt
+  local host=$1 attempt host_fqdn
+
+  host_fqdn=$(fqdn "$host")
 
   # 每 10 秒看一次，最多 90 次
   for attempt in $(seq 1 90); do
-    if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8090/v1/metadata/id")" = 200 ]; then
+    if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$host_fqdn:8090/v1/metadata/id")" = 200 ]; then
       if [ "$(under_replicated_count)" = 0 ]; then
         return 0
       fi
@@ -155,6 +166,7 @@ wait_controller_caught_up() {
 
   # 這台在 quorum 裡的 Lag（第 4 欄）回到 0：每 5 秒看一次，最多 90 次
   for attempt in $(seq 1 90); do
+    # lint-ok: 第 1 欄等於 node id 的那一行取第 4 欄；grep 比對不到整個欄位
     lag=$(quorum describe --replication | awk -v id="$node_id" '$1 == id {print $4}')
 
     if [ "$lag" = 0 ]; then
@@ -222,7 +234,7 @@ wait_for_ssh() {
 # result_field <欄位> <結果行>：PATCH_HOST 那一行某個欄位的值
 #   例：result_field reboot "updated=124 reboot=yes services=none …" → yes
 result_field() {
-  sed -n "s/.*$1=\([^ ]*\).*/\1/p" <<<"$2"
+  grep -o "$1=[^ ]*" <<<"$2" | cut -d= -f2
 }
 
 # restart_platform_services <主機>：這台的平台服務都重啟一次（C3 先重啟它內建的 Prometheus 與 Alertmanager）

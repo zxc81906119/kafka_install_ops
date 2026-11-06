@@ -22,7 +22,12 @@ export JAVA_HOME=/opt/java/current
 section "10.1 派送憑證（目錄 root:confluent 0750、檔案 0640）"
 for host in $KAFKA_HOSTS; do
   # 1. 這台要的檔案：controller 4 個；broker 多一個對外 listener 用的 cp-server.p12
-  files=("$CERTS_DIR/truststore.p12" "$CERTS_DIR/kafka-internal.p12" "$KEYS_DIR/mds-token.key" "$CERTS_DIR/mds-token-public.pem")
+  files=(
+    "$CERTS_DIR/truststore.p12"
+    "$CERTS_DIR/kafka-internal.p12"
+    "$KEYS_DIR/mds-token.key"
+    "$CERTS_DIR/mds-token-public.pem"
+  )
   case $host in
     kb*)
       files+=("$CERTS_DIR/cp-server.p12")
@@ -83,8 +88,11 @@ STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 LDAP_BIND_PASSWORD=$(cat "$SECRETS_DIR/ldap-bind.pass")
 
 # 2. envsubst 只換下面列出來的變數
-export CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN
-TEMPLATE_VARS="HOST_FQDN NODE_ID RACK STORE_PASSWORD LDAP_BIND_PASSWORD CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN"
+export CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE \
+  AD_GROUP_SEARCH_BASE AD_GROUP_SEARCH_FILTER AD_GROUP_MEMBER_PATTERN C3_FQDN
+TEMPLATE_VARS="HOST_FQDN NODE_ID RACK STORE_PASSWORD LDAP_BIND_PASSWORD CONTROLLER_QUORUM BROKER_INTERNAL "
+TEMPLATE_VARS+="AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE AD_GROUP_SEARCH_FILTER "
+TEMPLATE_VARS+="AD_GROUP_MEMBER_PATTERN C3_FQDN"
 
 # 3. 第 18 站做過的話，稽核日誌的設定片段要一起帶上（否則重跑這一站會把稽核設定蓋掉）
 audit_fragment=""
@@ -124,7 +132,8 @@ for host in $KAFKA_HOSTS; do
   props_file=$CONF_DIR/$host.server.properties
 
   # shellcheck disable=SC2086
-  if ! render_templates "$props_file" $TEMPLATE_VARS -- "$role_template" "$TEMPLATE_DIR/common.tpl" $audit_fragment; then
+  if ! render_templates "$props_file" $TEMPLATE_VARS -- \
+       "$role_template" "$TEMPLATE_DIR/common.tpl" $audit_fragment; then
     fail "$host: render"
     continue
   fi
@@ -170,7 +179,7 @@ fi
 
 # 5. 行數、沒換掉的 ${（要是 0）
 lines=$(sudo grep -c . $props)
-unresolved=$(sudo awk '/\$\{/ && !/\$\{securepass:/ {count++} END {print count + 0}' $props)
+unresolved=$(sudo awk '/\$\{/ && !/\$\{securepass:/ {c++} END {print c + 0}' $props)
 echo "$lines lines, unresolved=$unresolved changed=$changed"
 EOF
 )
@@ -313,8 +322,10 @@ if [ -f /tmp/kafka-admin.pass ]; then
   rm -f /tmp/kafka-admin.pass
 fi
 
-sudo -u cp-kafka env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-  kafka-storage format --cluster-id "$CLUSTER_ID" --config /etc/confluent/kafka/server.properties $FORMAT_ARGS "${scram_args[@]}" 2>&1 \
+sudo -u cp-kafka env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format --cluster-id "$CLUSTER_ID" --config /etc/confluent/kafka/server.properties \
+  $FORMAT_ARGS "${scram_args[@]}" 2>&1 \
   | grep -vi scram | tail -1
 
 echo "cluster.id=$(sudo sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)"
@@ -328,7 +339,8 @@ for host in $CONTROLLERS; do
     continue
   fi
 
-  result=$(ssh_script "$host" CLUSTER_ID="$CLUSTER_ID" FORMAT_ARGS="--initial-controllers $INITIAL_CONTROLLERS" <<<"$FORMAT_STORAGE")
+  result=$(ssh_script "$host" CLUSTER_ID="$CLUSTER_ID" \
+             FORMAT_ARGS="--initial-controllers $INITIAL_CONTROLLERS" <<<"$FORMAT_STORAGE")
 
   # 已格式化時那段腳本提早結束，這裡確保密碼檔不留
   ssh_run "$host" 'rm -f /tmp/kafka-admin.pass'
@@ -426,7 +438,8 @@ done
 sleep 20
 
 # 3. 3 台都在、有一個 leader；沒有 leader 就不啟動 broker
-quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
+quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$CONTROLLER_QUORUM" \
+  --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
 leader_line=$(grep LeaderId <<<"$quorum_status" | tr -s ' ')
 
 if grep -q 'LeaderId: [1-9]' <<<"$leader_line"; then
@@ -441,7 +454,8 @@ for host in $BROKERS; do
   # 1. 已經在跑、設定有變：一台一台重啟，等 MDS 回 200 才做下一台
   if restart_needed "$host"; then
     if ssh_run "$host" 'systemctl is-active -q confluent-server'; then
-      result=$(restart_and_wait "$host" confluent-server "https://$(fqdn "$host"):8090/v1/metadata/id")
+      host_fqdn=$(fqdn "$host")
+      result=$(restart_and_wait "$host" confluent-server "https://$host_fqdn:8090/v1/metadata/id")
 
       case $result in
         *after*)
@@ -469,7 +483,8 @@ log "等 broker 註冊與 MDS 起來（約 45 秒）"
 sleep 45
 
 # 3. 全部 broker 都以觀察者註冊到 quorum
-quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
+quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" \
+  --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
 observer_count=$(count_quorum_ids CurrentObservers "$quorum_status")
 broker_count=$(wc -w <<<"$BROKERS")
 
@@ -481,8 +496,10 @@ fi
 
 # 4. 每台的 MDS（8090）回 200：每 10 秒試一次，最多 6 次
 for host in $BROKERS; do
+  host_fqdn=$(fqdn "$host")
+
   for attempt in 1 2 3 4 5 6; do
-    http_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8090/v1/metadata/id")
+    http_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$host_fqdn:8090/v1/metadata/id")
 
     if [ "$http_code" = 200 ]; then
       break

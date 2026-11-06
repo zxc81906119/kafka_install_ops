@@ -73,14 +73,15 @@ for host in $CLUSTER_HOSTS; do
   fi
 
   # 2. 在那台放好、套用，數有幾個設不進去
-  error_count=$(ssh_script "$host" FILE="/tmp/$(basename "$sysctl_file")" <<'EOF'
+  sysctl_tmp_name=$(basename "$sysctl_file")
+  error_count=$(ssh_script "$host" FILE="/tmp/$sysctl_tmp_name" <<'EOF'
 sudo install -d -m 0755 /etc/sysctl.d
 
 if sudo install -m 0644 "$FILE" /etc/sysctl.d/90-confluent.conf; then
   rm -f "$FILE"
 fi
 
-sudo sysctl -q --system 2>&1 | awk '/sysctl:/ {count++} END {print count + 0}'
+sudo sysctl -q --system 2>&1 | awk '/sysctl:/ {c++} END {print c + 0}'
 EOF
 )
 
@@ -155,7 +156,8 @@ if ! sudo dnf -q -y install chrony >/dev/null; then
   exit 1
 fi
 
-printf 'server %s iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\n' "$NTP" | sudo tee /etc/chrony.conf >/dev/null
+printf 'server %s iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\n' "$NTP" \
+  | sudo tee /etc/chrony.conf >/dev/null
 sudo systemctl enable --now chronyd >/dev/null 2>&1
 sudo systemctl restart chronyd
 EOF

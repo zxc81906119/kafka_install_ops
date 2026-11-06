@@ -1,4 +1,4 @@
-// usage: [MODE=customer] node run-chapter.js <journey.md> <fromChapter> <toChapter|end> <out.sh>   (chapter ids 0–31, B; both inclusive; "A" is accepted as the old name of 0)
+// usage: [MODE=customer] node run-chapter.js <journey.md> <fromChapter> <toChapter|end> <out.sh>   (chapter ids 0–32, B; both inclusive; "A" is accepted as the old name of 0)
 // consecutive blocks on the same host/user run in ONE shell, fed from a file (stdin=/dev/null so ssh can't eat it)
 // each block runs under `trap … ERR` (like set -e, but no subshell, so variables carry over to the next block as in a terminal):
 // any line that fails stops the run, not only the last one (the guide writes one command per line, 2026-11-01)
@@ -8,8 +8,8 @@ const fs=require("fs"); const [,, md, from, to, out]=process.argv;
 const MODE=process.env.MODE||"customer";
 if(MODE!=="customer") throw new Error("MODE must be customer (the only mode left)");
 const s=fs.readFileSync(md,"utf8");
-// chapters are `# <id>. title` outside code fences; ids are 0..31 (0 = build the lab) plus appendix B (monitoring coverage, lab tear-down).
-// run order = 0, 1..31, then B. <from>/<to> are chapter ids, both inclusive; <to> may be "end".
+// chapters are `# <id>. title` outside code fences; ids are 0..32 (0 = build the lab) plus appendix B (monitoring coverage, lab tear-down).
+// run order = 0, 1..32, then B. <from>/<to> are chapter ids, both inclusive; <to> may be "end".
 const chapters=[]; { let fence=false, cur=null; for(const l of s.split("\n")){ if(/^```/.test(l)) fence=!fence; const m=!fence&&/^# ([0-9]{1,2}|[A-Z])\. /.exec(l); if(m){ cur={id:m[1],lines:[]}; chapters.push(cur); } else if(cur) cur.lines.push(l); } }
 const order=[...chapters.filter(c=>/^\d+$/.test(c.id)).sort((x,y)=>+x.id-+y.id),...chapters.filter(c=>/^[A-Z]$/.test(c.id))];
 const idx=(id)=>{ if(String(id)==="A") id="0"; const i=order.findIndex(c=>c.id===String(id)); if(i<0) throw new Error("chapter not found "+id); return i; };

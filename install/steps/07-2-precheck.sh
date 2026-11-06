@@ -19,13 +19,13 @@ for host in $ALL_HOSTS; do
 . /etc/os-release
 mem=$(free -m | awk '/Mem:/{print $2}')
 tmp_free=$(df -m /tmp | awk 'NR==2{print $4}')
-tmp_noexec=$(findmnt -no OPTIONS /tmp | awk '/noexec/ {count++} END {print count + 0}')
+tmp_noexec=$(findmnt -no OPTIONS /tmp | awk '/noexec/ {c++} END {print c + 0}')
 echo "$ID-$VERSION_ID cpu=$(nproc) mem=${mem}MB tmp_free=$tmp_free tmp_noexec=$tmp_noexec"
 EOF
 )
 
   # 2. 取出要判斷的兩個值。例：rocky-9.6 cpu=8 mem=10953MB tmp_free=2048 tmp_noexec=0 → 2048、0
-  tmp_free_mb=$(sed -n 's/.*tmp_free=\([0-9]*\).*/\1/p' <<<"$facts")
+  tmp_free_mb=$(grep -o 'tmp_free=[0-9]*' <<<"$facts" | cut -d= -f2)
   tmp_noexec=${facts##*tmp_noexec=}
 
   if [ "$tmp_noexec" = 0 ] && [ "${tmp_free_mb:-0}" -ge 2000 ]; then
@@ -52,7 +52,7 @@ EOF
 )
 
   # 2. 取出檔案系統。例：/var/lib fstype=overlay free=712GB → overlay
-  fstype=$(sed -n 's/.*fstype=\([^ ]*\).*/\1/p' <<<"$disk_facts")
+  fstype=$(grep -o 'fstype=[^ ]*' <<<"$disk_facts" | cut -d= -f2)
 
   case $fstype in
     xfs|ext4)
@@ -82,7 +82,8 @@ done
 
 section "DNS（用系統解析順序 getent，和程式連線時一樣）、兩個套件庫"
 for host in $ALL_HOSTS; do
-  result=$(ssh_script "$host" NAMES="$ALL_HOSTS $REPO_HOST $AD_HOST $LB_HOST" DOMAIN="$DOMAIN" REPO_URL="$REPO_URL" <<'EOF'
+  result=$(ssh_script "$host" NAMES="$ALL_HOSTS $REPO_HOST $AD_HOST $LB_HOST" \
+             DOMAIN="$DOMAIN" REPO_URL="$REPO_URL" <<'EOF'
 # 1. 解析不到的主機名稱列出來；全部解析得到就印 all resolved
 unresolved=""
 

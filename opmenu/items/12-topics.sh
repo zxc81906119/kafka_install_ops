@@ -32,7 +32,7 @@ run_12() {
     detail=$(be_kafka kafka-topics --describe --topic "$topic" 2>/dev/null)
 
     if [ $? -eq 0 ]; then
-      echo "$detail" | grep -E "^Topic:|Partition:" | sed -E 's/[[:space:]]+/ /g'
+      echo "$detail" | grep -E '^Topic:|Partition:' | sed -E 's/[[:space:]]+/ /g'
       shown_any=yes
     else
       echo "Topic: $topic  (看得到名稱,但沒有 DescribeConfigs 權限,無法顯示明細)"

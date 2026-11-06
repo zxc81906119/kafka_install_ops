@@ -1,6 +1,6 @@
 # install/ — 照手把手文件一章一支的安裝腳本
 
-`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 2–31 章的每一章，對應一支 `steps/NN-*.sh`（檔名照章號；第 7 章三支 07-1/2/3、第 25 章兩支 25-1/2；第 1 章與兩個附錄沒有腳本）（手把手只教手打指令，兩者的對照在下面「每一站」）。
+`docs/Confluent-安裝旅程-手把手.docx`（來源 `docs/journey-src/journey.md`）第 2–32 章的每一章，對應一支 `steps/NN-*.sh`（檔名照章號；第 7 章三支 07-1/2/3、第 25 章兩支 25-1/2；第 1 章與兩個附錄沒有腳本）（手把手只教手打指令，兩者的對照在下面「每一站」）。
 腳本做的事、順序、檢查點都和文件一樣；文件是給人讀的，腳本是同一條路的自動化。看不懂某一步，翻文件同一章。
 
 **版本路徑**：主線是「先裝安裝基底、再遷移」——基底 Confluent Platform 8.2.4＋Control Center 2.5.1＋JDK 21＋RHEL 9.6（第 2–19 站），遷移到 8.3.2＋2.6.1＋JDK 25＋RHEL 9.8（第 29、30 站，第 31 站單獨換 C3 版本）。版本都在 `conf/site.env`：基底 `CP_VERSION`／`C3_VERSION`／`JDK_MAJOR`／`OS_BASE_VERSION`，目標 `*_TARGET_*`。
@@ -109,7 +109,7 @@ install/
 6. **密碼**：從 0600 檔讀進變數、用完 `unset`；不放在 `ssh_script` 的參數（會出現在遠端的程序清單），不印出來。
 7. **只用 bash 與 RHEL 標準指令**：ssh、curl、openssl、sed、awk、grep、tar、dnf、systemctl，加上 Confluent 自己的 CLI。不用 python、node、jq；解析 JSON 用 grep／sed（例子：18 站稽核事件）。
 8. **每支結尾 `finish_step`**：有 `fail` 就整站失敗；銀行還沒做完用 `wait_for_bank`（rc 2）。
-9. **改完先跑 `bash install/tools/lint.sh`**，乾淨了再上 lab。真的要例外時在那一行上面寫 `# shellcheck disable=SCxxxx  # 原因`。
+9. **改完先跑 `bash install/tools/lint.sh` 和 `node docs/journey-src/tools/lint-commands.js install/steps/*.sh`**（寫法規則在 `docs/journey-src/tools/COMMAND-STYLE.md`：一行 120 字、管線最多 3 段、不巢狀 `$( )`），乾淨了再上 lab。真的要例外時在那一行上面寫 `# shellcheck disable=SCxxxx  # 原因`。
 
 ## 延伸站的開關（conf/site.env）
 
@@ -118,7 +118,7 @@ install/
 | `SECRETS_MODE=sp|plain` | 密碼放法：第 15 站 Secret Protection（只有 PAM）／不處理（不建議，15 站直接略過） |
 | `OPMENU` `JMX_EXPORTER` `AUDIT_LOG` | 16／17／18 站要不要做 |
 
-選單的緊急憑證（91）是操作機上的檔案 `~/secrets/opmenu-breakglass.pem`（0600、owner 是執行者，16 站組好、21 站換發時舊的另存 `opmenu-breakglass.prev.pem`），選單設定項 `OPMENU_BREAKGLASS_PEM` 可改路徑；主機用的 ssh 私鑰就是 `/secure/ssh` 的那個檔。兩者都不經 PVWA。
+選單的緊急憑證（91）是操作機上的檔案 `~/secrets/svc-ops.pem`（0600、owner 是執行者，16 站組好、21 站換發時舊的另存 `svc-ops.prev.pem`），選單設定項 `OPMENU_BREAKGLASS_PEM` 可改路徑；主機用的 ssh 私鑰就是 `/secure/ssh` 的那個檔。兩者都不經 PVWA。
 
 15 站一次把 15.1–15.5 做完，只滾動重啟一次；18 站依 `~/conf/secrets.mode`（15 站留下的）決定密碼怎麼放。
 

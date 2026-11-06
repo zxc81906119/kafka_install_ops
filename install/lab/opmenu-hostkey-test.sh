@@ -106,7 +106,8 @@ trap cleanup EXIT
 
 # 1. 臨時帳號，套同一份規則（只換開頭的帳號名稱）
 sudo useradd -M -s /usr/sbin/nologin sudotest 2> /dev/null
-sudo sed "s/^$SSH_USER /sudotest /" "/etc/sudoers.d/$SSH_USER-ops" | sudo install -m 0440 /dev/stdin /etc/sudoers.d/zz-sudotest
+sudo sed "s/^$SSH_USER /sudotest /" "/etc/sudoers.d/$SSH_USER-ops" \
+  | sudo install -m 0440 /dev/stdin /etc/sudoers.d/zz-sudotest
 
 if ! sudo visudo -cf /etc/sudoers.d/zz-sudotest > /dev/null; then
   echo "visudo 失敗"
@@ -123,14 +124,30 @@ can() {
 }
 
 # 2. 應該放行的三種寫法
-echo "allowed: $(can /usr/bin/systemctl restart "$UNIT") $(can /usr/bin/systemctl status "$UNIT") $(can /usr/bin/journalctl -u "$UNIT" -n 200 --no-pager)"
+allowed="allowed:"
+allowed="$allowed $(can /usr/bin/systemctl restart "$UNIT")"
+allowed="$allowed $(can /usr/bin/systemctl status "$UNIT")"
+allowed="$allowed $(can /usr/bin/journalctl -u "$UNIT" -n 200 --no-pager)"
+echo "$allowed"
 
 # 3. 應該拒絕的九種寫法
-echo "denied: $(can /usr/bin/systemctl restart sshd) $(can /usr/bin/systemctl restart "$UNIT" sshd) $(can /usr/bin/systemctl status "$UNIT" sshd) $(can /usr/bin/journalctl -u "$UNIT") $(can /usr/bin/journalctl -u "$UNIT" -n 5 --no-pager) $(can /usr/bin/journalctl -D /etc) $(can /usr/bin/journalctl -u sshd -n 200 --no-pager) $(can /usr/bin/systemctl restart confluent-other) $(can /usr/bin/systemctl stop "$UNIT")"
+denied="denied:"
+denied="$denied $(can /usr/bin/systemctl restart sshd)"
+denied="$denied $(can /usr/bin/systemctl restart "$UNIT" sshd)"
+denied="$denied $(can /usr/bin/systemctl status "$UNIT" sshd)"
+denied="$denied $(can /usr/bin/journalctl -u "$UNIT")"
+denied="$denied $(can /usr/bin/journalctl -u "$UNIT" -n 5 --no-pager)"
+denied="$denied $(can /usr/bin/journalctl -D /etc)"
+denied="$denied $(can /usr/bin/journalctl -u sshd -n 200 --no-pager)"
+denied="$denied $(can /usr/bin/systemctl restart confluent-other)"
+denied="$denied $(can /usr/bin/systemctl stop "$UNIT")"
+echo "$denied"
 EOF
 )
-  check "$host（$unit）放行：restart、status、journalctl -n 200" "[ \"\$(grep '^allowed:' <<<\"\$result\")\" = 'allowed: yes yes yes' ]"
-  check "$host 拒絕：別的服務、多帶參數、-D、stop（9 種寫法全部 no）" "[ \"\$(grep '^denied:' <<<\"\$result\")\" = 'denied: no no no no no no no no no' ]"
+  allowed_check="[ \"\$(grep '^allowed:' <<<\"\$result\")\" = 'allowed: yes yes yes' ]"
+  denied_check="[ \"\$(grep '^denied:' <<<\"\$result\")\" = 'denied: no no no no no no no no no' ]"
+  check "$host（$unit）放行：restart、status、journalctl -n 200" "$allowed_check"
+  check "$host 拒絕：別的服務、多帶參數、-D、stop（9 種寫法全部 no）" "$denied_check"
 done
 
 check "臨時帳號已清掉" "[ \"\$(ssh_run kb04 'id sudotest 2>/dev/null | wc -l')\" = 0 ]"

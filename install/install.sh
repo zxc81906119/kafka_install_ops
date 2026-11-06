@@ -10,7 +10,14 @@
 # 每一站的結束碼：0 成功；2 等銀行（印出「請銀行做」清單，做完用 --from 重跑同一站）；其他 = 失敗。
 # 任一站不是 0 就停。紀錄在 ~/install-logs/。
 set -uo pipefail
-INSTALL_DIR=$(cd "$(dirname "$0")" && pwd)
+script_dir=$(dirname "$0")
+INSTALL_DIR=$(
+  if ! cd "$script_dir"; then
+    exit 1
+  fi
+
+  pwd
+)
 LOG_DIR=${LOG_DIR:-$HOME/install-logs}
 
 from_step=02
@@ -46,7 +53,7 @@ while [ $# -gt 0 ]; do
 done
 
 # 從步驟檔的檔頭讀出「在哪台跑」（# where: 那一行）與標題（第 2 行，—— 之前）
-where_of() { awk '/^# where:/{print $3; exit}' "$1"; }
+where_of() { grep -m 1 '^# where:' "$1" | awk '{print $3}'; }
 title_of() { sed -n '2s/^# //p' "$1" | sed 's/ ——.*//'; }
 
 if [ "$list_only" = 1 ]; then

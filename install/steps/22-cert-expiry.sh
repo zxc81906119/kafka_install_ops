@@ -28,14 +28,15 @@ CERT_WARN_DAYS=${CERT_WARN_DAYS:-60}
 #   controller 9093；broker 9092（INTERNAL）、9094（TOKEN）、9095（CLIENT）、8090（MDS）；REST 兩台與 LB；C3；AD（銀行的，順便看）
 #   例："kc01.poc.lab:9093", "kc02.poc.lab:9093", …
 cert_targets() {
-  local host targets=""
+  local host host_fqdn targets=""
 
   for host in $CONTROLLERS; do
     targets="$targets\"$(fqdn "$host"):9093\", "
   done
 
   for host in $BROKERS; do
-    targets="$targets\"$(fqdn "$host"):9092\", \"$(fqdn "$host"):9094\", \"$(fqdn "$host"):9095\", \"$(fqdn "$host"):8090\", "
+    host_fqdn=$(fqdn "$host")
+    targets="$targets\"$host_fqdn:9092\", \"$host_fqdn:9094\", \"$host_fqdn:9095\", \"$host_fqdn:8090\", "
   done
 
   for host in $RESTS; do
@@ -47,7 +48,7 @@ cert_targets() {
 }
 
 files() {
-  local scrape_file endpoint_count alert_count
+  local scrape_file endpoint_count alert_count message prometheus_out
 
   section "22.2 給銀行監控團隊：blackbox 設定、scrape、規則、規則測試（$BANK_OUT/prometheus/）"
 
@@ -62,13 +63,18 @@ files() {
   BLACKBOX_ADDRESS=${BLACKBOX_ADDRESS:-BLACKBOX-EXPORTER:9115}
   scrape_file=$BANK_OUT/prometheus/scrape-blackbox.yml
 
-  if ! render_template "$TEMPLATE_DIR/prometheus-scrape-blackbox.yml" "$scrape_file" CERT_TARGETS ENV_LABEL BLACKBOX_ADDRESS; then
+  if ! render_template "$TEMPLATE_DIR/prometheus-scrape-blackbox.yml" "$scrape_file" \
+       CERT_TARGETS ENV_LABEL BLACKBOX_ADDRESS; then
     die "scrape-blackbox.yml"
   fi
   chmod 0644 "$scrape_file"
 
   # 2. blackbox 的模組、規則、規則的單元測試
-  if ! cp "$TEMPLATE_DIR/blackbox.yml" "$TEMPLATE_DIR/confluent-alerts-cert.yml" "$TEMPLATE_DIR/cert-expiry-rules-test.yml" "$BANK_OUT/prometheus/"; then
+  prometheus_out=$BANK_OUT/prometheus/
+  if ! cp "$TEMPLATE_DIR/blackbox.yml" \
+       "$TEMPLATE_DIR/confluent-alerts-cert.yml" \
+       "$TEMPLATE_DIR/cert-expiry-rules-test.yml" \
+       "$prometheus_out"; then
     die "複製失敗"
   fi
 
@@ -76,9 +82,15 @@ files() {
   endpoint_count=$(grep -o '"[^"]*:[0-9]*"' "$scrape_file" | wc -l)
   alert_count=$(awk '/alert:/ {c++} END {print c + 0}' "$BANK_OUT/prometheus/confluent-alerts-cert.yml")
   ok "scrape-blackbox.yml：$endpoint_count 個端點（blackbox 位址 $BLACKBOX_ADDRESS，銀行改成自己的）"
-  ok "confluent-alerts-cert.yml：$alert_count 條；blackbox.yml（tls 模組，用 ca.pem 驗鏈）；cert-expiry-rules-test.yml（promtool test rules）"
+  message="confluent-alerts-cert.yml：$alert_count 條；blackbox.yml（tls 模組，用 ca.pem 驗鏈）；"
+  message+="cert-expiry-rules-test.yml（promtool test rules）"
+  ok "$message"
 
-  ask_bank "監控團隊：起 blackbox_exporter（blackbox.yml）；scrape-blackbox.yml 的 BLACKBOX-EXPORTER:9115 改成它的位址、放進 scrape_config_files；confluent-alerts-cert.yml 放進 rule_files；promtool test rules cert-expiry-rules-test.yml 驗規則（lab：bank-sim.sh monitoring-blackbox）"
+  message="監控團隊：起 blackbox_exporter（blackbox.yml）；"
+  message+="scrape-blackbox.yml 的 BLACKBOX-EXPORTER:9115 改成它的位址、放進 scrape_config_files；"
+  message+="confluent-alerts-cert.yml 放進 rule_files；"
+  message+="promtool test rules cert-expiry-rules-test.yml 驗規則（lab：bank-sim.sh monitoring-blackbox）"
+  ask_bank "$message"
 }
 
 check() {

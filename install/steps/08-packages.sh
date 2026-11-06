@@ -57,8 +57,8 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-confluent
        file:///etc/pki/rpm-gpg/RPM-GPG-KEY-confluent-c3
 REPO
 
-repos=$(dnf -q repolist | awk '/confluent-internal/ {count++} END {print count + 0}')
-keys=$(rpm -q gpg-pubkey --qf '%{SUMMARY}\n' | awk 'tolower($0) ~ /confluent/ {count++} END {print count + 0}')
+repos=$(dnf -q repolist | awk '/confluent-internal/ {c++} END {print c + 0}')
+keys=$(rpm -q gpg-pubkey --qf '%{SUMMARY}\n' | awk 'tolower($0) ~ /confluent/ {c++} END {print c + 0}')
 echo "$repos repo, $keys keys"
 EOF
 )
@@ -107,7 +107,7 @@ for package in $(rpm -qa 'confluent-*'); do
   fi
 done
 
-locked=$(sudo dnf -q versionlock list | awk '/confluent/ {count++} END {print count + 0}')
+locked=$(sudo dnf -q versionlock list | awk '/confluent/ {c++} END {print c + 0}')
 installed=$(rpm -qa 'confluent-*' | wc -l)
 echo "$locked $installed"
 EOF

@@ -33,9 +33,15 @@ check() {
 # log_result_since <行號> <項目>：選單紀錄裡這行之後、這個項目最後一筆的結果（第 7 欄）
 #   輸入的一行：時間 | 主機 | 帳號 | 群組 | 13 查看 consumer lag  | sid=… | OK | …  → OK
 log_result_since() {
-  local line_number=$1 item=$2
+  local line_number=$1 item=$2 matching_lines
+  local field_separator=' \\| '
 
-  tail -n +$((line_number + 1)) /var/log/opmenu/opmenu.log | grep -E "\| $item [^|]* \| sid=" | tail -1 | awk -F' \\| ' '{print $7}'
+  # 1. 這行之後、這個項目的所有紀錄
+  # lint-ok: 引號裡的 | 是 regex，只有一個是管線
+  matching_lines=$(tail -n +$((line_number + 1)) /var/log/opmenu/opmenu.log | grep -E "\| $item [^|]* \| sid=")
+
+  # 2. 最後一筆的第 7 欄
+  tail -1 <<<"$matching_lines" | awk -F "$field_separator" '{print $7}'
 }
 
 # run_item <AD 帳號> <項目> [參數…]：非互動跑一次，畫面存在 $OUT/<項目>.txt；回傳選單紀錄裡這一筆的結果（OK／FAIL／DENIED…）
@@ -45,7 +51,8 @@ run_item() {
 
   lines_before=$(wc -l < /var/log/opmenu/opmenu.log)
 
-  env OPMENU_USER="$person" OPMENU_PASS="$TEST_PASSWORD" OPMENU_YES=1 OPMENU_REASON=regression JAVA_HOME=/opt/java/current \
+  env OPMENU_USER="$person" OPMENU_PASS="$TEST_PASSWORD" \
+       OPMENU_YES=1 OPMENU_REASON=regression JAVA_HOME=/opt/java/current \
        /opt/opmenu/opmenu.sh --run "$item" "$@" > "$OUT/$item.txt" 2>&1 < /dev/null
 
   sed -i 's/\x1b\[[0-9;]*m//g' "$OUT/$item.txt"
@@ -93,7 +100,9 @@ handover_files_ok() {
     return 1
   fi
 
-  [ "$(stat -c %a "$(latest_handover app-regtest-a)")" = 600 ]
+  local handover_file
+  handover_file=$(latest_handover app-regtest-a)
+  [ "$(stat -c %a "$handover_file")" = 600 ]
 }
 
 # 34：-a、-b 都能用交接檔的密碼登入
@@ -152,7 +161,8 @@ sensitive_audit_visible() {
 
 # under_replicated_count：叢集現在 under-replicated 的 partition 數
 under_replicated_count() {
-  kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe --under-replicated-partitions 2> /dev/null \
+  kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" \
+    --describe --under-replicated-partitions 2> /dev/null \
     | awk '/Partition:/ {c++} END {print c + 0}'
 }
 
@@ -196,20 +206,24 @@ item_ok alice 32 orders.regtest 3600000
 item_ok alice 33 orders.regtest
 remove_test_handovers
 item_ok alice 34 app-regtest regtest.
-password_a=$(cat "$(latest_handover app-regtest-a)" 2> /dev/null)
-password_b=$(cat "$(latest_handover app-regtest-b)" 2> /dev/null)
+handover_a=$(latest_handover app-regtest-a)
+handover_b=$(latest_handover app-regtest-b)
+password_a=$(cat "$handover_a" 2> /dev/null)
+password_b=$(cat "$handover_b" 2> /dev/null)
 check "34 兩個帳號的交接檔都在（0600）" handover_files_ok
 check "34 密碼沒有印在畫面上" "! grep -qF '$password_a' '$OUT/34.txt'"
 check "34 交接檔的密碼能登入（-a、-b）" both_handover_logins_work
 sleep 1
 item_ok alice 35 app-regtest app-regtest-a
-new_password_b=$(cat "$(latest_handover app-regtest-b)")
+handover_b=$(latest_handover app-regtest-b)
+new_password_b=$(cat "$handover_b")
 check "35 只換沒在用的 -b（新密碼和原本不同）" password_b_changed
 check "35 在用的 -a 不受影響（舊密碼照樣能登入）" "scram_login_works app-regtest-a '$password_a'"
 check "35 -b 用新密碼能登入、舊密碼不行" only_new_password_b_works
 
 # 36：先讓一個 consumer group 有讀取位置、停掉，再重設
-timeout 60 kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$CONF_DIR/$FIRST_SCRAM_APP.properties" --topic orders.events \
+timeout 60 kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" \
+  --consumer.config "$CONF_DIR/$FIRST_SCRAM_APP.properties" --topic orders.events \
   --group orders-regtest --from-beginning --max-messages 1 --timeout-ms 20000 > /dev/null 2>&1
 item_ok alice 36 orders-regtest earliest
 item_ok alice 38 app-regtest-a producer_byte_rate=1048576,request_percentage=10

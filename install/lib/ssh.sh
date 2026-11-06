@@ -277,3 +277,23 @@ rolling_restart() {
 
   [ "$failures" = 0 ]
 }
+
+# c3_login_code：alice 從 C3 登入的 HTTP 狀態碼。C3 的首頁不經過 MDS，只看首頁 200 抓不到「C3 連不上 MDS」
+c3_login_code() {
+  curl -s -o /dev/null -m 30 -w '%{http_code}' -u "alice:$(cat "$SECRETS_DIR/ad-test-users.pass")" "https://$C3_FQDN:9021/api/metadata/security/1.0/authenticate"
+}
+
+# wait_c3_login：等 alice 能從 C3 登入（C3 起來後健康檢查還要一點時間，最多等 60 秒）
+wait_c3_login() {
+  local attempt
+
+  for attempt in $(seq 1 12); do
+    if [ "$(c3_login_code)" = 200 ]; then
+      return 0
+    fi
+
+    sleep 5
+  done
+
+  return 1
+}

@@ -14,7 +14,7 @@ source "$INSTALL_DIR/lib/log.sh"
 REQUESTS_FILE=$PKI_DIR/requests.txt   # 每行：名稱 EKU SAN清單（由 conf/certs.txt 展開）
 INCOMING_DIR=$PKI_DIR/incoming        # 銀行回覆放這裡：<名稱>.crt（leaf + 簽發 CA）
 
-# san_list kafka|all：逗號分隔的 SAN 名稱清單（FQDN 與短名都放）
+# san_list kafka|broker|rest|c3：逗號分隔的 SAN 名稱清單（FQDN 與短名都放）
 #   例：san_list kafka → kc01.poc.lab,kc01,kc02.poc.lab,kc02,…
 san_list() {
   local hosts host
@@ -23,8 +23,14 @@ san_list() {
     kafka)
       hosts=$KAFKA_HOSTS
       ;;
-    all)
-      hosts="$ALL_HOSTS $LB_HOST"
+    broker)
+      hosts=$BROKERS
+      ;;
+    rest)
+      hosts=$RESTS
+      ;;
+    c3)
+      hosts=$C3_HOST
       ;;
   esac
 
@@ -34,9 +40,15 @@ san_list() {
       echo "$host"
     done
 
-    if [ "$1" = all ]; then
+    if [ "$1" = rest ]; then
       echo "$REST_VIP"
+    fi
+
+    if [ "$1" = c3 ]; then
       echo "$C3_VIP"
+    fi
+
+    if [ "$1" != kafka ]; then
       echo localhost
     fi
   } | paste -sd,
@@ -82,7 +94,10 @@ split_reply() {
   local cert_name=$1
 
   # 每遇到一行 BEGIN CERTIFICATE 就換寫下一個檔：.part1、.part2…
-  awk -v out="$INCOMING_DIR/$cert_name.part" 'BEGIN{count=0} /BEGIN CERT/{count++} {print > (out count)}' "$INCOMING_DIR/$cert_name.crt"
+  #   例：a.crt 有三張憑證 → a.part1（第一張）、a.part2、a.part3
+  # lint-ok: 要依內容把一個檔拆成多個檔，grep 與 cut 做不到
+  awk -v out="$INCOMING_DIR/$cert_name.part" 'BEGIN{count=0} /BEGIN CERT/{count++} {print > (out count)}' \
+    "$INCOMING_DIR/$cert_name.crt"
 
   mv "$INCOMING_DIR/$cert_name.part1" "$INCOMING_DIR/$cert_name.leaf.pem"
   cat "$INCOMING_DIR/$cert_name".part[2-9] > "$INCOMING_DIR/$cert_name.issuers.pem" 2>/dev/null
@@ -102,12 +117,19 @@ key_pubkey() {
 
 # cert_cn <憑證>：CN，例 kafka-internal
 cert_cn() {
-  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
+  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | grep -o 'CN=[^,]*' | cut -d= -f2-
 }
 
 # cert_san <憑證>：SAN 裡的主機名稱，排好順序、逗號分隔，例 kb01,kb01.poc.lab,…（沒有 SAN 就是空的）
 cert_san() {
-  openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,
+  local san_line
+
+  # 1. SAN 那一行，去掉空白與 DNS:。例：DNS:kb01, DNS:kb01.poc.lab → kb01,kb01.poc.lab
+  san_line=$(openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ')
+  san_line=$(sed 's/DNS://g' <<<"$san_line")
+
+  # 2. 排好順序，再用逗號接回去
+  tr ',' '\n' <<<"$san_line" | sort | paste -sd,
 }
 
 # sorted_list <逗號分隔的清單>：排好順序，用來和 cert_san 比；"-"（沒有 SAN）印空的
@@ -168,7 +190,8 @@ while read -r cert_name eku san_names; do
     extensions+=(-addext "subjectAltName=$(dns_san_list "$san_names")")
   fi
 
-  if openssl req -new -key "$KEYS_DIR/$cert_name.key" -sha256 -subj "/CN=$cert_name/O=PoC Bank/C=TW" "${extensions[@]}" -out "$PKI_DIR/requests/$cert_name.csr"; then
+  if openssl req -new -key "$KEYS_DIR/$cert_name.key" -sha256 -subj "/CN=$cert_name/O=PoC Bank/C=TW" \
+       "${extensions[@]}" -out "$PKI_DIR/requests/$cert_name.csr"; then
     ok "$cert_name: csr ok"
   else
     fail "$cert_name: openssl req 失敗"
@@ -195,7 +218,7 @@ fi
 section "9.3 拆開回覆：第一張是 leaf，其餘是中繼（簽發 CA）"
 for cert_name in $certificate_names; do
   split_reply "$cert_name"
-  issuer_count=$(awk '/BEGIN CERT/ {count++} END {print count + 0}' "$INCOMING_DIR/$cert_name.issuers.pem")
+  issuer_count=$(awk '/BEGIN CERT/ {c++} END {print c + 0}' "$INCOMING_DIR/$cert_name.issuers.pem")
   log "$cert_name: $issuer_count 張中繼"
 done
 
@@ -236,7 +259,8 @@ while read -r cert_name eku san_names; do
   fi
 
   # 6. 整條鏈驗得到銀行根憑證
-  if ! openssl verify -CAfile "$BANK_ROOT_CA" -untrusted "$INCOMING_DIR/$cert_name.issuers.pem" "$leaf" >/dev/null 2>&1; then
+  if ! openssl verify -CAfile "$BANK_ROOT_CA" -untrusted "$INCOMING_DIR/$cert_name.issuers.pem" \
+       "$leaf" >/dev/null 2>&1; then
     problems+=" 憑證鏈驗不過"
   fi
 
@@ -257,7 +281,11 @@ section "正式檔案：*.crt（leaf+中繼）、*.p12 keystore、truststore（�
 for cert_name in $certificate_names; do
   cat "$INCOMING_DIR/$cert_name.leaf.pem" "$INCOMING_DIR/$cert_name.issuers.pem" > "$CERTS_DIR/$cert_name.crt"
 
-  if openssl pkcs12 -export -name "$cert_name" -inkey "$KEYS_DIR/$cert_name.key" -in "$CERTS_DIR/$cert_name.crt" -out "$CERTS_DIR/$cert_name.p12" -passout file:"$PKI_DIR/store.pass"; then
+  if openssl pkcs12 -export -name "$cert_name" \
+       -inkey "$KEYS_DIR/$cert_name.key" \
+       -in "$CERTS_DIR/$cert_name.crt" \
+       -out "$CERTS_DIR/$cert_name.p12" \
+       -passout file:"$PKI_DIR/store.pass"; then
     chmod 0600 "$CERTS_DIR/$cert_name.p12"
   else
     fail "$cert_name: pkcs12"
@@ -268,7 +296,10 @@ done
 cp "$BANK_ROOT_CA" "$CERTS_DIR/bank-root.pem"
 rm -f "$CERTS_DIR/truststore.p12"
 
-if keytool -importcert -noprompt -alias bank-root -file "$CERTS_DIR/bank-root.pem" -keystore "$CERTS_DIR/truststore.p12" -storetype PKCS12 -storepass:file "$PKI_DIR/store.pass" >/dev/null 2>&1; then
+if keytool -importcert -noprompt -alias bank-root \
+     -file "$CERTS_DIR/bank-root.pem" \
+     -keystore "$CERTS_DIR/truststore.p12" -storetype PKCS12 \
+     -storepass:file "$PKI_DIR/store.pass" >/dev/null 2>&1; then
   ok "truststore.p12（只有 bank-root）"
 else
   fail "truststore"

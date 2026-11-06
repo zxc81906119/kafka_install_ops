@@ -284,6 +284,18 @@
 - 銀行未回覆的事項：用我們的預設，文件標「待銀行確認」。
 - 流程：Claude 自檢（順序、內容足夠、要改的內容）→ 直接改 → 從零實測四種模式（Conjur 與 provider 模式已於 2026-10-27 刪除）：客戶模式（手冊全書＋install 全站含 21–28）、有 Conjur 的選配模式、升級演練（8.2.4 起）、Secret Protection 與 Conjur provider 兩條密碼路徑各走一次。每次跑完都用 scan-log.sh 掃。
 
+### C3、REST Proxy 改用自己的憑證（2026-11-05 定案）
+
+- **定案**：`svc-c3`、`svc-rest` 同時有 serverAuth 與 clientAuth，C3／REST 的 listener 和 JMX exporter 都用自己的那張；CN 不變，RBAC 不用改。C3 內建 Prometheus、Alertmanager 的 server 端也用 `svc-c3`，c3-01 不再放 `cp-server`；代價是 `svc-c3`（SystemAdmin）的私鑰以 PEM 檔放在主機上（root:confluent 0640）。Prometheus 連 Alertmanager 也用 `svc-c3`（Alertmanager 只驗鏈與用途、不看 CN），`c3-monitoring` 拿掉，操作機的檢查改用 `svc-ops`。OP menu 緊急模式改用 `svc-ops`，`opmenu-breakglass` 拿掉（Kafka 稽核日誌分不出緊急操作，靠選單 EMERGENCY 紀錄、CyberArk 與 PSMP）。憑證 7 張：kafka-internal、cp-server、svc-rest、svc-c3、svc-ops、app-legacy-billing、svc-backup。`cp-server` 仍只有 serverAuth，取代下一節「svc-c3 只當 client」的部分。
+- **原因**：C3 2.5.1 的 Armeria 健康檢查（MDS、9090、9093）用 REST listener 的 keystore 當 client 憑證，`metadata.ssl.*`、`prometheus.ssl.*` 在這條路徑沒有作用；`cp-server` 只有 serverAuth 就被拒，C3 判定 MDS 全部不健康，AD 使用者的登入與 API 全部失敗（500／502），但首頁 200、服務 active，所以自動檢查一直抓不到。
+- **驗證**：lab 8.2.4 通過；C3 2.6.1、REST 8.3.2 待驗。手冊與腳本待改，並要加帶身分呼叫 C3 API 的驗收。
+
+### 銀行沒有 Prometheus 時的告警（2026-11-05 定案，手冊第 32 章）
+
+- **定案**：和第 17 章並存。C3 內建 Prometheus 抓 REST Proxy 7071；我們的規則放 `custom-rules-rest.yml`，群組層級 `labels: { target: omnibus }`；每台 Alertmanager 各有 `alert_relabel_configs`（內建 drop、第二台 keep）；第二個 Alertmanager 用 C3 內附的執行檔、獨立設定與 systemd，自訂 JSON 送 omnibus。基底的 C3 2.5.1 階段不開。
+- **實測**：2.5.1 內附 Alertmanager 0.32.2 會把 payload 的字串再解析成 YAML（`a: b`→物件、`123`→數字、`007`→7）；0.34.0（C3 2.6.1）、0.34.1 都是字串。c3-change.sh 升到 2.6.1，我們改的 10 個檔雜湊不變。真 C3 trigger 帶 `rule_created_by: c3-10`、沒有 target，只到內建；action 由內建送預設格式。
+- **未解**：原廠是否支援（文件寫不支援客戶自管 Prometheus／Alertmanager）；omnibus 欄位填法（問題清單 11.9）。
+
 ### cp-server 改成純 server 憑證（2026-10-25 討論；2026-10-28 定案並改進手冊與腳本）
 
 - **定案（2026-10-28）**：cp-server 只有 serverAuth；新增 `c3-monitoring`（clientAuth、無 RBAC、無 SAN）給內建 Prometheus 連 Alertmanager（`prometheus-generated.yml` 的 tls_config，PEM，沒有 p12）和第 13／14／19 站的檢查指令用；C3 自己連 Prometheus／Alertmanager 的 keystore 用 `svc-c3.p12`（alias svc-c3，使用者 2026-10-28 指正：C3 用自己的 client 憑證即可）；憑證共 9 張。web-config 的 `cp-server.crt/.key` 是 Prometheus／Alertmanager 的 server 端，不變。第 20 章換發、C3 派送一起帶 c3-monitoring；問題清單 6.2 說明。19 站新增一項驗收：cp-server 只有 serverAuth 且拿來連 9090 被拒。**還沒從零實跑驗證**（下一輪乾淨手冊實跑與腳本重跑要確認：keystore alias 讀得到、C3 連線正常、cp-server 被拒）。
@@ -393,7 +405,7 @@ lab 實測（provider 模式 lab，C3 2.6.1、內建 Alertmanager 0.34.0），�
 - **raft 指標（推翻 2026-10-25 的結論，待在三台 controller 的 lab 再驗）**：用官方規則抓，controller 與 broker 的 `kafka_server_raft_metrics_*`（current_leader、current_epoch、current_vote、number_of_voters、number_unknown_voter_connections、high_watermark、log_end_offset、append／fetch_records_rate、commit／election latency、poll_idle_ratio）**都有值**，官方 `kraft.json` 18／18 panel 有資料。2026-10-25 的 jshell 查不到的原因沒查清（那次是三台 controller 的 dynamic quorum，這次是單 controller `--standalone`；也可能是 jshell 的 MBean 查詢範圍或當時的 includeObjectNames 擋掉了 `kafka.server:type=raft-metrics`）。README「已知限制」第一條與手冊 17.10 的備註都改成「待複驗」。已據此加 `KRaftNoLeader`、`KRaftUnknownVoterConnections` 兩條告警。
 - **哪些 dashboard／panel 有資料**：測試環境單 controller／broker／REST／C3、3 個 partition 的 topic、無 RBAC／audit／quota：32 個 dashboard、816 個 panel、253 個有資料（`docs/journey-src/tools/dashboard-coverage.py` 量；手冊 17.9 有完整表）。可用：`kraft.json` 18／18、`kafka-cluster-kraft.json` 75／80、`kafka-topics-kraft.json` 13／13、`kafka-transaction-coordinator.json` 10／10、`rest-proxy.json` 10／10、`confluent-audit.json` 5／6。**不通的 panel（Confluent Server 加專用 controller 的 KRaft）**：`kafka-cluster-kraft.json`「Offline Partitions Count」、`kafka-topics.json`「Total # of Topics／Partitions」、`kafka-cluster.json`／`confluent-platform.json` 的「Active Controllers」等——官方 query 把 controller 指標寫成 `job="kafka-broker"`，但專用 controller 的叢集裡這些只在 `job="kafka-controller"`（ZooKeeper 時代與 combined mode 才在 broker 上）；沒改官方 JSON（升級官方版本時才不用重修），告警 `KafkaOfflinePartitions` 有涵蓋。Tiered Storage、Cluster Linking 的 panel 沒開功能時是空的。**未驗證**：`confluent-rbac.json`（要 MDS／RBAC）、`kafka-quotas.json`（要設 quota）、稽核的 fallback panel——測試叢集沒開，要在正常 lab 補驗。
 - **audit 與 quota dashboard（2026-10-31，Podman 從零重跑、8.3.2、稽核已開）**：`confluent-audit.json` 0／6，原因是 8.3.2 的 broker 沒有官方規則對應的 MBean `kafka.server:type=confluent-audit-metrics`（jshell attach 列全部 5,452 個 MBean 確認；稽核只以 producer `confluent-event-logger` 出現），手冊原寫的「啟用後 5／6」無法重現、已刪。`kafka-quotas.json` 0／6 是因為 `type=Produce,user=…` 只在有配額的帳號有流量時存在（閒置約 1 小時就消失），量的時候沒有流量。待確認：稽核寫入失敗要不要用 `confluent-event-logger` 的 producer 指標（record-error-rate）告警。
-- **告警規則（21 條，`install/templates/confluent-alerts.yml`，每條都有 `severity`、`impact`、`summary`、`description`，註解標出處）**：
+- **告警規則（22 條，`install/templates/confluent-alerts.yml`，每條都有 `severity`、`impact`、`summary`、`description`，註解標出處）**：
   - `official`（jmx-monitoring-stacks `prometheus-alerts/`）：`ConfluentTargetDown`（service_down，縮到我們四個 job）、`KafkaActiveControllerCountNotOne`、`KafkaOfflinePartitions`、`KafkaUncleanLeaderElections`（官方 `> 0` 對累計次數永遠成立，改看 10 分鐘增量）、`KafkaUnderReplicatedPartitions`（`for` 1 分改 5 分，滾動重啟會短暫 under-replicated）、`KafkaUnderMinIsrPartitions`。不收：官方兩條「Broker IO Activity」（用一個永遠小於 1 的 control-plane 指標，等於測試規則）、`high_load`（要 node exporter）、connector／zookeeper 規則（沒有元件）。
   - `confluent`（Confluent 監控指引）：`KafkaIsrShrinkingWithoutExpand`、`KafkaNetworkProcessorBusy`、`KafkaProduceLatencyHigh`（p99 > 500 ms）、`KRaftNoLeader`、`KRaftUnknownVoterConnections`。
   - `ours`：`KafkaRequestHandlerBusy`（官方有 `requesthandleravgidlepercent` 的累計值與 `_oneminuterate` 兩條序列，用後者）、`KRaftControllerMetadataLag`、`KRaftMetadataErrors`、`KRaftLeaderFlapping`（2026-10-25 的 controller 指標告警，保留）、`RestProxyErrors`（把每個 endpoint 的 `request_error_rate` 加總）、`RestProxyThreadPoolBusy`、`ControlCenterStreamsNotRunning`、`ControlCenterStreamThreadsFailed`、`JvmHeapHigh`、`JvmFileDescriptorsHigh`。每條 lab 都確認過指標存在；沒有 consumer lag 規則（lag 不是 broker 的 JMX 指標）。
@@ -615,5 +627,26 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 失敗時怎麼停：「先檢查、後動手」拆成兩塊，前一塊看到預期輸出（例如 `OK`）才做下一塊；不在貼上的指令裡用 `exit`（會關掉終端機）。`run-full.sh` 由執行器負責：每塊用 `trap … ERR` 執行，任何一行失敗就停（不開子 shell，變數照樣帶到下一塊，和人在同一個終端機照打一樣）。
 - 寫法補充（2026-11-01，第二批改寫時發現）：執行器每塊用 `trap … ERR`，所以「結果可能是 0 或失敗才正常」的指令不能寫成 `x=$(指令)`：
   - 計數可能是 0：用 `awk '/…/ {c++} END {print c + 0}'`，不用 `grep -c`（找不到時結束碼是 1）。
-  - 等服務起來時 curl 可能連不上：包成小函式，放在 `if [ "$(函式)" = 200 ]` 或 `echo`／`printf` 的參數裡，不要先 `code=$(curl …)`。
+  - 等服務起來時 curl 可能連不上：直接寫在 `if [ "$(curl …)" = 200 ]` 或 `echo`／`printf` 的參數裡，不要先 `code=$(curl …)`（2026-11-05 起手冊不再包成小函式）。
   - 送到容器或遠端主機的整段腳本用 `bash -e -s <<'EOF'`（裡面任何一行失敗就停、外面那塊跟著停）；只看不改的檢查用 `bash -s`。要給遠端的值用 `bash -s -- 值…` 傳成 `$1`、`$2`，heredoc 加引號，不再跳脫。
+
+## 指令寫法再收緊（2026-11-05 使用者定案）
+- 最優先仍是可維護性。手冊人照打的指令**不定義函式**，直接寫指令，寧可重複；手冊寫到磁碟的交付腳本與 install、opmenu 的腳本可以有函式。
+- 全部規則在 `docs/journey-src/tools/COMMAND-STYLE.md`，用 `docs/journey-src/tools/lint-commands.js` 檢查（一行 120 字、管線 3 段、不巢狀 `$( )`、一塊 60 行等）；例外要寫 `# lint-ok: 原因`。
+- 不用 `jq`：主機沒裝，也不在銀行的需求清單。
+
+## 9092／9093 的來源（2026-11-05 定案）
+- 操作機要能連 controller 9093（查 quorum、確認憑證）和 broker 9092（確認憑證）：第 10 章 broker 還沒啟動時，只能直接問 controller。不改成走 broker。bootstrap 第一條 binding 走 MDS 8090，不經過 9092，不需要另一個 super user。
+- 要收窄時白名單是 controller、broker、操作機；lab 的 7.3 目前對所有來源開放，等銀行回覆問題清單 5.8 再決定要不要改成限制來源。
+
+## AD 群組成員 pattern（2026-11-05，使用者同意，lab 實測）
+- `ldap.group.member.attribute.pattern=CN=([^,]+),.*OU=<使用者根 OU>,.*`。不符合的 member 安靜略過，不報錯。代價：根 OU 外的人在群組裡也沒有權限。
+- 舊 pattern `CN=([^,]+),.*` 的實測：子群組成員 DENIED（原廠文件也寫不支援巢狀群組）；和子群組同 CN 的使用者 ALLOWED；member 在 user search base 外 → 401；OU 內外同 CN，OU 內那個 ALLOWED。新 pattern 下後兩個 ALLOWED 都變 DENIED，OU 內的直接成員仍 ALLOWED。
+- 全大寫 cn：三種大小寫登入 MDS、C3 都 200，sub 都是 ZZCASEUSER；OP menu 三種大小寫都通過碰主機的權限檢查，紀錄都是 ZZCASEUSER。
+
+## AD 群組查詢範圍（2026-11-04，使用者定案，暫定）
+- 只查 Kafka 用的群組，用**名稱前綴**：`ldap.group.search.base` 指到銀行的群組根 OU（scope 2），加 `ldap.group.search.filter=(cn=KAFKA_*)`。銀行應該不會另開子 OU，所以不用專用 OU（先前的想法已取消）。
+- 群組名暫定 `KAFKA_` 開頭、全大寫（`KAFKA_ADMINS` 等），RBAC 綁定和 AD 寫法完全一致。
+- 實測（2026-11-04，lab 8.2.4，同一人同時在 4 個群組）：沒有 filter 時 3 個群組的權限都有；`(cn=KAFKA*)` 大小寫都比對得到（kafka-zzin、KAFKA_ZZUP 有，zzout-grp 沒有）；`(cn=kafka-*)` 只剩 kafka-zzin。既有帳號不受影響。手冊第 10 章、common.tpl、site.env（`AD_GROUP_SEARCH_FILTER`）已加；lab 用 `(cn=kafka-*)`。
+- **RBAC 的群組名有分大小寫**（實測）：`Group:kafka_zzlow` 對不到 AD 的 `KAFKA_ZZLOW`，沒有 filter 時也一樣 DENIED。
+- 只影響群組；人員的 `ldap.user.search.base` 仍要涵蓋所有會登入的人。待銀行確認（請銀行確認的事項 7.6）。

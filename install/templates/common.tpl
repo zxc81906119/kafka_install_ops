@@ -45,13 +45,15 @@ ldap.search.mode=GROUPS
 ldap.user.search.base=${AD_SEARCH_BASE}
 ldap.user.search.scope=2
 ldap.user.object.class=user
-ldap.user.name.attribute=sAMAccountName
+ldap.user.name.attribute=cn
+ldap.principal.mapping=ldap
 ldap.group.search.base=${AD_GROUP_SEARCH_BASE}
 ldap.group.search.scope=2
+ldap.group.search.filter=${AD_GROUP_SEARCH_FILTER}
 ldap.group.object.class=group
 ldap.group.name.attribute=cn
 ldap.group.member.attribute=member
-ldap.group.member.attribute.pattern=CN=([^,]+),.*
+ldap.group.member.attribute.pattern=${AD_GROUP_MEMBER_PATTERN}
 
 ############################# Metrics to Control Center (Prometheus OTLP receiver, mTLS) #############################
 metric.reporters=io.confluent.telemetry.reporter.TelemetryReporter

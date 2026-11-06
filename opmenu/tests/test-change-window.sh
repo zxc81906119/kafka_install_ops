@@ -2,7 +2,10 @@
 # 測變更時窗（core_window_ok）：跨午夜的時窗、跨週末的星期範圍、剛好在邊界的那一分鐘、"*"、沒設時窗。
 # 不需要叢集。時間用 OPMENU_NOW_OVERRIDE="<星期 1-7> <HH:MM>" 指定（只有 OPMENU_ALLOW_ENV_OVERRIDE=1 時才生效）。
 #   ./test-change-window.sh      全部通過印 "ALL PASS",有失敗回傳 1
-cd "$(dirname "$0")/.." || exit 1
+if ! cd "$(dirname "$0")/.."; then
+  exit 1
+fi
+
 export OPMENU_HOME="$PWD" OPMENU_LOG="$(mktemp)" OPMENU_SYSLOG=0 OPMENU_ALLOW_ENV_OVERRIDE=1
 . lib/defaults.sh
 . lib/common.sh

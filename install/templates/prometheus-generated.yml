@@ -6,8 +6,8 @@ alerting:
     - scheme: https
       tls_config:
         ca_file: /etc/confluent/ssl/ca.pem
-        cert_file: /etc/confluent/ssl/c3-monitoring.crt
-        key_file: /etc/confluent/ssl/c3-monitoring.key
+        cert_file: /etc/confluent/ssl/svc-c3.crt
+        key_file: /etc/confluent/ssl/svc-c3.key
       static_configs:
         - targets:
             - ${C3_FQDN}:9093

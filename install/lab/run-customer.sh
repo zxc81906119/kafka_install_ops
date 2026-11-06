@@ -35,7 +35,14 @@ if ! command -v podman > /dev/null 2>&1; then
   export PATH="$podman_dir:$PATH"
 fi
 
-LAB_TOOLS_DIR=$(cd "$(dirname "$0")" && pwd)
+script_dir=$(dirname "$0")
+LAB_TOOLS_DIR=$(
+  if ! cd "$script_dir"; then
+    exit 1
+  fi
+
+  pwd
+)
 LAB=${LAB:-$HOME/kafka-lab}
 OPS_CONTAINER=lab-ops02-1
 started_at=$(date +%s)
@@ -43,7 +50,7 @@ started_at=$(date +%s)
 # site_value <名稱>：repo 裡 site.env 的值（去掉行尾註解）
 #   例：CP_VERSION=8.2.4   # 基底 → 8.2.4
 site_value() {
-  grep -E "^$1=" "$LAB_TOOLS_DIR/../conf/site.env" | head -1 | cut -d= -f2 | cut -d' ' -f1
+  grep -m 1 -E "^$1=" "$LAB_TOOLS_DIR/../conf/site.env" | cut -d= -f2 | cut -d' ' -f1
 }
 
 # 預期的版本：讀 repo 裡的 site.env（基底與目標）
@@ -69,6 +76,27 @@ stop_lb_team() {
   kill "$LB_TEAM_PID" 2> /dev/null
 }
 trap stop_lb_team EXIT
+
+# omnibus_fields_are_strings：第 32 章的測試告警送到接收端時，每個欄位都是字串（0.32.x 會改成物件、數字）
+omnibus_fields_are_strings() {
+  local webhook_lines first_body
+
+  # 1. 接收端紀錄裡，第 32 章測試告警的那幾行
+  webhook_lines=$(MSYS_NO_PATHCONV=1 podman logs lab-mon-webhook 2>&1 \
+    | grep '^POST /c3-omnibus' \
+    | grep Chapter32WithTarget)
+
+  # 2. 取第一行，去掉 { 之前的部分，只留 JSON 本體
+  first_body=$(sed 's/^[^{]*//' <<<"$webhook_lines" | head -1)
+
+  # 3. 在容器裡用 python 看每個欄位的型別
+  printf '%s\n' "$first_body" | MSYS_NO_PATHCONV=1 podman run --rm -i lab-node:96 python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+bad = [k for k, v in d.items() if not isinstance(v, str)]
+print("omnibus 欄位", len(d), "個；非字串：", bad)
+sys.exit(1 if bad or len(d) != 10 else 0)'
+}
 
 # stage <段號> <標題>：段號小於 FROM 或大於 TO 就略過這一段（回 1），否則印標題（回 0）
 stage() {
@@ -237,7 +265,9 @@ V=2.6.0
 rpm=confluent-control-center-next-gen-$V-1.noarch.rpm
 
 mkdir -p /out/c3
-cd /out/c3 || exit 1
+if ! cd /out/c3; then
+  exit 1
+fi
 
 # have_copy：這個版本的 RPM 已經在這裡、而且 SHA256SUMS 對得上就印 yes，否則 no
 have_copy() {
@@ -277,7 +307,9 @@ EOF
 # 手把手 31.2（操作機）：設成唯讀、核對 sha256
 C3_DRILL_VERIFY=$(cat <<'EOF'
 chmod -R a-w /root/landing/c3
-cd /root/landing/c3 || exit 1
+if ! cd /root/landing/c3; then
+  exit 1
+fi
 sha256sum -c --quiet SHA256SUMS
 echo sha256-ok
 EOF
@@ -285,8 +317,12 @@ EOF
 
 # 手把手 31.2（操作機）：RPM 有沒有新增相依；c3-01 上原廠要求的前置套件都在（RPM 不宣告相依，dnf 不會替你查）
 C3_DRILL_PREREQUISITES=$(cat <<'EOF'
-cd ~/landing/c3 || exit 1
-echo "RPM 宣告的相依：$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE '^(rpmlib|/)' | sort -u | paste -sd';' -)"
+if ! cd ~/landing/c3; then
+  exit 1
+fi
+
+rpm_requires=$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE '^(rpmlib|/)' | sort -u)
+echo "RPM 宣告的相依：$(paste -sd';' - <<<"$rpm_requires")"
 ssh c3-01.poc.lab 'rpm -q cyrus-sasl openssl-devel'
 EOF
 )
@@ -498,7 +534,10 @@ if stage 27 "22 憑證到期監控：files（銀行 monitoring-blackbox：export
   must step_on_ops 22-cert-expiry.sh schedule
 fi
 
-if stage 28 "28 故障排查：快照全綠 → 銀行停 kb04 → 症狀 → 告警 firing → 重啟 → 歸零、告警解除；28.6 擋掉 8090 → 緊急主機模式、kafka-admin → 開回、換 kafka-admin 密碼"; then
+stage_title="28 故障排查：快照全綠 → 銀行停 kb04 → 症狀 → 告警 firing → 重啟 → 歸零、告警解除；"
+stage_title="${stage_title}28.6 擋掉 8090 → 緊急主機模式、kafka-admin → 開回、換 kafka-admin 密碼"
+
+if stage 28 "$stage_title"; then
   must step_on_ops 28-triage.sh snapshot
   must bank broker-stop kb04
   must step_on_ops 28-triage.sh drill kb04
@@ -574,7 +613,13 @@ if stage 33 "31 C3：帶進 2.6.0、退回、升回 2.6.1（回滾程序；2.6.x
   must step_on_ops 29-upgrade.sh c3 "$TARGET_C3"
 fi
 
-if stage 34 "19 驗收（全部做完）"; then
+if stage 34 "32 C3 告警：第二個 Alertmanager、抓 REST Proxy、依 target 分流"; then
+  must step_on_ops 32-c3-alerting.sh install
+  must step_on_ops 32-c3-alerting.sh test
+  must omnibus_fields_are_strings
+fi
+
+if stage 35 "19 驗收（全部做完）"; then
   acceptance "全部做完"
   install_on_ops --list
 fi

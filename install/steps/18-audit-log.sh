@@ -30,7 +30,16 @@ AUDIT_PASSWORD_FILE=$SECRETS_DIR/confluent-audit.pass
 AUDIT_FRAGMENT=$CONF_DIR/audit.rendered.tpl     # 換好主機清單、密碼變數還留著的片段（第 15 站重跑時也會用到）
 AUDIT_CONF_DIR=$CONF_DIR/audit                  # 這一站產出的每台 server.properties
 APP_CLIENT_CONF=$CONF_DIR/$FIRST_SCRAM_APP.properties
-SENSITIVE_TOPIC=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk -v prefix="$AUDIT_SENSITIVE_PREFIX" 'index($1, prefix) == 1 {print $1; exit}')
+# conf/topics.txt 裡第一個以 $AUDIT_SENSITIVE_PREFIX 開頭的 topic（第一欄是 topic 名稱）
+SENSITIVE_TOPIC=""
+topic_names=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}')
+
+for topic_name in $topic_names; do
+  if [[ $topic_name == "$AUDIT_SENSITIVE_PREFIX"* ]]; then
+    SENSITIVE_TOPIC=$topic_name
+    break
+  fi
+done
 
 if [ -z "$SENSITIVE_TOPIC" ]; then
   die "conf/topics.txt 沒有以 $AUDIT_SENSITIVE_PREFIX 開頭的 topic（18.3 要用它製造事件）"
@@ -63,7 +72,8 @@ fi
 
 # 2. 建 SCRAM 帳號
 scram_config="SCRAM-SHA-512=[iterations=8192,password=$(cat "$AUDIT_PASSWORD_FILE")]"
-if kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --alter --entity-type users --entity-name confluent-audit \
+if kafka-configs --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" \
+     --alter --entity-type users --entity-name confluent-audit \
      --add-config "$scram_config" >/dev/null 2>&1; then
   ok "confluent-audit: scram"
 else
@@ -80,7 +90,8 @@ source "$CONF_DIR/kraft.env"   # CLUSTER_ID
 
 for role in DeveloperWrite DeveloperManage; do
   # prefix 綁定同時涵蓋 confluent-audit-log-events 與 confluent-audit-log-events_sensitive
-  if mds_write confluent iam rbac role-binding create --principal User:confluent-audit --role $role --resource Topic:confluent-audit-log-events --prefix \
+  if mds_write confluent iam rbac role-binding create --principal User:confluent-audit --role $role \
+       --resource Topic:confluent-audit-log-events --prefix \
        --kafka-cluster "$CLUSTER_ID" >/dev/null 2>&1 </dev/null; then
     ok "confluent-audit $role Topic:confluent-audit-log-events PREFIXED"
   else
@@ -113,13 +124,16 @@ case $SECRETS_MODE_IN_USE in
     ;;
 esac
 
-export CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN
+export CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE \
+  AD_GROUP_SEARCH_BASE AD_GROUP_SEARCH_FILTER AD_GROUP_MEMBER_PATTERN C3_FQDN
 export HOST_FQDN NODE_ID RACK
 export STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD
 STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 LDAP_BIND_PASSWORD=$(cat "$SECRETS_DIR/ldap-bind.pass")
 AUDIT_PASSWORD=$(cat "$AUDIT_PASSWORD_FILE")
-TEMPLATE_VARS="HOST_FQDN NODE_ID RACK CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN AD_SEARCH_BASE AD_GROUP_SEARCH_BASE C3_FQDN STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD"
+TEMPLATE_VARS="HOST_FQDN NODE_ID RACK CONTROLLER_QUORUM BROKER_INTERNAL AD_FQDN AD_LDAPS_PORT AD_BIND_DN "
+TEMPLATE_VARS+="AD_SEARCH_BASE AD_GROUP_SEARCH_BASE AD_GROUP_SEARCH_FILTER AD_GROUP_MEMBER_PATTERN C3_FQDN "
+TEMPLATE_VARS+="STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD"
 
 if [ "$SECRETS_MODE_IN_USE" = sp ]; then
   CONFLUENT_SECURITY_MASTER_KEY=$(cat "$SECRETS_DIR/master.key")
@@ -147,14 +161,16 @@ for host in $KAFKA_HOSTS; do
   props_file=$AUDIT_CONF_DIR/$host.server.properties
 
   # shellcheck disable=SC2086  # TEMPLATE_VARS 要拆成一個一個變數名
-  if ! render_templates "$props_file" $TEMPLATE_VARS -- "$role_template" "$TEMPLATE_DIR/common.tpl" "$AUDIT_FRAGMENT"; then
+  if ! render_templates "$props_file" $TEMPLATE_VARS -- \
+       "$role_template" "$TEMPLATE_DIR/common.tpl" "$AUDIT_FRAGMENT"; then
     fail "$host: render"
     continue
   fi
 
   upload_files=("$props_file")
   if [ "$SECRETS_MODE_IN_USE" = sp ]; then
-    if ! encrypt_passwords "$props_file" "$SECRETS_DIR/security.properties" /etc/confluent/secrets/security.properties; then
+    if ! encrypt_passwords "$props_file" "$SECRETS_DIR/security.properties" \
+         /etc/confluent/secrets/security.properties; then
       fail "$host: encrypt"
       continue
     fi
@@ -214,7 +230,9 @@ if ! rolling_restart controllers brokers; then
 fi
 sleep 20
 
-audit_topic_count=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --list 2>/dev/null | awk '/^confluent-audit-log-events/ {c++} END {print c + 0}')
+audit_topic_count=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" \
+  --list 2>/dev/null \
+  | awk '/^confluent-audit-log-events/ {c++} END {print c + 0}')
 if [ "$audit_topic_count" = 2 ]; then
   ok "audit topic 2 個（預設 + _sensitive）"
 else
@@ -256,14 +274,16 @@ fi
 unset store_password
 
 # 2. alice 往敏感 topic 寫一筆（允許、敏感）
-if echo "audit-test-$(date +%s)" | kafka-console-producer --bootstrap-server "$FIRST_BROKER:9096" --producer.config "$ALICE_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" >/dev/null 2>&1; then
+if echo "audit-test-$(date +%s)" | kafka-console-producer --bootstrap-server "$FIRST_BROKER:9096" \
+     --producer.config "$ALICE_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" >/dev/null 2>&1; then
   ok "alice 寫入 $SENSITIVE_TOPIC（允許，應記到 _sensitive）"
 else
   fail "alice 寫入 $SENSITIVE_TOPIC 失敗"
 fi
 
 # 3. app 讀敏感 topic（沒有權限：拒絕、敏感）；group 用 app 自己 prefix 底下的（和手冊 18.3 一樣），被拒的才會是 topic 權限
-consumer_output=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$APP_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" \
+consumer_output=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" \
+     --consumer.config "$APP_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" \
      --group "${FIRST_SCRAM_APP#app-}-sneak" --max-messages 1 --timeout-ms 10000 2>&1)
 if grep -q 'TopicAuthorizationException' <<<"$consumer_output"; then
   ok "$FIRST_SCRAM_APP 讀 $SENSITIVE_TOPIC 被拒（拒絕，應記到 _sensitive）"
@@ -273,12 +293,18 @@ fi
 
 # 4. 等事件寫進 audit topic，讀回來
 sleep 10
-sensitive_events=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9096" --consumer.config "$ALICE_CLIENT_CONF" \
-                     --topic confluent-audit-log-events_sensitive --from-beginning --timeout-ms 20000 2>/dev/null | tr -d ' ')
+sensitive_events=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9096" \
+                     --consumer.config "$ALICE_CLIENT_CONF" \
+                     --topic confluent-audit-log-events_sensitive --from-beginning --timeout-ms 20000 2>/dev/null \
+                     | tr -d ' ')
 
 # 5. 每個事件是一行 JSON：同一行裡同時有「誰」「做什麼」「准或拒」的就算一筆
-alice_produce_allowed=$(awk '/"principal":"User:alice"/ && /"methodName":"kafka.Produce"/ && /"granted":true/ {c++} END {print c + 0}' <<<"$sensitive_events")
-app_denied=$(awk -v principal="\"principal\":\"User:$FIRST_SCRAM_ACCOUNT\"" 'index($0, principal) && /"granted":false/ {c++} END {print c + 0}' <<<"$sensitive_events")
+alice_produce_allowed=$(awk \
+  '/"principal":"User:alice"/ && /"methodName":"kafka.Produce"/ && /"granted":true/ {c++} END {print c + 0}' \
+  <<<"$sensitive_events")
+app_denied=$(awk -v principal="\"principal\":\"User:$FIRST_SCRAM_ACCOUNT\"" \
+  'index($0, principal) && /"granted":false/ {c++} END {print c + 0}' \
+  <<<"$sensitive_events")
 
 # 6. 判斷結果
 event_counts="alice 寫入（允許）$alice_produce_allowed 筆、$FIRST_SCRAM_APP（拒絕）$app_denied 筆"

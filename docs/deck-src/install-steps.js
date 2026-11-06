@@ -177,7 +177,7 @@ module.exports = function makeSteps(ctx) {
         ["LuSearchCheck", "匯入前檢查", "名稱、用途、效期、憑證鏈"],
         ["LuLayers", "依用途分開", "伺服器、內部、各服務各一張"],
         ["LuShieldCheck", "全部主機信任", "銀行根憑證放入信任清單"],
-        ["LuCalendarClock", "到期前換發", "到期前 30 天提出申請"],
+        ["LuCalendarClock", "到期前換發", "剩 60 天告警，排變更換發"],
       ]);
     }
 

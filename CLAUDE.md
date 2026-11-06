@@ -18,6 +18,7 @@ Details of the architecture and every component: @README.md
   path. New procedures are validated by running the raw commands on the lab, never only through the scripts.
 - Every chapter follows three steps: **hand-run on the lab → write the manual (concept diagram before the text) → wrap as a script**. If chapter order is
   wrong or chapters can merge, restructure first and test after; wrong content is simply fixed (user, 2026-10-28).
+- Command style (decided 2026-11-05): `docs/journey-src/tools/COMMAND-STYLE.md`, checked by `node docs/journey-src/tools/lint-commands.js`. The guide's typed commands define no functions (repetition is fine); scripts may. No `jq`.
 - The user drives the design discussion (`redesign/README.md`); record only confirmed decisions and open questions.
 - Never print a password, key or token in chat. Secrets live in 0600 files (`~/secrets/*.pass`, `~/pki/store.pass`,
   `~/kafka-lab/secrets.env`) and are read into variables at run time.
@@ -30,13 +31,13 @@ Details of the architecture and every component: @README.md
 - One session = one git worktree = one branch. The lab is shared: note "lab 使用中" in the status file.
 
 ## Repository map
-- `docs/journey-src/` — `journey.md` (the hands-on guide, chapter 0 = build the lab, chapters 1–31, appendix B = monitoring coverage and lab tear-down; single `customer` mode; it must stay runnable by someone **without this repository**: every lab file is written inline, the OP menu arrives as a delivered tarball made by `opmenu/package.sh`)
-  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh customer [from] [to]` (chapter ids 0–31/B, both inclusive, "A" = old name of 0; run order 0, 1…31, B; default 0→B) runs the guide's
+- `docs/journey-src/` — `journey.md` (the hands-on guide, chapter 0 = build the lab, chapters 1–32, appendix B = monitoring coverage and lab tear-down; single `customer` mode; it must stay runnable by someone **without this repository**: every lab file is written inline, the OP menu arrives as a delivered tarball made by `opmenu/package.sh`)
+  + `diagrams.js` → `docs/Confluent-安裝旅程-手把手.docx`; `tools/run-full.sh customer [from] [to]` (chapter ids 0–32/B, both inclusive, "A" = old name of 0; run order 0, 1…32, B; default 0→B) runs the guide's
   blocks on the lab (`run-chapter.js` extracts them, `scan-log.sh` flags rc=0 output that is really a failure).
 - `docs/questions-src/questions.md` → `docs/Confluent-請銀行確認的事項.docx` (`node build.js`).
 - `docs/deck-src/install.js` + `install-steps.js` → `docs/Confluent-RPM安裝流程.pptx` (14-page deck for bank managers).
 - `docs/deck-src/guide-slides.js` + `guide.js` + `guide-build.ps1` → `docs/Confluent-手冊導覽.pptx` (manual overview for the technical supervisor, company template, no commands; needs PowerPoint, see `docs/deck-src/README.md`).
-- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/02–30` named by chapter incl. the on-demand ones 21/22/23/24/26/27/28/29/30; chapters 7 and 25 are `07-1/2/3-*.sh` and `25-1/2-*.sh`, `conf/site.env`);
+- `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/02–32` named by chapter incl. the on-demand ones 21/22/23/24/26/27/28/29/30/32; chapters 7 and 25 are `07-1/2/3-*.sh` and `25-1/2-*.sh`, `conf/site.env`);
   `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh` = the whole path from zero: baseline → acceptance → migration → OS 9.8 → C3; no separate upgrade drill).
 - `opmenu/` — OP menu source (the **only** copy; never edit a sibling project such as `untitled6`).
 - `redesign/README.md` — design decisions, lessons, open questions.
@@ -74,13 +75,16 @@ Details of the architecture and every component: @README.md
 - JDKs (21 for the baseline, 25 for the migration) are delivered by the bank as tars; we install to `/opt/java/<dir>` + `/opt/java/current`, register
   `java`/`keytool` with `alternatives`, set `JAVA_HOME` in `/etc/profile.d/java.sh` and in each systemd drop-in.
 - Only Confluent packages and the JDK are version-locked; C3's `cyrus-sasl`/`openssl-devel` follow OS patching.
+- Certificates per component (decided 2026-11-05): C3 uses `svc-c3` for everything (9021, embedded Prometheus/Alertmanager, JMX exporter, and as client; its PEM key is on c3-01), REST Proxy uses `svc-rest` the same way; both have serverAuth+clientAuth. `cp-server` (serverAuth only) is for brokers only. Prometheus → Alertmanager also uses `svc-c3` (Alertmanager checks chain and purpose, not the CN); checks from ops02 to 9090 use `svc-ops`; OP menu emergency mode (item 91) uses `svc-ops` (`~/secrets/svc-ops.pem`), so Kafka audit shows `svc-ops` and the menu's EMERGENCY record tells them apart. 7 certificates: kafka-internal, cp-server, svc-rest, svc-c3, svc-ops, app-legacy-billing, svc-backup.
+- Without a bank Prometheus (chapter 32, alongside chapter 17): C3 embedded Prometheus scrapes REST Proxy; our rule group adds `target: omnibus`; per-Alertmanager `alert_relabel_configs` send it only to a second Alertmanager (C3's bundled binary, 127.0.0.1:9193) that posts the omnibus JSON. Only after C3 2.6.1.
+- AD group mapping: MDS reads `member` and takes the CN with `ldap.group.member.attribute.pattern`; it never checks object type or full DN. Nested groups are unsupported. The pattern includes the user root OU (`CN=([^,]+),.*OU=<root>,.*`, `AD_GROUP_MEMBER_PATTERN`) so sub-group names and same-named accounts outside that OU are silently ignored.
 - `super.users` is only `kafka-internal` (service-to-service). `svc-ops` (ops host, certificate) and `kafka-admin` (emergency SCRAM) are `SystemAdmin` via
   RBAC; chapter 11 bootstraps the first binding with the `kafka-internal` certificate. Authorization is decided by each broker from `_confluent-metadata-auth`, so
   MDS/AD outages do not affect it (drill 11.2 stops ad01).
 - Apps connect directly with SCRAM; apps via REST Proxy must use client certificates (REST has no password path).
 - Humans use AD accounts; RBAC binds AD groups, never individuals. Platform services use certificates, not AD.
 - CyberArk is decoupled from the platform (decided 2026-10-28): the only link is that a person logs in to the PVWA web page (AD + MFA) and PSMP
-  logs them in to ops02 as root. Platform secrets (passphrase, master key, SCRAM, svc-mds-bind, breakglass PEM, license) live only on ops02 in root-only
+  logs them in to ops02 as root. Platform secrets (passphrase, master key, SCRAM, svc-mds-bind, emergency PEM, license) live only on ops02 in root-only
   0600 files; nothing is vaulted; no CPM rotation — root is the bank's, `svc-mds-bind` is rotated by hand and the bank must tell us (update cipher text, rolling restart).
 - One SSH key pair (ed25519), private key only on ops02 in a separate encrypted file system `/secure/ssh` (root 0400), not in CyberArk, not backed up;
   ops02 rebuilt = new pair + OS team redeploys the public key. Public key in each host's `cpuser` authorized_keys with only `from="<ops02 IP>,127.0.0.1,::1"`.
@@ -94,6 +98,8 @@ Details of the architecture and every component: @README.md
 - MDS token key pair is fixed (rotate only on compromise); cpuser sudo is `NOPASSWD` during install.
 
 ## Gotchas learned the hard way
+- C3 2.5.1 health checks (MDS, 9090, 9093) present the certificate from `confluent.controlcenter.rest.ssl.keystore.*` as client; `confluent.metadata.ssl.*` is not used on that path. A serverAuth-only cert there means `incompatible key usage`, an empty healthy-MDS list, and AD logins and all C3 APIs fail (500/502 `failed to connect to any MDS server`) while the service is active and the home page answers 200. Check C3 with an identity (`alice` to `/api/metadata/security/1.0/authenticate`), never only the home page.
+- Alertmanager 0.32.x (C3 2.5.1) re-parses rendered `payload` strings as YAML even with `toJson` (`a: b` becomes an object, `007` becomes 7); 0.34.x does not.
 - A Rocky 9.6 image's default repo files point at the **latest 9.x** (mirrorlist with `$releasever` = 9): `dnf install` there installs 9.8 packages. Freeze to the vault (`dl.rockylinux.org/vault/rocky/9.6`, repo ids `vault96-*`); 9.8 lives in `pub/rocky/9.8`, 9.6 is not in `pub`.
 - Lab hosts are containers on the WSL2 kernel: `systemctl reboot` fails ("Could not activate remote peer"); `systemd-detect-virt -c` answers `wsl` (Podman and Docker alike). Chapter 30 / `30-os-patch.sh` / `rest-restart.sh -r` restart the platform services instead. A kernel update cannot be tested in the lab.
 - `dnf update` from a `file://` repo that is also the `--downloaddir` can delete the RPMs it just used: copy the downloaded set before indexing/using it.
@@ -121,6 +127,7 @@ Details of the architecture and every component: @README.md
 - `podman compose` fails with `failed to connect to the docker API at npipe:…` while plain `podman` works = `win-sshproxy` is not running (`podman machine start` says `API forwarding … not available … win-sshproxy.exe failed to start`). Cause: an orphaned AF_UNIX socket `%LOCALAPPDATA%\Temp\podman\kafka-lab-api.sock` (Application event log: `bind: Only one usage of each socket address`). `podman machine stop` removes it; a killed `win-sshproxy` (Windows shut down while the machine runs) leaves it (tested 2026-11-01). Stop the machine before shutting Windows down; if hit, `Remove-Item`/`rm` the file, then `podman machine stop/start`.
 - WSL can wedge entirely when Windows is short of memory (16 GB host, 11 GB for WSL; 2026-11-02 at the cold boot, likely commit exhaustion with a game and Chrome open): `wsl.exe` answers `Wsl/Service/0x8007274c`, `podman machine stop` and `wsl --terminate` hang. Only `wsl --shutdown` recovers (it also stops every other distro: ask first). If `podman machine start` then says `could not start api proxy`, an old `win-sshproxy` holds the pipe: stop that process, `podman machine stop`, remove the socket, start. Keep heavy programs closed during full runs.
 - `%LOCALAPPDATA%\Microsoft\WindowsApps` also holds WSL's `bash.exe`: never put it at the **front** of PATH in Git Bash, or `bash -c …` runs inside the Ubuntu distro (2026-10-31: the guide's 0.0 block ran there and started a `podman machine init`; stopped and cleaned up). Append it, or call `/usr/bin/bash`.
+- A WSL stall under memory pressure (every broker logs `Unable to send a heartbeat` in the same second) can leave Self-Balancing broken: `kafka-remove-brokers` then always fails with `RebalancePlanComputationException`, and the controller running the balancer (`kafka-rebalance-cluster --status`) logs `Replica metrics have more windows than partition metrics` (2026-11-06). Restart `confluent-server` on that controller, wait ~7 min for metrics, then retry. Keep games, IntelliJ and Chrome closed during full runs.
 - Podman: `podman images` names local images `localhost/<name>` (count with `(^|/)lab-`); a JS `replace()` with a replacement string containing `$'` pastes the rest of the file (use a function). Installing Podman resets WSL and stops Docker Desktop. Never `podman machine rm kafka-lab` or `reset` casually (it wipes volume `ops-secure`).
 - Building a package set with `dnf download --resolve`: use a clean container and download **before** installing
   tools, or the tools' dependencies are missed (`createrepo_c-libs`).

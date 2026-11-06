@@ -41,7 +41,8 @@ run_36() {
   esac
 
   # 3. 還有成員在線就拒絕（成員那一行的第 3 欄是 /IP）
-  if be_kafka kafka-consumer-groups --describe --group "$group" --members 2>/dev/null | grep -q -E '^[^ ]+ +[^ ]+ +/'; then
+  if be_kafka kafka-consumer-groups --describe --group "$group" --members 2>/dev/null \
+      | grep -q -E '^[^ ]+ +[^ ]+ +/'; then
     echo "consumer group $group 仍有成員在線,拒絕重設(先停止 application)"
     return 1
   fi

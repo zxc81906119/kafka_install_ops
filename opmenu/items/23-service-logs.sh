@@ -41,7 +41,7 @@ run_23() {
 
   # 3. 只留 ERROR、WARN 的行
   local problems
-  problems=$(echo "$log" | grep -i -E "ERROR|WARN" | tail -n "$lines")
+  problems=$(echo "$log" | grep -i -E 'ERROR|WARN' | tail -n "$lines")
 
   if [ -n "$problems" ]; then
     echo "$problems"

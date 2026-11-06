@@ -47,9 +47,11 @@ _mds_curl() {
 # be_mds_login <帳號> <密碼>：用 AD 帳密向 MDS 換 token，印出 token
 #   回傳：0 = 換到了；1 = 帳密不對（MDS 沒給 token）；2 = MDS 全部連不上
 be_mds_login() {
-  local reply token
+  local quoted_login reply token
 
-  reply=$(_mds_curl /security/1.0/authenticate "user = \"$(_curl_q "$1:$2")\"" -H "Accept: application/json")
+  quoted_login=$(_curl_q "$1:$2")
+
+  reply=$(_mds_curl /security/1.0/authenticate "user = \"$quoted_login\"" -H "Accept: application/json")
   if [ $? -ne 0 ]; then
     return 2
   fi
@@ -75,12 +77,16 @@ be_mds() {
     arguments+=(-d "$body")
   fi
 
-  _mds_curl "$path" "header = \"Authorization: Bearer $(_curl_q "$OP_TOKEN")\"" "${arguments[@]}" | tee -a "$OP_LAST_RAW"
+  local quoted_token
+  quoted_token=$(_curl_q "$OP_TOKEN")
+
+  _mds_curl "$path" "header = \"Authorization: Bearer $quoted_token\"" "${arguments[@]}" | tee -a "$OP_LAST_RAW"
 }
 
 # be_cluster_id：向 MDS 問 Kafka cluster ID（不需要帳密）
+#   回應裡找 "id":"<cluster ID>"；awk 用雙引號切欄位，只看第一筆，第 4 段就是值
 be_cluster_id() {
-  _mds_curl /v1/metadata/id "" | grep -o "\"id\":\"[^\"]*\"" | head -1 | cut -d"\"" -f4
+  _mds_curl /v1/metadata/id "" | grep -o '"id":"[^"]*"' | awk -F\" 'NR==1 {print $4}'
 }
 
 # be_http [curl 參數...]：用 curl 連 HTTPS（帶銀行根憑證、10 秒逾時）
@@ -97,18 +103,21 @@ be_kafka() {
   shift
   local output rc
 
-  output=$(KAFKA_HEAP_OPTS="-Xmx256m" "$tool" --bootstrap-server "$OPMENU_BOOTSTRAP" --command-config "$OP_CLIENT_CONF" "$@" 2>&1)
+  output=$(KAFKA_HEAP_OPTS="-Xmx256m" "$tool" \
+    --bootstrap-server "$OPMENU_BOOTSTRAP" \
+    --command-config "$OP_CLIENT_CONF" \
+    "$@" 2>&1)
   rc=$?
 
   printf '%s\n' "$output" >> "$OP_LAST_RAW"
-  printf '%s\n' "$output" | grep -v "^SLF4J\|^WARNING\|is deprecated"
+  printf '%s\n' "$output" | grep -v '^SLF4J\|^WARNING\|is deprecated'
 
   return $rc
 }
 
 # be_bootstrap_kafka <工具> [參數...]：91 緊急模式用備用憑證跑 Kafka 指令工具
 #   client 憑證（PEM：私鑰＋憑證鏈）從操作機上 0600 的檔案（OPMENU_BREAKGLASS_PEM）讀進記憶體檔案系統，
-#   組成「用憑證向 MDS 換 token」的連線設定，用完即刪。憑證身分（例 User:opmenu-breakglass）在 MDS 綁 SystemAdmin；broker 端不需要任何改動。
+#   組成「用憑證向 MDS 換 token」的連線設定，用完即刪。憑證身分（例 User:svc-ops）在 MDS 綁 SystemAdmin；broker 端不需要任何改動。
 be_bootstrap_kafka() {
   local tool="$1"
   shift
@@ -167,12 +176,15 @@ EOC
 
   # 4. 執行，然後馬上刪掉憑證與設定
   local output rc
-  output=$(KAFKA_HEAP_OPTS="-Xmx256m" "$tool" --bootstrap-server "$OPMENU_BREAKGLASS_BOOTSTRAP" --command-config "$conf" "$@" 2>&1)
+  output=$(KAFKA_HEAP_OPTS="-Xmx256m" "$tool" \
+    --bootstrap-server "$OPMENU_BREAKGLASS_BOOTSTRAP" \
+    --command-config "$conf" \
+    "$@" 2>&1)
   rc=$?
   rm -f "$pem" "$conf"
 
   printf '%s\n' "$output" >> "$OP_LAST_RAW"
-  printf '%s\n' "$output" | grep -v "^SLF4J\|^WARNING\|is deprecated"
+  printf '%s\n' "$output" | grep -v '^SLF4J\|^WARNING\|is deprecated'
 
   return $rc
 }
@@ -185,7 +197,11 @@ k_scope() {
 
 # k_bind_body <資源類型> <名稱> <比對方式>：建／刪 binding 的 JSON，例 k_bind_body Topic orders. PREFIXED
 k_bind_body() {
-  printf '{"scope":%s,"resourcePatterns":[{"resourceType":"%s","name":"%s","patternType":"%s"}]}' "$(k_scope)" "$1" "$2" "$3"
+  local scope format
+  scope=$(k_scope)
+  format='{"scope":%s,"resourcePatterns":[{"resourceType":"%s","name":"%s","patternType":"%s"}]}'
+
+  printf "$format" "$scope" "$1" "$2" "$3"
 }
 
 # k_http_ok：從 stdin 讀 be_mds 的回應，最後一行是 HTTP 2xx 才回 0（用法：be_mds … | k_http_ok）
@@ -217,17 +233,26 @@ k_gen_pw() {
 k_disable_scram() {
   local account="$1"
 
-  if ! be_kafka kafka-configs --describe --entity-type users --entity-name "$account" 2> /dev/null | grep -q "SCRAM-SHA-512="; then
+  if ! be_kafka kafka-configs --describe \
+      --entity-type users \
+      --entity-name "$account" 2> /dev/null \
+      | grep -q "SCRAM-SHA-512="; then
     echo "帳號 $account 沒有 SCRAM 憑證,略過"
     return 0
   fi
 
-  be_kafka kafka-configs --alter --add-config "SCRAM-SHA-512=[password=$(k_gen_pw)]" --entity-type users --entity-name "$account"
+  be_kafka kafka-configs --alter \
+    --add-config "SCRAM-SHA-512=[password=$(k_gen_pw)]" \
+    --entity-type users \
+    --entity-name "$account"
 }
 
 # k_unbind_user <帳號> <role> <資源類型> <名稱 prefix>：解除一條 binding（失敗不印、不中斷）
 k_unbind_user() {
-  be_mds DELETE "/security/1.0/principals/User:$1/roles/$2/bindings" "$(k_bind_body "$3" "$4" PREFIXED)" > /dev/null 2>&1
+  local body
+  body=$(k_bind_body "$3" "$4" PREFIXED)
+
+  be_mds DELETE "/security/1.0/principals/User:$1/roles/$2/bindings" "$body" > /dev/null 2>&1
 }
 
 # k_cluster_counts：印「<under-replicated 數> <offline 數> <在線 broker 數>」，例 "0 0 4"
@@ -264,7 +289,12 @@ k_cluster_counts() {
 k_license_claims() {
   local jwt payload
 
-  jwt=$(be_kafka kafka-console-consumer --topic _confluent-command --from-beginning --timeout-ms 20000 2> /dev/null | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' | tail -1)
+  jwt=$(be_kafka kafka-console-consumer \
+      --topic _confluent-command \
+      --from-beginning \
+      --timeout-ms 20000 2> /dev/null \
+    | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' \
+    | tail -1)
 
   if [ -z "$jwt" ]; then
     return 1
@@ -341,7 +371,12 @@ k_audit_fetch() {
   since=$(( ($(date +%s) - minutes * 60) * 1000 ))
 
   for topic in "${@:-$OPMENU_AUDIT_TOPIC}"; do
-    be_kafka kafka-console-consumer --topic "$topic" --from-beginning --timeout-ms 15000 --group "${OPMENU_AUDIT_GROUP_PREFIX}$OP_USER-$$-$RANDOM" --consumer-property enable.auto.commit=false 2> /dev/null
+    be_kafka kafka-console-consumer \
+      --topic "$topic" \
+      --from-beginning \
+      --timeout-ms 15000 \
+      --group "${OPMENU_AUDIT_GROUP_PREFIX}$OP_USER-$$-$RANDOM" \
+      --consumer-property enable.auto.commit=false 2> /dev/null
   done | awk -v s="$since" '
     # 取出 "time":"2026-11-01T01:02:03.456Z"，換成毫秒；夠新的就在前面加上時間（排序用）
     {

@@ -84,7 +84,9 @@ run_27() {
 
       sleep 10
       waited=$(( waited + 10 ))
-      echo "  等待 cluster 恢復…(${waited}s;under-replicated=$urp offline=$off 在線 $live/$count;連續健康 $healthy_in_a_row/$OPMENU_ROLLING_STABLE)"
+
+      local counts="under-replicated=$urp offline=$off 在線 $live/$count"
+      echo "  等待 cluster 恢復…(${waited}s;$counts;連續健康 $healthy_in_a_row/$OPMENU_ROLLING_STABLE)"
     done
 
     if [ "$recovered" = no ]; then

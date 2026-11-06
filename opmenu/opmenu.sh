@@ -7,7 +7,7 @@
 #   lib/common.sh             共用:項目登記、紀錄、確認、輸入驗證、執行流程、主機權限閘門、ssh 金鑰檔檢查
 #   lib/kafka.sh              共用:以操作者身分跑 Kafka 工具、呼叫 MDS;91 用操作機上的緊急憑證檔
 #   lib/hosts.sh              共用:ssh 到各主機重啟、看日誌、磁碟、診斷
-#   lib/secrets/file.sh       91 緊急憑證從哪裡取:操作機上 root 才讀得到的檔案(預設 ~/secrets/opmenu-breakglass.pem,0600)
+#   lib/secrets/file.sh       91 緊急憑證從哪裡取:操作機上 root 才讀得到的檔案(預設 ~/secrets/svc-ops.pem,0600)
 #   items/menu.list           選單對照表:每個項目一行(編號、層級、變更類、要確認、檔案、標題、說明);要加項目或改標題改這裡
 #   items/<編號>-<名稱>.sh     每個選單項目一個檔:裡面的 run_<編號> 函式做事(例 items/21-restart-broker.sh 的 run_21)
 #
@@ -17,8 +17,17 @@
 #   opmenu.sh --run 12 [參數]     直接執行一個項目(測試、排程用);--run menu 只印本人看得到的編號
 #   環境變數(只在 OPMENU_ALLOW_ENV_OVERRIDE=1 時接受):OPMENU_USER / OPMENU_PASS(操作者 AD 帳密)、OPMENU_YES=1(略過確認)、OPMENU_REASON
 set -uo pipefail
-OPMENU_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 這支腳本所在目錄的絕對路徑
+_script_dir=$(dirname "${BASH_SOURCE[0]}")
+OPMENU_HOME=$(
+  if cd "$_script_dir"; then
+    pwd
+  fi
+)
+unset _script_dir
 export OPMENU_HOME
+
 # ── 載入設定與共用程式 ──
 # 設定檔：OPMENU_CONF 指定的、/etc/opmenu/opmenu.conf、程式目錄裡的 opmenu.conf，用找到的第一個
 for _conf in "${OPMENU_CONF:-}" /etc/opmenu/opmenu.conf "$OPMENU_HOME/opmenu.conf"; do
@@ -116,6 +125,14 @@ EOC
   if [ $login_rc -ne 0 ]; then
     echo "${CR}登入失敗:帳號或密碼不正確。${C0}"
     core_log AUTH_FAIL login ""
+    exit 1
+  fi
+
+  # 登入不分大小寫，但 MDS 查權限時 userPrincipal 要和 token 的身分完全一致：
+  #   之後一律用 token 的 sub（AD 回傳的寫法），查權限和紀錄才會和 Kafka 稽核日誌記的身分相同
+  if ! OP_USER=$(token_subject "$OP_TOKEN"); then
+    echo "${CR}登入失敗:token 裡沒有帳號資訊。${C0}"
+    core_log AUTH_FAIL login "token 沒有 sub"
     exit 1
   fi
 
@@ -299,7 +316,12 @@ menu() {
 list_items() {
   local id
   for id in "${ACT_IDS[@]}"; do
-    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "${TIER_NAME[${ACT_TIER[$id]}]}" "${ACT_CHANGE[$id]}" "${ACT_CONFIRM[$id]}" "${ACT_TITLE[$id]}"
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "$id" \
+      "${TIER_NAME[${ACT_TIER[$id]}]}" \
+      "${ACT_CHANGE[$id]}" \
+      "${ACT_CONFIRM[$id]}" \
+      "${ACT_TITLE[$id]}"
   done
 }
 

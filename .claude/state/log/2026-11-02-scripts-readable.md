@@ -20,3 +20,18 @@
 - 使用者 16:42 要關機出門：停在第 23 段開頭（遷移流量結果拿到後），之後 machine stop；回來用 final-resume.sh 接著跑。
 - 最終實跑（11-02 15:14 到 11-03 前，中間關機一次）：腳本第 1–31 段（IDEMPOTENCE=1）＋手冊第 30 章照打（15 塊 rc=0，30.4 新順序輸出與 out 相符，只有秒數不同）＋腳本第 33–34 段＋21 trust-sync、21 chain（中繼沿用私鑰由同一根重簽，端點抽查出示新中繼）。驗收 9 次都 44/44，第 6 段後 0 個 FAIL；流量 遷移 9276 筆遺失 0／REST 1744 失敗 0，OS 更新 4935 筆遺失 0／REST 889 失敗 0。關機重開後驗收 44/44。
 - 這輪沒重跑（上一輪用相同程式碼跑過）：30-os-patch.sh、OP menu 回歸、MDS 金鑰輪替、26 站 reset。21 trust-sync／chain 沒有換新的根。
+
+## 2026-11-03 身分圖更正
+- `identity` 圖原本第二列的虛線像是「應用程式經 9095 到平台服務」，第三欄也混了不同身分。改成每列一種身分、一條實際路徑（對照 broker.tpl、site.env、kafka-rest／control-center 範本）。
+- 手冊 docx 已重建。手冊導覽 pptx 只換第 20 張（使用者調過第 5、18、19、20 張的圖位置，整份重建會蓋掉），`guide-slides.js` 同步；下次整份重建時要注意這些手動調整。
+
+## 2026-11-03 全部圖片自檢（48 張 + RPM 簡報）
+- 內容更正：C3 也換 JDK 25（upgrade、versionpath、migrationflow）；告警規則 22 條（jmx、c3roles）；SHA256SUMS 73、落地區 79 個檔；jar 來自 GitHub release、驗 sha256＋GPG（map、download、questions 2.3）；安裝前檢查是 7.2；JDK 解開在 7.1；MDS 私鑰在 kc、kb；配額是選單 38；rbac 的帳號是 app-orders-a／-b。
+- 畫法更正：map 的 controller→REST、broker→C3、packages→github；secretprotection 的 master key 箭頭方向與右欄派送；edge 的 Prometheus 是 C3 內建；clusterreset 第 4→5 步的箭頭；restore 標題超框。
+- RPM 簡報：封面版本、第 3 張人員走 PVWA＋PSMP、第 10 張 60 天告警、第 13 張 44 項。第 4 張「六件事」與手冊不同（未列 JDK 25、NTP、負載平衡；手冊未列授權檔），待使用者決定。
+- 手冊導覽 pptx 只替換有變的圖，保留使用者調過的位置。journey 文字本身沒有逐字校對。
+- RPM 簡報第 4 張：使用者選「補齊成完整清單」，八項（加 Java 21 與 25、NTP 與負載平衡），標題不再寫「六件事」。
+
+## 2026-11-03 使用者要手動從頭跑：lab 全清
+- 使用者要求清除：容器、volume（含 ops-secure）、lab 映像、`~/kafka-lab` 全清，只留 `landing`、`landing-extra`、`bank-os`、machine 與上游 base 映像。
+- 手冊 0.9 的 `podman compose -f ~/kafka-lab/compose.yml …` 在 `MSYS_NO_PATHCONV=1` 下會失敗（`~` 展開成 /c/Users/… 不被轉換，docker-compose.exe 找不到檔）；改成 `cd ~/kafka-lab` 後用相對路徑，同時補「監控容器先收」。

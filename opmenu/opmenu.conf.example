@@ -32,7 +32,7 @@ OPMENU_SSH_KEY_FILE='/secure/ssh/cpuser_ed25519'
 OPMENU_USER_FROM_OS=0
 
 # 機敏資料:91 緊急模式的憑證放在操作機上只有 root 讀得到的檔案(lib/secrets/file.sh,唯一的來源);權限必須 0600/0400 且 owner 是執行者
-OPMENU_BREAKGLASS_PEM="$HOME/secrets/opmenu-breakglass.pem"   # 91 緊急模式憑證(私鑰 + 憑證鏈 PEM),身分 User:opmenu-breakglass 在 MDS 綁 SystemAdmin
+OPMENU_BREAKGLASS_PEM="$HOME/secrets/svc-ops.pem"   # 91 緊急模式憑證(私鑰 + 憑證鏈 PEM),身分 User:svc-ops 在 MDS 綁 SystemAdmin
 
 # 規範(依客戶規定)
 OPMENU_TOPIC_PATTERN='^[a-z][a-z0-9]+\.[a-z0-9.-]+$'

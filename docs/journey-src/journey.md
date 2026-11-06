@@ -44,8 +44,13 @@ cd ~/kafka-lab
 pwd
 
 # 3. 建 rootful 的 machine（已經建過就跳過）
-if ! podman machine inspect kafka-lab > /dev/null 2>&1; then
-  podman machine init kafka-lab --rootful --cpus 8 > /dev/null
+#    先看清單裡有沒有 kafka-lab。清單是空的不代表失敗：還沒建過也是空的；if 看的是這個指令有沒有成功
+if machines=$(podman machine list --format '{{.Name}}'); then
+  if ! echo "$machines" | grep -qx kafka-lab; then
+    podman machine init kafka-lab --rootful --cpus 8 > /dev/null
+  fi
+else
+  echo "podman machine list 失敗：先看下面的陷阱，不要往下做"
 fi
 
 # 4. 開 machine（已經在跑就跳過）
@@ -114,6 +119,8 @@ start-lab.ps1：19 行
 ```
 
 撞到時先關掉 Podman Desktop（它也會讀 machine 的狀態檔：lab 實測同時開著時撞到一次 `Error writing machine starting state … Access is denied`，之後 `podman machine list` 一直顯示 Currently starting），再在 PowerShell 執行（或在 Git Bash 前面加 `powershell `）：`powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\kafka-lab\start-lab.ps1"`，最後一行是 `result: machine running, API forwarding ok` 就好了。
+
+> 陷阱（lab 實測）：Windows 記憶體不夠時（可用只剩幾百 MB），`podman machine inspect`、`list` 會失敗（`wsl.exe … exit status 143`）或卡住。先關掉 Podman Desktop 和吃記憶體的程式；還是不行就 `wsl --shutdown`（會停掉所有 WSL 發行版），再 `podman machine start kafka-lab`。
 
 > 陷阱：Podman 的安裝程式會重設 WSL，正在跑的其他 WSL 發行版（例如 Docker Desktop）會被關掉。
 >
@@ -324,7 +331,10 @@ if [ ! -f /var/lib/samba/private/sam.ldb ]; then
   rm -f /etc/samba/smb.conf
   samba-tool domain provision --use-rfc2307 --realm="${AD_REALM}" --domain="${AD_DOMAIN}" --server-role=dc \
     --dns-backend=SAMBA_INTERNAL --adminpass="${AD_ADMIN_PASSWORD}" --option="dns forwarder = 127.0.0.11" \
-    --option="tls enabled = yes" --option="tls keyfile = tls/key.pem" --option="tls certfile = tls/cert.pem" --option="tls cafile = tls/ca.pem"
+    --option="tls enabled = yes" \
+    --option="tls keyfile = tls/key.pem" \
+    --option="tls certfile = tls/cert.pem" \
+    --option="tls cafile = tls/ca.pem"
 fi
 
 # 3. Kerberos 設定用網域產生的那一份，再開 sshd
@@ -453,7 +463,11 @@ keyUsage=critical,keyCertSign,cRLSign
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid:always
 EOF
-openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2>/dev/null
+openssl x509 -req -in issuing.csr \
+  -CA root.crt -CAkey root.key -CAcreateserial \
+  -days 3650 -sha256 \
+  -extfile issuing.ext \
+  -out issuing.crt 2>/dev/null
 rm -f issuing.csr issuing.ext
 
 # 4. 確認：簽發 CA 驗得過根 CA；印出根憑證的指紋
@@ -479,7 +493,9 @@ cat > ~/kafka-lab/ca/sign.sh <<'EOF'
 # 改的時候要注意：Git Bash 的 openssl 是 Windows 程式，看不懂 /c/Users/... 這種路徑，所以給 openssl 的路徑都先用 to_win 轉
 set -euo pipefail
 
-ca_dir=$(cd "$(dirname "$0")" && pwd)   # 簽發 CA 的檔案和這支腳本放在同一個目錄
+# 簽發 CA 的檔案和這支腳本放在同一個目錄
+script_dir=$(dirname "$0")
+ca_dir=$(realpath "$script_dir")
 csr=$1
 out=$2
 
@@ -496,6 +512,7 @@ to_win() {
 # csr_ext <標題>：CSR 裡某一個 extension 的內容（openssl 把內容印在標題的下一行）
 #   例：csr_ext "Subject Alternative Name" → DNS:repo01.poc.lab, DNS:repo01
 csr_ext() {
+  # lint-ok: 要取標題的下一行；用 grep 的話找不到標題時 set -e 會直接停，後面的檢查印不出原因
   openssl req -in "$csr" -noout -text | awk -v h="$1" 'f {gsub(/^ +/, ""); print; exit} index($0, h) {f=1}'
 }
 
@@ -510,6 +527,8 @@ if ! openssl req -in "$csr" -noout -verify > /dev/null 2>&1; then
 fi
 
 # 2. 金鑰至少 2048 位元
+# 例：Public-Key: (2048 bit) → 2048
+# lint-ok: 找不到時要是空值，不能讓 set -e 停下；用 grep 會停
 bits=$(openssl req -in "$csr" -noout -text | sed -n 's/.*Public-Key: (\([0-9]*\) bit).*/\1/p')
 if [ "${bits:-0}" -lt 2048 ]; then
   echo "REJECT: key < 2048"
@@ -531,14 +550,17 @@ if echo "$basic" | grep -q "CA:TRUE"; then
 fi
 
 # 5. EKU 一定要有，而且只能是 serverAuth、clientAuth 或兩個都有
-eku=$(csr_ext "Extended Key Usage" | sed 's/TLS Web Server Authentication/serverAuth/; s/TLS Web Client Authentication/clientAuth/; s/, /,/g')
+eku=$(csr_ext "Extended Key Usage" | sed \
+  -e 's/TLS Web Server Authentication/serverAuth/' \
+  -e 's/TLS Web Client Authentication/clientAuth/' \
+  -e 's/, /,/g')
 if [ -z "$eku" ]; then
   echo "REJECT: extended key usage must be requested"
   exit 1
 fi
 
 case "$eku" in
-  serverAuth | clientAuth | serverAuth,clientAuth | clientAuth,serverAuth) ;;
+  serverAuth | clientAuth | serverAuth,clientAuth | clientAuth,serverAuth) ;; # lint-ok: case 的選項，不是管線
   *)
     echo "REJECT: EKU $eku not allowed"
     exit 1
@@ -547,7 +569,8 @@ esac
 
 # 6. 簽發用的 extension 檔：SAN 照 CSR 裡寫的（沒有就不加）
 san=$(csr_ext "Subject Alternative Name" | sed 's/IP Address:/IP:/g; s/, /,/g')
-ext_file=$(to_win "$(mktemp)")
+ext_tmp=$(mktemp)
+ext_file=$(to_win "$ext_tmp")
 
 echo "basicConstraints=critical,CA:FALSE" > "$ext_file"
 echo "keyUsage=critical,digitalSignature,keyEncipherment" >> "$ext_file"
@@ -560,7 +583,13 @@ if [ -n "$san" ]; then
 fi
 
 # 7. 簽一年；輸出的檔案是「憑證＋簽發 CA」
-openssl x509 -req -in "$csr" -CA "$ca_dir/issuing.crt" -CAkey "$ca_dir/issuing.key" -CAcreateserial -days 365 -sha256 -extfile "$ext_file" -out "$out.tmp" 2>/dev/null
+openssl x509 -req -in "$csr" \
+  -CA "$ca_dir/issuing.crt" \
+  -CAkey "$ca_dir/issuing.key" \
+  -CAcreateserial \
+  -days 365 -sha256 \
+  -extfile "$ext_file" \
+  -out "$out.tmp" 2>/dev/null
 rm -f "$ext_file"
 
 cat "$out.tmp" "$ca_dir/issuing.crt" > "$out"
@@ -604,29 +633,19 @@ signed repo.csr -> repo.crt  (CN = repo01.poc.lab, O = PoC Bank, C = TW; EKU ser
 ```bash
 cd ~/kafka-lab
 
-# good_password <密碼>：大寫、小寫、數字至少各有一個才算合格（AD 的密碼規則）
-good_password() {
-  if ! echo "$1" | grep -q '[A-Z]'; then
-    return 1
-  fi
-
-  if ! echo "$1" | grep -q '[a-z]'; then
-    return 1
-  fi
-
-  if ! echo "$1" | grep -q '[0-9]'; then
-    return 1
-  fi
-
-  return 0
-}
-
 # 1. AD 管理員密碼：20 個英數字，不合格就重產；只產生一次（已經有 secrets.env 就沿用）
 if [ ! -f secrets.env ]; then
-  ad_password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
-
-  while ! good_password "$ad_password"; do
+  while true; do
     ad_password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+
+    # 大寫、小寫、數字至少各有一個才算合格（AD 的密碼規則）
+    upper=$(echo "$ad_password" | tr -dc 'A-Z' | wc -c)
+    lower=$(echo "$ad_password" | tr -dc 'a-z' | wc -c)
+    digit=$(echo "$ad_password" | tr -dc '0-9' | wc -c)
+
+    if [ "$upper" -gt 0 ] && [ "$lower" -gt 0 ] && [ "$digit" -gt 0 ]; then
+      break
+    fi
   done
 
   touch secrets.env
@@ -777,7 +796,10 @@ lb01 多接了一個 `frontnet` 並對應 Windows 的 18082、19021，讓 Window
 ```bash
 # 1. 起下載機：/out 掛到落地區
 landing=$(cygpath -m "$HOME/kafka-lab/landing")
-podman run -d --restart unless-stopped --name dl01 --hostname dl01 -v "$landing:/out" lab-node:96 sleep infinity > /dev/null
+podman run -d --restart unless-stopped \
+  --name dl01 --hostname dl01 \
+  -v "$landing:/out" \
+  lab-node:96 sleep infinity > /dev/null
 
 # 2. 下載機的 OS repo 也用 vault 的 9.6
 podman exec dl01 dnf config-manager --set-enabled vault96-baseos vault96-appstream vault96-extras
@@ -816,12 +838,13 @@ podman exec -it lab-repo01-1 bash
 
 | 要做什麼 | 指令 | 說明 |
 |---|---|---|
-| 暫停 | `podman compose -f ~/kafka-lab/compose.yml stop` | 資料都在 volume 裡 |
-| 繼續 | `podman compose -f ~/kafka-lab/compose.yml start` | — |
+| 暫停 | `cd ~/kafka-lab`，再 `podman compose -f compose.yml stop` | 資料都在 volume 裡 |
+| 繼續 | `cd ~/kafka-lab`，再 `podman compose -f compose.yml start` | — |
 | Windows 重開機後 | `podman machine start kafka-lab`（machine 不會自己開）；14 台和下載機都帶 `restart: unless-stopped`，由 `podman-restart` 自己拉起來 | Kafka 服務設了 enable 也會自己起來 |
 | 關 Windows 之前 | `podman machine stop kafka-lab` | 不停就關機會留下孤兒 socket，下次 `podman compose` 壞掉（0.0 的陷阱） |
 | 操作機重開後 | 不用做 | `/secure/ssh` 的 volume 還在，金鑰不用重放（正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機，見第 4 章） |
-| 全部清掉重來 | 先 `podman compose -f ~/kafka-lab/compose.yml down -v`，再 `podman rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
+| 全部清掉重來 | 監控容器還在就先收（B.2 節），再 `cd ~/kafka-lab`、`podman compose -f compose.yml down -v`，最後 `podman rm -f dl01` | 落地區 `~/kafka-lab/landing` 不會被刪 |
+| 連 machine 和下載的檔案也清掉，從完全空白開始 | `podman machine rm -f kafka-lab`（容器、volume、映像都在 machine 裡），再 `rm -rf ~/kafka-lab`，然後從 0.0 節開始 | 第 0 章的映像、第 2 章的 RPM 與 JDK、5.1 與第 30 章的 OS 內容、第 17 章的監控映像、第 31 章的 RPM 都要重新下載。OP menu 的交付物（16.3 節）不是下載來的，要放在 `~/kafka-lab` 以外 |
 
 > 陷阱：要重跑第 0 章（重建映像、重產 CA）之前**一定先 `down -v`**。只 `down` 或直接再 `up -d` 會留下舊的 volume：操作機的 `~/pki`、`~/conf` 還是舊 CA 簽的、AD 裡帳號已存在，後面第 5、9 章會出現「鏈驗證失敗」「ou already exists」這類看似莫名的錯。
 
@@ -980,7 +1003,8 @@ mkdir -p /out/rpm /out/rpm-target /out/gpg-keys /out/tools
 
 # 2. 下載 Confluent 的簽章公鑰（Confluent Platform 一個網址、C3 一個網址）
 curl -fsSL https://packages.confluent.io/rpm/8.2/archive.key -o /out/gpg-keys/confluent.asc
-curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key -o /out/gpg-keys/confluent-c3.asc
+curl -fsSL https://packages.confluent.io/confluent-control-center-next-gen/rpm/archive.key \
+  -o /out/gpg-keys/confluent-c3.asc
 
 # 3. 匯入，確認 rpm 認得它
 rpm --import /out/gpg-keys/confluent.asc /out/gpg-keys/confluent-c3.asc
@@ -1043,7 +1067,11 @@ confluent-server.noarch                          1:8.3.2-1         confluent-8.3
 ```bash
 dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm \
   --disablerepo='*' --enablerepo=confluent-8.2,confluent-c3 \
-  confluent-server-8.2.4 confluent-security-8.2.4 confluent-kafka-rest-8.2.4 confluent-cli-8.2.4 confluent-control-center-next-gen-2.5.1
+  confluent-server-8.2.4 \
+  confluent-security-8.2.4 \
+  confluent-kafka-rest-8.2.4 \
+  confluent-cli-8.2.4 \
+  confluent-control-center-next-gen-2.5.1
 ```
 
 再抓遷移目標到 `/out/rpm-target`：
@@ -1051,7 +1079,11 @@ dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm \
 ```bash
 dnf download --resolve --arch x86_64 --arch noarch --destdir /out/rpm-target \
   --disablerepo='*' --enablerepo=confluent-8.3,confluent-c3 \
-  confluent-server-8.3.2 confluent-security-8.3.2 confluent-kafka-rest-8.3.2 confluent-cli-8.3.2 confluent-control-center-next-gen-2.6.1
+  confluent-server-8.3.2 \
+  confluent-security-8.3.2 \
+  confluent-kafka-rest-8.3.2 \
+  confluent-cli-8.3.2 \
+  confluent-control-center-next-gen-2.6.1
 ```
 
 每套約 3 GB。lab 裡：落地區是 Windows 資料夾，最後核對檔案那段會慢（看起來像卡在 99%），耐心等它結束。
@@ -1104,7 +1136,9 @@ Confluent 的 RPM 需要哪些非 Confluent 的東西？答案應該只有 bash 
 
 ```bash
 # 1. 所有 RPM 宣告的相依，去掉 Confluent 自己的和 rpm 內部用的
-needs=$(rpm -qpR /out/rpm/*.rpm /out/rpm-target/*.rpm 2>/dev/null | grep -vE '^(confluent-|rpmlib\(|config\()' | sort -u)
+needs=$(rpm -qpR /out/rpm/*.rpm /out/rpm-target/*.rpm 2>/dev/null \
+  | grep -vE '^(confluent-|rpmlib\(|config\()' \
+  | sort -u)
 
 # 2. 這些相依由哪些 OS 套件提供
 echo "$needs" | xargs -d '\n' rpm -q --whatprovides | sort -u
@@ -1177,7 +1211,8 @@ commit=f376263fc6d7270185ab6abab9a8c379079e2a92
 mkdir -p /out/monitoring /tmp/jms-x
 
 # 2. 下載這個 commit 的壓縮檔，只解開要用的路徑
-curl -fsSL "https://github.com/confluentinc/jmx-monitoring-stacks/archive/$commit.tar.gz" | tar -xz -C /tmp/jms-x --wildcards \
+archive_url="https://github.com/confluentinc/jmx-monitoring-stacks/archive/$commit.tar.gz"
+curl -fsSL "$archive_url" | tar -xz -C /tmp/jms-x --wildcards \
   '*/LICENSE' \
   '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*' \
   '*/jmxexporter-prometheus-grafana/assets/grafana/provisioning/datasources/*' \
@@ -1195,7 +1230,8 @@ rm -rf /tmp/jms-x
 
 # 4. 結果：檔案數、dashboard 數
 files=$(find /out/monitoring -type f | wc -l)
-dashboards=$(ls /out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana/provisioning/dashboards/*.json | wc -l)
+grafana_dir=/out/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets/grafana
+dashboards=$(ls $grafana_dir/provisioning/dashboards/*.json | wc -l)
 echo "commit $(echo $commit | cut -c1-12): $files 個檔，dashboard $dashboards 個"
 ```
 
@@ -1207,7 +1243,9 @@ commit f376263fc6d7: 48 個檔，dashboard 32 個
 
 ```bash
 dnf -q repoquery --latest-limit 1 --qf '%{name}\t%{version}-%{release}\t%{repoid}' \
-  chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c | sort -u | tee /out/os-packages.txt
+  chrony firewalld cyrus-sasl openssl-devel python3-dnf-plugin-versionlock gettext createrepo_c \
+  | sort -u \
+  | tee /out/os-packages.txt
 ```
 
 ```out
@@ -1242,9 +1280,17 @@ cd /out/bank
 
 for v in 21 25; do
   # 1. 問 Adoptium：這一版最新的 tar 在哪裡、官方的 sha256 是多少
-  meta=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/$v/hotspot?os=linux&architecture=x64&image_type=jdk&vendor=eclipse")
-  url=$(echo "$meta" | grep -o '"link": *"[^"]*\.tar\.gz"' | head -1 | cut -d'"' -f4)
-  sha=$(echo "$meta" | grep -o '"checksum": *"[0-9a-f]\{64\}"' | head -1 | cut -d'"' -f4)
+  query="os=linux&architecture=x64&image_type=jdk&vendor=eclipse"
+  meta=$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/$v/hotspot?$query")
+
+  # 第一筆 tar.gz 的網址；例 "link": "https://…/OpenJDK21U-….tar.gz" → 第 4 個雙引號欄位就是網址
+  link_field=$(echo "$meta" | grep -o '"link": *"[^"]*\.tar\.gz"' | head -1)
+  url=$(echo "$link_field" | cut -d'"' -f4)
+
+  # 第一筆 sha256；例 "checksum": "0a1b…" → 第 4 個雙引號欄位就是 sha256
+  checksum_field=$(echo "$meta" | grep -o '"checksum": *"[0-9a-f]\{64\}"' | head -1)
+  sha=$(echo "$checksum_field" | cut -d'"' -f4)
+
   file=$(basename "$url")
 
   # 2. 官方的 sha256 存成旁邊的 .sha256 檔；已經有同一版而且對得上就不重抓，否則下載（斷線時最多重試 3 次）
@@ -1287,7 +1333,9 @@ jdk-ok: OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz
 cd /out
 
 # 落地區裡我方的檔案（不含銀行的 JDK、之後才送的 tools/opmenu），排好順序算 sha256
-find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
+find rpm rpm-target tools gpg-keys monitoring -type f -not -path "tools/opmenu/*" \
+  | LC_ALL=C sort \
+  | xargs sha256sum > SHA256SUMS
 wc -l SHA256SUMS
 ```
 
@@ -1561,12 +1609,14 @@ line="from=\"172.35.0.10,127.0.0.1,::1\" $pub"
 # 2. 每台主機 cpuser 的 authorized_keys（目錄 0700、檔 0600、擁有者 cpuser）
 for h in ops02 kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
   podman exec lab-$h-1 install -d -m 0700 -o cpuser -g cpuser /home/cpuser/.ssh
-  echo "$line" | podman exec -i lab-$h-1 install -m 0600 -o cpuser -g cpuser /dev/stdin /home/cpuser/.ssh/authorized_keys
+  echo "$line" | podman exec -i lab-$h-1 \
+    install -m 0600 -o cpuser -g cpuser /dev/stdin /home/cpuser/.ssh/authorized_keys
 done
 
 # 3. repo01 的部署帳號 repodeploy 也用這一把
 podman exec lab-repo01-1 install -d -m 0700 -o repodeploy -g repodeploy /home/repodeploy/.ssh
-echo "$line" | podman exec -i lab-repo01-1 install -m 0600 -o repodeploy -g repodeploy /dev/stdin /home/repodeploy/.ssh/authorized_keys
+echo "$line" | podman exec -i lab-repo01-1 \
+  install -m 0600 -o repodeploy -g repodeploy /dev/stdin /home/repodeploy/.ssh/authorized_keys
 
 # 4. 放進去的那一行（金鑰內容省略）
 echo "$line" | sed 's/AAAA[^ ]*/AAAA…/'
@@ -1597,9 +1647,11 @@ fi
 password_field=$(sudo getent shadow cpuser | cut -d: -f2 | cut -c1-2)
 
 # 3. sshd 對 cpuser 實際生效的設定：要不要密碼、允許哪些驗證方式
-sshd_auth=$(sudo sshd -T -C user=cpuser,host=localhost,addr=127.0.0.1 | awk '/^passwordauthentication /{p=$2} /^authenticationmethods /{m=$2} END{print p, m}')
+sshd_config=$(sudo sshd -T -C user=cpuser,host=localhost,addr=127.0.0.1)
+password_auth=$(echo "$sshd_config" | awk '/^passwordauthentication /{print $2}')
+auth_methods=$(echo "$sshd_config" | awk '/^authenticationmethods /{print $2}')
 
-echo "$(id -un) $(hostname) uid=$(id -u) sudo=$has_sudo 密碼欄=$password_field sshd=$sshd_auth"
+echo "$(id -un) $(hostname) uid=$(id -u) sudo=$has_sudo 密碼欄=$password_field sshd=$password_auth $auth_methods"
 EOF
 done
 
@@ -1624,10 +1676,15 @@ repo01
 
 ```bash
 # 1. 把私鑰副本放到 kb01（模擬私鑰被複製）
-podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519 | podman exec -i lab-kb01-1 install -m 0600 /dev/stdin /tmp/copied-key
+podman exec lab-ops02-1 cat /secure/ssh/cpuser_ed25519 \
+  | podman exec -i lab-kb01-1 install -m 0600 /dev/stdin /tmp/copied-key
 
 # 2. 從 kb01 用這把副本連 kb02：應該被拒（失敗才是對的，所以放在 if 裡）
-if podman exec lab-kb01-1 ssh -F /dev/null -i /tmp/copied-key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no cpuser@kb02.poc.lab true 2> /tmp/ssh-result.txt; then
+if podman exec lab-kb01-1 ssh -F /dev/null -i /tmp/copied-key \
+  -o IdentitiesOnly=yes \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=no \
+  cpuser@kb02.poc.lab true 2> /tmp/ssh-result.txt; then
   result=允許
 else
   result=拒絕
@@ -1646,7 +1703,9 @@ if [ "$result" = 允許 ]; then
 fi
 
 # 5. kb02 的 sshd 日誌：不是來自允許的主機
-podman exec lab-kb02-1 journalctl -u sshd --no-pager -n 30 | grep -o 'not from a permitted host.*' | tail -1 | cut -c1-90
+sshd_log=$(podman exec lab-kb02-1 journalctl -u sshd --no-pager -n 30)
+denied_line=$(echo "$sshd_log" | grep -o 'not from a permitted host.*' | tail -1)
+echo "$denied_line" | cut -c1-90
 ```
 
 ```out
@@ -1689,6 +1748,7 @@ out_dir=$(cygpath -m "$PWD/bank-os/9.6")
 podman run --rm -i -v "$out_dir:/out" lab-node:96 bash -e -s <<'EOF'
 # 只開 vault 的 9.6 倉庫
 repos="--disablerepo=* --enablerepo=vault96-baseos,vault96-appstream,vault96-extras"
+# lint-ok: 套件清單（jq 只是 lab 主機自帶的工具，手冊指令不用它）
 packages="chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion"
 
 # 1a. 下載（鏡像站有時還沒同步好：最多試 3 次，每次隔 60 秒）
@@ -1799,31 +1859,21 @@ OpenJDK25U-jdk_x64_linux_hotspot_25.0.x_y.tar.gz.sha256
 密碼先產生到檔案，用環境變數傳進指令，不打在畫面上。AD 預設的密碼複雜度要求大寫、小寫、數字至少各一，隨機抽到不符合的就重抽（不然帳號建不起來）：
 
 ```bash
-# good_password <密碼>：大寫、小寫、數字至少各有一個才算合格（同 0.6）
-good_password() {
-  if ! echo "$1" | grep -q '[A-Z]'; then
-    return 1
-  fi
-
-  if ! echo "$1" | grep -q '[a-z]'; then
-    return 1
-  fi
-
-  if ! echo "$1" | grep -q '[0-9]'; then
-    return 1
-  fi
-
-  return 0
-}
-
 # 1. 兩個密碼檔：bind.pass 給 svc-mds-bind、users.pass 給三個測試人員共用（20 個英數字，不合格就重產）
 install -d -m 0700 /root/secrets
 
 for k in bind users; do
-  p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
-
-  while ! good_password "$p"; do
+  while true; do
     p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+
+    # 大寫、小寫、數字至少各有一個才算合格
+    upper=$(echo "$p" | tr -dc 'A-Z' | wc -c)
+    lower=$(echo "$p" | tr -dc 'a-z' | wc -c)
+    digit=$(echo "$p" | tr -dc '0-9' | wc -c)
+
+    if [ "$upper" -gt 0 ] && [ "$lower" -gt 0 ] && [ "$digit" -gt 0 ]; then
+      break
+    fi
   done
 
   install -m 0600 /dev/null /root/secrets/$k.pass
@@ -1840,7 +1890,9 @@ for ou in Users Groups Service; do
 done
 
 # 3. MDS 查詢用的唯讀帳號
-samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" --userou="OU=Service,OU=Confluent" --description="read-only LDAP bind for Confluent MDS"
+samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" \
+  --userou="OU=Service,OU=Confluent" \
+  --description="read-only LDAP bind for Confluent MDS"
 
 # 4. 三個群組
 for g in kafka-admins kafka-operators kafka-devs; do
@@ -1913,7 +1965,8 @@ podman exec lab-ad01-1 pkill -x samba
 sleep 8
 
 # 4. 確認：LDAPS（636）出示的憑證驗得過根憑證
-podman exec lab-ad01-1 bash -c "openssl s_client -connect localhost:636 -CAfile $tls/ca.pem < /dev/null 2> /dev/null | grep 'Verify return code'"
+podman exec lab-ad01-1 bash -c \
+  "openssl s_client -connect localhost:636 -CAfile $tls/ca.pem < /dev/null 2> /dev/null | grep 'Verify return code'"
 ```
 
 ```out
@@ -1932,7 +1985,8 @@ podman exec lab-ops02-1 install -d -m 0700 /root/secrets
 for pair in bind:ldap-bind users:ad-test-users; do
   src=$(echo "$pair" | cut -d: -f1)
   dst=$(echo "$pair" | cut -d: -f2)
-  podman exec lab-ad01-1 cat /root/secrets/$src.pass | podman exec -i lab-ops02-1 install -m 0600 /dev/stdin /root/secrets/$dst.pass
+  podman exec lab-ad01-1 cat /root/secrets/$src.pass \
+    | podman exec -i lab-ops02-1 install -m 0600 /dev/stdin /root/secrets/$dst.pass
 done
 
 podman exec lab-ops02-1 ls -la /root/secrets | tail -n +4
@@ -2064,6 +2118,7 @@ case "$action" in
   status)
     ;;
   *)
+    # lint-ok: 用法文字裡的 |，不是管線
     echo "用法：$0 <rest01|rest02> down|up|status"
     exit 2
     ;;
@@ -2083,7 +2138,10 @@ sleep 1
 
 # 3. 目前狀態：每一台縮成「主機名稱」或「主機名稱（停用）」
 #   例：server rest01.poc.lab:8082 max_fails=2 fail_timeout=10s down → rest01（停用）
-members=$(lb grep -oE 'server rest0[12][^;]*' "$conf" | sed -E 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//; s/server //; s/ down/（停用）/' | paste -sd' ' -)
+members=$(lb grep -oE 'server rest0[12][^;]*' "$conf" | sed -E \
+  -e 's/\.poc\.lab:8082 max_fails=2 fail_timeout=10s//' \
+  -e 's/server //' \
+  -e 's/ down/（停用）/' | paste -sd' ' -)
 echo "LB：$members"
 EOF
 
@@ -2303,7 +2361,8 @@ mem=$(free -m | awk '/Mem:/{print $2}')
 tmp_free=$(df -m /tmp | awk 'NR==2{print $4}')
 tmp_noexec=$(findmnt -no OPTIONS /tmp | grep -c noexec)
 
-printf "%-7s %s cpu=%s mem=%sMB tmp_free=%sMB tmp_noexec=%s\n" "$(hostname)" "$os" "$(nproc)" "$mem" "$tmp_free" "$tmp_noexec"
+printf "%-7s %s cpu=%s mem=%sMB tmp_free=%sMB tmp_noexec=%s\n" \
+  "$(hostname)" "$os" "$(nproc)" "$mem" "$tmp_free" "$tmp_noexec"
 EOF
 done
 ```
@@ -2381,7 +2440,10 @@ done
 
 # 2. broker 連得到 AD 的 LDAPS，而且憑證鏈信任成功
 for h in kb01 kb02 kb03 kb04; do
-  ssh $h.poc.lab 'echo "$(hostname): $(openssl s_client -connect ad01.poc.lab:636 < /dev/null 2> /dev/null | grep "Verify return code")"'
+  ssh $h.poc.lab bash -s <<'EOF'
+verify=$(openssl s_client -connect ad01.poc.lab:636 < /dev/null 2> /dev/null | grep "Verify return code")
+echo "$(hostname): $verify"
+EOF
 done
 ```
 
@@ -2508,7 +2570,8 @@ ConditionVirtualization=!container
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled; echo never > /sys/kernel/mm/transparent_hugepage/defrag"
+ExecStart=/bin/sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled; \
+  echo never > /sys/kernel/mm/transparent_hugepage/defrag"
 
 [Install]
 WantedBy=basic.target
@@ -2591,8 +2654,8 @@ kc01: repo01
 
 | 元件 | 連接埠 | 誰會連進來 |
 |---|---|---|
-| controller | 9093、7071 | 其他 controller 與 broker；監控 |
-| broker | 9092、9094、9095、9096、8090、7071 | broker 之間；token 連線；應用程式；MDS；監控 |
+| controller | 9093、7071 | 其他 controller 與 broker；操作機（查 quorum、確認憑證。第 10 章 broker 還沒啟動時只能這樣驗）；監控 |
+| broker | 9092、9094、9095、9096、8090、7071 | 9092：broker 之間、controller（metadata）、操作機（確認憑證）；token 連線；應用程式；MDS；監控 |
 | REST Proxy | 8082、7071 | 負載平衡；監控 |
 | C3 | 9021、9090、7071 | 維運人員的瀏覽器；C3 自己的 Prometheus；監控 |
 
@@ -2768,18 +2831,18 @@ RPM 建好了服務帳號（`cp-kafka` 等）和群組 `confluent`；C3 主機�
 
 ## 9.1 產生私鑰與 CSR
 
-先決定要幾張憑證、各自給誰用（下表），再一次把 9 組私鑰與 CSR 產生出來。私鑰留在操作機，只有 CSR 交給銀行。EKU（憑證用途）決定憑證能當伺服器、客戶端或兩者；SAN 是憑證適用的主機名稱，連線時名稱對不上會被拒。
+先決定要幾張憑證、各自給誰用（下表），再一次把 7 組私鑰與 CSR 產生出來。私鑰留在操作機，只有 CSR 交給銀行。EKU（憑證用途）決定憑證能當伺服器、客戶端或兩者；SAN 是憑證適用的主機名稱，連線時名稱對不上會被拒。
 
 @role 小安 | ops02 | root
 
 | 名稱 | 用途 | EKU | SAN |
 |---|---|---|---|
 | kafka-internal | controller、broker 之間的 mTLS；controller 的 JMX exporter（7071，第 17 章；controller 沒有 cp-server） | serverAuth, clientAuth | kc01–03、kb01–04 |
-| cp-server | 所有對外服務的**伺服器端**：client listener、MDS、REST、C3、C3 內建的 Prometheus／Alertmanager、broker／REST／C3 的 JMX exporter（7071）。只當 server 憑證，不拿去當 client 出示 | serverAuth | 全部主機、rest.poc.lab、c3.poc.lab、localhost |
-| svc-rest、svc-c3、svc-ops | REST Proxy、C3、操作機向 MDS 換 token 的身分 | clientAuth | 無 |
-| c3-monitoring | 內建 Prometheus 向 Alertmanager 出示的 client 身分（第 13 章），只有 PEM 檔，沒有 keystore。只做這件事，**不綁任何 Kafka 角色**（C3 本身連 Prometheus、Alertmanager 用自己的 `svc-c3`） | clientAuth | 無 |
+| cp-server | **broker** 對外的伺服器端：client listener、MDS、broker 的 JMX exporter（7071）。只當 server 憑證，不拿去當 client 出示 | serverAuth | kb01–04、localhost |
+| svc-rest | REST Proxy 自己的憑證：對外 8082 與 JMX exporter 當 server，向 MDS 換 token 當 client | serverAuth, clientAuth | rest01、rest02、rest.poc.lab、localhost |
+| svc-c3 | Control Center 自己的憑證：9021、內建 Prometheus／Alertmanager、JMX exporter 當 server，向 MDS 換 token、連內建服務當 client | serverAuth, clientAuth | c3-01、c3.poc.lab、localhost |
+| svc-ops | 操作機向 MDS 換 token 的身分；維運選單（第 16 章）緊急模式也用它 | clientAuth | 無 |
 | app-legacy-billing | 走 REST Proxy 的應用程式 | clientAuth | 無 |
-| opmenu-breakglass | 維運選單（第 16 章）緊急模式用的身分 | clientAuth | 無 |
 | svc-backup | 每日備份（第 23 章）匯出叢集中繼資料的唯讀身分 | clientAuth | 無 |
 
 ```bash
@@ -2791,21 +2854,13 @@ openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/pki/store.pass
 # 2. 申請清單：名稱、EKU、SAN（- = 沒有 SAN）
 cat > ~/pki/requests.txt <<'EOF'
 kafka-internal     serverAuth,clientAuth  kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04
-cp-server          serverAuth             kc01.poc.lab,kc01,kc02.poc.lab,kc02,kc03.poc.lab,kc03,kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,rest01.poc.lab,rest01,rest02.poc.lab,rest02,c3-01.poc.lab,c3-01,ops02.poc.lab,ops02,lb01.poc.lab,lb01,rest.poc.lab,c3.poc.lab,localhost
-svc-rest           clientAuth             -
-svc-c3             clientAuth             -
-c3-monitoring      clientAuth             -
+cp-server          serverAuth             kb01.poc.lab,kb01,kb02.poc.lab,kb02,kb03.poc.lab,kb03,kb04.poc.lab,kb04,localhost
+svc-rest           serverAuth,clientAuth  rest01.poc.lab,rest01,rest02.poc.lab,rest02,rest.poc.lab,localhost
+svc-c3             serverAuth,clientAuth  c3-01.poc.lab,c3-01,c3.poc.lab,localhost
 svc-ops            clientAuth             -
 app-legacy-billing clientAuth             -
-opmenu-breakglass  clientAuth             -
 svc-backup         clientAuth             -
 EOF
-
-# san_list <逗號分隔的主機名稱>：換成 subjectAltName 的寫法
-#   例：san_list kc01.poc.lab,kc01 → DNS:kc01.poc.lab,DNS:kc01
-san_list() {
-  echo "$1" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -
-}
 
 # 3. 清單上每一張：私鑰（0600）與 CSR；有 SAN 的多加一行 subjectAltName
 while read -r name eku san; do
@@ -2819,11 +2874,14 @@ while read -r name eku san; do
       -addext "extendedKeyUsage=$eku" \
       -out ~/pki/requests/$name.csr
   else
+    # 換成 subjectAltName 的寫法，例：kc01.poc.lab,kc01 → DNS:kc01.poc.lab,DNS:kc01
+    san_dns="DNS:$(echo "$san" | sed 's/,/,DNS:/g')"
+
     openssl req -new -key ~/pki/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" \
       -addext "basicConstraints=critical,CA:FALSE" \
       -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
       -addext "extendedKeyUsage=$eku" \
-      -addext "subjectAltName=$(san_list "$san")" \
+      -addext "subjectAltName=$san_dns" \
       -out ~/pki/requests/$name.csr
   fi
 
@@ -2833,7 +2891,7 @@ done < ~/pki/requests.txt
 
 ```out
 kafka-internal: csr ok
-（9 行）
+（7 行）
 ```
 
 送出前自己看一次 CN、SAN、EKU 是否和上表一致（銀行 CA 的政策會檢查 EKU，漏了會被退件）：
@@ -2841,7 +2899,12 @@ kafka-internal: csr ok
 ```bash
 for f in ~/pki/requests/*.csr; do
   echo "== $(basename $f)"
-  openssl req -in $f -noout -subject -text | grep -E "^subject=|Alternative|Extended Key" -A1 | grep -v "^--" | sed 's/^ */  /'
+
+  # 只留 subject、SAN、EKU 和它們的下一行
+  csr_text=$(openssl req -in $f -noout -subject -text)
+  wanted="^subject=|Alternative|Extended Key"
+  picked=$(echo "$csr_text" | grep -E "$wanted" -A1)
+  echo "$picked" | grep -v "^--" | sed 's/^ */  /'
 done
 ```
 
@@ -2849,7 +2912,7 @@ done
 
 @role 銀行 CA 窗口 | Windows 終端 | 本機
 
-正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5 建好的 `sign.sh`，9 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和 5.3 節簽給 ad01 的那張混在一起）：
+正式環境是把 CSR 交給 CA 窗口，收回「憑證 + 中繼 CA」。lab 裡：用 0.5 建好的 `sign.sh`，7 個 CSR 一次簽完、放回操作機的 `incoming/`（簽好的放在 `signed/` 子目錄，免得和 5.3 節簽給 ad01 的那張混在一起）：
 
 ```bash
 cd ~/kafka-lab
@@ -2874,7 +2937,7 @@ podman exec lab-ops02-1 bash -c 'ls /root/pki/incoming | wc -l'
 
 ```out
 signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
-（9 行）
+（7 行）
 9
 ```
 
@@ -2893,28 +2956,22 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 ```bash
 cd ~/pki
 
-# split_reply <名稱>：銀行回覆的 incoming/<名稱>.crt 拆成 leaf（第一張）和 issuers（其餘的中繼 CA）
+# 銀行回覆的 incoming/<名稱>.crt 拆成兩個檔
 #   例：incoming/svc-ops.crt → incoming/svc-ops.leaf.pem、incoming/svc-ops.issuers.pem
-split_reply() {
-  local name=$1
-
-  # 每遇到一行 BEGIN CERTIFICATE 就換寫下一個檔：.part1、.part2…
-  awk -v n=$name 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$name.crt
-
-  mv incoming/$name.part1 incoming/$name.leaf.pem
-  cat incoming/$name.part[2-9] > incoming/$name.issuers.pem 2> /dev/null
-  rm -f incoming/$name.part*
-}
-
 for name in $(awk '{print $1}' requests.txt); do
-  split_reply $name
+  # leaf：從頭到第一行 END CERTIFICATE（第一張）
+  sed '/END CERTIFICATE/q' incoming/$name.crt > incoming/$name.leaf.pem
+
+  # issuers：第一行 END CERTIFICATE 之後的全部（其餘的中繼 CA）
+  sed '1,/END CERTIFICATE/d' incoming/$name.crt > incoming/$name.issuers.pem
+
   echo "$name: $(grep -c 'BEGIN CERT' incoming/$name.issuers.pem) issuer(s)"
 done
 ```
 
 ```out
 kafka-internal: 1 issuer(s)
-（9 行）
+（7 行）
 ```
 
 五項檢查：私鑰相符、CN、SAN、EKU、效期，再驗整條鏈到銀行根憑證。好結果是每一行的 key、cn、san、eku、chain 都是 `ok`，days 約 364（憑證效期一年）：
@@ -2922,84 +2979,66 @@ kafka-internal: 1 issuer(s)
 ```bash
 cd ~/pki
 
-# cert_pubkey <憑證>、key_pubkey <私鑰>：公鑰的 sha256 前 16 碼；兩個一樣 = 憑證和私鑰是一對
-cert_pubkey() {
-  openssl x509 -in "$1" -pubkey -noout | sha256sum | cut -c1-16
-}
-
-key_pubkey() {
-  openssl pkey -in "$1" -pubout 2> /dev/null | sha256sum | cut -c1-16
-}
-
-# cert_cn <憑證>：CN，例 kafka-internal
-cert_cn() {
-  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-# cert_san <憑證>：SAN 裡的主機名稱，排好順序、逗號分隔，例 kb01,kb01.poc.lab,…（沒有 SAN 就是空的）
-cert_san() {
-  openssl x509 -in "$1" -noout -ext subjectAltName 2> /dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,
-}
-
-# sorted_list <逗號分隔的清單>：排好順序，用來和 cert_san 比；"-"（沒有 SAN）印空的
-sorted_list() {
-  if [ "$1" = "-" ]; then
-    echo ""
-  else
-    echo "$1" | tr ',' '\n' | sort | paste -sd,
-  fi
-}
-
-# cert_eku <憑證>：用途，例 TLSWebServerAuthentication,TLSWebClientAuthentication
-cert_eku() {
-  openssl x509 -in "$1" -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '
-}
-
-# cert_days <憑證>：還有幾天到期
-cert_days() {
-  local end
-  end=$(openssl x509 -in "$1" -noout -enddate | cut -d= -f2)
-  echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
-}
-
 while read -r name eku san; do
   leaf=incoming/$name.leaf.pem
 
-  # 1. 私鑰相符
-  if [ "$(cert_pubkey $leaf)" = "$(key_pubkey keys/$name.key)" ]; then
+  # 1. 私鑰相符：憑證和私鑰的公鑰，sha256 前 16 碼一樣 = 是一對
+  cert_pub=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16)
+  key_pub=$(openssl pkey -in keys/$name.key -pubout 2> /dev/null | sha256sum | cut -c1-16)
+
+  if [ "$cert_pub" = "$key_pub" ]; then
     key=ok
   else
     key=MISMATCH
   fi
 
   # 2. CN 就是申請的名稱（不是的話印出實際的 CN）
-  cn=$(cert_cn $leaf)
+  cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | grep -o 'CN=[^,]*' | cut -d= -f2)
+
   if [ "$cn" = "$name" ]; then
     cn=ok
   fi
 
-  # 3. SAN 和申請的一樣
-  if [ "$(cert_san $leaf)" = "$(sorted_list "$san")" ]; then
+  # 3. SAN 和申請的一樣：兩邊都排好順序再比，例 kb01,kb01.poc.lab,…（沒有 SAN 就是空的）
+  cert_ext=$(openssl x509 -in $leaf -noout -ext subjectAltName 2> /dev/null | tail -n +2 | tr -d ' ')
+  cert_lines=$(echo "$cert_ext" | sed 's/DNS://g' | tr ',' '\n')
+  cert_san=$(echo "$cert_lines" | sort | paste -sd,)
+
+  if [ "$san" = "-" ]; then
+    wanted_san=""
+  else
+    wanted_lines=$(echo "$san" | tr ',' '\n')
+    wanted_san=$(echo "$wanted_lines" | sort | paste -sd,)
+  fi
+
+  if [ "$cert_san" = "$wanted_san" ]; then
     san_check=ok
   else
     san_check=DIFF
   fi
 
   # 4. 整條鏈驗得到銀行根憑證
-  if openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf > /dev/null 2>&1; then
+  if openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem \
+    -untrusted incoming/$name.issuers.pem $leaf > /dev/null 2>&1; then
     chain=ok
   else
     chain=FAIL
   fi
 
-  # 5. 一行結果（EKU 與剩幾天直接印出來看）
-  printf '%-19s key=%s cn=%s san=%s eku=%s days=%s chain=%s\n' $name $key "$cn" $san_check "$(cert_eku $leaf)" "$(cert_days $leaf)" $chain
+  # 5. 用途（例 TLSWebServerAuthentication,TLSWebClientAuthentication）與還有幾天到期
+  leaf_eku=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' ')
+  end=$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)
+  days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+
+  # 6. 一行結果（EKU 與剩幾天直接印出來看）
+  printf '%-19s key=%s cn=%s san=%s eku=%s days=%s chain=%s\n' \
+    $name $key "$cn" $san_check "$leaf_eku" "$days" $chain
 done < requests.txt
 ```
 
 ```out
 kafka-internal      key=ok cn=ok san=ok eku=TLSWebServerAuthentication,TLSWebClientAuthentication days=364 chain=ok
-（9 行，全部 ok）
+（7 行，全部 ok）
 ```
 
 > 任何一項不是 ok 就退回銀行重簽，不往下做。
@@ -3012,13 +3051,21 @@ cd ~/pki
 # 1. 每一張：正式的 PEM（leaf＋中繼）與 PKCS12 keystore（0600）
 for name in $(awk '{print $1}' requests.txt); do
   cat incoming/$name.leaf.pem incoming/$name.issuers.pem > certs/$name.crt
-  openssl pkcs12 -export -name $name -inkey keys/$name.key -in certs/$name.crt -out certs/$name.p12 -passout file:store.pass
+  openssl pkcs12 -export -name $name \
+    -inkey keys/$name.key \
+    -in certs/$name.crt \
+    -out certs/$name.p12 \
+    -passout file:store.pass
   chmod 0600 certs/$name.p12
 done
 
 # 2. truststore：只放銀行根憑證
 cp /etc/pki/ca-trust/source/anchors/bank-root.pem certs/bank-root.pem
-keytool -importcert -noprompt -alias bank-root -file certs/bank-root.pem -keystore certs/truststore.p12 -storetype PKCS12 -storepass:file store.pass
+keytool -importcert -noprompt -alias bank-root \
+  -file certs/bank-root.pem \
+  -keystore certs/truststore.p12 \
+  -storetype PKCS12 \
+  -storepass:file store.pass
 
 # 3. MDS 簽 token 用的金鑰對（不經銀行；私鑰 0600）
 install -m 0600 /dev/null keys/mds-token.key
@@ -3055,7 +3102,8 @@ Certificate was added to keystore
 ```bash
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
   # 1. 這台要的檔案：controller 4 個；broker 多一個對外 listener 用的 cp-server.p12
-  files="$HOME/pki/certs/truststore.p12 $HOME/pki/certs/kafka-internal.p12 $HOME/pki/keys/mds-token.key $HOME/pki/certs/mds-token-public.pem"
+  files="$HOME/pki/certs/truststore.p12 $HOME/pki/certs/kafka-internal.p12"
+  files="$files $HOME/pki/keys/mds-token.key $HOME/pki/certs/mds-token-public.pem"
   case $h in
     kb*) files="$files $HOME/pki/certs/cp-server.p12" ;;
   esac
@@ -3078,7 +3126,9 @@ sudo install -o root -g confluent -m 0640 /tmp/mds-token.key /etc/confluent/ssl/
 rm -f /tmp/*.p12 /tmp/mds-token*
 
 # 放了幾個、哪些
-printf "%-6s %s files: %s\n" "$(hostname)" "$(sudo ls /etc/confluent/ssl | wc -l)" "$(sudo ls /etc/confluent/ssl | paste -sd" ")"
+file_count=$(sudo ls /etc/confluent/ssl | wc -l)
+file_names=$(sudo ls /etc/confluent/ssl | paste -sd" ")
+printf "%-6s %s files: %s\n" "$(hostname)" "$file_count" "$file_names"
 EOF
 done
 ```
@@ -3157,13 +3207,15 @@ ldap.search.mode=GROUPS
 ldap.user.search.base=OU=Confluent,DC=corp,DC=poc,DC=lab
 ldap.user.search.scope=2
 ldap.user.object.class=user
-ldap.user.name.attribute=sAMAccountName
+ldap.user.name.attribute=cn
+ldap.principal.mapping=ldap
 ldap.group.search.base=OU=Groups,OU=Confluent,DC=corp,DC=poc,DC=lab
 ldap.group.search.scope=2
+ldap.group.search.filter=(cn=kafka-*)
 ldap.group.object.class=group
 ldap.group.name.attribute=cn
 ldap.group.member.attribute=member
-ldap.group.member.attribute.pattern=CN=([^,]+),.*
+ldap.group.member.attribute.pattern=CN=([^,]+),.*OU=Users,OU=Confluent,.*
 
 ############################# Metrics to Control Center (Prometheus OTLP receiver, mTLS) #############################
 metric.reporters=io.confluent.telemetry.reporter.TelemetryReporter
@@ -3192,6 +3244,12 @@ confluent.consumer.lag.emitter.enabled=true
 EOF
 echo common.tpl ok
 ```
+
+> **群組的三個限制（lab 實測，依銀行的結構：使用者在多層 OU、群組在另一個根 OU）**：MDS 只讀群組的 `member`，用 `ldap.group.member.attribute.pattern` 取出 CN，不看完整 DN，也不查那筆是人還是群組。
+> - **不支援巢狀群組**（原廠文件也這樣寫）：子群組的成員登得進來，但沒有權限，也沒有錯誤訊息。`KAFKA_*` 群組一定要直接放人。
+> - **member 在 `ldap.user.search.base` 外**：那個人登不進來（401）。
+> - **同名風險**：如果 pattern 只寫 `CN=([^,]+),.*`，子群組的名稱會被當成使用者；OU 外的 `CN=ABC` 在群組裡，OU 內另一個同名的 `CN=ABC` 登入就會拿到那個群組的權限（都實測過）。所以 pattern 把使用者根 OU 也寫進去（lab 是 `OU=Users,OU=Confluent`，銀行是 `OU=<使用者根 OU>`）：不符合的 member 會被**安靜略過**，不會報錯。代價是根 OU 之外的人即使在群組裡也沒有權限，看 AD 也看不出原因。
+
 
 controller 範本：
 
@@ -3296,7 +3354,7 @@ confluent.metadata.server.user.store=LDAP
 confluent.metadata.server.token.signature.algorithm=RS256
 confluent.metadata.server.token.max.lifetime.ms=3600000
 confluent.metadata.server.impersonation.super.users=User:svc-rest
-confluent.metadata.server.impersonation.protected.users=User:kafka-internal;User:kafka-admin;User:svc-ops;User:svc-mds-bind;User:svc-rest;User:svc-c3;User:opmenu-breakglass;User:svc-backup;User:confluent-audit
+confluent.metadata.server.impersonation.protected.users=User:kafka-internal;User:kafka-admin;User:svc-ops;User:svc-mds-bind;User:svc-rest;User:svc-c3;User:svc-backup;User:confluent-audit
 
 ############################# Cluster defaults #############################
 default.replication.factor=3
@@ -3469,8 +3527,14 @@ for h in kc01 kc02 kc03; do
 password=$(cat /tmp/ka.pass)
 rm -f /tmp/ka.pass
 
-sudo -u cp-kafka env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-  kafka-storage format --cluster-id $1 --config /etc/confluent/kafka/server.properties --initial-controllers $2 \
+sudo -u cp-kafka env \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format \
+  --cluster-id $1 \
+  --config /etc/confluent/kafka/server.properties \
+  --initial-controllers $2 \
   --add-scram "SCRAM-SHA-512=[name=kafka-admin,password=$password]" 2>&1 | grep -v -i scram
 
 printf '%-5s cluster.id=%s\n' $(hostname) "$(sudo sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)"
@@ -3480,8 +3544,14 @@ done
 # 3. broker：格式化成觀察者（不參與 quorum 投票）（$1 = cluster id）
 for h in kb01 kb02 kb03 kb04; do
   ssh $h.poc.lab bash -s -- "$CLUSTER_ID" <<'EOF'
-sudo -u cp-kafka env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-  kafka-storage format --cluster-id $1 --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1
+sudo -u cp-kafka env \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format \
+  --cluster-id $1 \
+  --config /etc/confluent/kafka/server.properties \
+  --no-initial-controllers 2>&1 | tail -1
 
 cluster=$(sudo sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)
 node=$(sudo sed -n 's/^node.id=//p' /var/lib/kafka/data/meta.properties)
@@ -3595,7 +3665,7 @@ kb04 MDS=200
 
 **先講清楚 super user**：第 10 章的 `super.users` 只有 `kafka-internal`（controller 與 broker 彼此用的憑證），它繞過 RBAC。人用的身分都不是 super user：操作機的 `svc-ops`、緊急用的 `kafka-admin` 都靠 RBAC 綁 `SystemAdmin`，動作受 RBAC 控管、稽核記的是明確的角色。授權由每台 broker 自己的 authorizer 依 binding 判斷（binding 在內部 topic `_confluent-metadata-auth`），MDS 的 REST 或 AD 不通都不影響授權，所以把人用的帳號設成 super user 沒有必要（11.2 會驗證）。
 
-**bootstrap**：叢集剛起來時一條 binding 都沒有，只有 super user 能呼叫 MDS 建 binding。所以第一步用 `kafka-internal` 的憑證登入 MDS，建第一條：`User:svc-ops → SystemAdmin`。這是 `kafka-internal` 憑證唯一一次被人拿來用：
+**bootstrap**：叢集剛起來時一條 binding 都沒有，只有 super user 能呼叫 MDS 建 binding。所以第一步用 `kafka-internal` 的憑證登入 MDS，建第一條：`User:svc-ops → SystemAdmin`。這是 `kafka-internal` 唯一一次被人拿來寫權限（走 MDS 的 8090，不經過 9092；操作機之後只用它查 quorum）：
 
 ```bash
 export JAVA_HOME=/opt/java/current
@@ -3671,7 +3741,12 @@ for a in app-orders-a app-orders-b app-payments-a app-payments-b; do
   openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$a.pass
 
   password=$(cat ~/secrets/$a.pass)
-  kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name $a \
+  kafka-configs \
+    --bootstrap-server $BS \
+    --command-config ~/conf/client-admin.properties \
+    --alter \
+    --entity-type users \
+    --entity-name $a \
     --add-config "SCRAM-SHA-512=[iterations=8192,password=$password]" > /dev/null
   echo "$a: scram created"
 done
@@ -3679,7 +3754,12 @@ unset password
 
 # 2. 確認：四個帳號，加上 10.4 建的 kafka-admin，都有 SCRAM 憑據
 for a in app-orders-a app-orders-b app-payments-a app-payments-b kafka-admin; do
-  scram=$(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name $a | grep -o 'SCRAM-SHA-512=[^,]*' | head -1)
+  scram=$(kafka-configs \
+    --bootstrap-server $BS \
+    --command-config ~/conf/client-admin.properties \
+    --describe \
+    --entity-type users \
+    --entity-name $a | grep -o 'SCRAM-SHA-512=[^,]*' | head -1)
   echo "$a: $scram"
 done
 ```
@@ -3759,13 +3839,25 @@ EOF
 # 3. 逐條建立：整個 cluster 的不給 --resource；PREFIXED 的多加 --prefix
 while read -r principal role resource pattern; do
   if [ "$resource" = "-" ]; then
-    confluent iam rbac role-binding create --principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID" > /dev/null
+    confluent iam rbac role-binding create \
+      --principal "$principal" \
+      --role "$role" \
+      --kafka-cluster "$CLUSTER_ID" > /dev/null
     echo "ok  $principal $role"
   elif [ "$pattern" = "PREFIXED" ]; then
-    confluent iam rbac role-binding create --principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID" --resource "$resource" --prefix > /dev/null
+    confluent iam rbac role-binding create \
+      --principal "$principal" \
+      --role "$role" \
+      --kafka-cluster "$CLUSTER_ID" \
+      --resource "$resource" \
+      --prefix > /dev/null
     echo "ok  $principal $role $resource $pattern"
   else
-    confluent iam rbac role-binding create --principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID" --resource "$resource" > /dev/null
+    confluent iam rbac role-binding create \
+      --principal "$principal" \
+      --role "$role" \
+      --kafka-cluster "$CLUSTER_ID" \
+      --resource "$resource" > /dev/null
     echo "ok  $principal $role $resource $pattern"
   fi
 done < ~/conf/rbac.txt
@@ -3781,11 +3873,21 @@ ok  Group:kafka-admins SystemAdmin
 ```bash
 # 1. 配額：四個 SCRAM 帳號一樣；走 REST Proxy 的 app-legacy-billing 小一點
 for a in app-orders-a app-orders-b app-payments-a app-payments-b; do
-  kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name $a \
+  kafka-configs \
+    --bootstrap-server $BS \
+    --command-config ~/conf/client-admin.properties \
+    --alter \
+    --entity-type users \
+    --entity-name $a \
     --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50'
 done
 
-kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-legacy-billing \
+kafka-configs \
+  --bootstrap-server $BS \
+  --command-config ~/conf/client-admin.properties \
+  --alter \
+  --entity-type users \
+  --entity-name app-legacy-billing \
   --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25'
 
 # 2. 範例 topic（寫法：名稱:partition 數）
@@ -3817,8 +3919,12 @@ for u in alice carol; do
   CONFLUENT_PLATFORM_USERNAME=$u CONFLUENT_PLATFORM_PASSWORD=$password confluent login --url https://kb01.poc.lab:8090 \
     --certificate-authority-path ~/pki/certs/bank-root.pem > /dev/null 2>&1
 
-  # 2. 自己有哪些角色
-  roles=$(confluent iam rbac role-binding list --principal User:$u --kafka-cluster $CLUSTER_ID -o json 2> /dev/null | grep -o '"role": *"[^"]*"' | sort -u | tr '\n' ' ')
+  # 2. 自己有哪些角色：從 JSON 取出 "role" 欄位、去掉重複，再排成一行
+  roles=$(confluent iam rbac role-binding list \
+    --principal User:$u \
+    --kafka-cluster $CLUSTER_ID \
+    -o json 2> /dev/null | grep -o '"role": *"[^"]*"' | sort -u)
+  roles=$(echo "$roles" | tr '\n' ' ')
   echo "$u: $roles"
 done
 unset password
@@ -3848,7 +3954,13 @@ carol: "role": "DeveloperRead"
 確認這幾個檔都只有 root 讀得到：
 
 ```bash
-stat -c '%a %U %s 位元組 %n' ~/pki/store.pass ~/secrets/kafka-admin.pass ~/secrets/app-orders-a.pass ~/secrets/app-orders-b.pass ~/secrets/app-payments-a.pass ~/secrets/app-payments-b.pass
+stat -c '%a %U %s 位元組 %n' \
+  ~/pki/store.pass \
+  ~/secrets/kafka-admin.pass \
+  ~/secrets/app-orders-a.pass \
+  ~/secrets/app-orders-b.pass \
+  ~/secrets/app-payments-a.pass \
+  ~/secrets/app-payments-b.pass
 ```
 
 ```out
@@ -3886,13 +3998,9 @@ ca=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
 # 1. alice 用 AD 帳密向 MDS 要 token：AD 不通，應該是 401
 password=$(cat ~/secrets/ad-test-users.pass)
+url=https://kb01.poc.lab:8090/security/1.0/authenticate
 
-# alice_login：alice 向 MDS 要 token 的 HTTP 狀態碼
-alice_login() {
-  curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate
-}
-
-echo "alice 登入 MDS：HTTP $(alice_login)"
+echo "alice 登入 MDS：HTTP $(curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w '%{http_code}' $url)"
 unset password
 
 # 2. kafka-admin 用 SCRAM 從 9095 列 topic：照樣可以
@@ -3901,10 +4009,16 @@ tmp=$(mktemp -d)
 grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
 
 admin_password=$(cat ~/secrets/kafka-admin.pass)
-echo "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-admin\" password=\"$admin_password\";" >> $tmp/c.properties
+
+cat >> $tmp/c.properties <<EOF
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="$admin_password";
+EOF
 unset admin_password
 
-count=$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list 2> /dev/null | grep -vc -e '^Error' -e '^$')
+count=$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --command-config $tmp/c.properties \
+  --list 2> /dev/null | grep -vc -e '^Error' -e '^$')
 echo "kafka-admin 從 9095 列 topic：$count 個"
 rm -rf $tmp
 ```
@@ -3921,9 +4035,13 @@ kafka-admin 從 9095 列 topic：10 個
 ```bash
 podman start lab-ad01-1 > /dev/null
 
+# 在操作機上執行的檢查：LDAPS 連得上，而且憑證驗證通過
+check="timeout 5 openssl s_client -connect ad01.poc.lab:636 < /dev/null 2> /dev/null"
+check="$check | grep -q 'Verify return code: 0'"
+
 # 從操作機每 5 秒試一次 LDAPS，最多試 30 次
 for i in $(seq 1 30); do
-  if podman exec lab-ops02-1 bash -c "timeout 5 openssl s_client -connect ad01.poc.lab:636 < /dev/null 2> /dev/null | grep -q 'Verify return code: 0'"; then
+  if podman exec lab-ops02-1 bash -c "$check"; then
     break
   fi
 
@@ -3942,22 +4060,18 @@ ad01 已開回（LDAPS 約 10 秒後可用）
 ```bash
 ca=/etc/pki/ca-trust/source/anchors/bank-root.pem
 password=$(cat ~/secrets/ad-test-users.pass)
+url=https://kb01.poc.lab:8090/security/1.0/authenticate
 
-# alice_login：alice 向 MDS 要 token 的 HTTP 狀態碼（200 = 成功）
-alice_login() {
-  curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate
-}
-
-# 每 5 秒試一次，最多試 12 次，拿到 200 就停
+# 每 5 秒試一次 alice 向 MDS 要 token，最多試 12 次，拿到 200 就停
 for i in $(seq 1 12); do
-  if [ "$(alice_login)" = 200 ]; then
+  if [ "$(curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w '%{http_code}' $url)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "AD 開回後 alice 登入 MDS：HTTP $(alice_login)"
+echo "AD 開回後 alice 登入 MDS：HTTP $(curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w '%{http_code}' $url)"
 unset password
 ```
 
@@ -3985,20 +4099,26 @@ export JAVA_HOME=/opt/java/current
 confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
   --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null
 
-# role_table：把 MDS 的角色定義（JSON，從 stdin 讀）整理成一個角色一行；只留 Kafka cluster 的四種資源與 SecurityMetadata
+# 把 MDS 的角色定義（JSON）整理成一個角色一行；只留 Kafka cluster 的四種資源與 SecurityMetadata
 #   例：DeveloperRead    Resource  Cluster=-  Topic=Read,Describe  Group=Read,Describe  TransactionalId=Describe
-role_table() {
-  python3 -c '
+confluent iam rbac role list -o json | python3 -c '
 import json, sys
-keep = ["Cluster", "Topic", "Group", "TransactionalId", "SecurityMetadata"]
-for r in sorted(json.load(sys.stdin), key=lambda r: (r["accessPolicy"]["scopeType"], r["name"])):
-    p = r["accessPolicy"]
-    ops = {o["resourceType"]: ",".join(o.get("operations", [])) or "-" for o in p.get("allowedOperations", []) if o.get("resourceType") in keep}
-    print("%-16s %-9s %s" % (r["name"], p["scopeType"], "  ".join("%s=%s" % (k, ops[k]) for k in keep if k in ops) or "(scope 內全部)"))
-'
-}
 
-confluent iam rbac role list -o json | role_table
+keep = ["Cluster", "Topic", "Group", "TransactionalId", "SecurityMetadata"]
+roles = json.load(sys.stdin)
+roles.sort(key=lambda r: (r["accessPolicy"]["scopeType"], r["name"]))
+
+for r in roles:
+    p = r["accessPolicy"]
+    ops = {}
+
+    for o in p.get("allowedOperations", []):
+        if o.get("resourceType") in keep:
+            ops[o["resourceType"]] = ",".join(o.get("operations", [])) or "-"
+
+    shown = ["%s=%s" % (k, ops[k]) for k in keep if k in ops]
+    print("%-16s %-9s %s" % (r["name"], p["scopeType"], "  ".join(shown) or "(scope 內全部)"))
+'
 ```
 
 ```out
@@ -4018,7 +4138,7 @@ ResourceOwner    Resource  Cluster=Describe,Alter,IdempotentWrite,AlterAccess,Cr
 
 | 角色 | 綁在 | Topic | Group | Cluster | 本平台誰綁 |
 |---|---|---|---|---|---|
-| SystemAdmin | 整個 cluster | 全部 | 全部 | 全部（含 role binding） | `Group:kafka-admins`、`svc-ops`、`kafka-admin`（SCRAM）、`svc-c3`、`opmenu-breakglass` |
+| SystemAdmin | 整個 cluster | 全部 | 全部 | 全部（含 role binding） | `Group:kafka-admins`、`svc-ops`、`kafka-admin`（SCRAM）、`svc-c3` |
 | ClusterAdmin | 整個 cluster | 建、刪、改設定、看（**不能讀寫**） | — | 改設定、建 | 沒用 |
 | UserAdmin | 整個 cluster | — | — | 管 role binding | 沒用（改權限由 SystemAdmin 做） |
 | SecurityAdmin | 整個 cluster | — | — | 只能看 role binding | `svc-backup`（23.2） |
@@ -4047,14 +4167,14 @@ REST Proxy 沒有密碼登入，應用程式一律用 client 憑證；憑證的 
 
 ```bash
 for h in rest01 rest02; do
-  scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/svc-rest.p12 ~/pki/certs/mds-token-public.pem $h.poc.lab:/tmp/
+  scp -q ~/pki/certs/truststore.p12 ~/pki/certs/svc-rest.p12 ~/pki/certs/mds-token-public.pem $h.poc.lab:/tmp/
 
   # 在那台執行 EOF 之前的那一段：建目錄（root:confluent 0750）、放檔案（0640）（bash -e：任何一行失敗就停）
   ssh $h.poc.lab bash -e -s <<'EOF'
 sudo install -d -o root -g root -m 0755 /etc/confluent
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/kafka-rest
 
-for f in truststore.p12 cp-server.p12 svc-rest.p12 mds-token-public.pem; do
+for f in truststore.p12 svc-rest.p12 mds-token-public.pem; do
   sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/
 done
 rm -f /tmp/*.p12 /tmp/mds-token-public.pem
@@ -4065,8 +4185,8 @@ done
 ```
 
 ```out
-rest01  4 files
-rest02  4 files
+rest01  3 files
+rest02  3 files
 ```
 
 設定檔用範本產生（兩台只差 `id` 與主機名），連同 systemd drop-in 一起派送。看最後一行：`unresolved=0` 代表範本變數都換好了，`exec=` 要指向我們的設定檔：
@@ -4081,7 +4201,7 @@ host.name=rest.poc.lab
 
 ############################# HTTPS + mandatory client certificates #############################
 ssl.keystore.type=PKCS12
-ssl.keystore.location=/etc/confluent/ssl/cp-server.p12
+ssl.keystore.location=/etc/confluent/ssl/svc-rest.p12
 ssl.keystore.password=${STORE_PASSWORD}
 ssl.key.password=${STORE_PASSWORD}
 ssl.truststore.type=PKCS12
@@ -4187,24 +4307,22 @@ done
 # 2. 等 40 秒讓兩台起來
 sleep 40
 
-# rest_code <網址> [curl 參數…]：打一次 <網址>/v3/clusters，印 HTTP 狀態碼（000 = TLS 就被拒絕）
-#   例：rest_code https://rest01.poc.lab:8082 --cert a.crt --key a.key → 200
-rest_code() {
-  local url=$1
-  shift
-  curl -s -o /dev/null -m 30 -w '%{http_code}' "$@" $url/v3/clusters
-}
-
 legacy="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key"
 other="--cert $HOME/pki/certs/svc-ops.crt --key $HOME/pki/keys/svc-ops.key"
 
-# 3. 每台三種情況：legacy app 的憑證、其他憑證、不帶憑證
+# 3. 每台三種情況：legacy app 的憑證、其他憑證、不帶憑證（印 HTTP 狀態碼；000 = TLS 就被拒絕）
 for h in rest01 rest02; do
-  echo "$h legacy-app=$(rest_code https://$h.poc.lab:8082 $legacy) other-cert=$(rest_code https://$h.poc.lab:8082 $other) no-cert=$(rest_code https://$h.poc.lab:8082)"
+  url=https://$h.poc.lab:8082/v3/clusters
+
+  printf '%s legacy-app=%s other-cert=%s no-cert=%s\n' \
+    "$h" \
+    "$(curl -s -o /dev/null -m 30 -w '%{http_code}' $legacy $url)" \
+    "$(curl -s -o /dev/null -m 30 -w '%{http_code}' $other $url)" \
+    "$(curl -s -o /dev/null -m 30 -w '%{http_code}' $url)"
 done
 
 # 4. 經 LB
-echo "via LB: $(rest_code https://rest.poc.lab:8082 $legacy)"
+echo "via LB: $(curl -s -o /dev/null -m 30 -w '%{http_code}' $legacy https://rest.poc.lab:8082/v3/clusters)"
 ```
 
 ```out
@@ -4327,7 +4445,11 @@ fi
 
 # 5. 等 REST 回 200：每 3 秒試一次，最多試 60 次
 for i in $(seq 1 60); do
-  code=$(curl -s -m 5 --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://$host.poc.lab:8082/v3/clusters)
+  code=$(curl -s -m 5 \
+    --cert ~/pki/certs/app-legacy-billing.crt \
+    --key ~/pki/keys/app-legacy-billing.key \
+    -o /dev/null -w '%{http_code}' \
+    https://$host.poc.lab:8082/v3/clusters)
 
   if [ "$code" = 200 ]; then
     break
@@ -4364,7 +4486,11 @@ rest-restart.sh ok
 # 1. 探測程式：每 0.2 秒經 LB 打一次 REST，一行一筆「時間 狀態碼」寫進 /tmp/lbprobe.log
 cat > /tmp/lbprobe.sh <<'EOF'
 while true; do
-  code=$(curl -s -m 5 --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w %{http_code} https://rest.poc.lab:8082/v3/clusters)
+  code=$(curl -s -m 5 \
+    --cert ~/pki/certs/app-legacy-billing.crt \
+    --key ~/pki/keys/app-legacy-billing.key \
+    -o /dev/null -w %{http_code} \
+    https://rest.poc.lab:8082/v3/clusters)
   echo "$(date +%T) $code" >> /tmp/lbprobe.log
   sleep 0.2
 done
@@ -4465,8 +4591,8 @@ echo "經 LB 打了 $total 次，非 200：$failed"
 C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。內建的 Prometheus、Alertmanager 是給 C3 自己的畫面用的；**監控與告警不走它們**（第 17 章用行內的 Prometheus、Alertmanager、Grafana），所以這一章只把它們設到 C3 畫面能用，不要在 C3 畫面建 alert trigger 或 action。
 
 ```bash
-scp -q ~/pki/certs/truststore.p12 ~/pki/certs/cp-server.p12 ~/pki/certs/cp-server.crt ~/pki/keys/cp-server.key \
-  ~/pki/certs/c3-monitoring.crt ~/pki/keys/c3-monitoring.key ~/pki/certs/bank-root.pem ~/pki/certs/svc-c3.p12 ~/pki/certs/mds-token-public.pem \
+scp -q ~/pki/certs/truststore.p12 ~/pki/certs/svc-c3.p12 ~/pki/certs/svc-c3.crt ~/pki/keys/svc-c3.key \
+  ~/pki/certs/bank-root.pem ~/pki/certs/mds-token-public.pem \
   c3-01.poc.lab:/tmp/
 
 # 在 c3-01 執行 EOF 之前的那一段：建目錄（root:confluent 0750）、放檔案（0640）（bash -e：任何一行失敗就停）
@@ -4474,42 +4600,45 @@ ssh c3-01.poc.lab bash -e -s <<'EOF'
 sudo install -d -o root -g root -m 0755 /etc/confluent
 sudo install -d -o root -g confluent -m 0750 /etc/confluent/ssl /etc/confluent/control-center
 
-for f in truststore.p12 cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12 mds-token-public.pem; do
+for f in truststore.p12 svc-c3.p12 svc-c3.crt svc-c3.key mds-token-public.pem; do
   sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/
 done
 
 # 銀行根憑證：Prometheus、Alertmanager 要 PEM 檔，放成 ca.pem
 sudo install -o root -g confluent -m 0640 /tmp/bank-root.pem /etc/confluent/ssl/ca.pem
-rm -f /tmp/*.p12 /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/bank-root.pem /tmp/mds-token-public.pem
+rm -f /tmp/*.p12 /tmp/svc-c3.* /tmp/bank-root.pem /tmp/mds-token-public.pem
 
 echo "c3-01: $(sudo ls /etc/confluent/ssl | wc -l) files"
 EOF
 ```
 
 ```out
-c3-01: 9 files
+c3-01: 6 files
 ```
 
-接著是內建 Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。三種身分各用各的憑證：
+接著是內建 Prometheus、Alertmanager 的 TLS（要求 client 憑證）與設定。C3 這台只有一張憑證，全部用自己的 `svc-c3`：
 
 | 誰、對誰 | 出示的憑證 | 說明 |
 |---|---|---|
-| Prometheus、Alertmanager 對外（當 server） | `cp-server` | 只有 serverAuth 的純 server 憑證 |
-| C3（Java）連 Prometheus、Alertmanager | `svc-c3` | keystore 就是 C3 已經在用的 `svc-c3.p12`，不用新檔 |
-| Prometheus（Go）連 Alertmanager | `c3-monitoring` | 只有 clientAuth、不綁任何 Kafka 角色，用 PEM 檔，所以沒有 `SystemAdmin` 的私鑰以 PEM 留在磁碟上 |
+| C3 9021、Prometheus、Alertmanager、JMX exporter（當 server） | `svc-c3` | 同時有 serverAuth 與 clientAuth |
+| C3（Java）連 MDS、Prometheus、Alertmanager，Prometheus（Go）連 Alertmanager（當 client） | `svc-c3` | 同一張 |
 
-這樣 `cp-server` 即使外洩，也不能拿去當 client 登入任何需要 client 憑證的服務；Prometheus／Alertmanager 的 `client_auth_type` 只驗憑證鏈與用途，不看 CN，所以不用另外設定誰能連。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
+> 陷阱（lab 實測，C3 2.5.1）：C3 的健康檢查（連 MDS、9090、9093）拿 **REST listener 的 keystore**（`confluent.controlcenter.rest.ssl.keystore.*`）當 client 憑證，`confluent.metadata.ssl.*`、`prometheus.ssl.*` 在這條路徑沒有作用。如果 REST listener 放只有 serverAuth 的憑證，對方會以 `certificate specifies an incompatible key usage` 拒絕，C3 判定 MDS 全部不健康：**AD 使用者登入與所有 API 都失敗（500／502，`failed to connect to any MDS server`），但服務 active、首頁照樣 200**。所以 C3 的 REST keystore 一定要用同時有兩種用途的 `svc-c3`，而且驗收要帶身分呼叫 C3（這一章最後一步）。
+
+> 取捨：`svc-c3` 是 SystemAdmin，它的私鑰以 PEM 檔放在 c3-01（`root:confluent 0640`，Prometheus、Alertmanager 是 Go 程式，只吃 PEM），能讀這個檔的人就有 SystemAdmin 權限。這台的 root 與 `confluent` 群組要納入管制。
+
+Prometheus／Alertmanager 的 `client_auth_type` 只驗憑證鏈與用途，不看 CN，所以不用另外設定誰能連。`*-generated.yml` 是 C3 自己會寫的檔，擁有者要是 `cp-control-center`：
 
 ```bash
 # 在 c3-01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
 ssh c3-01.poc.lab bash -e -s <<'EOF'
 cd /etc/confluent-control-center
 
-# 1. Prometheus 與 Alertmanager 的 TLS：cp-server 當 server 憑證，要求 client 出示銀行簽的憑證（兩個服務用同一份）
+# 1. Prometheus 與 Alertmanager 的 TLS：svc-c3 當 server 憑證，要求 client 出示銀行簽的憑證（兩個服務用同一份）
 sudo tee web-config-prom.yml > /dev/null <<'WEB'
 tls_server_config:
-  cert_file: /etc/confluent/ssl/cp-server.crt
-  key_file: /etc/confluent/ssl/cp-server.key
+  cert_file: /etc/confluent/ssl/svc-c3.crt
+  key_file: /etc/confluent/ssl/svc-c3.key
   client_ca_file: /etc/confluent/ssl/ca.pem
   client_auth_type: RequireAndVerifyClientCert
   min_version: TLS12
@@ -4526,8 +4655,8 @@ alerting:
     - scheme: https
       tls_config:
         ca_file: /etc/confluent/ssl/ca.pem
-        cert_file: /etc/confluent/ssl/c3-monitoring.crt
-        key_file: /etc/confluent/ssl/c3-monitoring.key
+        cert_file: /etc/confluent/ssl/svc-c3.crt
+        key_file: /etc/confluent/ssl/svc-c3.key
       static_configs:
         - targets:
             - c3-01.poc.lab:9093
@@ -4536,17 +4665,40 @@ rule_files:
   - "trigger_rules-generated.yml"
 scrape_configs:
 otlp:
-  promote_resource_attributes: ["host.hostname", "java.version", "kafka.broker.id", "kafka.cluster.id", "kafka.version", "type"]
+  promote_resource_attributes:
+    - "host.hostname"
+    - "java.version"
+    - "kafka.broker.id"
+    - "kafka.cluster.id"
+    - "kafka.version"
+    - "type"
 storage:
   tsdb:
     out_of_order_time_window: 10m
 PROM
 
+echo "c3-01: prometheus files written"
+EOF
+```
+
+```out
+c3-01: prometheus files written
+```
+
+再設定這些檔案的擁有者與權限，寫 Prometheus 的 systemd drop-in：
+
+```bash
+# 在 c3-01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
+ssh c3-01.poc.lab bash -e -s <<'EOF'
+cd /etc/confluent-control-center
+
 # 3. 擁有者與權限：我們寫的三個給 root；C3 自己會改寫的 4 個 generated 檔給 cp-control-center
 sudo chown root:confluent web-config-prom.yml web-config-am.yml prometheus-generated.yml
 sudo chmod 0640 web-config-prom.yml web-config-am.yml prometheus-generated.yml
-sudo chown cp-control-center:confluent alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml
-sudo chmod 0640 alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml
+generated="alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml"
+generated="$generated prometheus-generated-local.yml"
+sudo chown cp-control-center:confluent $generated
+sudo chmod 0640 $generated
 
 # 4. Prometheus 的 drop-in：資料保留 2 天、聽 9090
 sudo install -d -m 0755 /etc/systemd/system/prometheus.service.d
@@ -4621,7 +4773,7 @@ public.key.path=/etc/confluent/ssl/mds-token-public.pem
 ############################# HTTPS UI #############################
 confluent.controlcenter.rest.listeners=https://0.0.0.0:9021
 confluent.controlcenter.rest.ssl.keystore.type=PKCS12
-confluent.controlcenter.rest.ssl.keystore.location=/etc/confluent/ssl/cp-server.p12
+confluent.controlcenter.rest.ssl.keystore.location=/etc/confluent/ssl/svc-c3.p12
 confluent.controlcenter.rest.ssl.keystore.password=${STORE_PASSWORD}
 confluent.controlcenter.rest.ssl.key.password=${STORE_PASSWORD}
 confluent.controlcenter.rest.ssl.truststore.type=PKCS12
@@ -4660,7 +4812,9 @@ unset STORE_PASSWORD
 scp -q c3-01.control-center.properties c3-01.poc.lab:/tmp/control-center.properties
 
 ssh c3-01.poc.lab bash -e -s <<'EOF'
-sudo install -o root -g confluent -m 0640 /tmp/control-center.properties /etc/confluent/control-center/control-center.properties
+sudo install -o root -g confluent -m 0640 \
+  /tmp/control-center.properties \
+  /etc/confluent/control-center/control-center.properties
 rm -f /tmp/control-center.properties
 sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/confluent/control-center
 
@@ -4706,24 +4860,37 @@ for unit in prometheus alertmanager confluent-control-center; do
 done
 EOF
 
-# 2. 內建 Prometheus 就緒（它要求 client 憑證，用 c3-monitoring 的）
-echo "prometheus=$(curl -s -o /dev/null -w '%{http_code}' --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/-/ready)"
+# 2. 內建 Prometheus 就緒（它要求 client 憑證，從操作機用 svc-ops 的）
+echo "prometheus=$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert ~/pki/certs/svc-ops.crt \
+  --key ~/pki/keys/svc-ops.key \
+  https://c3-01.poc.lab:9090/-/ready)"
 
-# c3_code：C3 畫面的 HTTP 狀態碼（還連不上時是 000）
-c3_code() {
-  curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://c3-01.poc.lab:9021/
-}
-
-# 3. 等 C3 畫面回 200：每 10 秒試一次，最多試 24 次
+# 3. 等 C3 畫面回 200：每 10 秒試一次，最多試 24 次（還連不上時狀態碼是 000）
 for i in $(seq 1 24); do
-  if [ "$(c3_code)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "c3 ui=$(c3_code) after ~$((i*10))s"
+echo "c3 ui=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://c3-01.poc.lab:9021/) after ~$((i*10))s"
+
+# 4. alice 真的從 C3 登入（首頁不經過 MDS，只看 200 抓不到；C3 起來後健康檢查還要一點時間，最多等 60 秒）
+password=$(cat ~/secrets/ad-test-users.pass)
+url=https://c3-01.poc.lab:9021/api/metadata/security/1.0/authenticate
+
+for i in $(seq 1 12); do
+  if [ "$(curl -s -u "alice:$password" -o /dev/null -m 30 -w '%{http_code}' $url)" = 200 ]; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "alice 從 C3 登入：$(curl -s -u "alice:$password" -o /dev/null -m 30 -w '%{http_code}' $url)"
+unset password
 ```
 
 ```out
@@ -4732,10 +4899,11 @@ alertmanager               active
 confluent-control-center   active
 prometheus=200
 c3 ui=200 after ~30s
+alice 從 C3 登入：200
 （第一次啟動 30–120 秒都正常）
 ```
 
-確認指標真的帶有叢集標籤（上面那個陷阱的檢查）。內建 Prometheus 的 9090 要求 client 憑證（只認銀行簽、有 clientAuth 的憑證），所以在 c3-01 上用它自己的 `c3-monitoring` 憑證查：
+確認指標真的帶有叢集標籤（上面那個陷阱的檢查）。內建 Prometheus 的 9090 要求 client 憑證（只認銀行簽、有 clientAuth 的憑證），所以在 c3-01 上用它自己的 `svc-c3` 憑證查：
 
 ```bash
 ssh c3-01.poc.lab bash -s <<'REMOTE'
@@ -4743,10 +4911,15 @@ ssh c3-01.poc.lab bash -s <<'REMOTE'
 query='count(count by (kafka_broker_id) ({kafka_broker_id=~".+"}))'
 
 # 每 10 秒問一次內建 Prometheus，最多問 18 次；大於 0 就停（查不到結果時當成 0）
+#   回應裡要的那一段長這樣："value":[1793000000.123,"7"]，用 " 切開的第 4 欄就是 7
 n=0
 for i in $(seq 1 18); do
-  answer=$(sudo curl -s --cacert /etc/confluent/ssl/ca.pem --cert /etc/confluent/ssl/c3-monitoring.crt --key /etc/confluent/ssl/c3-monitoring.key \
-    --data-urlencode "query=$query" https://c3-01.poc.lab:9090/api/v1/query | sed -n 's/.*"value":\[[0-9.]*,"\([0-9]*\)".*/\1/p')
+  answer=$(sudo curl -s \
+    --cacert /etc/confluent/ssl/ca.pem \
+    --cert /etc/confluent/ssl/svc-c3.crt \
+    --key /etc/confluent/ssl/svc-c3.key \
+    --data-urlencode "query=$query" \
+    https://c3-01.poc.lab:9090/api/v1/query | grep -o '"value":\[[0-9.]*,"[0-9]*"' | cut -d'"' -f4)
 
   if [ -n "$answer" ]; then
     n=$answer
@@ -4794,7 +4967,10 @@ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
 done
 
 # 2. quorum 有 leader
-kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep LeaderId
+kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --status | grep LeaderId
 
 # 3. 4 台 MDS（印在同一行）
 for h in kb01 kb02 kb03 kb04; do
@@ -4803,15 +4979,32 @@ done
 echo
 
 # 4. 第 11 章建的 topic（_ 開頭的內部 topic 不列）
-echo "topics: $(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list | grep -v '^_' | paste -sd' ')"
+topics=$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --list | grep -v '^_' | paste -sd' ')
+echo "topics: $topics"
 
 # 5. REST Proxy 經 LB、C3 畫面
-echo "rest via LB: $(curl -s -o /dev/null -m 30 -w %{http_code} --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)"
+echo "rest via LB: $(curl -s -o /dev/null -m 30 -w %{http_code} \
+  --cert ~/pki/certs/app-legacy-billing.crt \
+  --key ~/pki/keys/app-legacy-billing.key \
+  https://rest.poc.lab:8082/v3/clusters)"
 echo "c3 ui: $(curl -s -o /dev/null -m 10 -w %{http_code} https://c3-01.poc.lab:9021/)"
 
+# 首頁不經過 MDS，只看 200 抓不到登入壞掉；這裡用 alice 真的從 C3 登入
+alice_pass=$(cat ~/secrets/ad-test-users.pass)
+echo "c3 login: $(curl -s -o /dev/null -m 30 -w %{http_code} \
+  -u "alice:$alice_pass" \
+  https://c3-01.poc.lab:9021/api/metadata/security/1.0/authenticate)"
+
 # 6. 內建 Prometheus 收到幾種 Confluent 的指標
-kinds=$(curl -s -m 10 --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l)
-echo "metrics in prometheus: $kinds kinds"
+all_names=$(curl -s -m 10 \
+  --cert ~/pki/certs/svc-ops.crt \
+  --key ~/pki/keys/svc-ops.key \
+  https://c3-01.poc.lab:9090/api/v1/label/__name__/values)
+kinds=$(echo "$all_names" | grep -o 'confluent_kafka_server[a-z_]*' | sort -u)
+echo "metrics in prometheus: $(echo "$kinds" | wc -l) kinds"
 ```
 
 ```out
@@ -4822,6 +5015,7 @@ kb01 MDS=200 kb02 MDS=200 kb03 MDS=200 kb04 MDS=200
 topics: billing.events confluent-audit-log-events orders.events payments.events poc-cluster-2-5-1-10-AlertHistoryStore-changelog …
 rest via LB: 200
 c3 ui: 200
+c3 login: 200
 metrics in prometheus: 111 kinds
 （C3 起來後會自己建幾個 poc-cluster-… 開頭的 topic；metrics 種類 100 多種都正常）
 ```
@@ -4829,7 +5023,7 @@ metrics in prometheus: 111 kinds
 | 已完成 | 還沒做（之後的旅程） |
 |---|---|
 | 11 台主機就緒、套件裝好並鎖版本 | 設定檔密碼加密、master key 只放操作機與各主機（第 15 章） |
-| 9 張銀行憑證、truststore、MDS token 金鑰 | 維運選單（OP menu）；稽核日誌分流與專用寫入帳號 |
+| 7 張銀行憑證、truststore、MDS token 金鑰 | 維運選單（OP menu）；稽核日誌分流與專用寫入帳號 |
 | controller、broker、MDS、RBAC（人員綁 AD 群組） | 外部監控：JMX exporter（7071）與行內 Prometheus、Alertmanager、Grafana 的設定（第 17 章） |
 | 應用程式 SCRAM 帳號、配額、範例 topic | 正式的端對端驗收清單 |
 | REST Proxy（憑證認證，經負載平衡）、C3（含 Prometheus） | 收回安裝帳號的 sudo、移交文件；之後的憑證輪替（第 21 章）、升級（第 29 章） |
@@ -5018,13 +5212,26 @@ envsubst "$vars" < control-center.tpl > c3-01.control-center.properties
 unset STORE_PASSWORD LDAP_BIND_PASSWORD AUDIT_PASSWORD
 
 # 4. 有沒有沒換掉的變數（要是 0 個）
-left=$(grep -ho '${[A-Z_]*}' *.server.properties *.kafka-rest.properties c3-01.control-center.properties | sort -u | paste -sd' ')
+left=$(grep -ho '${[A-Z_]*}' \
+  *.server.properties \
+  *.kafka-rest.properties \
+  c3-01.control-center.properties | sort -u | paste -sd' ')
 if [ -z "$left" ]; then
   left="0 個"
 fi
 echo "沒替換到的變數：$left"
+```
 
-# 5. 逐檔加密所有 password／credentials 欄位：原檔的值換成 ${securepass:…} 參照，密文寫進 security.properties
+```out
+沒替換到的變數：0 個
+```
+
+再逐檔加密，最後看 `security.properties` 裡的密文筆數：
+
+```bash
+cd ~/conf
+
+# 1. 逐檔加密所有 password／credentials 欄位：原檔的值換成 ${securepass:…} 參照，密文寫進 security.properties
 #    --config 要的是「欄位名稱,欄位名稱,…」；--remote-secrets-file 是密文檔放在主機上的路徑
 export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)
 
@@ -5042,12 +5249,11 @@ done
 
 unset CONFLUENT_SECURITY_MASTER_KEY
 
-# 6. security.properties 裡的密文筆數（_ 開頭的是 metadata，不算）
+# 2. security.properties 裡的密文筆數（_ 開頭的是 metadata，不算）
 echo "security.properties: $(grep -c '^[^_].*ENC\[' ~/secrets/security.properties) entries"
 ```
 
 ```out
-沒替換到的變數：0 個
 kb01.server.properties: 17 encrypted, plaintext=0
 （broker 17、controller 11、REST 9、C3 18；做過第 18 站的話 broker 19、controller 13。10 個檔 plaintext 都是 0）
 security.properties: 137 entries（做過第 18 站是 151）
@@ -5151,24 +5357,19 @@ echo "$(hostname) $(systemctl is-active confluent-server)"
 EOF
 done
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
 # 2. broker：一台一台重啟，等 MDS 回 200（每 5 秒看一次，最多 60 次）
 for h in kb01 kb02 kb03 kb04; do
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h) after ~$((i*5))s"
+  echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id) after ~$((i*5))s"
 done
 
 # 3. C3：重啟，等畫面回 200（每 5 秒看一次，最多 36 次）
@@ -5186,7 +5387,8 @@ echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021
 
 # 4. alice 用 AD 帳密登入 MDS（MDS 用解密後的 AD 查詢密碼去驗）
 password=$(cat ~/secrets/ad-test-users.pass)
-echo "alice login: $(curl -sk -u alice:$password -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
+url=https://kb01.poc.lab:8090/security/1.0/authenticate
+echo "alice login: $(curl -sk -u alice:$password -o /dev/null -w '%{http_code}' $url)"
 unset password
 ```
 
@@ -5261,7 +5463,8 @@ ssh kb01.poc.lab bash -s <<'EOF'
 echo "in systemctl show: $(systemctl show confluent-server -p Environment --value | grep -c MASTER_KEY)"
 
 # 2. 設定檔與密文檔裡各出現幾次 MASTER_KEY 這個字
-echo "in properties: $(sudo grep -rc MASTER_KEY /etc/confluent/kafka/server.properties /etc/confluent/secrets/security.properties | paste -sd,)"
+files="/etc/confluent/kafka/server.properties /etc/confluent/secrets/security.properties"
+echo "in properties: $(sudo grep -rc MASTER_KEY $files | paste -sd,)"
 
 # 3. service.env 只有 root 讀得到
 echo "service.env: $(sudo stat -c "%U:%G %a" /etc/confluent/service.env)"
@@ -5284,15 +5487,28 @@ tmp=$(mktemp -d)
 cp ~/secrets/security.properties $tmp/s
 export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)
 
+# 目前的 passphrase、錯的 passphrase（亂數）、兩次都用的新 passphrase（亂數）
+passphrase=$(cat ~/secrets/sp-passphrase.txt)
+wrong_passphrase="wrong-$(openssl rand -hex 8)"
+new_passphrase="check-$(openssl rand -hex 8)"
+
 # 1. 用目前的 passphrase 輪替：要成功（輸出裡有 Save the master key）
-ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" \
-  --local-secrets-file $tmp/s -o yaml 2>&1 < /dev/null | awk '/Save the master key/ {c++} END {print c + 0}')
+ok=$(confluent secret file rotate \
+  --master-key \
+  --passphrase "$passphrase" \
+  --passphrase-new "$new_passphrase" \
+  --local-secrets-file $tmp/s \
+  -o yaml 2>&1 < /dev/null | awk '/Save the master key/ {c++} END {print c + 0}')
 
 # 2. 用錯的 passphrase 輪替：要被拒（輸出裡有 incorrect master key passphrase）
-bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" \
-  --local-secrets-file $tmp/s -o yaml 2>&1 < /dev/null | awk '/incorrect master key passphrase/ {c++} END {print c + 0}')
+bad=$(confluent secret file rotate \
+  --master-key \
+  --passphrase "$wrong_passphrase" \
+  --passphrase-new "$new_passphrase" \
+  --local-secrets-file $tmp/s \
+  -o yaml 2>&1 < /dev/null | awk '/incorrect master key passphrase/ {c++} END {print c + 0}')
 
-unset CONFLUENT_SECURITY_MASTER_KEY
+unset CONFLUENT_SECURITY_MASTER_KEY passphrase wrong_passphrase new_passphrase
 rm -rf $tmp
 
 # 3. 結果：兩個都要是「是」
@@ -5337,7 +5553,7 @@ echo "目前的 passphrase 還能輪替：$ok_text；錯的 passphrase 被拒：
 
 ![opmenuflow]
 
-**這一章在做什麼**：裝一個給維運人員用的文字選單（OP menu），讓他們用自己的 AD 帳號做日常作業（看狀態、重啟、看日誌、建 topic、查權限），不用記指令。前提：第 11 章的 RBAC 與 AD 群組已經建好，第 9 章的 `opmenu-breakglass` 憑證已簽發，第 4 章 的 cpuser 金鑰可用。名詞：選單裡每個項目有編號（例如 21 重啟、23 看日誌、91 緊急模式）；「緊急模式」（91）是平常用不到的備用路徑（break-glass）：本人的 AD 身分處理不了時（例如 AD 不通），改用緊急憑證 `opmenu-breakglass` 做，必填原因、記為 EMERGENCY。它要向 MDS 換 token，所以 **MDS 也不通時 91 用不了**：選單會直接進「緊急主機模式」（不看群組，只開放磁碟、診斷、重啟、看日誌這些主機類項目），Kafka 類操作改用 28.6 的 `kafka-admin`（SCRAM，不經 MDS）。
+**這一章在做什麼**：裝一個給維運人員用的文字選單（OP menu），讓他們用自己的 AD 帳號做日常作業（看狀態、重啟、看日誌、建 topic、查權限），不用記指令。前提：第 11 章的 RBAC 與 AD 群組已經建好，第 9 章的 `svc-ops` 憑證已簽發，第 4 章 的 cpuser 金鑰可用。名詞：選單裡每個項目有編號（例如 21 重啟、23 看日誌、91 緊急模式）；「緊急模式」（91）是平常用不到的備用路徑（break-glass）：本人的 AD 身分處理不了時（例如 AD 不通），改用緊急憑證 `svc-ops` 做，必填原因、記為 EMERGENCY。它要向 MDS 換 token，所以 **MDS 也不通時 91 用不了**：選單會直接進「緊急主機模式」（不看群組，只開放磁碟、診斷、重啟、看日誌這些主機類項目），Kafka 類操作改用 28.6 的 `kafka-admin`（SCRAM，不經 MDS）。
 
 平台交給維運之後，日常作業不該靠人記指令。小安帶了一個文字選單：維運人員經 CyberArk 登入操作機（進去是 root），執行選單、輸入自己的 AD 帳密，選單把所有項目都列出來，做了沒有權限的會被 Kafka／MDS 拒絕（依本人的 AD 群組），每一步留紀錄。重啟、看日誌這類要碰主機的動作，選單用 第 4 章 那把金鑰（`/secure/ssh/cpuser_ed25519`）以 cpuser ssh 過去做：金鑰就是檔案，**不再從 PVWA 取出貼進選單**；主機上不放任何代理程式，只靠 sudoers 限制 cpuser 能跑的指令（16.4：每個服務、每種寫法逐一列出）。
 
@@ -5348,34 +5564,34 @@ echo "目前的 passphrase 還能輪替：$ok_text；錯的 passphrase 被拒：
 | 銀行 OS 團隊 | 各主機 cpuser 的 sudo 改成兩段式（16.4） |
 | 小安 | 準備緊急憑證檔、裝選單、派送設定、綁緊急身分的權限、試跑 |
 
-選單取緊急憑證的方式：緊急憑證放在操作機的 `~/secrets/opmenu-breakglass.pem`（0600，只有 root 讀得到），91 直接讀這個檔，沒有從別處取出貼上的動作。操作者本來就是 root，所以 91 的把關是「必填原因、記為 EMERGENCY 的稽核記錄」，不是讓人拿不到憑證。
+選單取緊急憑證的方式：緊急憑證放在操作機的 `~/secrets/svc-ops.pem`（0600，只有 root 讀得到），91 直接讀這個檔，沒有從別處取出貼上的動作。操作者本來就是 root，所以 91 的把關是「必填原因、記為 EMERGENCY 的稽核記錄」，不是讓人拿不到憑證。
 
 ## 16.1 緊急憑證放在哪裡
 
-**這一節在做什麼**：說明選單 91（緊急模式）用的憑證放在哪裡。銀行沒有要準備的東西：憑證檔是第 9 章簽的 `opmenu-breakglass`（私鑰＋憑證鏈），16.2 由小安整理成一個 PEM 檔放在操作機：
+**這一節在做什麼**：說明選單 91（緊急模式）用的憑證放在哪裡。銀行沒有要準備的東西：緊急模式用操作機自己的 `svc-ops`（第 9 章簽的，已經是 SystemAdmin），16.2 由小安整理成一個 PEM 檔放在操作機：
 
 | 檔案 | 內容 | 權限 |
 |---|---|---|
-| `~/secrets/opmenu-breakglass.pem` | 緊急模式憑證（私鑰＋憑證鏈，PEM） | 0600，root |
+| `~/secrets/svc-ops.pem` | 緊急模式憑證（私鑰＋憑證鏈，PEM） | 0600，root |
 
 選單 91 啟動時檢查這個檔必須是自己的、權限 0600 或 0400，否則拒絕執行。
 
-## 16.2 交付緊急憑證、綁緊急身分的權限
+## 16.2 交付緊急憑證
 
-**這一節在做什麼**：把緊急模式要用的身分準備好，並設定各群組的角色。第 9 章簽好備用的 `opmenu-breakglass` 憑證（私鑰＋憑證鏈，PEM）整理成 `~/secrets/opmenu-breakglass.pem`，再把 `User:opmenu-breakglass` 綁成 SystemAdmin，這就是選單 91（緊急模式）用的身分。
+**這一節在做什麼**：把緊急模式要用的身分準備好，並設定各群組的角色。`svc-ops` 的憑證（私鑰＋憑證鏈）整理成 `~/secrets/svc-ops.pem`。它在第 11 章已經綁成 SystemAdmin，不用另外綁。緊急操作在 Kafka 稽核日誌裡記成 `svc-ops`，要分辨是不是緊急操作，看選單的 EMERGENCY 紀錄（含操作者與原因）、CyberArk 登入紀錄與 PSMP 錄影。這就是選單 91（緊急模式）用的身分。
 
 @role 小安 | ops02 | root
 
 ```bash
 # 私鑰＋憑證鏈接成一個 PEM 檔（0600）
-install -m 0600 /dev/null ~/secrets/opmenu-breakglass.pem
-cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem
+install -m 0600 /dev/null ~/secrets/svc-ops.pem
+cat ~/pki/keys/svc-ops.key ~/pki/certs/svc-ops.crt > ~/secrets/svc-ops.pem
 
-echo "opmenu-breakglass：$(grep -c 'BEGIN' ~/secrets/opmenu-breakglass.pem) 段 PEM（私鑰＋憑證鏈）"
+echo "svc-ops：$(grep -c 'BEGIN' ~/secrets/svc-ops.pem) 段 PEM（私鑰＋憑證鏈）"
 ```
 
 ```out
-opmenu-breakglass：3 段 PEM（私鑰＋憑證鏈）
+svc-ops：3 段 PEM（私鑰＋憑證鏈）
 ```
 
 @role 小安 | ops02 | root
@@ -5384,19 +5600,20 @@ opmenu-breakglass：3 段 PEM（私鑰＋憑證鏈）
 export JAVA_HOME=/opt/java/current
 
 # 1. svc-ops 登入 MDS；cluster id 問 MDS
-confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
-  --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null 2>&1
+confluent login \
+  --url https://kb01.poc.lab:8090 \
+  --certificate-authority-path ~/pki/certs/bank-root.pem \
+  --certificate-only \
+  --client-cert-path ~/pki/certs/svc-ops.crt \
+  --client-key-path ~/pki/keys/svc-ops.key > /dev/null 2>&1
 cluster_id=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 
-# 2. 緊急身分綁 SystemAdmin
-confluent iam rbac role-binding create --principal User:opmenu-breakglass --role SystemAdmin --kafka-cluster "$cluster_id" > /dev/null 2>&1
-
-# 3. 確認
-confluent iam rbac role-binding list --principal User:opmenu-breakglass --kafka-cluster "$cluster_id" 2> /dev/null | tail -1
+# 2. 確認：svc-ops 已經是 SystemAdmin（第 11 章綁的）
+confluent iam rbac role-binding list --principal User:svc-ops --kafka-cluster "$cluster_id" 2> /dev/null | tail -1
 ```
 
 ```out
-  User:opmenu-breakglass | SystemAdmin | Cluster       |      |
+  User:svc-ops | SystemAdmin | Cluster       |      |
 ```
 
 維運群組要能跑健康檢查與重啟前的檢查（`kafka-topics --describe` 對每個 topic 都要 DescribeConfigs），只有 Operator 不夠；開發群組在自己的 prefix 上也要 DescribeConfigs 才看得到 topic 明細：
@@ -5406,14 +5623,30 @@ export JAVA_HOME=/opt/java/current
 cluster_id=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 
 # 1. 維運群組：所有 topic 的 DeveloperManage（看得到設定）、所有 consumer group 的 DeveloperRead
-confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperManage --resource 'Topic:*' --kafka-cluster "$cluster_id" > /dev/null 2>&1
-confluent iam rbac role-binding create --principal Group:kafka-operators --role DeveloperRead --resource 'Group:*' --kafka-cluster "$cluster_id" > /dev/null 2>&1
+confluent iam rbac role-binding create \
+  --principal Group:kafka-operators \
+  --role DeveloperManage \
+  --resource 'Topic:*' \
+  --kafka-cluster "$cluster_id" > /dev/null 2>&1
+
+confluent iam rbac role-binding create \
+  --principal Group:kafka-operators \
+  --role DeveloperRead \
+  --resource 'Group:*' \
+  --kafka-cluster "$cluster_id" > /dev/null 2>&1
 
 # 2. 開發群組：自己的 prefix（orders.）的 DeveloperManage
-confluent iam rbac role-binding create --principal Group:kafka-devs --role DeveloperManage --resource Topic:orders. --prefix --kafka-cluster "$cluster_id" > /dev/null 2>&1
+confluent iam rbac role-binding create \
+  --principal Group:kafka-devs \
+  --role DeveloperManage \
+  --resource Topic:orders. \
+  --prefix \
+  --kafka-cluster "$cluster_id" > /dev/null 2>&1
 
 # 3. 確認維運群組的 binding（表頭兩行不印）
-confluent iam rbac role-binding list --principal Group:kafka-operators --kafka-cluster "$cluster_id" 2> /dev/null | tail -n +3
+confluent iam rbac role-binding list \
+  --principal Group:kafka-operators \
+  --kafka-cluster "$cluster_id" 2> /dev/null | tail -n +3
 ```
 
 ```out
@@ -5431,7 +5664,7 @@ confluent iam rbac role-binding list --principal Group:kafka-operators --kafka-c
 **這一節在做什麼**：把選單套件經第 3 章的離線流程送進操作機，裝到 `/opt/opmenu` 並寫好設定。選單是我方的**交付物**，和這本手冊一起給：`opmenu-<日期>.<雜湊>.tar.gz` 與它的 `SHA256SUMS` 兩個檔（檔名帶日期與內容的雜湊，內容不同就不會蓋掉舊的）。把它們複製進落地區的 `tools/opmenu/`、核對雜湊，再照 3.4 送進來（`D=opmenu`）。落地區只留最新一版，下面的 `tar -xzf opmenu-*.tar.gz` 才不會同時解到兩個（`<交付物的目錄>` 換成你放這兩個檔的地方）：
 
 ```bash
-D=<交付物的目錄>
+D="<交付物的目錄>"
 dest=~/kafka-lab/landing/tools/opmenu
 
 # 1. 落地區只留最新一版：先刪掉舊的，再複製進來
@@ -5527,8 +5760,12 @@ install -m 0600 ~/pki/store.pass /etc/opmenu/ssl/truststore.pass
 install -m 0644 /etc/pki/ca-trust/source/anchors/bank-root.pem /etc/opmenu/ssl/ca.pem
 
 # 3. 各主機的 ssh 主機金鑰：選單只信這份清單（只留金鑰行，# 開頭的註解行不要）
-hosts="kc01.poc.lab kc02.poc.lab kc03.poc.lab kb01.poc.lab kb02.poc.lab kb03.poc.lab kb04.poc.lab rest01.poc.lab rest02.poc.lab c3-01.poc.lab"
-ssh-keyscan -t ed25519 $hosts 2> /dev/null | grep -v "^#" | sort | install -m 0644 /dev/stdin /etc/opmenu/known_hosts
+hosts="kc01.poc.lab kc02.poc.lab kc03.poc.lab"
+hosts="$hosts kb01.poc.lab kb02.poc.lab kb03.poc.lab kb04.poc.lab"
+hosts="$hosts rest01.poc.lab rest02.poc.lab c3-01.poc.lab"
+
+host_keys=$(ssh-keyscan -t ed25519 $hosts 2> /dev/null | grep -v "^#" | sort)
+echo "$host_keys" | install -m 0644 /dev/stdin /etc/opmenu/known_hosts
 
 # 4. 紀錄與匯出檔的目錄
 install -d -m 0750 -o root -g root /var/log/opmenu
@@ -5559,7 +5796,7 @@ OPMENU_CONTROLLER_HOSTS="kc01.poc.lab kc02.poc.lab kc03.poc.lab"
 OPMENU_SSH_USER=cpuser
 OPMENU_SSH_KEY_FILE=/secure/ssh/cpuser_ed25519
 OPMENU_USER_FROM_OS=0
-OPMENU_BREAKGLASS_PEM=/root/secrets/opmenu-breakglass.pem
+OPMENU_BREAKGLASS_PEM=/root/secrets/svc-ops.pem
 OPMENU_LOG=/var/log/opmenu/opmenu.log
 OPMENU_SYSLOG=0
 OPMENU_ALLOW_ENV_OVERRIDE=1
@@ -5568,7 +5805,7 @@ EOF
 chmod 0644 /etc/opmenu/opmenu.conf
 
 # 選單讀得到設定：列出前 8 個項目（第 1 欄編號、第 5 欄標題）
-/opt/opmenu/opmenu.sh --list | awk -F'\t' '{print $1, $5}' | head -8
+/opt/opmenu/opmenu.sh --list | cut -f1,5 --output-delimiter=' ' | head -8
 ```
 
 ```out
@@ -5613,7 +5850,9 @@ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
   esac
 
   # 2. 規則：重啟、查狀態、看日誌，各只開一種寫法
-  rule="cpuser ALL=(root) NOPASSWD: /usr/bin/systemctl restart $unit, /usr/bin/systemctl status $unit, /usr/bin/journalctl -u $unit -n 200 --no-pager"
+  rule="cpuser ALL=(root) NOPASSWD: /usr/bin/systemctl restart $unit"
+  rule="$rule, /usr/bin/systemctl status $unit"
+  rule="$rule, /usr/bin/journalctl -u $unit -n 200 --no-pager"
 
   # 3. 寫進那台的 /etc/sudoers.d/cpuser-ops（0440），再用 visudo 檢查語法
   echo "$rule" | ssh $h.poc.lab 'sudo install -m 0440 /dev/stdin /etc/sudoers.d/cpuser-ops'
@@ -5677,23 +5916,21 @@ EOF
 **這一節在做什麼**：用三個不同權限的人試跑選單。選單**不依權限過濾**，每個人看到的項目一樣；要做什麼直接選，Kafka 類動作以本人身分執行，沒權限的由 Kafka／MDS 依 RBAC 拒絕並記成 DENIED。選單和 MDS 之間：登入時用本人 AD 帳密向 MDS 換 token（只有這一次用 basic auth，不用 confluent CLI），之後呼叫 MDS 都帶 token；token 用超過 55 分鐘，下一個動作開始前會自動用本次登入的帳密換新（紀錄記 `TOKEN_RENEWED`），換不到就請操作者重新登入。操作機本身從不連 AD：AD 帳密都由 broker（MDS 與 LDAP listener 9096）去驗（2026-10-29 實測：操作機把 AD 的路由黑洞掉，選單照常登入與操作）。只有兩種項目選單自己會先問 MDS：碰主機的（16、18、21、22、23、27，要 Operator 以上）和 91 緊急模式（以備用憑證執行，Kafka 檢查的是備用身分不是本人，所以本人要先是管理員）。好結果：bob、carol、alice 看到同一份選單；bob 建 topic 被 Kafka 拒絕、進 91 被擋，alice 都能做。互動模式就是人員經 PVWA 與 PSMP 登入操作機（root）後執行 `/opt/opmenu/opmenu.sh`，輸入自己的 AD 帳密。為了把結果印在這裡，用 `--run` 非互動跑；`--run menu` 印選單上的編號：
 
 ```bash
-password=$(cat ~/secrets/ad-test-users.pass)
+# 非互動跑選單要的環境變數（密碼從檔案讀）；每次執行只換 OPMENU_USER
+export OPMENU_PASS=$(cat ~/secrets/ad-test-users.pass)
+export OPMENU_YES=1
+export OPMENU_REASON="第 16 站試跑"
+export JAVA_HOME=/opt/java/current
 
-# op <AD 帳號> <項目與參數…>：用那個人的帳密非互動跑一次選單；拿掉顏色碼與 SLF4J 的雜訊
-op() {
-  local person="$1"
-  shift
-  env OPMENU_USER="$person" OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current \
-    /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'
-}
-
-# 三個人各印一行：選單上看得到的編號
+# 三個人各印一行：選單上看得到的編號（output 是拿掉 SLF4J 雜訊與顏色碼之後的輸出）
 for u in bob carol alice; do
   printf '%-6s ' $u
-  op $u menu | grep '@@MENU@@' | cut -d' ' -f2-
+
+  output=$(OPMENU_USER=$u /opt/opmenu/opmenu.sh --run menu 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+  echo "$output" | grep '@@MENU@@' | cut -d' ' -f2-
 done
 
-unset password
+unset OPMENU_PASS OPMENU_YES OPMENU_REASON
 ```
 
 ```out
@@ -5708,12 +5945,12 @@ bob（Operator）：健康檢查、看 kb04 的日誌（kb04 只剩窄規則；2
 
 @role 小安（代打 bob、carol、alice） | ops02 | root
 
-主機類項目（23、21）直接用 `/secure/ssh` 的金鑰，不會問任何東西。緊急模式（91）讀 `~/secrets/opmenu-breakglass.pem`，不會問你要貼什麼；它要求輸入原因，並記為 EMERGENCY。為了把結果印在這裡，lab 用一支小腳本跑選單（`--run <AD 帳號> <項目…>`）：
+主機類項目（23、21）直接用 `/secure/ssh` 的金鑰，不會問任何東西。緊急模式（91）讀 `~/secrets/svc-ops.pem`，不會問你要貼什麼；它要求輸入原因，並記為 EMERGENCY。為了把結果印在這裡，lab 用一支小腳本跑選單（`--run <AD 帳號> <項目…>`）：
 
 ```bash
 cat > ~/conf/opmenu-try.sh <<'EOF'
 #!/usr/bin/env bash
-# lab：跑一次選單（opmenu-try.sh <AD 帳號> <項目…>）；91 的緊急憑證直接讀 ~/secrets/opmenu-breakglass.pem，不需要貼上
+# lab：跑一次選單（opmenu-try.sh <AD 帳號> <項目…>）；91 的緊急憑證直接讀 ~/secrets/svc-ops.pem，不需要貼上
 person=$1
 shift
 password=$(cat ~/secrets/ad-test-users.pass)
@@ -5723,29 +5960,32 @@ env OPMENU_USER=$person OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON=第16
 EOF
 chmod 0700 ~/conf/opmenu-try.sh
 
-password=$(cat ~/secrets/ad-test-users.pass)
-
-# op <AD 帳號> <項目與參數…>：同上一塊
-op() {
-  local person="$1"
-  shift
-  env OPMENU_USER="$person" OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current \
-    /opt/opmenu/opmenu.sh --run "$@" 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'
-}
+# 非互動跑選單要的環境變數（同上一塊）；output 是拿掉 SLF4J 雜訊與顏色碼之後的輸出
+export OPMENU_PASS=$(cat ~/secrets/ad-test-users.pass)
+export OPMENU_YES=1
+export OPMENU_REASON="第 16 站試跑"
+export JAVA_HOME=/opt/java/current
 
 # 1. bob（Operator）：健康檢查看得到 broker 與自己的 token
-op bob 11 | grep -E '^-- (broker 在線:|你的 MDS token)'
+output=$(OPMENU_USER=bob /opt/opmenu/opmenu.sh --run 11 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | grep -E '^-- (broker 在線:|你的 MDS token)'
 
 # 2. bob 改權限：被 MDS 拒絕
-op bob 42 add kafka-devs DeveloperRead Topic orders. | tail -1
+output=$(OPMENU_USER=bob /opt/opmenu/opmenu.sh --run 42 add kafka-devs DeveloperRead Topic orders. 2>&1 \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | tail -1
 
 # 3. bob 進 91：被管理員閘門擋下
-op bob 91 kafka-topics --list | tail -1
+output=$(OPMENU_USER=bob /opt/opmenu/opmenu.sh --run 91 kafka-topics --list 2>&1 \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | tail -1
 
 # 4. alice（SystemAdmin）建 topic
-op alice 31 orders.optest 1 | tail -1
+output=$(OPMENU_USER=alice /opt/opmenu/opmenu.sh --run 31 orders.optest 1 2>&1 \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | tail -1
 
-unset password
+unset OPMENU_PASS OPMENU_YES OPMENU_REASON
 ```
 
 ```out
@@ -5759,16 +5999,15 @@ Created topic orders.optest.
 @role 維運人員 bob、alice（91 讀操作機上的緊急憑證檔；lab 由 Windows 終端代打） | Windows 終端 | 本機
 
 ```bash
-# try <AD 帳號> <項目…>：在操作機跑一次 opmenu-try.sh（不給它 stdin，選單不會停下來等輸入）
-try() {
-  podman exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh "$@" < /dev/null
-}
+# 每個項目都是在操作機跑一次 opmenu-try.sh <AD 帳號> <項目…>（不給它 stdin，選單不會停下來等輸入）
 
-# 1. bob 看 kb04 的日誌（只留最後兩行）
-try bob 23 kb04.poc.lab:confluent-server 10 | grep -E 'kb04' | tail -2 | cut -c1-100
+# 1. bob 看 kb04 的日誌（只留最後兩行，每行前 100 字）
+lines=$(podman exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh bob 23 kb04.poc.lab:confluent-server 10 < /dev/null \
+  | grep -E 'kb04' | tail -2)
+echo "$lines" | cut -c1-100
 
 # 2. bob 重啟 kb04（kb04 只剩窄規則）
-try bob 21 kb04.poc.lab:confluent-server | tail -1
+podman exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh bob 21 kb04.poc.lab:confluent-server < /dev/null | tail -1
 
 # 3. 在操作機等 kb04 的 MDS 回 200：每 5 秒試一次，最多 24 次
 podman exec -i lab-ops02-1 bash -s <<'EOF'
@@ -5786,11 +6025,12 @@ echo "kb04 MDS=$code after ~$((i*5))s"
 EOF
 
 # 4. alice 用 91 緊急模式列 topic，數有幾個
-count=$(try alice 91 kafka-topics --list | grep -c '^[a-z_]')
+count=$(podman exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh alice 91 kafka-topics --list < /dev/null \
+  | grep -c '^[a-z_]')
 echo "91 緊急模式列出的 topic：$count"
 
 # 5. alice 刪掉剛才建的 topic（只看「將執行」那一行）
-try alice 33 orders.optest | grep 將執行
+podman exec -i lab-ops02-1 bash /root/conf/opmenu-try.sh alice 33 orders.optest < /dev/null | grep 將執行
 ```
 
 ```out
@@ -5810,12 +6050,15 @@ kb04 MDS=200 after ~20s
 password=$(cat ~/secrets/ad-test-users.pass)
 
 # 1. alice 用 35 換 app-payments 的密碼：應用程式現在用 -a，所以換 -b
-#    只留三行重點；交接檔名裡的時間換成 <時間>
-env OPMENU_USER=alice OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current \
-  /opt/opmenu/opmenu.sh --run 35 app-payments app-payments-a 2>&1 | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g' \
-  | grep -E '將執行|新密碼已寫到|下一步' | sed -E 's/-[0-9]{8}-[0-9]{6}.pass/-<時間>.pass/g'
+output=$(env OPMENU_USER=alice OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" \
+  JAVA_HOME=/opt/java/current \
+  /opt/opmenu/opmenu.sh --run 35 app-payments app-payments-a 2>&1 \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
 
 unset password
+
+#    只留三行重點；交接檔名裡的時間換成 <時間>
+echo "$output" | grep -E '將執行|新密碼已寫到|下一步' | sed -E 's/-[0-9]{8}-[0-9]{6}.pass/-<時間>.pass/g'
 
 # 2. 這裡只是示範：交接檔直接 shred（正式環境是交給應用程式團隊之後才刪）
 shred -u ~/opmenu-handover/app-payments-b-*.pass
@@ -5834,35 +6077,51 @@ echo "交接檔已 shred"
 值班常看的三項：13 每個 consumer group 的合計 lag 和**在線成員數**（0 個成員 = 應用程式沒在跑，lag 會一直長）；15 每個帳號的配額；17 除了各端點的憑證，也列 license 的到期日。調配額用 38（第 3 層，受並行鎖與變更時窗管制）：先顯示目前的值，值填 `-` 是拿掉那一項。配額要叢集層級的 `DescribeConfigs`／`AlterConfigs`，所以維運的 bob 看不到、也改不了，管理的 alice 可以。license 存在 `_confluent-command`，讀得到的人（alice）即時讀；讀不到的人，17 改顯示操作機每天檢查（26.2）記進 syslog 的最後一筆。這裡先開一個 60 秒的 consumer，讓 13 看得到在線成員：
 
 ```bash
-password=$(cat ~/secrets/ad-test-users.pass)
-
-# op <AD 帳號> <項目與參數…>：同上（不給選單 stdin）
-op() {
-  local person="$1"
-  shift
-  env OPMENU_USER="$person" OPMENU_PASS="$password" OPMENU_YES=1 OPMENU_REASON="第 16 站試跑" JAVA_HOME=/opt/java/current \
-    /opt/opmenu/opmenu.sh --run "$@" 2>&1 < /dev/null | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'
-}
-
 # 1. 背景開一個 60 秒的 consumer（app-orders-a，group orders-optest），等 20 秒讓它加入
 JAVA_HOME=/opt/java/current KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml timeout 60 \
   kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties \
   --topic orders.events --group orders-optest > /dev/null 2>&1 &
 sleep 20
 
-# 2. bob：13 看得到這個 group 的成員；15 看全部配額被拒
-op bob 13 orders-optest | grep '^=='
-op bob 15 "" | tail -1
+# 非互動跑選單要的環境變數（同上；不給選單 stdin）；output 是拿掉 SLF4J 雜訊與顏色碼之後的輸出
+export OPMENU_PASS=$(cat ~/secrets/ad-test-users.pass)
+export OPMENU_YES=1
+export OPMENU_REASON="第 16 站試跑"
+export JAVA_HOME=/opt/java/current
 
-# 3. alice：15 看一個帳號；38 改配額，再改回原來的值
-op alice 15 app-orders-b | tail -1
-op alice 38 app-orders-b producer_byte_rate=4194304,request_percentage=- | grep -E '^(目前|將執行|改後)'
-op alice 38 app-orders-b producer_byte_rate=5242880,request_percentage=50 | grep '^改後'
+# 2. bob：13 看得到這個 group 的成員
+output=$(OPMENU_USER=bob /opt/opmenu/opmenu.sh --run 13 orders-optest 2>&1 < /dev/null \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | grep '^=='
+
+# 15 看全部配額被拒
+output=$(OPMENU_USER=bob /opt/opmenu/opmenu.sh --run 15 "" 2>&1 < /dev/null \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | tail -1
+
+# 3. alice：15 看一個帳號
+output=$(OPMENU_USER=alice /opt/opmenu/opmenu.sh --run 15 app-orders-b 2>&1 < /dev/null \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | tail -1
+
+# 38 改配額
+output=$(OPMENU_USER=alice /opt/opmenu/opmenu.sh --run 38 app-orders-b \
+  producer_byte_rate=4194304,request_percentage=- 2>&1 < /dev/null \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | grep -E '^(目前|將執行|改後)'
+
+# 再改回原來的值
+output=$(OPMENU_USER=alice /opt/opmenu/opmenu.sh --run 38 app-orders-b \
+  producer_byte_rate=5242880,request_percentage=50 2>&1 < /dev/null \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | grep '^改後'
 
 # 4. alice：17 的 license 那一行
-op alice 17 | grep '^license'
+output=$(OPMENU_USER=alice /opt/opmenu/opmenu.sh --run 17 2>&1 < /dev/null \
+  | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | grep '^license'
 
-unset password
+unset OPMENU_PASS OPMENU_YES OPMENU_REASON
 ```
 
 ```out
@@ -5897,9 +6156,11 @@ tail -4 /var/log/opmenu/opmenu.log | cut -c1-120
 
 ```out
 ssh-agent: 0; private keys in /dev/shm,/tmp: 0; key file: root:root 400
-2026-10-22 22:40:47 +0800 | LAB | alice | os=root | 91 breakglass | sid=1792680046-22240 | EMERGENCY | kafka-topics --li
-2026-10-22 22:40:49 +0800 | LAB | alice | os=root | 91 緊急模式(以備用憑證執行一個指令) | sid
-2026-10-22 22:40:56 +0800 | LAB | alice | os=root | 33 刪除 topic | sid=1792680050-22629 | OK | orders.optest [rc=0 6s
+2026-11-05 23:49:57 +0800 | LAB | alice | os=root | 15 查看配額(quota) | sid=1793893792-9179 | OK | app-orders-b [rc
+2026-11-05 23:50:15 +0800 | LAB | alice | os=root | 38 調整配額(quota) | sid=1793893797-9377 | OK | app-orders-b pro
+2026-11-05 23:50:23 +0800 | LAB | alice | os=root | 38 調整配額(quota) | sid=1793893815-9749 | OK | app-orders-b pro
+2026-11-05 23:50:52 +0800 | LAB | alice | os=root | 17 查看 certificate 與 license 到期日 | sid=1793893823-10074 |
+（最後 4 筆是 16.5 最後做的幾項：查看與調整配額、查看到期日）
 ```
 
 @role 銀行 OS 團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
@@ -5924,6 +6185,8 @@ kb04: full sudo back (change window)
 
 監控與告警的做法已定案：**每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），由銀行的 Prometheus 抓、銀行的 Alertmanager 發告警、銀行的 Grafana 看圖**。Prometheus、Alertmanager、Grafana 是銀行提供的；我方交付的是設定：exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方的 32 個 dashboard。
 
+> **這一章是銀行有提供 Prometheus、Alertmanager、Grafana 時的做法**；銀行沒有提供時，REST Proxy 的告警改走 C3 內建的 Prometheus 加我們的第二個 Alertmanager（第 32 章），兩者可以並存。
+
 > **C3 內建的 Prometheus、Alertmanager 不動**：它們是 C3 自己的畫面（第 13 章）要用的，`otlp` 等設定照舊。但**告警與 dashboard 不走它們**，也不要在 C3 畫面建 alert trigger 或 action（Webhook、Email、PagerDuty）。原因：C3 會把那份 Alertmanager 設定重寫（C3 重啟後手改的內容被蓋掉）、webhook 內容不能自訂、而且只看得到 C3 自己收到的 telemetry（沒有主機標籤、看不到 controller 的 raft 以外的 JMX）。這幾點 2026-10-26 在 lab 逐項實測過。
 
 | 誰 | 做什麼 |
@@ -5946,7 +6209,7 @@ kb04: full sudo back (change window)
 
 7071 只做 **HTTPS**，不要求帳密、也不要求 client 憑證（2026-10-31 定案）：指標只能讀、不能改任何東西，內容沒有訊息也沒有密碼，所以不另外發一組要交給銀行、要同步輪替的抓取密碼。誰連得到 7071 就讀得到，所以**存取控制靠網路**：7071 只放行行內 Prometheus 的來源位址（請銀行確認的事項 11.4；7.3 節的 firewalld 目前對所有來源開放）。keystore 密碼不寫進 YAML：exporter（1.4 起）讀得到 `${環境變數}`，YAML 裡寫 `${JMX_KEYSTORE_PASSWORD}`，值放在每台的 `/etc/confluent/jmx-exporter.env`（root 0600），由 systemd drop-in 的 `EnvironmentFile` 帶進服務（`ps` 看不到；只有 root 與服務本身讀得到）。YAML 是 root:confluent 0640。
 
-keystore 依角色不同：controller 沒有 `cp-server.p12`，用 `kafka-internal.p12`；broker、REST Proxy、C3 用 `cp-server.p12`。這一步只產生兩份**標頭**（HTTPS），規則在 17.2 接上去：
+keystore 依角色不同：controller 用 `kafka-internal.p12`，broker 用 `cp-server.p12`，REST Proxy 用 `svc-rest.p12`，C3 用 `svc-c3.p12`。這一步只產生四份**標頭**（HTTPS），規則在 17.2 接上去：
 
 ```bash
 install -d -m 0700 ~/monitoring
@@ -5954,9 +6217,9 @@ install -d -m 0700 ~/monitoring
 # 舊版（basic auth）留下的密碼檔，有的話刪掉
 rm -f ~/secrets/jmx-scrape.pass ~/secrets/jmx-scrape.salt
 
-# 1. 兩份標頭（0600）：controller 用 kafka-internal.p12，其他用 cp-server.p12
+# 1. 四份標頭（0600）：controller 用 kafka-internal.p12、broker 用 cp-server.p12、REST 用 svc-rest.p12、C3 用 svc-c3.p12
 #    EOF 沒加引號：$ks 會換成值；\${JMX_KEYSTORE_PASSWORD} 原樣留著，給 exporter 從環境變數讀
-for ks in cp-server kafka-internal; do
+for ks in cp-server kafka-internal svc-c3 svc-rest; do
   install -m 0600 /dev/null ~/monitoring/jmx-header-$ks.yml
   cat > ~/monitoring/jmx-header-$ks.yml <<EOF
 # Prometheus JMX exporter: HTTPS with this host's certificate, no authentication (only the bank's Prometheus may reach 7071: firewall).
@@ -5976,7 +6239,7 @@ done
 install -m 0600 /dev/null ~/monitoring/jmx-exporter.env
 echo "JMX_KEYSTORE_PASSWORD=$(cat ~/pki/store.pass)" > ~/monitoring/jmx-exporter.env
 
-# 3. 確認：兩份標頭、環境檔 0600、YAML 裡的密碼是變數、沒有 authentication: 設定（要是 0；註解裡的字不算）
+# 3. 確認：四份標頭、環境檔 0600、YAML 裡的密碼是變數、沒有 authentication: 設定（要是 0；註解裡的字不算）
 headers=$(ls ~/monitoring | grep '^jmx-header' | tr '\n' ' ')
 env_mode=$(stat -c %a ~/monitoring/jmx-exporter.env)
 password_line=$(grep -h 'password:' ~/monitoring/jmx-header-*.yml | sort -u | sed 's/^ *//')
@@ -5985,7 +6248,7 @@ echo "headers: $headers；jmx-exporter.env $env_mode；YAML 裡的 keystore 密�
 ```
 
 ```out
-headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml ；jmx-exporter.env 600；YAML 裡的 keystore 密碼：password: ${JMX_KEYSTORE_PASSWORD}；authentication：0
+headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml jmx-header-svc-c3.yml jmx-header-svc-rest.yml ；jmx-exporter.env 600；YAML 裡的 keystore 密碼：password: ${JMX_KEYSTORE_PASSWORD}；authentication：0
 ```
 
 > 舊版（10-30 以前）的 7071 用 basic auth，操作機有 `~/secrets/jmx-scrape.pass`、`jmx-scrape.salt`；上面的 `rm -f` 把它們清掉（不存在也不會出錯）。
@@ -6012,7 +6275,7 @@ echo "官方規則版本：$(cut -c1-12 ~/landing/monitoring/jmx-monitoring-stac
 
 # 2. controller、broker、REST Proxy：標頭＋官方規則（官方檔第一行的 --- 拿掉；檔案 0600）
 #    寫法：角色:用哪份標頭:官方規則檔名
-for entry in controller:kafka-internal:kafka_controller broker:cp-server:kafka_broker rest:cp-server:confluent_rest; do
+for entry in controller:kafka-internal:kafka_controller broker:cp-server:kafka_broker rest:svc-rest:confluent_rest; do
   role=$(echo $entry | cut -d: -f1)
   keystore=$(echo $entry | cut -d: -f2)
   rules=$(echo $entry | cut -d: -f3)
@@ -6062,13 +6325,17 @@ EOF
 
 # 4. C3 的設定：標頭＋我們的開頭＋官方 kafka_streams.yml 的規則（只取 rules: 底下那些；檔案 0600）
 install -m 0600 /dev/null ~/monitoring/jmx-c3.yml
-cat ~/monitoring/jmx-header-cp-server.yml ~/monitoring/rules-c3.yml > ~/monitoring/jmx-c3.yml
+cat ~/monitoring/jmx-header-svc-c3.yml ~/monitoring/rules-c3.yml > ~/monitoring/jmx-c3.yml
 sed -n '/^rules:/,$p' $official/kafka_streams.yml | tail -n +2 >> ~/monitoring/jmx-c3.yml
 
 # 5. 每個角色一行：行數；httpServer 與 lowercaseOutputName 都是 1 = 標頭和規則都接上了
 for f in controller broker rest c3; do
   file=~/monitoring/jmx-$f.yml
-  printf '%-11s %4d 行  httpServer=%s lowercaseOutputName=%s\n' $f $(wc -l < $file) $(grep -c '^httpServer:' $file) $(grep -c '^lowercaseOutputName: true' $file)
+  printf '%-11s %4d 行  httpServer=%s lowercaseOutputName=%s\n' \
+    $f \
+    $(wc -l < $file) \
+    $(grep -c '^httpServer:' $file) \
+    $(grep -c '^lowercaseOutputName: true' $file)
 done
 ```
 
@@ -6090,37 +6357,25 @@ c3           128 行  httpServer=1 lowercaseOutputName=1
 
 每台放四樣東西：jar 到 `/opt/jmx-exporter/`（舊版的 jar 先刪）、設定檔到各元件的目錄、keystore 密碼的環境檔 `/etc/confluent/jmx-exporter.env`（root 0600）、第四個 drop-in 用 `EnvironmentFile` 讀那個檔，並把 `-javaagent` 放進環境變數。環境變數依角色不同：controller 與 broker 是 `KAFKA_OPTS`，REST Proxy 是 `KAFKAREST_OPTS`，C3 是 `CONTROL_CENTER_OPTS`（C3 的啟動腳本本來就會讀它，另外加的 `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=*` 由腳本自己補，不用管）。7071 在 7.3 節的防火牆已經開了（C3 的 7071 也在）。
 
-一條指令對 10 台做完；每行要看到 `javaagent:` 的 jar 路徑，行數要和 17.2 產生的設定檔相同：
+分兩塊對 10 台做完。第一塊把 jar、設定檔、環境檔送到每台，印出送完的主機：
 
 ```bash
 jar=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename)
 
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
-  # 1. 這台的角色、設定檔放哪、服務名稱、放 javaagent 的環境變數
+  # 1. 這台的角色（決定用哪一份設定檔）
   case $h in
     kc*)
       role=controller
-      cfg=/etc/confluent/kafka/jmx-exporter.yml
-      unit=confluent-server
-      var=KAFKA_OPTS
       ;;
     kb*)
       role=broker
-      cfg=/etc/confluent/kafka/jmx-exporter.yml
-      unit=confluent-server
-      var=KAFKA_OPTS
       ;;
     rest*)
       role=rest
-      cfg=/etc/confluent/kafka-rest/jmx-exporter.yml
-      unit=confluent-kafka-rest
-      var=KAFKAREST_OPTS
       ;;
     c3*)
       role=c3
-      cfg=/etc/confluent/control-center/jmx-exporter.yml
-      unit=confluent-control-center
-      var=CONTROL_CENTER_OPTS
       ;;
   esac
 
@@ -6130,7 +6385,41 @@ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
   scp -q ~/landing/tools/$jar /tmp/jmx-$h.yml /tmp/jmx-$h.env $h.poc.lab:/tmp/
   rm -f /tmp/jmx-$h.yml /tmp/jmx-$h.env
 
-  # 3. 在那台執行 EOF 之前的那一段（$1 jar 檔名、$2 主機、$3 設定檔路徑、$4 服務、$5 環境變數名；bash -e：任何一行失敗就停）
+  printf '%s ' $h
+done
+echo
+```
+
+```out
+kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
+```
+
+第二塊到每台裝好、掛上 javaagent；每行要看到 `javaagent:` 的 jar 路徑，行數要和 17.2 產生的設定檔相同：
+
+```bash
+jar=$(ls ~/landing/tools/jmx_prometheus_javaagent-*.jar | xargs -n1 basename)
+
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
+  # 1. 這台的設定檔放哪、服務名稱、放 javaagent 的環境變數
+  case $h in
+    kc*|kb*)
+      cfg=/etc/confluent/kafka/jmx-exporter.yml
+      unit=confluent-server
+      var=KAFKA_OPTS
+      ;;
+    rest*)
+      cfg=/etc/confluent/kafka-rest/jmx-exporter.yml
+      unit=confluent-kafka-rest
+      var=KAFKAREST_OPTS
+      ;;
+    c3*)
+      cfg=/etc/confluent/control-center/jmx-exporter.yml
+      unit=confluent-control-center
+      var=CONTROL_CENTER_OPTS
+      ;;
+  esac
+
+  # 2. 在那台執行 EOF 之前的那一段（$1 jar 檔名、$2 主機、$3 設定檔路徑、$4 服務、$5 環境變數名；bash -e：任何一行失敗就停）
   ssh $h.poc.lab bash -e -s -- $jar $h $cfg $unit $var <<'EOF'
 jar=$1
 host=$2
@@ -6155,7 +6444,7 @@ UNIT
 sudo systemctl daemon-reload
 
 # 確認：javaagent 的 jar 路徑、設定檔行數、環境檔權限
-agent=$(systemctl show $unit -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1)
+agent=$(systemctl show $unit -p Environment --value | grep -o 'javaagent:[^ =]*' | head -1)
 lines=$(sudo wc -l $cfg | cut -d' ' -f1)
 echo "$(hostname): $agent $lines lines env=$(sudo stat -c %a /etc/confluent/jmx-exporter.env)"
 EOF
@@ -6203,24 +6492,19 @@ echo "$(hostname) $(systemctl is-active confluent-server)"
 EOF
 done
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# 2. broker：一台一台重啟，等 MDS 回 200（每 5 秒看一次，最多 60 次）
+# 2. broker：一台一台重啟，等 MDS（8090）回 200（每 5 秒看一次，最多 60 次）
 for h in kb01 kb02 kb03 kb04; do
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h)"
+  echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
 ```
 
@@ -6290,27 +6574,39 @@ LB：rest01 rest02
 最後是 C3（它的畫面約 1 分鐘不能用）：
 
 ```bash
+# 1. 重啟 C3
 ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'
 
-# c3_code：C3 畫面的 HTTP 狀態碼（還連不上時是 000）
-c3_code() {
-  curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
-
-# 等畫面回 200：每 10 秒試一次，最多 60 次
+# 2. 等畫面回 200（還連不上時是 000）：每 10 秒試一次，最多 60 次
 for i in $(seq 1 60); do
-  if [ "$(c3_code)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "c3 ui=$(c3_code) after ~$((i*10))s"
+echo "c3 ui=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/) after ~$((i*10))s"
+
+# 3. alice 真的從 C3 登入（首頁不經過 MDS，只看 200 抓不到；C3 起來後健康檢查還要一點時間，最多等 60 秒）
+alice_pass=$(cat ~/secrets/ad-test-users.pass)
+login_url=https://c3-01.poc.lab:9021/api/metadata/security/1.0/authenticate
+
+for i in $(seq 1 12); do
+  if [ "$(curl -s -u "alice:$alice_pass" -o /dev/null -m 30 -w '%{http_code}' $login_url)" = 200 ]; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "alice 從 C3 登入：$(curl -s -u "alice:$alice_pass" -o /dev/null -m 30 -w '%{http_code}' $login_url)"
+unset alice_pass
 ```
 
 ```out
 c3 ui=200 after ~60s
+alice 從 C3 登入：200
 ```
 
 HTTPS 要拿得到指標，憑證鏈用銀行根憑證驗（不用 -k）；不加密的 `http://` 要連不上（`000`）。controller 與 broker 重啟後前兩分鐘指標是空的（官方規則的 `startDelaySeconds: 120`），所以每台等到有指標再算：
@@ -6318,24 +6614,12 @@ HTTPS 要拿得到指標，憑證鏈用銀行根憑證驗（不用 -k）；不�
 ```bash
 ca=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
-# metric_count <網址>：拿一次指標，數 kafka_、jvm_ 開頭的行（連不上就是 0）
-metric_count() {
-  curl -s --max-time 30 --cacert $ca $1 | awk '/^(kafka_|jvm_)/ {c++} END {print c + 0}'
-}
-
-# http_code <網址> [curl 參數…]：HTTP 狀態碼（連不上時是 000）
-http_code() {
-  local url=$1
-  shift
-  curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" $url
-}
-
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
   url=https://$h.poc.lab:7071/metrics
 
-  # 1. 等到有指標（超過 20 行才算）：每 10 秒試一次，最多 30 次
+  # 1. 等到有指標（kafka_、jvm_ 開頭的行超過 20 行才算；連不上就是 0）：每 10 秒試一次，最多 30 次
   for i in $(seq 1 30); do
-    count=$(metric_count $url)
+    count=$(curl -s --max-time 30 --cacert $ca $url | awk '/^(kafka_|jvm_)/ {c++} END {print c + 0}')
 
     if [ "$count" -gt 20 ]; then
       break
@@ -6345,7 +6629,11 @@ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
   done
 
   # 2. https 用銀行根憑證驗（不用 -k）要是 200；不加密的 http 要連不上（000）
-  printf '%-7s https=%s http=%s metrics=%s\n' $h "$(http_code $url --cacert $ca)" "$(http_code http://$h.poc.lab:7071/metrics)" $count
+  printf '%-7s https=%s http=%s metrics=%s\n' \
+    $h \
+    "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert $ca $url)" \
+    "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://$h.poc.lab:7071/metrics)" \
+    $count
 done
 ```
 
@@ -6715,7 +7003,9 @@ datasources:
       timeInterval: 30s
 EOF
 
-echo "alertmanager.yml $(wc -l < ~/monitoring/to-bank/alertmanager/alertmanager.yml) 行、datasource-prometheus.yml $(wc -l < ~/monitoring/to-bank/grafana/datasource-prometheus.yml) 行"
+alertmanager_lines=$(wc -l < ~/monitoring/to-bank/alertmanager/alertmanager.yml)
+datasource_lines=$(wc -l < ~/monitoring/to-bank/grafana/datasource-prometheus.yml)
+echo "alertmanager.yml $alertmanager_lines 行、datasource-prometheus.yml $datasource_lines 行"
 ```
 
 ```out
@@ -6732,7 +7022,8 @@ alertmanager.yml 39 行、datasource-prometheus.yml 12 行
 ```bash
 # 1. 官方的 32 個 dashboard 和 dashboard.yml 複製出來（落地區的檔是唯讀的，加回寫入權限）
 assets=~/landing/monitoring/jmx-monitoring-stacks/jmxexporter-prometheus-grafana/assets
-cp $assets/grafana/provisioning/dashboards/*.json $assets/grafana/provisioning/dashboards/dashboard.yml ~/monitoring/to-bank/grafana/dashboards/
+dashboards=$assets/grafana/provisioning/dashboards
+cp $dashboards/*.json $dashboards/dashboard.yml ~/monitoring/to-bank/grafana/dashboards/
 chmod u+w ~/monitoring/to-bank/grafana/dashboards/*
 
 # 2. 修兩件事（datasource 佔位符、重複的 uid）：用 EOF 之前的那段 Python 改每個 JSON
@@ -6747,13 +7038,15 @@ for f in files:
 renamed = 0
 for uid, group in seen.items():
     for i, (f, d) in enumerate(group):
-        if i > 0:                                   # same uid as an earlier file (the ZooKeeper-era twins): give it its own
+        # same uid as an earlier file (the ZooKeeper-era twins): give it its own
+        if i > 0:
             stem = os.path.basename(f)[:-5]
             d['uid'] = (uid + '-' + stem)[:40]
             d['title'] = d['title'] + ' [' + stem + ']'
             renamed += 1
         json.dump(d, open(f, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
-print('dashboards: %d, placeholder datasource fixed, uid shared with another file (renamed): %d' % (len(files), renamed))
+print('dashboards: %d, placeholder datasource fixed, uid shared with another file (renamed): %d'
+      % (len(files), renamed))
 EOF
 ```
 
@@ -6809,10 +7102,13 @@ cd bank-monitoring
 # 3. 放成各容器要的樣子：webhook 網址換成接收端容器、datasource 指向 lab 的 Prometheus
 cp to-bank/prometheus/* prometheus/confluent/
 sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' to-bank/alertmanager/alertmanager.yml > alertmanager/alertmanager.yml
-sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' to-bank/grafana/datasource-prometheus.yml > grafana/provisioning/datasources/prometheus.yml
+sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' to-bank/grafana/datasource-prometheus.yml \
+  > grafana/provisioning/datasources/prometheus.yml
 cp to-bank/grafana/dashboards/* grafana/provisioning/dashboards/
 
-echo "prometheus: $(ls prometheus/confluent | tr '\n' ' ')/ dashboards: $(ls grafana/provisioning/dashboards | wc -l) 個檔"
+confluent_files=$(ls prometheus/confluent | tr '\n' ' ')
+dashboard_count=$(ls grafana/provisioning/dashboards | wc -l)
+echo "prometheus: $confluent_files/ dashboards: $dashboard_count 個檔"
 ```
 
 ```out
@@ -6855,10 +7151,7 @@ prometheus.yml 4 行、receiver.py 8 行
 ```bash
 cd ~/kafka-lab/bank-monitoring
 
-# win_path <相對路徑>：給 podman 的 Windows 路徑（C:/Users/...）
-win_path() {
-  cygpath -m "$PWD/$1"
-}
+# 給 podman 的路徑要是 Windows 路徑（C:/Users/...），所以下面的 -v 都先用 cygpath -m 轉過
 
 # 1. Prometheus 要認得各主機的名稱（監控容器不在 compose 裡，沒有 extra_hosts）：每台一個 --add-host
 #    寫法：主機:IP 的最後一段
@@ -6871,22 +7164,29 @@ done
 
 # 2. webhook 接收端（用 lab-node:96 跑那支 Python）
 podman run -d --restart unless-stopped --name lab-mon-webhook --network lab_labnet --memory 64m \
-  -v "$(win_path webhook):/w:ro" lab-node:96 python3 -u /w/receiver.py > /dev/null
+  -v "$(cygpath -m "$PWD/webhook"):/w:ro" lab-node:96 python3 -u /w/receiver.py > /dev/null
 
 # 3. Alertmanager（--cluster.listen-address= 留空：lab 的 172.35.x.x 不是私有位址，gossip 起不來）
 podman run -d --restart unless-stopped --name lab-mon-alertmanager --network lab_labnet --memory 128m \
-  -v "$(win_path alertmanager/alertmanager.yml):/etc/alertmanager/alertmanager.yml:ro" \
-  prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= > /dev/null
+  -v "$(cygpath -m "$PWD/alertmanager/alertmanager.yml"):/etc/alertmanager/alertmanager.yml:ro" \
+  prom/alertmanager:v0.34.1 \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --storage.path=/alertmanager \
+  --cluster.listen-address= > /dev/null
 
 # 4. Prometheus（--web.enable-lifecycle：17.8 要叫它重新載入規則）
 podman run -d --restart unless-stopped --name lab-mon-prometheus --network lab_labnet --memory 600m $hosts \
-  -v "$(win_path prometheus/prometheus.yml):/etc/prometheus/prometheus.yml:ro" -v "$(win_path prometheus/confluent):/etc/prometheus/confluent:ro" \
-  prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d > /dev/null
+  -v "$(cygpath -m "$PWD/prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" \
+  -v "$(cygpath -m "$PWD/prometheus/confluent"):/etc/prometheus/confluent:ro" \
+  prom/prometheus:v3.5.0 \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --web.enable-lifecycle \
+  --storage.tsdb.retention.time=1d > /dev/null
 
 # 5. Grafana（匿名 Admin 只為了 lab 好操作；發佈到 Windows 的 13000）
 podman run -d --restart unless-stopped --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 \
   -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
-  -v "$(win_path grafana/provisioning):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 > /dev/null
+  -v "$(cygpath -m "$PWD/grafana/provisioning"):/etc/grafana/provisioning:ro" grafana/grafana:11.3.0 > /dev/null
 
 # 6. 等 60 秒，4 個都要是 Up
 sleep 60
@@ -6961,7 +7261,18 @@ Grafana 的 dashboard 真的查得到資料：用 Grafana 自己的查詢介面�
 # 在 labnet 上起一個臨時容器，執行 EOF 之前的那一段
 podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
 # 1. 查詢內容（JSON）：active controller 數的即時值
-query='{"queries":[{"refId":"A","datasource":{"type":"prometheus","uid":"Prometheus"},"expr":"sum(kafka_controller_kafkacontroller_activecontrollercount{env=\"lab\", job=\"kafka-controller\"})","instant":true}],"from":"now-5m","to":"now"}'
+query='{
+  "queries": [
+    {
+      "refId": "A",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "expr": "sum(kafka_controller_kafkacontroller_activecontrollercount{env=\"lab\", job=\"kafka-controller\"})",
+      "instant": true
+    }
+  ],
+  "from": "now-5m",
+  "to": "now"
+}'
 
 # 2. 送給 Grafana，印出狀態與查到的值
 curl -s -X POST http://lab-mon-grafana:3000/api/ds/query -H "Content-Type: application/json" -d "$query" | python3 -c '
@@ -7018,25 +7329,26 @@ podman logs lab-mon-webhook 2>&1 | grep -c ConfluentTestAlert
 先看**預設格式**：整包 JSON，`alerts` 是陣列（一個通知群組可能有很多筆），欄位是 Alertmanager 的 version 4：
 
 ```bash
-# first_post <路徑>：接收端日誌裡第一筆送到那個路徑的測試告警，拆成兩行：「路徑 User-Agent」、JSON 本文
-#   日誌一行長這樣：POST /default | Alertmanager/0.34.1 | {"version":"4",…}
-first_post() {
-  podman logs lab-mon-webhook 2>&1 | grep "^POST $1" | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/'
-}
+# 1. 接收端日誌裡第一筆送到 /default 的測試告警
+#    日誌一行長這樣：POST /default | Alertmanager/0.34.1 | {"version":"4",…}
+test_posts=$(podman logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert)
+post=$(echo "$test_posts" | grep "^POST /default" | head -1)
 
-# show_default：把 first_post 的結果整理成重點欄位（Python 在 lab-node:96 裡跑）
-show_default() {
-  podman run --rm -i lab-node:96 python3 -c '
+# 2. 拆開：路徑、User-Agent（前後各帶一個空白）、JSON 本文
+post_path=$(echo "$post" | cut -d' ' -f2)
+agent=$(echo "$post" | cut -d'|' -f2)
+body=$(echo "$post" | cut -d'|' -f3-)
+
+# 3. 第一行印「路徑 User-Agent」，JSON 本文整理成重點欄位（Python 在 lab-node:96 裡跑）
+printf '%s%s\n%s\n' "$post_path" "$agent" "$body" | podman run --rm -i lab-node:96 python3 -c '
 import json, sys
 head, body = sys.stdin.read().split("\n", 1)
 d = json.loads(body)
 print(head)
 print(json.dumps({k: d[k] for k in ("version", "status", "receiver", "groupKey")}, ensure_ascii=False))
 a = d["alerts"][0]
-print(json.dumps({"status": a["status"], "labels": a["labels"], "annotations": a["annotations"], "startsAt": a["startsAt"], "fingerprint": a["fingerprint"]}, ensure_ascii=False, indent=1))'
-}
-
-first_post /default | show_default
+print(json.dumps({"status": a["status"], "labels": a["labels"], "annotations": a["annotations"],
+                  "startsAt": a["startsAt"], "fingerprint": a["fingerprint"]}, ensure_ascii=False, indent=1))'
 ```
 
 ```out
@@ -7065,21 +7377,21 @@ first_post /default | show_default
 再看**自訂格式**：一筆告警一個扁平的 JSON，欄位是前面範本組出來的；`description` 裡的雙引號、冒號、`007` 都完整保留，JSON 沒壞：
 
 ```bash
-# first_post：同上一塊
-first_post() {
-  podman logs lab-mon-webhook 2>&1 | grep "^POST $1" | grep ConfluentTestAlert | head -1 | sed 's/^POST \([^ ]*\) | \([^|]*\)| /\1 \2\n/'
-}
+# 1. 接收端日誌裡第一筆送到 /omnibus 的測試告警
+test_posts=$(podman logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert)
+post=$(echo "$test_posts" | grep "^POST /omnibus" | head -1)
 
-# show_json：第一行照印，JSON 本文排版後印出
-show_json() {
-  podman run --rm -i lab-node:96 python3 -c '
+# 2. 拆開：路徑、User-Agent（前後各帶一個空白）、JSON 本文
+post_path=$(echo "$post" | cut -d' ' -f2)
+agent=$(echo "$post" | cut -d'|' -f2)
+body=$(echo "$post" | cut -d'|' -f3-)
+
+# 3. 第一行印「路徑 User-Agent」，JSON 本文排版後印出（Python 在 lab-node:96 裡跑）
+printf '%s%s\n%s\n' "$post_path" "$agent" "$body" | podman run --rm -i lab-node:96 python3 -c '
 import json, sys
 head, body = sys.stdin.read().split("\n", 1)
 print(head)
 print(json.dumps(json.loads(body), ensure_ascii=False, indent=1))'
-}
-
-first_post /omnibus | show_json
 ```
 
 ```out
@@ -7159,22 +7471,37 @@ fi
 
 # 2. 建 SCRAM 帳號
 password=$(cat ~/secrets/confluent-audit.pass)
-kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name confluent-audit \
+kafka-configs \
+  --bootstrap-server $BS \
+  --command-config ~/conf/client-admin.properties \
+  --alter \
+  --entity-type users \
+  --entity-name confluent-audit \
   --add-config "SCRAM-SHA-512=[iterations=8192,password=$password]" > /dev/null
 unset password
 
 # 3. 權限：audit topic prefix 的寫入與管理（svc-ops 登入 MDS 來綁）
-confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
-  --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null 2>&1
+confluent login \
+  --url https://kb01.poc.lab:8090 \
+  --certificate-authority-path ~/pki/certs/bank-root.pem \
+  --certificate-only \
+  --client-cert-path ~/pki/certs/svc-ops.crt \
+  --client-key-path ~/pki/keys/svc-ops.key > /dev/null 2>&1
 cluster_id=$(curl -sk https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 
 for role in DeveloperWrite DeveloperManage; do
-  confluent iam rbac role-binding create --principal User:confluent-audit --role $role --resource Topic:confluent-audit-log-events --prefix \
+  confluent iam rbac role-binding create \
+    --principal User:confluent-audit \
+    --role $role \
+    --resource Topic:confluent-audit-log-events \
+    --prefix \
     --kafka-cluster "$cluster_id" > /dev/null 2>&1
 done
 
 # 4. 確認（表頭兩行不印）
-confluent iam rbac role-binding list --principal User:confluent-audit --kafka-cluster "$cluster_id" 2> /dev/null | tail -n +3
+confluent iam rbac role-binding list \
+  --principal User:confluent-audit \
+  --kafka-cluster "$cluster_id" 2> /dev/null | tail -n +3
 ```
 
 ```out
@@ -7309,24 +7636,19 @@ echo "$(hostname) $(systemctl is-active confluent-server)"
 EOF
 done
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# 2. broker：一台一台重啟，等 MDS 回 200（每 5 秒看一次，最多 60 次）
+# 2. broker：一台一台重啟，等 MDS（8090）回 200（每 5 秒看一次，最多 60 次）
 for h in kb01 kb02 kb03 kb04; do
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h)"
+  echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
 
 # 3. 等 20 秒，兩個稽核 topic 都建好了
@@ -7371,17 +7693,32 @@ EOF
 unset password store_password
 
 # 2. alice 往 payments.events 寫一筆（允許、敏感）
-echo "audit-test-$(date +%s)" | kafka-console-producer --bootstrap-server kb01.poc.lab:9096 --producer.config ~/conf/client-alice.properties \
+echo "audit-test-$(date +%s)" | kafka-console-producer \
+  --bootstrap-server kb01.poc.lab:9096 \
+  --producer.config ~/conf/client-alice.properties \
   --topic payments.events > /dev/null 2>&1
 echo "alice: produced to payments.events"
 
 # 3. app-orders 讀 payments.events（沒有權限：拒絕、敏感）
-kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic payments.events \
-  --group orders-sneak --max-messages 1 --timeout-ms 10000 2>&1 | grep -o 'TopicAuthorizationException\|not authorized' | head -1 | sed 's/^/app-orders on payments.events: /'
+denied=$(kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --consumer.config ~/conf/app-orders.properties \
+  --topic payments.events \
+  --group orders-sneak \
+  --max-messages 1 \
+  --timeout-ms 10000 2>&1 | grep -o 'TopicAuthorizationException\|not authorized' | head -1)
+echo "app-orders on payments.events: $denied"
 
 # 4. app-orders 讀自己的 orders.events（允許、不敏感）
-kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events \
-  --group orders-audit-check --from-beginning --max-messages 1 --timeout-ms 15000 2> /dev/null | wc -l | sed 's/^/app-orders on orders.events: read /'
+read_count=$(kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --consumer.config ~/conf/app-orders.properties \
+  --topic orders.events \
+  --group orders-audit-check \
+  --from-beginning \
+  --max-messages 1 \
+  --timeout-ms 15000 2> /dev/null | wc -l)
+echo "app-orders on orders.events: read $read_count"
 ```
 
 ```out
@@ -7397,9 +7734,16 @@ sleep 10
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-# audit_summary：讀 stdin 的稽核事件（一行一個 JSON），印總數，並依「主體／方法／資源／准拒」統計幾個測試身分的事件
-audit_summary() {
-  python3 -c '
+# 兩個稽核 topic 各讀一遍（從頭讀，20 秒沒有新的就停）
+# Python 讀 stdin 的稽核事件（一行一個 JSON），印總數，並依「主體／方法／資源／准拒」統計幾個測試身分的事件
+for t in confluent-audit-log-events_sensitive confluent-audit-log-events; do
+  echo "== $t"
+  kafka-console-consumer \
+    --bootstrap-server kb01.poc.lab:9096 \
+    --consumer.config ~/conf/client-alice.properties \
+    --topic $t \
+    --from-beginning \
+    --timeout-ms 20000 2> /dev/null | python3 -c '
 import sys, json, collections
 c = collections.Counter(); tot = 0
 for line in sys.stdin:
@@ -7408,17 +7752,11 @@ for line in sys.stdin:
     tot += 1
     p = e.get("authenticationInfo", {}).get("principal", "?"); m = e.get("methodName", "?").split(".")[-1]
     a = e.get("authorizationInfo", {}); g = a.get("granted"); r = a.get("resourceName", "")
-    if p in ("User:alice", "User:app-orders-a", "User:bob", "User:carol"): c[(p, m, r[:28], "ALLOWED" if g else "DENIED")] += 1
+    if p in ("User:alice", "User:app-orders-a", "User:bob", "User:carol"):
+        c[(p, m, r[:28], "ALLOWED" if g else "DENIED")] += 1
 print("  total events:", tot)
 for k, v in sorted(c.items()): print("  %-16s %-10s %-28s %-8s x%d" % (k[0], k[1], k[2], k[3], v))
 '
-}
-
-# 兩個稽核 topic 各讀一遍（從頭讀，20 秒沒有新的就停）
-for t in confluent-audit-log-events_sensitive confluent-audit-log-events; do
-  echo "== $t"
-  kafka-console-consumer --bootstrap-server kb01.poc.lab:9096 --consumer.config ~/conf/client-alice.properties --topic $t \
-    --from-beginning --timeout-ms 20000 2> /dev/null | audit_summary
 done
 ```
 
@@ -7444,22 +7782,28 @@ done
 ```bash
 password=$(cat ~/secrets/ad-test-users.pass)
 
-# op <AD 帳號> <項目與參數…>：用那個人的帳密非互動跑一次選單（同第 16 章）
-op() {
-  local person="$1"
-  shift
-  env OPMENU_USER="$person" OPMENU_PASS="$password" OPMENU_YES=1 JAVA_HOME=/opt/java/current \
-    /opt/opmenu/opmenu.sh --run "$@" 2>&1 < /dev/null | grep -v '^SLF4J' | sed 's/\x1b\[[0-9;]*m//g'
-}
+# 下面每一步都是用那個人的帳密非互動跑一次選單（同第 16 章），濾掉 SLF4J 訊息與顏色碼
 
 # 1. 一般 topic：最近 240 分鐘 bob 被拒的事件，存檔（檔名裡的時間換成 <時間>）
-op alice 43 240 bob DENIED save | grep -E '符合|DENIED$|已匯出' | sed -E 's/audit-[0-9]{8}-[0-9]{6}/audit-<時間>/'
+output=$(env OPMENU_USER=alice OPMENU_PASS="$password" OPMENU_YES=1 JAVA_HOME=/opt/java/current \
+  /opt/opmenu/opmenu.sh --run 43 240 bob DENIED save 2>&1 < /dev/null \
+  | grep -v '^SLF4J' \
+  | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | grep -E '符合|DENIED$|已匯出' | sed -E 's/audit-[0-9]{8}-[0-9]{6}/audit-<時間>/'
 
 # 2. 敏感 topic：app-orders-a 的事件（只印第一行與最後一行）
-op alice 43 240 app-orders-a - - sensitive | grep -E '符合|payments' | sed -n '1p;$p'
+output=$(env OPMENU_USER=alice OPMENU_PASS="$password" OPMENU_YES=1 JAVA_HOME=/opt/java/current \
+  /opt/opmenu/opmenu.sh --run 43 240 app-orders-a - - sensitive 2>&1 < /dev/null \
+  | grep -v '^SLF4J' \
+  | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | grep -E '符合|payments' | sed -n '1p;$p'
 
 # 3. carol 沒有讀取權限：被 Kafka 拒絕
-op carol 43 240 | tail -1
+output=$(env OPMENU_USER=carol OPMENU_PASS="$password" OPMENU_YES=1 JAVA_HOME=/opt/java/current \
+  /opt/opmenu/opmenu.sh --run 43 240 2>&1 < /dev/null \
+  | grep -v '^SLF4J' \
+  | sed 's/\x1b\[[0-9;]*m//g')
+echo "$output" | tail -1
 
 unset password
 ```
@@ -7495,8 +7839,12 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 每個 topic 的第一行（總覽），只取名稱、replication factor、min.insync.replicas
 for t in confluent-audit-log-events confluent-audit-log-events_sensitive; do
-  kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --topic $t 2> /dev/null \
-    | head -1 | grep -oE 'Topic: [^[:space:]]+|ReplicationFactor: [0-9]+|min.insync.replicas=[0-9]+' | paste -sd' '
+  overview=$(kafka-topics \
+    --bootstrap-server kb01.poc.lab:9094 \
+    --command-config ~/conf/client-admin.properties \
+    --describe \
+    --topic $t 2> /dev/null | head -1)
+  echo "$overview" | grep -oE 'Topic: [^[:space:]]+|ReplicationFactor: [0-9]+|min.insync.replicas=[0-9]+' | paste -sd' '
 done
 ```
 
@@ -7519,6 +7867,10 @@ Topic: confluent-audit-log-events_sensitive ReplicationFactor: 3 min.insync.repl
 
 @role 小安 | ops02 | root
 
+每一項都是同樣的寫法：`all` 加 1，判斷，通過就 `ok` 加 1 並印 `ok`，沒過就印 `FAIL`。判斷時不印指令本身的輸出。`all`、`ok` 跨塊延續，這一節的幾塊要在同一個 shell 接著貼。
+
+先看 KRaft、服務與 MDS：
+
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
@@ -7526,94 +7878,165 @@ ca=/etc/pki/ca-trust/source/anchors/bank-root.pem
 ok=0
 all=0
 
-# check <說明> <指令…>：執行一項檢查（輸出不印），成功印 ok、失敗印 FAIL，並計數
-check() {
-  local name="$1"
-  shift
+# 1. controller quorum 有 leader
+all=$((all + 1))
+
+if kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --status 2> /dev/null | grep -q "LeaderId: *[0-9]"; then
+  echo "ok   controller quorum 有 leader"
+  ok=$((ok + 1))
+else
+  echo "FAIL controller quorum 有 leader"
+fi
+
+# 2. 7 台 confluent-server
+for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
   all=$((all + 1))
 
-  if "$@" > /dev/null 2>&1; then
-    printf 'ok   %s\n' "$name"
+  if ssh $h.poc.lab 'systemctl is-active -q confluent-server' > /dev/null 2>&1; then
+    echo "ok   $h confluent-server active"
     ok=$((ok + 1))
   else
-    printf 'FAIL %s\n' "$name"
+    echo "FAIL $h confluent-server active"
   fi
-}
-
-# ---- 下面每個小函式是一項檢查：結束碼 0 = 通過 ----
-
-# http_is <期望的狀態碼> <網址> [curl 參數…]：網址回的 HTTP 狀態碼是不是期望的（連不上時是 000）
-http_is() {
-  local want=$1
-  local url=$2
-  shift 2
-  [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 "$@" $url)" = "$want" ]
-}
-
-# quorum_has_leader：controller quorum 有 leader
-quorum_has_leader() {
-  kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status | grep -q "LeaderId: *[0-9]"
-}
-
-# no_partitions <describe 的選項>：kafka-topics --describe 加這個選項時，列不出任何 partition
-no_partitions() {
-  local count
-  count=$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe $1 | grep -c Partition:)
-  [ "$count" = 0 ]
-}
-
-# balancer_enabled：Self-Balancing 是啟用的
-balancer_enabled() {
-  kafka-rebalance-cluster --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --status 2> /dev/null | grep -q "Balancer status: ENABLED"
-}
-
-# c3_prometheus_has_broker_metrics：C3 內建的 Prometheus 有 broker 的指標
-c3_prometheus_has_broker_metrics() {
-  curl -s --cacert $ca --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server
-}
-
-# jmx_https_only <主機>：那台的 7071 用 HTTPS 回 200，不加密的 HTTP 連不上（000）
-jmx_https_only() {
-  if ! http_is 200 https://$1.poc.lab:7071/metrics; then
-    return 1
-  fi
-
-  http_is 000 http://$1.poc.lab:7071/metrics
-}
-
-# 1. KRaft 與服務
-check "controller quorum 有 leader" quorum_has_leader
-
-for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
-  check "$h confluent-server active" ssh $h.poc.lab 'systemctl is-active -q confluent-server'
 done
 
-# 2. MDS
+# 3. 4 台 MDS（連不上時狀態碼是 000）
 for h in kb01 kb02 kb03 kb04; do
-  check "$h MDS 8090 回 200" http_is 200 https://$h.poc.lab:8090/v1/metadata/id
+  all=$((all + 1))
+  url=https://$h.poc.lab:8090/v1/metadata/id
+
+  if [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 $url)" = 200 ]; then
+    echo "ok   $h MDS 8090 回 200"
+    ok=$((ok + 1))
+  else
+    echo "FAIL $h MDS 8090 回 200"
+  fi
 done
+```
 
-# 3. partition 與 Self-Balancing
-check "沒有 under-replicated partition" no_partitions --under-replicated-partitions
-check "沒有 offline partition" no_partitions --unavailable-partitions
-check "Self-Balancing 啟用" balancer_enabled
+```out
+ok   controller quorum 有 leader
+ok   kc01 confluent-server active
+（…）
+ok   kb04 MDS 8090 回 200
+```
 
-# 4. REST Proxy、C3
-check "REST Proxy 經 LB 回 200（mTLS）" http_is 200 https://rest.poc.lab:8082/v3/clusters --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key
-check "Control Center 9021 回 200" http_is 200 https://c3-01.poc.lab:9021/
-check "C3 的 Prometheus 有 broker 指標" c3_prometheus_has_broker_metrics
+partition 與 Self-Balancing：
 
-# 5. JMX exporter
+```bash
+# 4. 沒有 under-replicated partition：kafka-topics --describe 加這個選項時，列不出任何 partition
+all=$((all + 1))
+count=$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}')
+
+if [ "$count" = 0 ]; then
+  echo "ok   沒有 under-replicated partition"
+  ok=$((ok + 1))
+else
+  echo "FAIL 沒有 under-replicated partition"
+fi
+
+# 5. 沒有 offline partition（做法同上）
+all=$((all + 1))
+count=$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --describe --unavailable-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}')
+
+if [ "$count" = 0 ]; then
+  echo "ok   沒有 offline partition"
+  ok=$((ok + 1))
+else
+  echo "FAIL 沒有 offline partition"
+fi
+
+# 6. Self-Balancing 是啟用的
+all=$((all + 1))
+
+if kafka-rebalance-cluster \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --status 2> /dev/null | grep -q "Balancer status: ENABLED"; then
+  echo "ok   Self-Balancing 啟用"
+  ok=$((ok + 1))
+else
+  echo "FAIL Self-Balancing 啟用"
+fi
+```
+
+```out
+ok   沒有 under-replicated partition
+ok   沒有 offline partition
+ok   Self-Balancing 啟用
+```
+
+REST Proxy、C3、JMX exporter，最後印這一組的統計：
+
+```bash
+# 7. REST Proxy 經 LB（mTLS）
+all=$((all + 1))
+
+if [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 \
+  --cert ~/pki/certs/app-legacy-billing.crt \
+  --key ~/pki/keys/app-legacy-billing.key \
+  https://rest.poc.lab:8082/v3/clusters)" = 200 ]; then
+  echo "ok   REST Proxy 經 LB 回 200（mTLS）"
+  ok=$((ok + 1))
+else
+  echo "FAIL REST Proxy 經 LB 回 200（mTLS）"
+fi
+
+# 8. Control Center 畫面
+all=$((all + 1))
+
+if [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 https://c3-01.poc.lab:9021/)" = 200 ]; then
+  echo "ok   Control Center 9021 回 200"
+  ok=$((ok + 1))
+else
+  echo "FAIL Control Center 9021 回 200"
+fi
+
+# 9. C3 內建的 Prometheus 有 broker 的指標
+all=$((all + 1))
+
+if curl -s --cacert $ca \
+  --cert ~/pki/certs/svc-ops.crt \
+  --key ~/pki/keys/svc-ops.key \
+  https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -q confluent_kafka_server; then
+  echo "ok   C3 的 Prometheus 有 broker 指標"
+  ok=$((ok + 1))
+else
+  echo "FAIL C3 的 Prometheus 有 broker 指標"
+fi
+
+# 10. JMX exporter：7071 用 HTTPS 回 200，不加密的 HTTP 連不上（000）
 for h in kc01 kb01 rest01 c3-01; do
-  check "$h JMX exporter 7071 只走 HTTPS" jmx_https_only $h
+  all=$((all + 1))
+  https_url=https://$h.poc.lab:7071/metrics
+  http_url=http://$h.poc.lab:7071/metrics
+
+  if [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 $https_url)" = 200 ] && \
+     [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 $http_url)" = 000 ]; then
+    echo "ok   $h JMX exporter 7071 只走 HTTPS"
+    ok=$((ok + 1))
+  else
+    echo "FAIL $h JMX exporter 7071 只走 HTTPS"
+  fi
 done
 
 echo "健康：$ok / $all 項通過"
 ```
 
 ```out
-ok   controller quorum 有 leader
-ok   kc01 confluent-server active
+ok   REST Proxy 經 LB 回 200（mTLS）
+ok   Control Center 9021 回 200
+ok   C3 的 Prometheus 有 broker 指標
+ok   kc01 JMX exporter 7071 只走 HTTPS
 （…）
 ok   rest01 JMX exporter 7071 只走 HTTPS
 ok   c3-01 JMX exporter 7071 只走 HTTPS
@@ -7624,7 +8047,9 @@ ok   c3-01 JMX exporter 7071 只走 HTTPS
 
 @role 小安 | ops02 | root
 
-每一條規則都要有「該過的過、該擋的擋」：
+每一條規則都要有「該過的過、該擋的擋」。寫法和 19.1 相同；「被拒」的檢查，被拒才算通過。`all`、`ok` 跨塊延續，這一節的幾塊要在同一個 shell 接著貼。
+
+先看 AD 身分（MDS 去 AD 驗帳密）：
 
 ```bash
 export JAVA_HOME=/opt/java/current
@@ -7634,175 +8059,286 @@ password=$(cat ~/secrets/ad-test-users.pass)
 ok=0
 all=0
 
-# check <說明> <指令…>：執行一項檢查（輸出不印），成功印 ok、失敗印 FAIL，並計數（同 19.1）
-check() {
-  local name="$1"
-  shift
+# 向 MDS 要 token 的網址
+mds_url=https://kb01.poc.lab:8090/security/1.0/authenticate
+
+# 1. 帳密正確：要 200
+all=$((all + 1))
+
+if [ "$(curl -s --cacert $ca -u "alice:$password" -o /dev/null -w '%{http_code}' $mds_url)" = 200 ]; then
+  echo "ok   AD 帳密正確 → MDS 給 token"
+  ok=$((ok + 1))
+else
+  echo "FAIL AD 帳密正確 → MDS 給 token"
+fi
+
+# 2. 密碼錯：要 401
+all=$((all + 1))
+
+if [ "$(curl -s --cacert $ca -u "alice:wrong-password" -o /dev/null -w '%{http_code}' $mds_url)" = 401 ]; then
+  echo "ok   AD 密碼錯 → 401"
+  ok=$((ok + 1))
+else
+  echo "FAIL AD 密碼錯 → 401"
+fi
+
+# 3. 帳號不存在：要 401
+all=$((all + 1))
+
+if [ "$(curl -s --cacert $ca -u "nobody:$password" -o /dev/null -w '%{http_code}' $mds_url)" = 401 ]; then
+  echo "ok   不存在的帳號 → 401"
+  ok=$((ok + 1))
+else
+  echo "FAIL 不存在的帳號 → 401"
+fi
+```
+
+```out
+ok   AD 帳密正確 → MDS 給 token
+ok   AD 密碼錯 → 401
+ok   不存在的帳號 → 401
+```
+
+Kafka 的授權：
+
+```bash
+# 4. carol 在自己 prefix 以外（payments.）建 topic，要被 Kafka 拒絕
+#    連線設定借 alice 那一份，帳號換成 carol（測試帳號共用同一個密碼；暫存檔用完即刪）
+all=$((all + 1))
+conf=$(mktemp)
+cat ~/conf/client-alice.properties 2> /dev/null | sed 's/username="alice"/username="carol"/' > $conf
+
+if kafka-topics \
+  --bootstrap-server kb01.poc.lab:9096 \
+  --command-config $conf \
+  --create \
+  --topic payments.carol-test \
+  --partitions 1 \
+  --replication-factor 3 2>&1 | grep -q TopicAuthorizationException; then
+  echo "ok   carol 在自己 prefix 以外建 topic 被拒"
+  ok=$((ok + 1))
+else
+  echo "FAIL carol 在自己 prefix 以外建 topic 被拒"
+fi
+
+rm -f $conf
+
+# 5. app-orders 讀 payments.events，要被拒絕
+all=$((all + 1))
+
+if kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --consumer.config ~/conf/app-orders.properties \
+  --topic payments.events \
+  --max-messages 1 \
+  --timeout-ms 8000 2>&1 | grep -q TopicAuthorizationException; then
+  echo "ok   app-orders 讀 payments.events 被拒"
+  ok=$((ok + 1))
+else
+  echo "FAIL app-orders 讀 payments.events 被拒"
+fi
+```
+
+```out
+ok   carol 在自己 prefix 以外建 topic 被拒
+ok   app-orders 讀 payments.events 被拒
+```
+
+連線方式：
+
+```bash
+# 6. 不帶 client 憑證連 REST Proxy：TLS 那一關就要失敗
+all=$((all + 1))
+
+if ! curl -s --cacert $ca --max-time 10 https://rest.poc.lab:8082/v3/clusters -o /dev/null; then
+  echo "ok   REST Proxy 不帶憑證 → 連線被拒"
+  ok=$((ok + 1))
+else
+  echo "FAIL REST Proxy 不帶憑證 → 連線被拒"
+fi
+
+# 7. 帶非 app 憑證（svc-ops）連 REST Proxy：要 401
+all=$((all + 1))
+
+if [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 \
+  --cert ~/pki/certs/svc-ops.crt \
+  --key ~/pki/keys/svc-ops.key \
+  https://rest.poc.lab:8082/v3/clusters)" = 401 ]; then
+  echo "ok   REST Proxy 帶非 app 憑證（svc-ops）→ 401"
+  ok=$((ok + 1))
+else
+  echo "FAIL REST Proxy 帶非 app 憑證（svc-ops）→ 401"
+fi
+
+# 8. 連 9095 只做 TLS、不做 SASL：要失敗（暫存設定檔用完即刪）
+all=$((all + 1))
+conf=$(mktemp)
+echo "security.protocol=SSL" > $conf
+echo "ssl.truststore.type=PKCS12" >> $conf
+echo "ssl.truststore.location=/root/pki/certs/truststore.p12" >> $conf
+echo "ssl.truststore.password=$(cat ~/pki/store.pass)" >> $conf
+
+if ! kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
+  echo "ok   CLIENT 9095 不帶 SASL → 失敗"
+  ok=$((ok + 1))
+else
+  echo "FAIL CLIENT 9095 不帶 SASL → 失敗"
+fi
+
+rm -f $conf
+```
+
+```out
+ok   REST Proxy 不帶憑證 → 連線被拒
+ok   REST Proxy 帶非 app 憑證（svc-ops）→ 401
+ok   CLIENT 9095 不帶 SASL → 失敗
+```
+
+不加密的 JMX 與憑證鏈驗證：
+
+```bash
+# 9. JMX exporter 不加密的 HTTP：要連不上（000）
+all=$((all + 1))
+
+url=http://kb01.poc.lab:7071/metrics
+
+if [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 $url)" = 000 ]; then
+  echo "ok   JMX exporter 不加密的 HTTP → 連不上"
+  ok=$((ok + 1))
+else
+  echo "FAIL JMX exporter 不加密的 HTTP → 連不上"
+fi
+
+# 10. 用一張無關的自簽 CA 去驗 MDS 的憑證：要失敗（代表 client 端的鏈驗證有效；暫存檔用完即刪）
+all=$((all + 1))
+junk=$(mktemp)
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout /dev/null \
+  -subj /CN=junk \
+  -out $junk 2> /dev/null
+
+if ! curl -s --max-time 10 --cacert $junk https://kb01.poc.lab:8090/v1/metadata/id -o /dev/null; then
+  echo "ok   用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）"
+  ok=$((ok + 1))
+else
+  echo "FAIL 用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）"
+fi
+
+rm -f $junk
+```
+
+```out
+ok   JMX exporter 不加密的 HTTP → 連不上
+ok   用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）
+```
+
+機敏資料與檔案權限：
+
+```bash
+# 11. 3 台的設定檔裡沒有明文密碼（在那台執行 EOF 之前的那一段；最後一行的結果決定通過與否）
+for h in kb01 rest01 c3-01; do
   all=$((all + 1))
 
-  if "$@" > /dev/null 2>&1; then
-    printf 'ok   %s\n' "$name"
-    ok=$((ok + 1))
-  else
-    printf 'FAIL %s\n' "$name"
-  fi
-}
-
-# ---- 下面每個小函式是一項檢查：結束碼 0 = 通過（「被拒」的檢查，被拒才回 0） ----
-
-# http_is <期望的狀態碼> <網址> [curl 參數…]：網址回的 HTTP 狀態碼是不是期望的（連不上時是 000）
-http_is() {
-  local want=$1
-  local url=$2
-  shift 2
-  [ "$(curl -s --cacert $ca -o /dev/null -w '%{http_code}' --max-time 10 "$@" $url)" = "$want" ]
-}
-
-# mds_is <期望的狀態碼> <帳號> <密碼>：用這組帳密向 MDS 要 token，回的狀態碼是不是期望的
-mds_is() {
-  [ "$(curl -s --cacert $ca -u "$2:$3" -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)" = "$1" ]
-}
-
-# carol_create_denied：carol 在自己 prefix 以外（payments.）建 topic，要被 Kafka 拒絕
-#   連線設定借 alice 那一份，帳號換成 carol（測試帳號共用同一個密碼；暫存檔用完即刪）
-carol_create_denied() {
-  local conf result
-  conf=$(mktemp)
-  sed 's/username="alice"/username="carol"/' ~/conf/client-alice.properties > $conf
-
-  kafka-topics --bootstrap-server kb01.poc.lab:9096 --command-config $conf --create --topic payments.carol-test --partitions 1 --replication-factor 3 2>&1 | grep -q TopicAuthorizationException
-  result=$?
-
-  rm -f $conf
-  return $result
-}
-
-# orders_cannot_read_payments：app-orders 讀 payments.events，要被拒絕
-orders_cannot_read_payments() {
-  kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic payments.events \
-    --max-messages 1 --timeout-ms 8000 2>&1 | grep -q TopicAuthorizationException
-}
-
-# rest_without_cert_refused：不帶 client 憑證連 REST Proxy，TLS 那一關就要失敗
-rest_without_cert_refused() {
-  if curl -s --cacert $ca --max-time 10 https://rest.poc.lab:8082/v3/clusters -o /dev/null; then
-    return 1
-  fi
-
-  return 0
-}
-
-# client_listener_without_sasl_fails：連 9095 只做 TLS、不做 SASL，要失敗（暫存設定檔用完即刪）
-client_listener_without_sasl_fails() {
-  local conf result
-  conf=$(mktemp)
-  echo "security.protocol=SSL" > $conf
-  echo "ssl.truststore.type=PKCS12" >> $conf
-  echo "ssl.truststore.location=/root/pki/certs/truststore.p12" >> $conf
-  echo "ssl.truststore.password=$(cat ~/pki/store.pass)" >> $conf
-
-  if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list 2> /dev/null; then
-    result=1
-  else
-    result=0
-  fi
-
-  rm -f $conf
-  return $result
-}
-
-# wrong_ca_rejected：用一張無關的自簽 CA 去驗 MDS 的憑證，要失敗（代表 client 端的鏈驗證有效）
-wrong_ca_rejected() {
-  local junk result
-  junk=$(mktemp)
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=junk -out $junk 2> /dev/null
-
-  if curl -s --max-time 10 --cacert $junk https://kb01.poc.lab:8090/v1/metadata/id -o /dev/null; then
-    result=1
-  else
-    result=0
-  fi
-
-  rm -f $junk
-  return $result
-}
-
-# no_plaintext_password <主機>：那台的設定檔裡沒有明文密碼（在那台執行 EOF 之前的那一段）
-no_plaintext_password() {
-  ssh $1.poc.lab bash -s <<'EOF'
-file=$(ls /etc/confluent/kafka/server.properties /etc/confluent/kafka-rest/kafka-rest.properties /etc/confluent/control-center/control-center.properties 2> /dev/null | head -1)
+  if ssh $h.poc.lab bash -s > /dev/null 2>&1 <<'EOF'; then
+file=$(ls /etc/confluent/kafka/server.properties \
+  /etc/confluent/kafka-rest/kafka-rest.properties \
+  /etc/confluent/control-center/control-center.properties 2> /dev/null | head -1)
 count=$(sudo awk '/^[^#].*(password|credentials|jaas.config)=[^$]/ {c++} END {print c + 0}' $file)
 [ "$count" = 0 ]
 EOF
-}
+    echo "ok   $h properties 沒有明文密碼"
+    ok=$((ok + 1))
+  else
+    echo "FAIL $h properties 沒有明文密碼"
+  fi
+done
 
-# master_key_only_in_service_env：kb01 的 /etc/confluent、/etc/systemd/system 底下，只有 service.env 一個檔有 master key
-master_key_only_in_service_env() {
-  ssh kb01.poc.lab bash -s <<'EOF'
+# 12. kb01 的 /etc/confluent、/etc/systemd/system 底下，只有 service.env 一個檔有 master key
+all=$((all + 1))
+
+if ssh kb01.poc.lab bash -s > /dev/null 2>&1 <<'EOF'; then
 count=$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd/system 2> /dev/null | wc -l)
 [ "$count" = 1 ]
 EOF
-}
+  echo "ok   kb01 磁碟上的 master key 只有 service.env 一個"
+  ok=$((ok + 1))
+else
+  echo "FAIL kb01 磁碟上的 master key 只有 service.env 一個"
+fi
 
-# ssl_dir_is_0750：kb01 的 /etc/confluent/ssl 是 0750
-ssl_dir_is_0750() {
-  ssh kb01.poc.lab '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]'
-}
+# 13. kb01 的 /etc/confluent/ssl 是 0750
+all=$((all + 1))
 
-# cp_server_is_not_a_client：cp-server 只有 serverAuth；拿它當 client 憑證連 C3 的 Prometheus 要被拒，c3-monitoring 則連得上
-cp_server_is_not_a_client() {
-  local eku
-  eku=$(openssl x509 -in ~/pki/certs/cp-server.crt -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' ')
+if ssh kb01.poc.lab '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]' > /dev/null 2>&1; then
+  echo "ok   各主機 /etc/confluent/ssl 是 0750"
+  ok=$((ok + 1))
+else
+  echo "FAIL 各主機 /etc/confluent/ssl 是 0750"
+fi
+```
 
-  if [ "$eku" != TLSWebServerAuthentication ]; then
-    return 1
-  fi
+```out
+ok   kb01 properties 沒有明文密碼
+ok   rest01 properties 沒有明文密碼
+ok   c3-01 properties 沒有明文密碼
+ok   kb01 磁碟上的 master key 只有 service.env 一個
+ok   各主機 /etc/confluent/ssl 是 0750
+```
 
-  if ! curl -sf -m 15 --cacert $ca --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/-/ready; then
-    return 1
-  fi
+憑證用途與 C3 登入，最後印這一組的統計：
 
-  if curl -sf -m 15 --cacert $ca --cert ~/pki/certs/cp-server.crt --key ~/pki/keys/cp-server.key https://c3-01.poc.lab:9090/-/ready; then
-    return 1
-  fi
+```bash
+# 14. cp-server 只有 serverAuth；拿它當 client 憑證連 C3 的 Prometheus 要被拒，svc-ops 則連得上
+#     三件事都要對：passed 從 yes 開始，哪一件不對就改成 no
+all=$((all + 1))
+passed=yes
+ready_url=https://c3-01.poc.lab:9090/-/ready
+eku=$(openssl x509 -in ~/pki/certs/cp-server.crt -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' ')
 
-  return 0
-}
+if [ "$eku" != TLSWebServerAuthentication ]; then
+  passed=no
+fi
 
-# 1. AD 身分（MDS 去 AD 驗帳密）
-check "AD 帳密正確 → MDS 給 token" mds_is 200 alice "$password"
-check "AD 密碼錯 → 401" mds_is 401 alice wrong-password
-check "不存在的帳號 → 401" mds_is 401 nobody "$password"
+if ! curl -sf -m 15 --cacert $ca \
+  --cert ~/pki/certs/svc-ops.crt \
+  --key ~/pki/keys/svc-ops.key \
+  $ready_url > /dev/null 2>&1; then
+  passed=no
+fi
 
-# 2. Kafka 的授權
-check "carol 在自己 prefix 以外建 topic 被拒" carol_create_denied
-check "app-orders 讀 payments.events 被拒" orders_cannot_read_payments
+if curl -sf -m 15 --cacert $ca \
+  --cert ~/pki/certs/cp-server.crt \
+  --key ~/pki/keys/cp-server.key \
+  $ready_url > /dev/null 2>&1; then
+  passed=no
+fi
 
-# 3. 連線方式
-check "REST Proxy 不帶憑證 → 連線被拒" rest_without_cert_refused
-check "REST Proxy 帶非 app 憑證（svc-ops）→ 401" http_is 401 https://rest.poc.lab:8082/v3/clusters --cert ~/pki/certs/svc-ops.crt --key ~/pki/keys/svc-ops.key
-check "CLIENT 9095 不帶 SASL → 失敗" client_listener_without_sasl_fails
-check "JMX exporter 不加密的 HTTP → 連不上" http_is 000 http://kb01.poc.lab:7071/metrics
-check "用無關的 CA 驗 MDS 憑證會被拒（鏈驗證生效）" wrong_ca_rejected
+if [ "$passed" = yes ]; then
+  echo "ok   cp-server 只有 serverAuth，拿它當 client 憑證連 C3 的 Prometheus 被拒（svc-ops 則能連）"
+  ok=$((ok + 1))
+else
+  echo "FAIL cp-server 只有 serverAuth，拿它當 client 憑證連 C3 的 Prometheus 被拒（svc-ops 則能連）"
+fi
 
-# 4. 機敏資料與檔案權限
-for h in kb01 rest01 c3-01; do
-  check "$h properties 沒有明文密碼" no_plaintext_password $h
-done
+# 15. alice 真的從 C3 登入（首頁不經過 MDS，只看 200 抓不到 C3 連不上 MDS 的問題）
+all=$((all + 1))
+c3_login_url=https://c3-01.poc.lab:9021/api/metadata/security/1.0/authenticate
 
-check "kb01 磁碟上的 master key 只有 service.env 一個" master_key_only_in_service_env
-check "各主機 /etc/confluent/ssl 是 0750" ssl_dir_is_0750
-check "cp-server 只有 serverAuth，拿它當 client 憑證連 C3 的 Prometheus 被拒（c3-monitoring 則能連）" cp_server_is_not_a_client
+if [ "$(curl -s -o /dev/null -m 30 -w '%{http_code}' -u "alice:$password" $c3_login_url)" = 200 ]; then
+  echo "ok   alice 能從 C3 登入（C3 連得到 MDS）"
+  ok=$((ok + 1))
+else
+  echo "FAIL alice 能從 C3 登入（C3 連得到 MDS）"
+fi
 
 unset password
 echo "安全：$ok / $all 項通過"
 ```
 
 ```out
-ok   AD 帳密正確 → MDS 給 token
-ok   AD 密碼錯 → 401
-（…）
-安全：16 / 16 項通過
+ok   cp-server 只有 serverAuth，拿它當 client 憑證連 C3 的 Prometheus 被拒（svc-ops 則能連）
+ok   alice 能從 C3 登入（C3 連得到 MDS）
+安全：17 / 17 項通過
 ```
 
 > carol 的群組在第 16 章拿到 `orders.` prefix 的 DeveloperManage，所以她在自己的 prefix 裡是能建 topic 的；反向測試要用她沒有權限的 prefix。
@@ -7821,26 +8357,40 @@ cluster_id=$(curl -s --cacert $ca https://kb01.poc.lab:8090/v1/metadata/id | gre
 message="acceptance-$(date +%s)"   # 這次驗收的訊息，讀回時用它找
 
 # 1. app-orders（SCRAM 直連 9095）寫一筆
-echo "$message" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config ~/conf/app-orders.properties --topic orders.events > /dev/null 2>&1
+echo "$message" | kafka-console-producer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --producer.config ~/conf/app-orders.properties \
+  --topic orders.events > /dev/null 2>&1
 echo "app-orders SCRAM 直連寫入：ok"
 
 # 2. app-orders 讀回自己寫的那筆（從頭讀，最多等 45 秒）
-kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events \
-  --group orders-acceptance --from-beginning --timeout-ms 45000 2> /dev/null | grep -c "$message" | sed 's/^/app-orders 讀回自己寫的：/'
+kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --consumer.config ~/conf/app-orders.properties \
+  --topic orders.events \
+  --group orders-acceptance \
+  --from-beginning \
+  --timeout-ms 45000 2> /dev/null | grep -c "$message" | sed 's/^/app-orders 讀回自己寫的：/'
 
-# rest_post <JSON 本文>：以 app-legacy-billing 的憑證經 LB 寫一筆到 billing.events，印 HTTP 狀態碼
-rest_post() {
-  curl -s --cacert $ca --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' \
-    -X POST -H 'Content-Type: application/json' -d "$1" "https://rest.poc.lab:8082/v3/clusters/$cluster_id/topics/billing.events/records"
-}
-
-# 3. app-legacy-billing 經 LB + REST Proxy（mTLS）寫一筆
+# 3. app-legacy-billing 用自己的憑證經 LB + REST Proxy（mTLS）寫一筆到 billing.events，印 HTTP 狀態碼
 body="{\"value\":{\"type\":\"JSON\",\"data\":\"$message-rest\"}}"
-echo "app-legacy-billing 經 LB + REST Proxy（mTLS）寫入：HTTP $(rest_post "$body")"
+echo "app-legacy-billing 經 LB + REST Proxy（mTLS）寫入：HTTP $(curl -s --cacert $ca \
+  --cert ~/pki/certs/app-legacy-billing.crt \
+  --key ~/pki/keys/app-legacy-billing.key \
+  -o /dev/null -w '%{http_code}' \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d "$body" \
+  "https://rest.poc.lab:8082/v3/clusters/$cluster_id/topics/billing.events/records")"
 
 # 4. alice 在 billing.events 讀到那一筆
-kafka-console-consumer --bootstrap-server kb01.poc.lab:9096 --consumer.config ~/conf/client-alice.properties --topic billing.events \
-  --group billing-acceptance --from-beginning --timeout-ms 15000 2> /dev/null | grep -c "$message-rest" | sed 's/^/alice 在 billing.events 看到那筆：/'
+kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9096 \
+  --consumer.config ~/conf/client-alice.properties \
+  --topic billing.events \
+  --group billing-acceptance \
+  --from-beginning \
+  --timeout-ms 15000 2> /dev/null | grep -c "$message-rest" | sed 's/^/alice 在 billing.events 看到那筆：/'
 ```
 
 ```out
@@ -7865,22 +8415,24 @@ podman exec -i lab-ops02-1 bash -s <<'EOF'
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-# kb03_mds：kb03 的 MDS（8090）的 HTTP 狀態碼
-kb03_mds() {
-  curl -s -o /dev/null -w "%{http_code}" https://kb03.poc.lab:8090/v1/metadata/id
-}
+# kb03 的 MDS（8090）網址
+mds_url=https://kb03.poc.lab:8090/v1/metadata/id
 
 # 每 5 秒看一次，最多 24 次
 for i in $(seq 1 24); do
-  if [ "$(kb03_mds)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w "%{http_code}" $mds_url)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-under=$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2> /dev/null | grep -c Partition:)
-echo "kb03 MDS=$(kb03_mds) after ~$((i*5))s; under-replicated=$under"
+under=$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --describe \
+  --under-replicated-partitions 2> /dev/null | grep -c Partition:)
+echo "kb03 MDS=$(curl -s -o /dev/null -w "%{http_code}" $mds_url) after ~$((i*5))s; under-replicated=$under"
 EOF
 ```
 
@@ -7898,22 +8450,21 @@ kb03 MDS=200 after ~20s; under-replicated=0
 ```bash
 cd ~/kafka-lab
 
-# probe <網址>：從操作機打一次，印 HTTP 狀態碼（不驗憑證；連不上時是 000）
-probe() {
-  podman exec lab-ops02-1 curl -sk -o /dev/null -w '%{http_code}' $1
-}
+# 這一塊的檢查都是從操作機打一次，看 HTTP 狀態碼（連不上時是 000）
 
 # 1. 全部停掉（模擬停電），再全部開起來：兩次都要數到 14
 podman compose -f compose.yml stop 2>&1 | grep -c Stopped
 t0=$(date +%s)
 podman compose -f compose.yml start 2>&1 | grep -c Started
 
-# 2. 等 4 台 broker 的 MDS 都回 200：每 10 秒看一次，最多 60 次
+# 2. 等 4 台 broker 的 MDS 都回 200（不驗憑證）：每 10 秒看一次，最多 60 次
 for i in $(seq 1 60); do
   ready=0
 
   for h in kb01 kb02 kb03 kb04; do
-    if [ "$(probe https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
+    url=https://$h.poc.lab:8090/v1/metadata/id
+
+    if [ "$(podman exec lab-ops02-1 curl -sk -o /dev/null -w '%{http_code}' $url)" = 200 ]; then
       ready=$((ready + 1))
     fi
   done
@@ -7927,9 +8478,9 @@ done
 
 echo "4 台 broker 的 MDS 都回 200：$(( $(date +%s) - t0 ))s"
 
-# 3. 等 C3 回 200：每 10 秒看一次，最多 60 次
+# 3. 等 C3 回 200（不驗憑證）：每 10 秒看一次，最多 60 次
 for i in $(seq 1 60); do
-  if [ "$(probe https://c3-01.poc.lab:9021/)" = 200 ]; then
+  if [ "$(podman exec lab-ops02-1 curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
@@ -7938,17 +8489,19 @@ done
 
 echo "C3 回 200：$(( $(date +%s) - t0 ))s"
 
-# rest_via_lb：從操作機經 LB 打 REST Proxy（mTLS，驗銀行根憑證），印 HTTP 狀態碼
-rest_via_lb() {
-  podman exec lab-ops02-1 curl -s --cacert /etc/pki/ca-trust/source/anchors/bank-root.pem --cert /root/pki/certs/app-legacy-billing.crt \
-    --key /root/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters
-}
+# 4. REST 經 LB（mTLS，驗銀行根憑證）
+echo "REST 經 LB：$(podman exec lab-ops02-1 curl -s \
+  --cacert /etc/pki/ca-trust/source/anchors/bank-root.pem \
+  --cert /root/pki/certs/app-legacy-billing.crt \
+  --key /root/pki/keys/app-legacy-billing.key \
+  -o /dev/null -w '%{http_code}' \
+  https://rest.poc.lab:8082/v3/clusters)"
 
-# 4. REST 經 LB
-echo "REST 經 LB：$(rest_via_lb)"
-
-# 5. kb01 的 confluent-server 這 10 分鐘內被 systemd 重試了幾次（要是 0）
-podman exec lab-kb01-1 bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")"'
+# 5. kb01 的 confluent-server 這 10 分鐘內被 systemd 重試了幾次（要是 0）；在 kb01 執行 EOF 之前的那一段
+podman exec -i lab-kb01-1 bash -s <<'EOF'
+count=$(journalctl -u confluent-server --since "-10min" --no-pager | grep -c "Scheduled restart job")
+echo "kb01 confluent-server 重試次數：$count"
+EOF
 ```
 
 ```out
@@ -8002,14 +8555,15 @@ echo
 # 3. 各主機：/tmp 的殘留（JVM 自己的 hsperfdata、lib*.so 等不算）、sudoers.d 裡有哪些檔
 for h in kc01 kb01 rest01 c3-01; do
   ssh $h.poc.lab bash -s <<'EOF'
-leftover=$(ls /tmp | grep -cv "^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.")
+leftover=$(ls /tmp | grep -cv '^hsperfdata\|^systemd-private\|^lib.*\.so\|^com_\|^\.')
 sudoers=$(sudo ls /etc/sudoers.d | tr "\n" ",")
 printf "%s: /tmp 殘留 %s 個；sudoers %s\n" $(hostname) $leftover "$sudoers"
 EOF
 done
 
 # 4. 家目錄底下的金鑰與密碼檔都要是 0600（不是的會一個一個列出來）
-find ~ -maxdepth 2 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2> /dev/null | sed 's/^/權限不是 0600：/'
+find ~ -maxdepth 2 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2> /dev/null \
+  | sed 's/^/權限不是 0600：/'
 echo "收尾檢查完成"
 ```
 
@@ -8046,37 +8600,55 @@ kc01: /tmp 殘留 0 個；sudoers cpuser,cpuser-ops,
 
 @role 小安 | ops02 | root
 
-先模擬一次緊急使用（用 `~/secrets/kafka-admin.pass` 從 9095 登入），再換密碼：新密碼先寫暫存檔，叢集改成功才換掉 `~/secrets/kafka-admin.pass`。`kafka-configs` 出錯時會把整串設定（含密碼）印出來，所以它的輸出一律丟掉，結果用 `--describe` 和實際登入確認：
+先模擬一次緊急使用：用 `~/secrets/kafka-admin.pass` 以 `kafka-admin` 從 9095 登入、列 topic（連線設定借 app-orders 那一份，帳密那一行換掉）：
+
+```bash
+export JAVA_HOME=/opt/java/current
+export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+tmp=$(mktemp -d)   # 暫存目錄：連線設定放這裡，最後刪掉
+login_module=org.apache.kafka.common.security.scram.ScramLoginModule
+
+# 1. 連線設定：app-orders 那一份，帳密換成 kafka-admin 目前的密碼
+password=$(cat ~/secrets/kafka-admin.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
+echo "sasl.jaas.config=$login_module required username=\"kafka-admin\" password=\"$password\";" >> $tmp/c.properties
+unset password
+
+# 2. 從 9095 列 topic，看登不登得進
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
+  result=登入成功
+else
+  result=被拒
+fi
+
+echo "緊急使用（目前的密碼）：$result"
+
+rm -rf $tmp
+```
+
+```out
+緊急使用（目前的密碼）：登入成功
+```
+
+再換密碼：新密碼先寫暫存檔，叢集改成功才換掉 `~/secrets/kafka-admin.pass`。`kafka-configs` 出錯時會把整串設定（含密碼）印出來，所以它的輸出一律丟掉，結果用 `--describe` 和實際登入確認：
 
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 BS=kb01.poc.lab:9094
 tmp=$(mktemp -d)   # 暫存目錄：新舊密碼與連線設定都放這裡，最後刪掉
+login_module=org.apache.kafka.common.security.scram.ScramLoginModule
 
-# admin_login <密碼檔>：用這個密碼以 kafka-admin 從 9095 列 topic，印「登入成功」或「被拒」
-#   連線設定借 app-orders 那一份，帳密那一行換掉
-admin_login() {
-  grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
-  echo "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-admin\" password=\"$(cat $1)\";" >> $tmp/c.properties
-
-  if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
-    echo 登入成功
-  else
-    echo 被拒
-  fi
-}
-
-# 1. 模擬一次緊急使用（目前的密碼）
-echo "緊急使用（目前的密碼）：$(admin_login ~/secrets/kafka-admin.pass)"
-
-# 2. 留一份舊密碼，產生新密碼（0600）
+# 1. 留一份舊密碼，產生新密碼（0600）
 cp -p ~/secrets/kafka-admin.pass $tmp/old.pass
 install -m 0600 /dev/null $tmp/new.pass
 openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > $tmp/new.pass
 
-# 3. 叢集改成功，才換掉 ~/secrets/kafka-admin.pass（kafka-configs 出錯會把密碼印出來，所以輸出全丟）
-if kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name kafka-admin \
+# 2. 叢集改成功，才換掉 ~/secrets/kafka-admin.pass（kafka-configs 出錯會把密碼印出來，所以輸出全丟）
+if kafka-configs \
+  --bootstrap-server $BS \
+  --command-config ~/conf/client-admin.properties \
+  --alter --entity-type users --entity-name kafka-admin \
   --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat $tmp/new.pass)]" > /dev/null 2>&1; then
   install -m 0600 $tmp/new.pass ~/secrets/kafka-admin.pass
 else
@@ -8085,15 +8657,41 @@ else
   false
 fi
 
-# 4. 確認：SCRAM 憑據還在；新密碼登得進、舊密碼被拒
-echo "kafka-admin: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name kafka-admin 2> /dev/null | grep -o 'SCRAM-SHA-512=[^ ]*')"
-echo "換完：新密碼 $(admin_login ~/secrets/kafka-admin.pass)；舊密碼 $(admin_login $tmp/old.pass)"
+# 3. 確認 SCRAM 憑據還在
+echo "kafka-admin: $(kafka-configs \
+  --bootstrap-server $BS \
+  --command-config ~/conf/client-admin.properties \
+  --describe --entity-type users --entity-name kafka-admin 2> /dev/null | grep -o 'SCRAM-SHA-512=[^ ]*')"
+
+# 4. 新密碼要登得進
+password=$(cat ~/secrets/kafka-admin.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
+echo "sasl.jaas.config=$login_module required username=\"kafka-admin\" password=\"$password\";" >> $tmp/c.properties
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
+  new_result=登入成功
+else
+  new_result=被拒
+fi
+
+# 5. 舊密碼要被拒
+password=$(cat $tmp/old.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
+echo "sasl.jaas.config=$login_module required username=\"kafka-admin\" password=\"$password\";" >> $tmp/c.properties
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
+  old_result=登入成功
+else
+  old_result=被拒
+fi
+
+unset password
+echo "換完：新密碼 $new_result；舊密碼 $old_result"
 
 rm -rf $tmp
 ```
 
 ```out
-緊急使用（目前的密碼）：登入成功
 kafka-admin: SCRAM-SHA-512=iterations=8192
 換完：新密碼 登入成功；舊密碼 被拒
 ```
@@ -8130,8 +8728,11 @@ cp -p ~/secrets/master.key ~/secrets/master.key.bak
 
 # 2. rotate：給目前的 master key（環境變數）與舊 passphrase，換成新 passphrase 算出的新 master key（寫回 master.key）
 export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)
-confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "$(cat ~/secrets/sp-passphrase-new.txt)" \
-  --local-secrets-file ~/secrets/security.properties -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key
+confluent secret file rotate --master-key \
+  --passphrase "$(cat ~/secrets/sp-passphrase.txt)" \
+  --passphrase-new "$(cat ~/secrets/sp-passphrase-new.txt)" \
+  --local-secrets-file ~/secrets/security.properties \
+  -o yaml | awk '/master_key/{print $2}' > ~/secrets/master.key
 unset CONFLUENT_SECURITY_MASTER_KEY
 
 # CLI 重寫的 security.properties 也保持只有 root 讀得到
@@ -8196,7 +8797,7 @@ cat ~/secrets/master-key.custody
 
 @role 小安 | ops02 | root
 
-然後照 15.5 再滾動重啟一次（指令相同），每台起得來就代表新 master key 解得開：
+然後照 15.5 再滾動重啟一次（指令相同），每台起得來就代表新 master key 解得開。先是 controller 和 broker：
 
 ```bash
 # 1. controller：一台一台重啟，等到 active（在那台每 2 秒看一次，最多 30 次）
@@ -8216,51 +8817,20 @@ echo "$(hostname) $(systemctl is-active confluent-server)"
 EOF
 done
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# c3_code：C3 畫面的 HTTP 狀態碼
-c3_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
-
-# 2. broker：一台一台重啟，等 MDS 回 200（每 5 秒看一次，最多 60 次）
+# 2. broker：一台一台重啟，等 MDS（8090）回 200（每 5 秒看一次，最多 60 次）
 for h in kb01 kb02 kb03 kb04; do
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h)"
+  echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
-
-# 3. C3：重啟，等畫面回 200（每 5 秒看一次，最多 36 次）
-ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'
-
-for i in $(seq 1 36); do
-  if [ "$(c3_code)" = 200 ]; then
-    break
-  fi
-
-  sleep 5
-done
-
-echo "c3 ui=$(c3_code)"
-
-# 4. alice 用 AD 帳密登入 MDS（MDS 要用新 master key 解出的 AD 查詢密碼）
-password=$(cat ~/secrets/ad-test-users.pass)
-echo "alice login after master key rotation: $(curl -sk -u alice:$password -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
-unset password
-
-# 5. 都起得來，回滾用的 .bak 才刪
-rm -f ~/secrets/security.properties.bak ~/secrets/master.key.bak
 ```
 
 ```out
@@ -8268,6 +8838,36 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
+```
+
+再來是 C3，最後用 alice 確認 MDS 解得開 AD 查詢密碼；都起得來才刪回滾用的 `.bak`：
+
+```bash
+# 1. C3：重啟，等畫面回 200（每 5 秒看一次，最多 36 次）
+ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'
+
+for i in $(seq 1 36); do
+  if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "c3 ui=$(curl -sk -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+
+# 2. alice 用 AD 帳密登入 MDS（MDS 要用新 master key 解出的 AD 查詢密碼）
+password=$(cat ~/secrets/ad-test-users.pass)
+echo "alice login after master key rotation: $(curl -sk -o /dev/null -w '%{http_code}' \
+  -u "alice:$password" \
+  https://kb01.poc.lab:8090/security/1.0/authenticate)"
+unset password
+
+# 3. 都起得來，回滾用的 .bak 才刪
+rm -f ~/secrets/security.properties.bak ~/secrets/master.key.bak
+```
+
+```out
 c3 ui=200
 alice login after master key rotation: 200
 ```
@@ -8334,15 +8934,27 @@ tmp=$(mktemp -d)
 cp ~/secrets/security.properties $tmp/s
 export CONFLUENT_SECURITY_MASTER_KEY=$(cat ~/secrets/master.key)
 
+# 這次測試用的 passphrase（目前的、錯的、兩次測試各自的新值）
+current_passphrase=$(cat ~/secrets/sp-passphrase.txt)
+wrong_passphrase=wrong-$(openssl rand -hex 8)
+new_passphrase_1=check-$(openssl rand -hex 8)
+new_passphrase_2=check-$(openssl rand -hex 8)
+
 # 1. 用目前的 passphrase 輪替：要成功（輸出裡有 Save the master key）
-ok=$(confluent secret file rotate --master-key --passphrase "$(cat ~/secrets/sp-passphrase.txt)" --passphrase-new "check-$(openssl rand -hex 8)" \
-  --local-secrets-file $tmp/s -o yaml 2>&1 < /dev/null | awk '/Save the master key/ {c++} END {print c + 0}')
+ok=$(confluent secret file rotate --master-key \
+  --passphrase "$current_passphrase" \
+  --passphrase-new "$new_passphrase_1" \
+  --local-secrets-file $tmp/s \
+  -o yaml 2>&1 < /dev/null | awk '/Save the master key/ {c++} END {print c + 0}')
 
 # 2. 用錯的 passphrase 輪替：要被拒（輸出裡有 incorrect master key passphrase）
-bad=$(confluent secret file rotate --master-key --passphrase "wrong-$(openssl rand -hex 8)" --passphrase-new "check-$(openssl rand -hex 8)" \
-  --local-secrets-file $tmp/s -o yaml 2>&1 < /dev/null | awk '/incorrect master key passphrase/ {c++} END {print c + 0}')
+bad=$(confluent secret file rotate --master-key \
+  --passphrase "$wrong_passphrase" \
+  --passphrase-new "$new_passphrase_2" \
+  --local-secrets-file $tmp/s \
+  -o yaml 2>&1 < /dev/null | awk '/incorrect master key passphrase/ {c++} END {print c + 0}')
 
-unset CONFLUENT_SECURITY_MASTER_KEY
+unset CONFLUENT_SECURITY_MASTER_KEY current_passphrase wrong_passphrase new_passphrase_1 new_passphrase_2
 rm -rf $tmp
 
 # 3. 結果：兩個都要是「是」
@@ -8380,27 +8992,17 @@ AD 團隊在 AD 改密碼，把新密碼交給小安（交付方式同 5.3，不
 ```bash
 # 在 ad01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
 podman exec -i lab-ad01-1 bash -e -s <<'EOF'
-# good_password <密碼>：大寫、小寫、數字至少各有一個才算合格（同 0.6）
-good_password() {
-  if ! echo "$1" | grep -q '[A-Z]'; then
-    return 1
-  fi
-
-  if ! echo "$1" | grep -q '[a-z]'; then
-    return 1
-  fi
-
-  if ! echo "$1" | grep -q '[0-9]'; then
-    return 1
-  fi
-
-  return 0
-}
-
-# 1. 新密碼：20 個英數字，不合格就重產
-p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
-while ! good_password "$p"; do
+# 1. 新密碼：20 個英數字；大寫、小寫、數字至少各有一個才算合格（同 0.6），不合格就重產
+while true; do
   p=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)
+
+  upper=$(echo "$p" | tr -dc 'A-Z' | wc -c)
+  lower=$(echo "$p" | tr -dc 'a-z' | wc -c)
+  digit=$(echo "$p" | tr -dc '0-9' | wc -c)
+
+  if [ "$upper" -gt 0 ] && [ "$lower" -gt 0 ] && [ "$digit" -gt 0 ]; then
+    break
+  fi
 done
 
 # 2. 改 AD 的密碼，新密碼存進 /root/secrets/bind.pass（交給平台用）
@@ -8425,7 +9027,8 @@ AD: password changed
 podman exec lab-ops02-1 cp -p /root/secrets/ldap-bind.pass /root/secrets/ldap-bind.prev.pass
 
 # 2. ad01 上的新密碼直接送進操作機（0600），不經過任何中間資料夾
-podman exec lab-ad01-1 cat /root/secrets/bind.pass | podman exec -i lab-ops02-1 install -m 0600 /dev/stdin /root/secrets/ldap-bind.pass
+podman exec lab-ad01-1 cat /root/secrets/bind.pass \
+  | podman exec -i lab-ops02-1 install -m 0600 /dev/stdin /root/secrets/ldap-bind.pass
 
 podman exec lab-ops02-1 bash -c 'echo "ldap-bind.pass: $(wc -c < /root/secrets/ldap-bind.pass) chars"'
 ```
@@ -8451,13 +9054,17 @@ failed=no
 
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
   # 2. 這台設定檔的參照用的 key 名（${securepass:…security.properties:<key 名>/欄位} 裡的 <key 名>），例 kb01.server.properties
-  key=$(ssh $h.poc.lab "sudo grep -o 'security.properties:[^/]*' /etc/confluent/kafka/server.properties | head -1 | cut -d: -f2")
+  key=$(ssh $h.poc.lab \
+    "sudo grep -o 'security.properties:[^/]*' /etc/confluent/kafka/server.properties | head -1 | cut -d: -f2")
 
   # 3. 用同名的檔案，只更新 AD 查詢密碼這一個欄位的密文
   cp $h.server.properties $tmp/$key
 
-  if confluent secret file update --config-file $tmp/$key --local-secrets-file ~/secrets/security.properties \
-    --remote-secrets-file /etc/confluent/secrets/security.properties --config "ldap.java.naming.security.credentials=$new_password" > /dev/null; then
+  if confluent secret file update \
+    --config-file $tmp/$key \
+    --local-secrets-file ~/secrets/security.properties \
+    --remote-secrets-file /etc/confluent/secrets/security.properties \
+    --config "ldap.java.naming.security.credentials=$new_password" > /dev/null; then
     echo "$h: key=$key"
   else
     echo "$h: update FAILED"
@@ -8491,13 +9098,14 @@ changed lines: 7, of which ldap credentials: 7；總行數 170 → 170（要相�
 
 > 新密碼會短暫出現在這台操作機的行程參數裡（`--config` 只吃命令列）。能登入操作機的只有經 PSMP 進來的人員（root，全程錄影），可以接受；介意的話就改走 15.3 整批重新加密。
 
-`security.properties` 每台都是同一份，所以 10 台都派送（REST、C3 那幾行沒變，不用重啟）；只滾動重啟 controller 和 broker，再用 alice 的 AD 帳密登入 MDS 證明 bind 成功（MDS 要先用查詢帳號到 AD 找到 alice，才能驗她的密碼）：
+`security.properties` 每台都是同一份，所以 10 台都派送（REST、C3 那幾行沒變，不用重啟）；只滾動重啟 controller 和 broker：
 
 ```bash
 # 1. 密文檔派送到 10 台
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
   scp -q ~/secrets/security.properties $h.poc.lab:/tmp/
-  ssh $h.poc.lab 'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties'
+  ssh $h.poc.lab \
+    'sudo install -o root -g confluent -m 0640 /tmp/security.properties /etc/confluent/secrets/security.properties'
   ssh $h.poc.lab 'rm -f /tmp/security.properties'
 done
 
@@ -8518,43 +9126,20 @@ echo "$(hostname) $(systemctl is-active confluent-server)"
 EOF
 done
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# 3. broker：一台一台重啟，等 MDS 回 200（每 5 秒看一次，最多 60 次）
+# 3. broker：一台一台重啟，等 MDS（8090）回 200（每 5 秒看一次，最多 60 次）
 for h in kb01 kb02 kb03 kb04; do
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h)"
+  echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
-
-# 4. alice 用 AD 帳密登入 MDS（MDS 先用新的查詢密碼到 AD 找到 alice，才能驗她的密碼）
-password=$(cat ~/secrets/ad-test-users.pass)
-echo "換密碼後 alice 登入 MDS：$(curl -sk -u alice:$password -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
-unset password
-
-# 5. kb01：這次啟動以來沒有 LDAP 錯誤；設定檔裡 bind 的欄位仍是密文參照（在 kb01 執行 EOF 之前的那一段）
-ssh kb01.poc.lab bash -s <<'EOF'
-since=$(systemctl show -p ActiveEnterTimestamp --value confluent-server)
-errors=$(sudo journalctl -u confluent-server --since "$since" --no-pager 2> /dev/null | grep -ci "javax.naming\|LDAP search failed")
-echo "kb01 ldap auth errors since restart: $errors"
-
-refs=$(sudo grep -c '^ldap.java.naming.security.credentials *= *\${securepass:' /etc/confluent/kafka/server.properties)
-echo "kb01 bind 欄位仍是密文參照：$refs"
-EOF
-
-# 6. 都正常，回滾用的 .bak 才刪
-rm -f ~/secrets/security.properties.bak
 ```
 
 ```out
@@ -8562,6 +9147,34 @@ kc01 active
 （3 行）
 kb01 MDS=200
 （4 行）
+```
+
+再用 alice 的 AD 帳密登入 MDS 證明 bind 成功（MDS 要先用查詢帳號到 AD 找到 alice，才能驗她的密碼）；都正常才刪回滾用的 `.bak`：
+
+```bash
+# 1. alice 用 AD 帳密登入 MDS（MDS 先用新的查詢密碼到 AD 找到 alice，才能驗她的密碼）
+password=$(cat ~/secrets/ad-test-users.pass)
+echo "換密碼後 alice 登入 MDS：$(curl -sk -o /dev/null -w '%{http_code}' \
+  -u "alice:$password" \
+  https://kb01.poc.lab:8090/security/1.0/authenticate)"
+unset password
+
+# 2. kb01：這次啟動以來沒有 LDAP 錯誤；設定檔裡 bind 的欄位仍是密文參照（在 kb01 執行 EOF 之前的那一段）
+ssh kb01.poc.lab bash -s <<'EOF'
+since=$(systemctl show -p ActiveEnterTimestamp --value confluent-server)
+errors=$(sudo journalctl -u confluent-server --since "$since" --no-pager 2> /dev/null \
+  | grep -ci "javax.naming\|LDAP search failed")
+echo "kb01 ldap auth errors since restart: $errors"
+
+refs=$(sudo grep -c '^ldap.java.naming.security.credentials *= *\${securepass:' /etc/confluent/kafka/server.properties)
+echo "kb01 bind 欄位仍是密文參照：$refs"
+EOF
+
+# 3. 都正常，回滾用的 .bak 才刪
+rm -f ~/secrets/security.properties.bak
+```
+
+```out
 換密碼後 alice 登入 MDS：200
 kb01 ldap auth errors since restart: 0
 kb01 bind 欄位仍是密文參照：1
@@ -8631,7 +9244,10 @@ echo "探針已開始"
 cd /secure/ssh
 
 # 要換的 12 個登入對象：每台的 cpuser，加上 repo01 的 repodeploy
-targets="cpuser@ops02 cpuser@kc01 cpuser@kc02 cpuser@kc03 cpuser@kb01 cpuser@kb02 cpuser@kb03 cpuser@kb04 cpuser@rest01 cpuser@rest02 cpuser@c3-01 repodeploy@repo01"
+targets="cpuser@ops02"
+targets="$targets cpuser@kc01 cpuser@kc02 cpuser@kc03"
+targets="$targets cpuser@kb01 cpuser@kb02 cpuser@kb03 cpuser@kb04"
+targets="$targets cpuser@rest01 cpuser@rest02 cpuser@c3-01 repodeploy@repo01"
 old_comment=$(awk '{print $3}' cpuser_ed25519.pub)
 
 # 1. 新金鑰對（註解帶日期與時分）
@@ -8639,7 +9255,7 @@ ssh-keygen -q -t ed25519 -N '' -C "cpuser-ops-$(date +%Y%m%d-%H%M)" -f cpuser_ed
 chmod 0400 cpuser_ed25519.new
 
 # 2. 新公鑰行：from= 照操作機自己 authorized_keys 裡的那一段；用舊金鑰登入，加到每一台的最後面（舊的保留）
-from=$(sed -n 's/^\(from="[^"]*"\) .*/\1/p' /home/cpuser/.ssh/authorized_keys | head -1)
+from=$(grep -o '^from="[^"]*"' /home/cpuser/.ssh/authorized_keys | head -1)
 new_line="$from $(cat cpuser_ed25519.new.pub)"
 
 for t in $targets; do
@@ -8651,7 +9267,9 @@ done
 # 3. 用新金鑰逐台試登入（-F /dev/null：不讀 ssh config，不然 config 裡的舊金鑰會讓測試假通過）
 ok=0
 for t in $targets; do
-  if ssh -F /dev/null -i cpuser_ed25519.new -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new $t.poc.lab true 2> /dev/null; then
+  if ssh -F /dev/null -i cpuser_ed25519.new \
+    -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    $t.poc.lab true 2> /dev/null; then
     ok=$((ok + 1))
   fi
 done
@@ -8691,7 +9309,10 @@ stat -c '%a %n' cpuser_ed25519*
 ```bash
 cd /secure/ssh
 
-targets="cpuser@ops02 cpuser@kc01 cpuser@kc02 cpuser@kc03 cpuser@kb01 cpuser@kb02 cpuser@kb03 cpuser@kb04 cpuser@rest01 cpuser@rest02 cpuser@c3-01 repodeploy@repo01"
+targets="cpuser@ops02"
+targets="$targets cpuser@kc01 cpuser@kc02 cpuser@kc03"
+targets="$targets cpuser@kb01 cpuser@kb02 cpuser@kb03 cpuser@kb04"
+targets="$targets cpuser@rest01 cpuser@rest02 cpuser@c3-01 repodeploy@repo01"
 old_comment=$(awk '{print $3}' cpuser_ed25519.old.pub)
 
 # 1. 用新金鑰登入每一台，刪掉舊公鑰那一行（以註解比對到行尾）
@@ -8702,7 +9323,8 @@ for t in $targets; do
 done
 
 # 2. 舊金鑰要被拒
-refused=$(ssh -F /dev/null -i cpuser_ed25519.old -o IdentitiesOnly=yes -o BatchMode=yes cpuser@kb01.poc.lab true 2>&1 | grep -c 'Permission denied')
+refused=$(ssh -F /dev/null -i cpuser_ed25519.old -o IdentitiesOnly=yes -o BatchMode=yes \
+  cpuser@kb01.poc.lab true 2>&1 | grep -c 'Permission denied')
 
 # 3. 每台剩幾行金鑰（統計成「台數 行數」，要是 12 1）
 rm -f /tmp/key-lines.txt
@@ -8757,30 +9379,44 @@ echo "探針：換金鑰全程連線 $n 次，失敗 $f 次（0 次，或 1 次�
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-# scram_login <帳號> <密碼>：用這組帳密從 9095 列 topic，印「成功」或「被拒」
-#   連線設定借 app-orders 那一份，帳密那一行換掉（暫存檔用完即刪）
-scram_login() {
-  local conf
-  conf=$(mktemp)
-  grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
-  echo "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"$1\" password=\"$2\";" >> $conf
+login_module=org.apache.kafka.common.security.scram.ScramLoginModule
+conf=$(mktemp)   # 連線設定借 app-orders 那一份，帳密那一行換掉（暫存檔用完即刪）
 
-  if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
-    echo 成功
-  else
-    echo 被拒
-  fi
-
-  rm -f $conf
-}
-
-# 1. 現況：應用程式用哪個帳號；兩個帳號都登得進
+# 1. 現況：應用程式用哪個帳號
 using=$(grep -o 'username="[^"]*"' ~/conf/app-orders.properties)
-echo "應用程式用 $using；-a 登入：$(scram_login app-orders-a "$(cat ~/secrets/app-orders-a.pass)")；-b 登入：$(scram_login app-orders-b "$(cat ~/secrets/app-orders-b.pass)")"
 
-# 2. 背景用 -a 持續寫入（每秒 5 筆、共 600 筆），代表正在跑的應用程式
-nohup kafka-producer-perf-test --topic orders.events --num-records 600 --throughput 5 --record-size 100 \
-  --producer.config ~/conf/app-orders.properties --producer-props bootstrap.servers=kb01.poc.lab:9095 acks=all > /tmp/ab-load.log 2>&1 &
+# 2. -a 登得進嗎：用這組帳密從 9095 列 topic
+password=$(cat ~/secrets/app-orders-a.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
+echo "sasl.jaas.config=$login_module required username=\"app-orders-a\" password=\"$password\";" >> $conf
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
+  a_result=成功
+else
+  a_result=被拒
+fi
+
+# 3. -b 登得進嗎：同上
+password=$(cat ~/secrets/app-orders-b.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
+echo "sasl.jaas.config=$login_module required username=\"app-orders-b\" password=\"$password\";" >> $conf
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
+  b_result=成功
+else
+  b_result=被拒
+fi
+
+unset password
+rm -f $conf
+echo "應用程式用 $using；-a 登入：$a_result；-b 登入：$b_result"
+
+# 4. 背景用 -a 持續寫入（每秒 5 筆、共 600 筆），代表正在跑的應用程式
+nohup kafka-producer-perf-test \
+  --topic orders.events \
+  --num-records 600 --throughput 5 --record-size 100 \
+  --producer.config ~/conf/app-orders.properties \
+  --producer-props bootstrap.servers=kb01.poc.lab:9095 acks=all > /tmp/ab-load.log 2>&1 &
 sleep 5
 echo "背景寫入已開始（-a）"
 ```
@@ -8795,22 +9431,7 @@ echo "背景寫入已開始（-a）"
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-
-# scram_login <帳號> <密碼>：同上一塊
-scram_login() {
-  local conf
-  conf=$(mktemp)
-  grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
-  echo "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"$1\" password=\"$2\";" >> $conf
-
-  if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
-    echo 成功
-  else
-    echo 被拒
-  fi
-
-  rm -f $conf
-}
+login_module=org.apache.kafka.common.security.scram.ScramLoginModule
 
 # 1. 舊密碼留一份、產生新密碼（放在暫存目錄，0600）
 tmp=$(mktemp -d)
@@ -8819,7 +9440,10 @@ install -m 0600 /dev/null $tmp/new.pass
 openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > $tmp/new.pass
 
 # 2. 叢集改成功，才換掉 ~/secrets/app-orders-b.pass（kafka-configs 出錯會把密碼印出來，所以輸出全丟）
-if kafka-configs --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name app-orders-b \
+if kafka-configs \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --alter --entity-type users --entity-name app-orders-b \
   --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat $tmp/new.pass)]" > /dev/null 2>&1; then
   install -m 0600 $tmp/new.pass ~/secrets/app-orders-b.pass
 else
@@ -8828,10 +9452,40 @@ else
   false
 fi
 
-# 3. 驗三件事：-b 新密碼登得進、舊密碼被拒、-a 不受影響
-new_result=$(scram_login app-orders-b "$(cat ~/secrets/app-orders-b.pass)")
-old_result=$(scram_login app-orders-b "$(cat $tmp/old.pass)")
-a_result=$(scram_login app-orders-a "$(cat ~/secrets/app-orders-a.pass)")
+# 3. 驗第一件：-b 新密碼登得進（連線設定借 app-orders 那一份，帳密那一行換掉）
+password=$(cat ~/secrets/app-orders-b.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
+echo "sasl.jaas.config=$login_module required username=\"app-orders-b\" password=\"$password\";" >> $tmp/c.properties
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
+  new_result=成功
+else
+  new_result=被拒
+fi
+
+# 4. 驗第二件：-b 舊密碼被拒
+password=$(cat $tmp/old.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
+echo "sasl.jaas.config=$login_module required username=\"app-orders-b\" password=\"$password\";" >> $tmp/c.properties
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
+  old_result=成功
+else
+  old_result=被拒
+fi
+
+# 5. 驗第三件：-a 不受影響
+password=$(cat ~/secrets/app-orders-a.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
+echo "sasl.jaas.config=$login_module required username=\"app-orders-a\" password=\"$password\";" >> $tmp/c.properties
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
+  a_result=成功
+else
+  a_result=被拒
+fi
+
+unset password
 echo "換完 -b：新密碼 $new_result；舊密碼 $old_result；-a 仍 $a_result"
 
 rm -rf $tmp
@@ -8878,10 +9532,18 @@ unset password store_password
 
 # 3. 用 -b 寫一筆、讀回來
 message="switch-$(date +%s)"
-echo "$message" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config ~/conf/app-orders.properties --topic orders.events > /dev/null 2>&1
+echo "$message" | kafka-console-producer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --producer.config ~/conf/app-orders.properties \
+  --topic orders.events > /dev/null 2>&1
 
-read_back=$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config ~/conf/app-orders.properties --topic orders.events \
-  --group orders-ab-$(date +%s) --from-beginning --max-messages 5000 --timeout-ms 30000 2> /dev/null | grep -c "^$message$")
+group=orders-ab-$(date +%s)
+read_back=$(kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --consumer.config ~/conf/app-orders.properties \
+  --topic orders.events \
+  --group $group \
+  --from-beginning --max-messages 5000 --timeout-ms 30000 2> /dev/null | grep -c "^$message$")
 echo "切到 -b 後寫一筆：ok；讀回：$read_back"
 
 echo "現在應用程式用 $(grep -o 'username="[^"]*"' ~/conf/app-orders.properties)；下次輪替換 -a"
@@ -8936,7 +9598,12 @@ echo "現在應用程式用 $(grep -o 'username="[^"]*"' ~/conf/app-orders.prope
 比對「名稱與私鑰有沒有換」：拿銀行給的新舊兩張（根或中繼）各算一次公鑰雜湊與名稱，名稱相同、雜湊相同就是續簽：
 
 ```
-for f in old-ca.pem new-ca.pem; do echo "$f: $(openssl x509 -in $f -noout -subject -nameopt compat | sed 's/subject=//')  key=$(openssl x509 -in $f -noout -pubkey | sha256sum | cut -c1-12)  到期 $(openssl x509 -in $f -noout -enddate | cut -d= -f2)"; done
+for f in old-ca.pem new-ca.pem; do
+  ca_name=$(openssl x509 -in $f -noout -subject -nameopt compat | sed 's/subject=//')
+  ca_key=$(openssl x509 -in $f -noout -pubkey | sha256sum | cut -c1-12)
+  ca_end=$(openssl x509 -in $f -noout -enddate | cut -d= -f2)
+  echo "$f: $ca_name  key=$ca_key  到期 $ca_end"
+done
 ```
 
 > 實測（2026-10-24，openssl，用 lab 的模擬 CA）：同私鑰續簽的根、同私鑰續簽的中繼、兩者同時，舊 leaf 全部驗得過；根換私鑰而中繼沿用私鑰、由新根重簽時，舊 leaf 配新中繼驗得過新根，但**還沒換鏈的主機（舊 leaf 配舊中繼）在只信新根之後就驗不過**，所以三階段的「拿掉舊根」一定排在每個端點都換好鏈之後。Java 的驗證原理相同，沒有另外實測。
@@ -8950,44 +9617,35 @@ for f in old-ca.pem new-ca.pem; do echo "$f: $(openssl x509 -in $f -noout -subje
 ```bash
 cd ~/pki
 
-# serial_tail <憑證檔>：序號的最後 8 碼
-serial_tail() {
-  openssl x509 -in $1 -noout -serial | cut -d= -f2 | tail -c 9
-}
-
-# days_left <憑證檔>：還有幾天到期
-days_left() {
-  local end
-  end=$(openssl x509 -in $1 -noout -enddate | cut -d= -f2)
-  echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
-}
-
-# served_cert <主機:埠>：那個端點實際出示的憑證，印「序號末 8 碼 CN」（連不上就印空的）
-#   例：served_cert kb01.poc.lab:9095 → F343BC54 cp-server
-served_cert() {
-  local host pem serial cn
-  host=$(echo $1 | cut -d: -f1)
-  pem=$(openssl s_client -connect $1 -servername $host < /dev/null 2> /dev/null | openssl x509 2> /dev/null)
-
-  if [ -z "$pem" ]; then
-    echo ""
-    return
-  fi
-
-  serial=$(echo "$pem" | openssl x509 -noout -serial | cut -d= -f2 | tail -c 9)
-  cn=$(echo "$pem" | openssl x509 -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
-  echo "$serial $cn"
-}
-
 # 1. 操作機上每張憑證的序號（末 8 碼）、還剩幾天
 for name in $(awk '{print $1}' requests.txt); do
-  printf '%-19s serial=%s days=%s\n' $name "$(serial_tail certs/$name.crt)" "$(days_left certs/$name.crt)"
+  serial=$(openssl x509 -in certs/$name.crt -noout -serial | cut -d= -f2 | tail -c 9)
+  end=$(openssl x509 -in certs/$name.crt -noout -enddate | cut -d= -f2)
+  days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+  printf '%-19s serial=%s days=%s\n' $name "$serial" "$days"
 done
 
-# 2. 各端點實際出示的是哪一張
+# 2. 各端點實際出示的是哪一張，印「序號末 8 碼 CN」（連不上就印空的）
+#    例：kb01.poc.lab:9095 → F343BC54 cp-server
 echo "-- 各端點出示的憑證（序號末 8 碼）"
-for ep in kc01.poc.lab:9093 kb01.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest01.poc.lab:7071 c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071; do
-  printf '%-22s %s\n' $ep "$(served_cert $ep)"
+
+endpoints="kc01.poc.lab:9093 kb01.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071"
+endpoints="$endpoints rest01.poc.lab:8082 rest01.poc.lab:7071"
+endpoints="$endpoints c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071"
+
+for ep in $endpoints; do
+  host=$(echo $ep | cut -d: -f1)
+
+  if pem=$(openssl s_client -connect $ep -servername $host < /dev/null 2> /dev/null | openssl x509 2> /dev/null); then
+    serial=$(echo "$pem" | openssl x509 -noout -serial | tail -c 9)
+
+    # 從主旨取 CN，例：subject=CN=cp-server,O=PoC Bank,C=TW → cp-server
+    cn=$(echo "$pem" | openssl x509 -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+
+    printf '%-22s %s\n' $ep "$serial $cn"
+  else
+    printf '%-22s %s\n' $ep ""
+  fi
 done
 ```
 
@@ -8999,7 +9657,7 @@ cp-server           serial=F343BC54 days=364
 kc01.poc.lab:9093      F343BC55 kafka-internal
 kb01.poc.lab:9092      F343BC55 kafka-internal
 kb01.poc.lab:9095      F343BC54 cp-server
-（11 行：controller 的 9093、7071 與 broker 的 9092 是 kafka-internal，其他都是 cp-server）
+（11 行：controller 的 9093、7071 與 broker 的 9092 是 kafka-internal；broker 的 9095、8090、7071 是 cp-server；REST 的 8082、7071 是 svc-rest；C3 的 9021、9090、7071 是 svc-c3）
 ```
 
 > 要求 client 憑證的埠（9092、9093、9090）沒有帶憑證也看得到伺服器出示的那張，握手才會在之後失敗；這裡只看伺服器那一張。
@@ -9018,12 +9676,6 @@ kb01.poc.lab:9095      F343BC54 cp-server
 install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/incoming ~/pki/next/certs
 cd ~/pki
 
-# san_list <逗號分隔的主機名稱>：換成 subjectAltName 的寫法（同 9.1）
-#   例：san_list kc01.poc.lab,kc01 → DNS:kc01.poc.lab,DNS:kc01
-san_list() {
-  echo "$1" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -
-}
-
 # 清單上每一張：新私鑰（0600）與 CSR，放在 next/；有 SAN 的多加一行 subjectAltName
 while read -r name eku san; do
   install -m 0600 /dev/null next/keys/$name.key
@@ -9036,11 +9688,14 @@ while read -r name eku san; do
       -addext "extendedKeyUsage=$eku" \
       -out next/requests/$name.csr
   else
+    # SAN 換成 subjectAltName 的寫法（同 9.1），例：kc01.poc.lab,kc01 → DNS:kc01.poc.lab,DNS:kc01
+    dns_list=DNS:$(echo "$san" | sed 's/,/,DNS:/g')
+
     openssl req -new -key next/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" \
       -addext "basicConstraints=critical,CA:FALSE" \
       -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
       -addext "extendedKeyUsage=$eku" \
-      -addext "subjectAltName=$(san_list "$san")" \
+      -addext "subjectAltName=$dns_list" \
       -out next/requests/$name.csr
   fi
 
@@ -9050,7 +9705,7 @@ done < requests.txt
 
 ```out
 kafka-internal: csr ok
-（9 行）
+（7 行）
 ```
 
 ### 21.2.2 銀行 CA 簽發
@@ -9082,7 +9737,7 @@ podman exec lab-ops02-1 bash -c 'ls /root/pki/next/incoming | wc -l'
 
 ```out
 signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
-（9 行）
+（7 行）
 9
 ```
 
@@ -9094,88 +9749,64 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 
 ```bash
 cd ~/pki/next
+anchor=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
-# split_reply <名稱>：incoming/<名稱>.crt 拆成 leaf（第一張）和 issuers（其餘的中繼 CA）（同 9.3）
-split_reply() {
-  local name=$1
-
-  # 每遇到一行 BEGIN CERTIFICATE 就換寫下一個檔：.part1、.part2…
-  awk -v n=$name 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$name.crt
-
-  mv incoming/$name.part1 incoming/$name.leaf.pem
-  cat incoming/$name.part[2-9] > incoming/$name.issuers.pem 2> /dev/null
-  rm -f incoming/$name.part*
-}
-
-# 以下幾個小函式同 9.3；cert_issuer 是多的一個
-cert_pubkey() {
-  openssl x509 -in "$1" -pubkey -noout | sha256sum | cut -c1-16
-}
-
-key_pubkey() {
-  openssl pkey -in "$1" -pubout 2> /dev/null | sha256sum | cut -c1-16
-}
-
-cert_cn() {
-  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-cert_san() {
-  openssl x509 -in "$1" -noout -ext subjectAltName 2> /dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,
-}
-
-sorted_list() {
-  if [ "$1" = "-" ]; then
-    echo ""
-  else
-    echo "$1" | tr ',' '\n' | sort | paste -sd,
-  fi
-}
-
-cert_days() {
-  local end
-  end=$(openssl x509 -in "$1" -noout -enddate | cut -d= -f2)
-  echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
-}
-
-# cert_issuer <憑證>：簽發者的 CN，例 PoC Bank Issuing CA 01
-cert_issuer() {
-  openssl x509 -in "$1" -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-# 1. 拆開每一張回覆
+# 1. 拆開每一張回覆（同 9.3）：第一行到第一個 END CERTIFICATE 是 leaf，後面全部是中繼 CA（issuers）
 for name in $(awk '{print $1}' ../requests.txt); do
-  split_reply $name
+  sed -n '1,/END CERT/p' incoming/$name.crt > incoming/$name.leaf.pem
+  sed '1,/END CERT/d' incoming/$name.crt > incoming/$name.issuers.pem
 done
 
 # 2. 每一張：私鑰相符、CN、SAN、整條鏈驗得到銀行根憑證；印剩幾天與簽發者
 while read -r name eku san; do
   leaf=incoming/$name.leaf.pem
 
-  if [ "$(cert_pubkey $leaf)" = "$(key_pubkey keys/$name.key)" ]; then
+  # 私鑰：憑證和私鑰算出的公鑰 sha256 前 16 碼一樣 = 是一對
+  cert_pub=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16)
+  key_pub=$(openssl pkey -in keys/$name.key -pubout 2> /dev/null | sha256sum | cut -c1-16)
+
+  if [ "$cert_pub" = "$key_pub" ]; then
     key=ok
   else
     key=MISMATCH
   fi
 
-  cn=$(cert_cn $leaf)
+  # CN，例：subject=CN=kafka-internal,O=PoC Bank,C=TW → kafka-internal
+  cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
   if [ "$cn" = "$name" ]; then
     cn=ok
   fi
 
-  if [ "$(cert_san $leaf)" = "$(sorted_list "$san")" ]; then
+  # SAN：憑證裡的與清單上的都排序、用逗號接起來再比；清單寫 - 表示沒有 SAN
+  #   例：憑證裡的 DNS:kc01.poc.lab, DNS:kc01 → kc01,kc01.poc.lab
+  san_line=$(openssl x509 -in $leaf -noout -ext subjectAltName 2> /dev/null | tail -n +2)
+  san_sorted=$(echo "$san_line" | sed 's/ //g; s/DNS://g; s/,/\n/g' | sort)
+  san_in_cert=$(echo "$san_sorted" | paste -sd,)
+
+  san_wanted=""
+  if [ "$san" != "-" ]; then
+    san_sorted=$(echo "$san" | tr ',' '\n' | sort)
+    san_wanted=$(echo "$san_sorted" | paste -sd,)
+  fi
+
+  if [ "$san_in_cert" = "$san_wanted" ]; then
     san_check=ok
   else
     san_check=DIFF
   fi
 
-  if openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf > /dev/null 2>&1; then
+  if openssl verify -CAfile $anchor -untrusted incoming/$name.issuers.pem $leaf > /dev/null 2>&1; then
     chain=ok
   else
     chain=FAIL
   fi
 
-  printf '%-19s key=%s cn=%s san=%s days=%s chain=%s issuer=%s\n' $name $key "$cn" $san_check "$(cert_days $leaf)" $chain "$(cert_issuer $leaf)"
+  # 還有幾天到期、簽發者的 CN（例 PoC Bank Issuing CA 01）
+  end=$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)
+  days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+  issuer=$(openssl x509 -in $leaf -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+
+  printf '%-19s key=%s cn=%s san=%s days=%s chain=%s issuer=%s\n' $name $key "$cn" $san_check "$days" $chain "$issuer"
 done < ../requests.txt
 ```
 
@@ -9192,7 +9823,13 @@ cd ~/pki/next
 # 1. 每一張：正式的 PEM（leaf＋中繼）與 PKCS12 keystore（0600；密碼和原本的一樣）
 for name in $(awk '{print $1}' ../requests.txt); do
   cat incoming/$name.leaf.pem incoming/$name.issuers.pem > certs/$name.crt
-  openssl pkcs12 -export -name $name -inkey keys/$name.key -in certs/$name.crt -out certs/$name.p12 -passout file:../store.pass
+
+  openssl pkcs12 -export -name $name \
+    -inkey keys/$name.key \
+    -in certs/$name.crt \
+    -out certs/$name.p12 \
+    -passout file:../store.pass
+
   chmod 0600 certs/$name.p12
 done
 
@@ -9200,12 +9837,14 @@ ls certs | wc -l
 
 # 2. 兩張最常用的：舊的與新的序號（末 8 碼）
 for name in kafka-internal cp-server; do
-  echo "$name: old=$(openssl x509 -in ../certs/$name.crt -noout -serial | tail -c 9) new=$(openssl x509 -in certs/$name.crt -noout -serial | tail -c 9)"
+  old_serial=$(openssl x509 -in ../certs/$name.crt -noout -serial | tail -c 9)
+  new_serial=$(openssl x509 -in certs/$name.crt -noout -serial | tail -c 9)
+  echo "$name: old=$old_serial new=$new_serial"
 done
 ```
 
 ```out
-18
+14
 kafka-internal: old=F343BC55 new=F343BC5D
 cp-server: old=F343BC54 new=F343BC5C
 ```
@@ -9218,40 +9857,20 @@ cp-server: old=F343BC54 new=F343BC5C
 |---|---|---|
 | controller | kafka-internal.p12 | confluent-server |
 | broker | kafka-internal.p12、cp-server.p12 | confluent-server |
-| REST Proxy | cp-server.p12、svc-rest.p12 | confluent-kafka-rest |
-| C3 | cp-server.p12、cp-server.crt／.key、c3-monitoring.crt／.key、svc-c3.p12 | prometheus、alertmanager、confluent-control-center |
+| REST Proxy | svc-rest.p12 | confluent-kafka-rest |
+| C3 | svc-c3.p12、svc-c3.crt／.key | prometheus、alertmanager、confluent-control-center |
 
-每台的 7071（JMX exporter，第 17 章）是服務裡的 javaagent，讀同一個 keystore（controller 用 `kafka-internal.p12`，其他用 `cp-server.p12`）：服務重啟就一起換，不用另外處理；換完用 21.1 的指令看 7071 也是新序號。
+每台的 7071（JMX exporter，第 17 章）是服務裡的 javaagent，讀同一個 keystore（controller 用 `kafka-internal.p12`，broker 用 `cp-server.p12`，REST 用 `svc-rest.p12`，C3 用 `svc-c3.p12`）：服務重啟就一起換，不用另外處理；換完用 21.1 的指令看 7071 也是新序號。
 
 一台一台：放檔 → 重啟 → 等健康 → 確認那台出示的是新序號，才做下一台：
 
 ```bash
 cd ~/pki/next
 
-# 新憑證的完整序號，用來比對各端點出示的是不是新的
+# 新憑證的完整序號，用來比對 9093 出示的是不是新的
 new_internal=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2)
-new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
 
-# served_serial <主機:埠>：那個端點實際出示的憑證序號（還沒開始聽時是空的）
-served_serial() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) < /dev/null 2> /dev/null | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2
-}
-
-# new_or_old <主機:埠> <新序號>：出示的是新序號就印 new，否則印 OLD
-new_or_old() {
-  if [ "$(served_serial $1)" = "$2" ]; then
-    echo new
-  else
-    echo OLD
-  fi
-}
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# 1. controller：放新的 kafka-internal.p12、重啟、等 active，再等 9093 出示新序號（在那台執行 EOF 之前的那一段）
+# controller：放新的 kafka-internal.p12、重啟、等 active，再等 9093 出示新序號（在那台執行 EOF 之前的那一段）
 for h in kc01 kc02 kc03; do
   scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/
 
@@ -9269,18 +9888,46 @@ for i in $(seq 1 30); do
 done
 EOF
 
+  # 9093 實際出示的憑證序號（還沒開始聽時是空的）：每 2 秒看一次，最多 30 次
   for i in $(seq 1 30); do
-    if [ "$(served_serial $h.poc.lab:9093)" = "$new_internal" ]; then
+    served=$(openssl s_client -connect $h.poc.lab:9093 -servername $h.poc.lab < /dev/null 2> /dev/null \
+      | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+    if [ "$served" = "$new_internal" ]; then
       break
     fi
 
     sleep 2
   done
 
-  echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$(new_or_old $h.poc.lab:9093 $new_internal)"
-done
+  # 出示的是新序號就印 new，否則印 OLD
+  if [ "$served" = "$new_internal" ]; then
+    result=new
+  else
+    result=OLD
+  fi
 
-# 2. broker：放兩個 p12、重啟、等 MDS 回 200；看 9092（kafka-internal）與 9095（cp-server）
+  echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$result"
+done
+```
+
+```out
+kc01 active 9093=new
+（3 行）
+```
+
+> 陷阱：controller 的 `systemctl is-active` 變成 active 之後，9093 還要幾秒才開始聽。這時去看出示的憑證會拿到空的，看起來像「還是舊的」。所以上面是等到它出示新序號才往下。
+
+broker 接著做，同樣一台健康了才做下一台：
+
+```bash
+cd ~/pki/next
+
+# 新憑證的完整序號，用來比對各端點出示的是不是新的
+new_internal=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2)
+new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
+
+# broker：放兩個 p12、重啟、等 MDS 回 200；看 9092（kafka-internal）與 9095（cp-server）
 for h in kb01 kb02 kb03 kb04; do
   scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/
 
@@ -9293,77 +9940,96 @@ rm -f /tmp/*.p12
 sudo systemctl restart confluent-server
 EOF
 
+  # 等那台 MDS（8090）回 200：每 5 秒看一次，最多 60 次
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h) 9092=$(new_or_old $h.poc.lab:9092 $new_internal) 9095=$(new_or_old $h.poc.lab:9095 $new_server)"
+  # 9092 出示的是新序號就印 new，否則印 OLD
+  served=$(openssl s_client -connect $h.poc.lab:9092 -servername $h.poc.lab < /dev/null 2> /dev/null \
+    | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+  if [ "$served" = "$new_internal" ]; then
+    result_9092=new
+  else
+    result_9092=OLD
+  fi
+
+  # 9095 同樣
+  served=$(openssl s_client -connect $h.poc.lab:9095 -servername $h.poc.lab < /dev/null 2> /dev/null \
+    | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+  if [ "$served" = "$new_server" ]; then
+    result_9095=new
+  else
+    result_9095=OLD
+  fi
+
+  mds_url=https://$h.poc.lab:8090/v1/metadata/id
+  echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' $mds_url) 9092=$result_9092 9095=$result_9095"
 done
 ```
 
 ```out
-kc01 active 9093=new
-（3 行）
 kb01 MDS=200 9092=new 9095=new
 （4 行）
 ```
-
-> 陷阱：controller 的 `systemctl is-active` 變成 active 之後，9093 還要幾秒才開始聽。這時去看出示的憑證會拿到空的，看起來像「還是舊的」。所以上面是等到它出示新序號才往下。
 
 REST Proxy 與 C3（REST 的健康檢查用應用程式的**舊**憑證，證明舊 leaf 在換發期間仍然有效）：
 
 ```bash
 cd ~/pki/next
-new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
-
-# served_serial <主機:埠>：那個端點實際出示的憑證序號（同上一塊）
-served_serial() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) < /dev/null 2> /dev/null | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2
-}
-
-# new_or_old <主機:埠> <新序號>：出示的是新序號就印 new，否則印 OLD
-new_or_old() {
-  if [ "$(served_serial $1)" = "$2" ]; then
-    echo new
-  else
-    echo OLD
-  fi
-}
-
-# c3_code：C3 畫面的 HTTP 狀態碼
-c3_code() {
-  curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
+new_c3=$(openssl x509 -in certs/svc-c3.crt -noout -serial | cut -d= -f2)
 
 # 1. C3：送新的檔，在 c3-01 執行 EOF 之前的那一段：放檔、依序重啟三個服務
-scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/
+scp -q certs/svc-c3.p12 certs/svc-c3.crt keys/svc-c3.key c3-01.poc.lab:/tmp/
 
 ssh c3-01.poc.lab bash -s <<'EOF'
-for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12; do
+for f in svc-c3.p12 svc-c3.crt svc-c3.key; do
   sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/
 done
 
-rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12
+rm -f /tmp/svc-c3.*
 
 for unit in prometheus alertmanager confluent-control-center; do
   sudo systemctl restart $unit
 done
 EOF
 
-# 2. 等畫面回 200（每 5 秒看一次，最多 60 次），看 9021、9090 出示的是不是新的
+# 2. 等畫面回 200（每 5 秒看一次，最多 60 次）
 for i in $(seq 1 60); do
-  if [ "$(c3_code)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "c3-01 UI=$(c3_code) 9021=$(new_or_old c3-01.poc.lab:9021 $new_server) 9090=$(new_or_old c3-01.poc.lab:9090 $new_server)"
+# 3. 看 9021、9090 出示的是不是新的
+served=$(openssl s_client -connect c3-01.poc.lab:9021 -servername c3-01.poc.lab < /dev/null 2> /dev/null \
+  | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+if [ "$served" = "$new_c3" ]; then
+  result_9021=new
+else
+  result_9021=OLD
+fi
+
+served=$(openssl s_client -connect c3-01.poc.lab:9090 -servername c3-01.poc.lab < /dev/null 2> /dev/null \
+  | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+if [ "$served" = "$new_c3" ]; then
+  result_9090=new
+else
+  result_9090=OLD
+fi
+
+c3_url=https://c3-01.poc.lab:9021/
+echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' $c3_url) 9021=$result_9021 9090=$result_9090"
 ```
 
 ```out
@@ -9382,17 +10048,17 @@ LB：rest01（停用） rest02
 
 @role 小安 | ops02 | root
 
-REST Proxy 照 12.1 一台一台換：新的 `cp-server.p12`、`svc-rest.p12` 複製過去、裝好再重啟。
+REST Proxy 照 12.1 一台一台換：新的 `svc-rest.p12` 複製過去、裝好再重啟。
 
 ```bash
 cd ~/pki/next
 
-# 重啟前在那台要執行的指令：放兩個新的 p12、刪掉 /tmp 的副本（set -e：任何一行失敗就不重啟）
+# 重啟前在那台要執行的指令：放新的 p12、刪掉 /tmp 的副本（set -e：任何一行失敗就不重啟）
 before='set -e
-sudo install -o root -g confluent -m 0640 /tmp/cp-server.p12 /tmp/svc-rest.p12 /etc/confluent/ssl/
-rm -f /tmp/cp-server.p12 /tmp/svc-rest.p12'
+sudo install -o root -g confluent -m 0640 /tmp/svc-rest.p12 /etc/confluent/ssl/
+rm -f /tmp/svc-rest.p12'
 
-~/conf/rest-restart.sh rest01 -c "certs/cp-server.p12 certs/svc-rest.p12" -b "$before"
+~/conf/rest-restart.sh rest01 -c "certs/svc-rest.p12" -b "$before"
 ```
 
 ```out
@@ -9418,10 +10084,10 @@ cd ~/pki/next
 
 # 重啟前在那台要執行的指令（同 rest01）
 before='set -e
-sudo install -o root -g confluent -m 0640 /tmp/cp-server.p12 /tmp/svc-rest.p12 /etc/confluent/ssl/
-rm -f /tmp/cp-server.p12 /tmp/svc-rest.p12'
+sudo install -o root -g confluent -m 0640 /tmp/svc-rest.p12 /etc/confluent/ssl/
+rm -f /tmp/svc-rest.p12'
 
-~/conf/rest-restart.sh rest02 -c "certs/cp-server.p12 certs/svc-rest.p12" -b "$before"
+~/conf/rest-restart.sh rest02 -c "certs/svc-rest.p12" -b "$before"
 ```
 
 ```out
@@ -9444,15 +10110,14 @@ LB：rest01 rest02
 
 ```bash
 cd ~/pki/next
-new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
-
-# served_serial <主機:埠>：那個端點實際出示的憑證序號
-served_serial() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) < /dev/null 2> /dev/null | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2
-}
+new_rest=$(openssl x509 -in certs/svc-rest.crt -noout -serial | cut -d= -f2)
 
 for h in rest01 rest02; do
-  if [ "$(served_serial $h.poc.lab:8082)" = "$new_server" ]; then
+  # 那個端點實際出示的憑證序號
+  served=$(openssl s_client -connect $h.poc.lab:8082 -servername $h.poc.lab < /dev/null 2> /dev/null \
+    | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+  if [ "$served" = "$new_rest" ]; then
     echo "$h 8082=new"
   else
     echo "$h 8082=OLD"
@@ -9469,7 +10134,7 @@ rest02 8082=new
 
 @role 小安 | ops02 | root
 
-舊的整份留到 `~/pki/old-<日期時間>/`，新的放回正本位置。操作機自己用的 `svc-ops`、`kafka-internal`（管理 client、quorum 查詢）換成新的之後馬上試一次；緊急身分 `opmenu-breakglass` 要換掉操作機上的 `~/secrets/opmenu-breakglass.pem`（新私鑰＋新憑證鏈，root 0600；選單 91 直接讀這個檔）；`app-legacy-billing` 是應用程式的憑證，**交給應用程式團隊在他們的時段換**（舊的到期前都還有效）：
+舊的整份留到 `~/pki/old-<日期時間>/`，新的放回正本位置。操作機自己用的 `svc-ops`、`kafka-internal`（管理 client、quorum 查詢）換成新的之後馬上試一次；緊急身分 `svc-ops` 要換掉操作機上的 `~/secrets/svc-ops.pem`（新私鑰＋新憑證鏈，root 0600；選單 91 直接讀這個檔）；`app-legacy-billing` 是應用程式的憑證，**交給應用程式團隊在他們的時段換**（舊的到期前都還有效）：
 
 ```bash
 cd ~/pki
@@ -9491,16 +10156,29 @@ rm -rf next
 # 2. 操作機自己用的兩個身分馬上試：svc-ops（管理 client）、kafka-internal（查 quorum）
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2> /dev/null | wc -l) 個 topic"
-echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2> /dev/null | grep -o 'LeaderId: *[0-9]*')"
 
-# rest_with <憑證> <私鑰>：用這組 client 憑證經 LB 打 REST，印 HTTP 狀態碼
-rest_with() {
-  curl -s --cert $1 --key $2 -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters
-}
+echo "svc-ops 管理 client：$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --list 2> /dev/null | wc -l) 個 topic"
 
-# 3. app-legacy-billing：新的（交給應用程式團隊）與舊的（還在效期內）都能用
-echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(rest_with certs/app-legacy-billing.crt keys/app-legacy-billing.key)；舊的（還在效期內）：REST=$(rest_with $old/certs/app-legacy-billing.crt $old/keys/app-legacy-billing.key)"
+echo "kafka-internal 查 quorum：$(kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --status 2> /dev/null | grep -o 'LeaderId: *[0-9]*')"
+
+# 3. app-legacy-billing：新的（交給應用程式團隊）與舊的（還在效期內）都能用；經 LB 打 REST，印 HTTP 狀態碼（同一行）
+rest_url=https://rest.poc.lab:8082/v3/clusters
+
+printf '新的 app-legacy-billing（交給應用程式團隊）：REST=%s' "$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert certs/app-legacy-billing.crt \
+  --key keys/app-legacy-billing.key \
+  $rest_url)"
+
+printf '；舊的（還在效期內）：REST=%s\n' "$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert $old/certs/app-legacy-billing.crt \
+  --key $old/keys/app-legacy-billing.key \
+  $rest_url)"
 ```
 
 ```out
@@ -9509,25 +10187,25 @@ kafka-internal 查 quorum：LeaderId: 1
 新的 app-legacy-billing（交給應用程式團隊）：REST=200；舊的（還在效期內）：REST=200
 ```
 
-緊急身分的 PEM 換了，操作機上的 `~/secrets/opmenu-breakglass.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
+`svc-ops` 的憑證換了，緊急模式用的 PEM 操作機上的 `~/secrets/svc-ops.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
 
 @role 小安 | ops02 | root
 
 ```bash
 # 1. 舊的另存 .prev（到期前都還有效）
-if [ -f ~/secrets/opmenu-breakglass.pem ]; then
-  cp -p ~/secrets/opmenu-breakglass.pem ~/secrets/opmenu-breakglass.prev.pem
+if [ -f ~/secrets/svc-ops.pem ]; then
+  cp -p ~/secrets/svc-ops.pem ~/secrets/svc-ops.prev.pem
 fi
 
 # 2. 新的：私鑰＋憑證鏈接成一個 PEM 檔（0600）
-install -m 0600 /dev/null ~/secrets/opmenu-breakglass.pem
-cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem
+install -m 0600 /dev/null ~/secrets/svc-ops.pem
+cat ~/pki/keys/svc-ops.key ~/pki/certs/svc-ops.crt > ~/secrets/svc-ops.pem
 
-echo "opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/opmenu-breakglass.pem -noout -serial | tail -c 9)"
+echo "svc-ops 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/svc-ops.pem -noout -serial | tail -c 9)"
 ```
 
 ```out
-opmenu-breakglass 已更新，序號末 8 碼 …
+svc-ops 已更新，序號末 8 碼 …
 ```
 
 最後用 21.1 的指令再看一次：每個端點的序號都要是新的。
@@ -9575,7 +10253,8 @@ keyUsage=critical,keyCertSign,cRLSign
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid:always
 EOF
-openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2> /dev/null
+openssl x509 -req -in issuing.csr -CA root.crt -CAkey root.key -CAcreateserial \
+  -days 3650 -sha256 -extfile issuing.ext -out issuing.crt 2> /dev/null
 rm -f issuing.csr issuing.ext
 
 # 3. 簽發腳本複製一份（它用自己所在目錄的簽發 CA）
@@ -9703,21 +10382,20 @@ echo rolling-restart.sh ok
 cp ~/kafka-lab/ca/bundle-g1-g2.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem
 podman restart lab-mon-prometheus > /dev/null
 
-# up_targets：Prometheus 上 health 是 up 的 target 數
-up_targets() {
-  podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null | grep -o '"health":"up"' | wc -l
-}
-
 # 2. 等 10 個 target 都回到 up：每 10 秒看一次，最多 12 次
 for i in $(seq 1 12); do
-  if [ "$(up_targets)" = 10 ]; then
+  # Prometheus 上 health 是 up 的 target 數
+  up=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null \
+    | grep -o '"health":"up"' | wc -l)
+
+  if [ "$up" = 10 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "Prometheus target up：$(up_targets) / 10（約 $((i*10)) 秒）"
+echo "Prometheus target up：$up / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -9738,12 +10416,17 @@ cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem
 # 2. truststore 加一個 alias bank-root-g2：bundle 切開後，/tmp/root-00 是舊根、/tmp/root-01 是新根
 csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}'
 
-if ! keytool -importcert -noprompt -alias bank-root-g2 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass > /dev/null 2>&1; then
+if ! keytool -importcert -noprompt -alias bank-root-g2 -file /tmp/root-01 \
+  -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass > /dev/null 2>&1; then
   echo "（bank-root-g2 沒有加進去：可能已經在 truststore 裡，看下一行）"
 fi
 
 rm -f /tmp/root-*
-echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')"
+aliases=$(keytool -list \
+  -keystore truststore.p12 \
+  -storetype PKCS12 \
+  -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1)
+echo "truststore：$(echo "$aliases" | paste -sd' ')"
 
 # 3. 派送：truststore 到 10 台
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
@@ -9858,8 +10541,15 @@ rm -f images/web/tls/repo-g2.csr
 podman exec lab-repo01-1 systemctl restart httpd
 
 # 3. 從操作機看兩台出示的憑證是誰簽的
+# 3. 從操作機看兩台出示的憑證是誰簽的（在操作機執行 EOF 之前的那一段，$1 是主機:埠）
 for ep in ad01.poc.lab:636 repo01.poc.lab:443; do
-  issuer=$(podman exec lab-ops02-1 bash -c "openssl s_client -connect $ep < /dev/null 2> /dev/null | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")
+  issuer=$(podman exec -i lab-ops02-1 bash -s -- $ep <<'EOF'
+openssl s_client -connect $1 < /dev/null 2> /dev/null \
+  | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname \
+  | sed 's/.*CN=//; s/,.*//'
+EOF
+)
+
   echo "$ep $issuer"
 done
 ```
@@ -9881,12 +10571,6 @@ repo01.poc.lab:443 PoC Bank Issuing CA G2
 install -d -m 0700 ~/pki/next ~/pki/next/keys ~/pki/next/requests ~/pki/next/incoming ~/pki/next/certs
 cd ~/pki
 
-# san_list <逗號分隔的主機名稱>：換成 subjectAltName 的寫法（同 9.1）
-#   例：san_list kc01.poc.lab,kc01 → DNS:kc01.poc.lab,DNS:kc01
-san_list() {
-  echo "$1" | tr ',' '\n' | sed 's/^/DNS:/' | paste -sd, -
-}
-
 # 清單上每一張：新私鑰（0600）與 CSR，放在 next/；有 SAN 的多加一行 subjectAltName
 while read -r name eku san; do
   install -m 0600 /dev/null next/keys/$name.key
@@ -9899,11 +10583,14 @@ while read -r name eku san; do
       -addext "extendedKeyUsage=$eku" \
       -out next/requests/$name.csr
   else
+    # SAN 換成 subjectAltName 的寫法（同 9.1），例：kc01.poc.lab,kc01 → DNS:kc01.poc.lab,DNS:kc01
+    dns_list=DNS:$(echo "$san" | sed 's/,/,DNS:/g')
+
     openssl req -new -key next/keys/$name.key -sha256 -subj "/CN=$name/O=PoC Bank/C=TW" \
       -addext "basicConstraints=critical,CA:FALSE" \
       -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
       -addext "extendedKeyUsage=$eku" \
-      -addext "subjectAltName=$(san_list "$san")" \
+      -addext "subjectAltName=$dns_list" \
       -out next/requests/$name.csr
   fi
 
@@ -9913,7 +10600,7 @@ done < requests.txt
 
 ```out
 kafka-internal: csr ok
-（9 行）
+（7 行）
 ```
 
 **21.2.2 銀行改用 G2 簽**
@@ -9943,7 +10630,7 @@ podman exec lab-ops02-1 bash -c 'ls /root/pki/next/incoming | wc -l'
 
 ```out
 signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billing, O = PoC Bank, C = TW; EKU clientAuth)
-（9 行）
+（7 行）
 9
 ```
 
@@ -9953,88 +10640,64 @@ signed app-legacy-billing.csr -> app-legacy-billing.crt  (CN = app-legacy-billin
 
 ```bash
 cd ~/pki/next
+anchor=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
-# split_reply <名稱>：incoming/<名稱>.crt 拆成 leaf（第一張）和 issuers（其餘的中繼 CA）（同 9.3）
-split_reply() {
-  local name=$1
-
-  # 每遇到一行 BEGIN CERTIFICATE 就換寫下一個檔：.part1、.part2…
-  awk -v n=$name 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$name.crt
-
-  mv incoming/$name.part1 incoming/$name.leaf.pem
-  cat incoming/$name.part[2-9] > incoming/$name.issuers.pem 2> /dev/null
-  rm -f incoming/$name.part*
-}
-
-# 以下幾個小函式同 9.3；cert_issuer 是多的一個
-cert_pubkey() {
-  openssl x509 -in "$1" -pubkey -noout | sha256sum | cut -c1-16
-}
-
-key_pubkey() {
-  openssl pkey -in "$1" -pubout 2> /dev/null | sha256sum | cut -c1-16
-}
-
-cert_cn() {
-  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-cert_san() {
-  openssl x509 -in "$1" -noout -ext subjectAltName 2> /dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,
-}
-
-sorted_list() {
-  if [ "$1" = "-" ]; then
-    echo ""
-  else
-    echo "$1" | tr ',' '\n' | sort | paste -sd,
-  fi
-}
-
-cert_days() {
-  local end
-  end=$(openssl x509 -in "$1" -noout -enddate | cut -d= -f2)
-  echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
-}
-
-# cert_issuer <憑證>：簽發者的 CN，例 PoC Bank Issuing CA 01
-cert_issuer() {
-  openssl x509 -in "$1" -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-# 1. 拆開每一張回覆
+# 1. 拆開每一張回覆（同 9.3）：第一行到第一個 END CERTIFICATE 是 leaf，後面全部是中繼 CA（issuers）
 for name in $(awk '{print $1}' ../requests.txt); do
-  split_reply $name
+  sed -n '1,/END CERT/p' incoming/$name.crt > incoming/$name.leaf.pem
+  sed '1,/END CERT/d' incoming/$name.crt > incoming/$name.issuers.pem
 done
 
 # 2. 每一張：私鑰相符、CN、SAN、整條鏈驗得到銀行根憑證；印剩幾天與簽發者
 while read -r name eku san; do
   leaf=incoming/$name.leaf.pem
 
-  if [ "$(cert_pubkey $leaf)" = "$(key_pubkey keys/$name.key)" ]; then
+  # 私鑰：憑證和私鑰算出的公鑰 sha256 前 16 碼一樣 = 是一對
+  cert_pub=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16)
+  key_pub=$(openssl pkey -in keys/$name.key -pubout 2> /dev/null | sha256sum | cut -c1-16)
+
+  if [ "$cert_pub" = "$key_pub" ]; then
     key=ok
   else
     key=MISMATCH
   fi
 
-  cn=$(cert_cn $leaf)
+  # CN，例：subject=CN=kafka-internal,O=PoC Bank,C=TW → kafka-internal
+  cn=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
   if [ "$cn" = "$name" ]; then
     cn=ok
   fi
 
-  if [ "$(cert_san $leaf)" = "$(sorted_list "$san")" ]; then
+  # SAN：憑證裡的與清單上的都排序、用逗號接起來再比；清單寫 - 表示沒有 SAN
+  #   例：憑證裡的 DNS:kc01.poc.lab, DNS:kc01 → kc01,kc01.poc.lab
+  san_line=$(openssl x509 -in $leaf -noout -ext subjectAltName 2> /dev/null | tail -n +2)
+  san_sorted=$(echo "$san_line" | sed 's/ //g; s/DNS://g; s/,/\n/g' | sort)
+  san_in_cert=$(echo "$san_sorted" | paste -sd,)
+
+  san_wanted=""
+  if [ "$san" != "-" ]; then
+    san_sorted=$(echo "$san" | tr ',' '\n' | sort)
+    san_wanted=$(echo "$san_sorted" | paste -sd,)
+  fi
+
+  if [ "$san_in_cert" = "$san_wanted" ]; then
     san_check=ok
   else
     san_check=DIFF
   fi
 
-  if openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$name.issuers.pem $leaf > /dev/null 2>&1; then
+  if openssl verify -CAfile $anchor -untrusted incoming/$name.issuers.pem $leaf > /dev/null 2>&1; then
     chain=ok
   else
     chain=FAIL
   fi
 
-  printf '%-19s key=%s cn=%s san=%s days=%s chain=%s issuer=%s\n' $name $key "$cn" $san_check "$(cert_days $leaf)" $chain "$(cert_issuer $leaf)"
+  # 還有幾天到期、簽發者的 CN（例 PoC Bank Issuing CA 01）
+  end=$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)
+  days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+  issuer=$(openssl x509 -in $leaf -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+
+  printf '%-19s key=%s cn=%s san=%s days=%s chain=%s issuer=%s\n' $name $key "$cn" $san_check "$days" $chain "$issuer"
 done < ../requests.txt
 ```
 
@@ -10051,7 +10714,13 @@ cd ~/pki/next
 # 1. 每一張：正式的 PEM（leaf＋中繼）與 PKCS12 keystore（0600；密碼和原本的一樣）
 for name in $(awk '{print $1}' ../requests.txt); do
   cat incoming/$name.leaf.pem incoming/$name.issuers.pem > certs/$name.crt
-  openssl pkcs12 -export -name $name -inkey keys/$name.key -in certs/$name.crt -out certs/$name.p12 -passout file:../store.pass
+
+  openssl pkcs12 -export -name $name \
+    -inkey keys/$name.key \
+    -in certs/$name.crt \
+    -out certs/$name.p12 \
+    -passout file:../store.pass
+
   chmod 0600 certs/$name.p12
 done
 
@@ -10059,12 +10728,14 @@ ls certs | wc -l
 
 # 2. 兩張最常用的：舊的與新的序號（末 8 碼）
 for name in kafka-internal cp-server; do
-  echo "$name: old=$(openssl x509 -in ../certs/$name.crt -noout -serial | tail -c 9) new=$(openssl x509 -in certs/$name.crt -noout -serial | tail -c 9)"
+  old_serial=$(openssl x509 -in ../certs/$name.crt -noout -serial | tail -c 9)
+  new_serial=$(openssl x509 -in certs/$name.crt -noout -serial | tail -c 9)
+  echo "$name: old=$old_serial new=$new_serial"
 done
 ```
 
 ```out
-18
+14
 kafka-internal: old=F343BC55 new=F343BC5D
 cp-server: old=F343BC54 new=F343BC5C
 ```
@@ -10074,30 +10745,10 @@ cp-server: old=F343BC54 new=F343BC5C
 ```bash
 cd ~/pki/next
 
-# 新憑證的完整序號，用來比對各端點出示的是不是新的
+# 新憑證的完整序號，用來比對 9093 出示的是不是新的
 new_internal=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2)
-new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
 
-# served_serial <主機:埠>：那個端點實際出示的憑證序號（還沒開始聽時是空的）
-served_serial() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) < /dev/null 2> /dev/null | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2
-}
-
-# new_or_old <主機:埠> <新序號>：出示的是新序號就印 new，否則印 OLD
-new_or_old() {
-  if [ "$(served_serial $1)" = "$2" ]; then
-    echo new
-  else
-    echo OLD
-  fi
-}
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -sk -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# 1. controller：放新的 kafka-internal.p12、重啟、等 active，再等 9093 出示新序號（在那台執行 EOF 之前的那一段）
+# controller：放新的 kafka-internal.p12、重啟、等 active，再等 9093 出示新序號（在那台執行 EOF 之前的那一段）
 for h in kc01 kc02 kc03; do
   scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/
 
@@ -10115,18 +10766,44 @@ for i in $(seq 1 30); do
 done
 EOF
 
+  # 9093 實際出示的憑證序號（還沒開始聽時是空的）：每 2 秒看一次，最多 30 次
   for i in $(seq 1 30); do
-    if [ "$(served_serial $h.poc.lab:9093)" = "$new_internal" ]; then
+    served=$(openssl s_client -connect $h.poc.lab:9093 -servername $h.poc.lab < /dev/null 2> /dev/null \
+      | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+    if [ "$served" = "$new_internal" ]; then
       break
     fi
 
     sleep 2
   done
 
-  echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$(new_or_old $h.poc.lab:9093 $new_internal)"
-done
+  # 出示的是新序號就印 new，否則印 OLD
+  if [ "$served" = "$new_internal" ]; then
+    result=new
+  else
+    result=OLD
+  fi
 
-# 2. broker：放兩個 p12、重啟、等 MDS 回 200；看 9092（kafka-internal）與 9095（cp-server）
+  echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$result"
+done
+```
+
+```out
+kc01 active 9093=new
+（3 行）
+```
+
+broker 接著做，同樣一台健康了才做下一台：
+
+```bash
+cd ~/pki/next
+
+# 新憑證的完整序號，用來比對各端點出示的是不是新的
+new_internal=$(openssl x509 -in certs/kafka-internal.crt -noout -serial | cut -d= -f2)
+new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
+
+# broker：放兩個 p12、重啟、等 MDS 回 200；看 9092（kafka-internal）與 9095（cp-server）
 for h in kb01 kb02 kb03 kb04; do
   scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/
 
@@ -10139,21 +10816,41 @@ rm -f /tmp/*.p12
 sudo systemctl restart confluent-server
 EOF
 
+  # 等那台 MDS（8090）回 200：每 5 秒看一次，最多 60 次
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -sk -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h) 9092=$(new_or_old $h.poc.lab:9092 $new_internal) 9095=$(new_or_old $h.poc.lab:9095 $new_server)"
+  # 9092 出示的是新序號就印 new，否則印 OLD
+  served=$(openssl s_client -connect $h.poc.lab:9092 -servername $h.poc.lab < /dev/null 2> /dev/null \
+    | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+  if [ "$served" = "$new_internal" ]; then
+    result_9092=new
+  else
+    result_9092=OLD
+  fi
+
+  # 9095 同樣
+  served=$(openssl s_client -connect $h.poc.lab:9095 -servername $h.poc.lab < /dev/null 2> /dev/null \
+    | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+  if [ "$served" = "$new_server" ]; then
+    result_9095=new
+  else
+    result_9095=OLD
+  fi
+
+  mds_url=https://$h.poc.lab:8090/v1/metadata/id
+  echo "$h MDS=$(curl -sk -o /dev/null -w '%{http_code}' $mds_url) 9092=$result_9092 9095=$result_9095"
 done
 ```
 
 ```out
-kc01 active 9093=new
-（3 行）
 kb01 MDS=200 9092=new 9095=new
 （4 行）
 ```
@@ -10162,52 +10859,53 @@ kb01 MDS=200 9092=new 9095=new
 
 ```bash
 cd ~/pki/next
-new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
-
-# served_serial <主機:埠>：那個端點實際出示的憑證序號（同上一塊）
-served_serial() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) < /dev/null 2> /dev/null | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2
-}
-
-# new_or_old <主機:埠> <新序號>：出示的是新序號就印 new，否則印 OLD
-new_or_old() {
-  if [ "$(served_serial $1)" = "$2" ]; then
-    echo new
-  else
-    echo OLD
-  fi
-}
-
-# c3_code：C3 畫面的 HTTP 狀態碼
-c3_code() {
-  curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
+new_c3=$(openssl x509 -in certs/svc-c3.crt -noout -serial | cut -d= -f2)
 
 # 1. C3：送新的檔，在 c3-01 執行 EOF 之前的那一段：放檔、依序重啟三個服務
-scp -q certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/
+scp -q certs/svc-c3.p12 certs/svc-c3.crt keys/svc-c3.key c3-01.poc.lab:/tmp/
 
 ssh c3-01.poc.lab bash -s <<'EOF'
-for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12; do
+for f in svc-c3.p12 svc-c3.crt svc-c3.key; do
   sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/
 done
 
-rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12
+rm -f /tmp/svc-c3.*
 
 for unit in prometheus alertmanager confluent-control-center; do
   sudo systemctl restart $unit
 done
 EOF
 
-# 2. 等畫面回 200（每 5 秒看一次，最多 60 次），看 9021、9090 出示的是不是新的
+# 2. 等畫面回 200（每 5 秒看一次，最多 60 次）
 for i in $(seq 1 60); do
-  if [ "$(c3_code)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "c3-01 UI=$(c3_code) 9021=$(new_or_old c3-01.poc.lab:9021 $new_server) 9090=$(new_or_old c3-01.poc.lab:9090 $new_server)"
+# 3. 看 9021、9090 出示的是不是新的
+served=$(openssl s_client -connect c3-01.poc.lab:9021 -servername c3-01.poc.lab < /dev/null 2> /dev/null \
+  | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+if [ "$served" = "$new_c3" ]; then
+  result_9021=new
+else
+  result_9021=OLD
+fi
+
+served=$(openssl s_client -connect c3-01.poc.lab:9090 -servername c3-01.poc.lab < /dev/null 2> /dev/null \
+  | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+if [ "$served" = "$new_c3" ]; then
+  result_9090=new
+else
+  result_9090=OLD
+fi
+
+c3_url=https://c3-01.poc.lab:9021/
+echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' $c3_url) 9021=$result_9021 9090=$result_9090"
 ```
 
 ```out
@@ -10226,17 +10924,17 @@ LB：rest01（停用） rest02
 
 @role 小安 | ops02 | root
 
-REST Proxy 照 12.1 一台一台換：新的 `cp-server.p12`、`svc-rest.p12` 複製過去、裝好再重啟。
+REST Proxy 照 12.1 一台一台換：新的 `svc-rest.p12` 複製過去、裝好再重啟。
 
 ```bash
 cd ~/pki/next
 
-# 重啟前在那台要執行的指令：放兩個新的 p12、刪掉 /tmp 的副本（set -e：任何一行失敗就不重啟）
+# 重啟前在那台要執行的指令：放新的 p12、刪掉 /tmp 的副本（set -e：任何一行失敗就不重啟）
 before='set -e
-sudo install -o root -g confluent -m 0640 /tmp/cp-server.p12 /tmp/svc-rest.p12 /etc/confluent/ssl/
-rm -f /tmp/cp-server.p12 /tmp/svc-rest.p12'
+sudo install -o root -g confluent -m 0640 /tmp/svc-rest.p12 /etc/confluent/ssl/
+rm -f /tmp/svc-rest.p12'
 
-~/conf/rest-restart.sh rest01 -c "certs/cp-server.p12 certs/svc-rest.p12" -b "$before"
+~/conf/rest-restart.sh rest01 -c "certs/svc-rest.p12" -b "$before"
 ```
 
 ```out
@@ -10262,10 +10960,10 @@ cd ~/pki/next
 
 # 重啟前在那台要執行的指令（同 rest01）
 before='set -e
-sudo install -o root -g confluent -m 0640 /tmp/cp-server.p12 /tmp/svc-rest.p12 /etc/confluent/ssl/
-rm -f /tmp/cp-server.p12 /tmp/svc-rest.p12'
+sudo install -o root -g confluent -m 0640 /tmp/svc-rest.p12 /etc/confluent/ssl/
+rm -f /tmp/svc-rest.p12'
 
-~/conf/rest-restart.sh rest02 -c "certs/cp-server.p12 certs/svc-rest.p12" -b "$before"
+~/conf/rest-restart.sh rest02 -c "certs/svc-rest.p12" -b "$before"
 ```
 
 ```out
@@ -10288,15 +10986,14 @@ LB：rest01 rest02
 
 ```bash
 cd ~/pki/next
-new_server=$(openssl x509 -in certs/cp-server.crt -noout -serial | cut -d= -f2)
-
-# served_serial <主機:埠>：那個端點實際出示的憑證序號
-served_serial() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) < /dev/null 2> /dev/null | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2
-}
+new_rest=$(openssl x509 -in certs/svc-rest.crt -noout -serial | cut -d= -f2)
 
 for h in rest01 rest02; do
-  if [ "$(served_serial $h.poc.lab:8082)" = "$new_server" ]; then
+  # 那個端點實際出示的憑證序號
+  served=$(openssl s_client -connect $h.poc.lab:8082 -servername $h.poc.lab < /dev/null 2> /dev/null \
+    | openssl x509 -noout -serial 2> /dev/null | cut -d= -f2)
+
+  if [ "$served" = "$new_rest" ]; then
     echo "$h 8082=new"
   else
     echo "$h 8082=OLD"
@@ -10331,16 +11028,29 @@ rm -rf next
 # 2. 操作機自己用的兩個身分馬上試：svc-ops（管理 client）、kafka-internal（查 quorum）
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2> /dev/null | wc -l) 個 topic"
-echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2> /dev/null | grep -o 'LeaderId: *[0-9]*')"
 
-# rest_with <憑證> <私鑰>：用這組 client 憑證經 LB 打 REST，印 HTTP 狀態碼
-rest_with() {
-  curl -s --cert $1 --key $2 -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters
-}
+echo "svc-ops 管理 client：$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --list 2> /dev/null | wc -l) 個 topic"
 
-# 3. app-legacy-billing：新的（交給應用程式團隊）與舊的（還在效期內）都能用
-echo "新的 app-legacy-billing（交給應用程式團隊）：REST=$(rest_with certs/app-legacy-billing.crt keys/app-legacy-billing.key)；舊的（還在效期內）：REST=$(rest_with $old/certs/app-legacy-billing.crt $old/keys/app-legacy-billing.key)"
+echo "kafka-internal 查 quorum：$(kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --status 2> /dev/null | grep -o 'LeaderId: *[0-9]*')"
+
+# 3. app-legacy-billing：新的（交給應用程式團隊）與舊的（還在效期內）都能用；經 LB 打 REST，印 HTTP 狀態碼（同一行）
+rest_url=https://rest.poc.lab:8082/v3/clusters
+
+printf '新的 app-legacy-billing（交給應用程式團隊）：REST=%s' "$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert certs/app-legacy-billing.crt \
+  --key keys/app-legacy-billing.key \
+  $rest_url)"
+
+printf '；舊的（還在效期內）：REST=%s\n' "$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert $old/certs/app-legacy-billing.crt \
+  --key $old/keys/app-legacy-billing.key \
+  $rest_url)"
 ```
 
 ```out
@@ -10349,25 +11059,25 @@ kafka-internal 查 quorum：LeaderId: 1
 新的 app-legacy-billing（交給應用程式團隊）：REST=200；舊的（還在效期內）：REST=200
 ```
 
-緊急身分的 PEM 換了，操作機上的 `~/secrets/opmenu-breakglass.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
+`svc-ops` 的憑證換了，緊急模式用的 PEM 操作機上的 `~/secrets/svc-ops.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
 
 @role 小安 | ops02 | root
 
 ```bash
 # 1. 舊的另存 .prev（到期前都還有效）
-if [ -f ~/secrets/opmenu-breakglass.pem ]; then
-  cp -p ~/secrets/opmenu-breakglass.pem ~/secrets/opmenu-breakglass.prev.pem
+if [ -f ~/secrets/svc-ops.pem ]; then
+  cp -p ~/secrets/svc-ops.pem ~/secrets/svc-ops.prev.pem
 fi
 
 # 2. 新的：私鑰＋憑證鏈接成一個 PEM 檔（0600）
-install -m 0600 /dev/null ~/secrets/opmenu-breakglass.pem
-cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem
+install -m 0600 /dev/null ~/secrets/svc-ops.pem
+cat ~/pki/keys/svc-ops.key ~/pki/certs/svc-ops.crt > ~/secrets/svc-ops.pem
 
-echo "opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/opmenu-breakglass.pem -noout -serial | tail -c 9)"
+echo "svc-ops 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/svc-ops.pem -noout -serial | tail -c 9)"
 ```
 
 ```out
-opmenu-breakglass 已更新，序號末 8 碼 …
+svc-ops 已更新，序號末 8 碼 …
 ```
 
 > 陷阱：這一段**一定要做完才能進階段三**。只有銀行的伺服器換成 G2、我方的 leaf 還是舊 CA 簽的就拿掉舊根，broker 驗不過 controller 的憑證，整個叢集起不來（lab 實際發生過：broker 一直重啟、MDS 不回應）。
@@ -10377,15 +11087,18 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 @role 小安 | ops02 | root
 
 ```bash
-# issuer_of <主機:埠>：那個端點出示的憑證是誰簽的（簽發者的 CN；沒有回應就是空的）
-issuer_of() {
-  openssl s_client -connect $1 < /dev/null 2> /dev/null | openssl x509 -noout -issuer 2> /dev/null | sed 's/.*CN *= *//; s/,.*//'
-}
-
 # 不是 G2 簽的端點一個一個列出來
+endpoints="kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093"
+endpoints="$endpoints kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092"
+endpoints="$endpoints kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071"
+endpoints="$endpoints rest01.poc.lab:8082 rest02.poc.lab:8082 rest01.poc.lab:7071"
+endpoints="$endpoints c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071"
+
 bad=0
-for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 rest01.poc.lab:7071 c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071; do
-  issuer=$(issuer_of $ep)
+for ep in $endpoints; do
+  # 那個端點出示的憑證是誰簽的（簽發者的 CN；沒有回應就是空的）
+  issuer=$(openssl s_client -connect $ep < /dev/null 2> /dev/null \
+    | openssl x509 -noout -issuer 2> /dev/null | sed 's/.*CN *= *//; s/,.*//')
 
   if [ "$issuer" != "PoC Bank Issuing CA G2" ]; then
     if [ -z "$issuer" ]; then
@@ -10447,21 +11160,20 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 cp ~/kafka-lab/ca/g2/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem
 podman restart lab-mon-prometheus > /dev/null
 
-# up_targets：Prometheus 上 health 是 up 的 target 數
-up_targets() {
-  podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null | grep -o '"health":"up"' | wc -l
-}
-
 # 2. 等 10 個 target 都回到 up：每 10 秒看一次，最多 12 次
 for i in $(seq 1 12); do
-  if [ "$(up_targets)" = 10 ]; then
+  # Prometheus 上 health 是 up 的 target 數
+  up=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null \
+    | grep -o '"health":"up"' | wc -l)
+
+  if [ "$up" = 10 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "Prometheus target up：$(up_targets) / 10（約 $((i*10)) 秒）"
+echo "Prometheus target up：$up / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -10481,7 +11193,11 @@ cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem
 
 # 2. truststore 拿掉舊根的 alias bank-root
 keytool -delete -alias bank-root -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass
-echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')"
+aliases=$(keytool -list \
+  -keystore truststore.p12 \
+  -storetype PKCS12 \
+  -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1)
+echo "truststore：$(echo "$aliases" | paste -sd' ')"
 
 # 3. 派送：truststore 到 10 台
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
@@ -10572,18 +11288,24 @@ LB：rest01 rest02
 cd ~/pki
 oldest=$(ls -d old-* | head -1)   # 21.2 第一次換發留下的那一份（舊 CA 簽的）
 
-# rest_with <憑證> <私鑰>：用這組 client 憑證經 LB 打 REST，印 HTTP 狀態碼（000 = TLS 就被拒絕）
-rest_with() {
-  curl -s --cert $1 --key $2 -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters
-}
+# 1. 舊 CA 簽的 app 憑證要被拒、新的要能用；用這組 client 憑證經 LB 打 REST，印 HTTP 狀態碼（000 = TLS 就被拒絕）
+rest_url=https://rest.poc.lab:8082/v3/clusters
 
-# 1. 舊 CA 簽的 app 憑證要被拒、新的要能用
-echo "舊 CA 簽的 app 憑證 → REST：$(rest_with $oldest/certs/app-legacy-billing.crt $oldest/keys/app-legacy-billing.key)（000 = TLS 直接拒絕）"
-echo "新 CA 簽的 app 憑證 → REST：$(rest_with certs/app-legacy-billing.crt keys/app-legacy-billing.key)"
+echo "舊 CA 簽的 app 憑證 → REST：$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert $oldest/certs/app-legacy-billing.crt \
+  --key $oldest/keys/app-legacy-billing.key \
+  $rest_url)（000 = TLS 直接拒絕）"
+
+echo "新 CA 簽的 app 憑證 → REST：$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert certs/app-legacy-billing.crt \
+  --key keys/app-legacy-billing.key \
+  $rest_url)"
 
 # 2. AD、套件庫照常（它們在階段二已經換成 G2）
 password=$(cat ~/secrets/ad-test-users.pass)
-echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -u alice:$password -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
+echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -o /dev/null -w '%{http_code}' \
+  -u alice:$password \
+  https://kb01.poc.lab:8090/security/1.0/authenticate)"
 unset password
 
 echo "套件庫：$(curl -s -o /dev/null -w '%{http_code}' https://repo01.poc.lab/confluent/repodata/repomd.xml)"
@@ -10641,15 +11363,16 @@ keyUsage=critical,keyCertSign,cRLSign
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid:always
 EOF
-openssl x509 -req -in issuing-g3.csr -CA ../g3/root.crt -CAkey ../g3/root.key -CAcreateserial -days 3650 -sha256 -extfile issuing.ext -out issuing-g3.crt 2> /dev/null
+openssl x509 -req -in issuing-g3.csr -CA ../g3/root.crt -CAkey ../g3/root.key -CAcreateserial \
+  -days 3650 -sha256 -extfile issuing.ext -out issuing-g3.crt 2> /dev/null
 rm -f issuing-g3.csr issuing.ext
 
 # 3. 確認：新中繼驗得過 G3；新舊兩張中繼的名稱、簽發者、公鑰雜湊
 openssl verify -CAfile ../g3/root.crt issuing-g3.crt
 
 for f in issuing.crt issuing-g3.crt; do
-  subject=$(openssl x509 -in $f -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
-  issuer=$(openssl x509 -in $f -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
+  subject=$(openssl x509 -in $f -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+  issuer=$(openssl x509 -in $f -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
   key=$(openssl x509 -in $f -noout -pubkey | sha256sum | cut -c1-12)
   echo "$f: $subject（簽發者 $issuer）key=$key"
 done
@@ -10707,21 +11430,20 @@ ops02:2 kc01:2 kc02:2 kc03:2 kb01:2 kb02:2 kb03:2 kb04:2 rest01:2 rest02:2 c3-01
 cp ~/kafka-lab/ca/bundle-g2-g3.pem ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem
 podman restart lab-mon-prometheus > /dev/null
 
-# up_targets：Prometheus 上 health 是 up 的 target 數
-up_targets() {
-  podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null | grep -o '"health":"up"' | wc -l
-}
-
 # 2. 等 10 個 target 都回到 up：每 10 秒看一次，最多 12 次
 for i in $(seq 1 12); do
-  if [ "$(up_targets)" = 10 ]; then
+  # Prometheus 上 health 是 up 的 target 數
+  up=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null \
+    | grep -o '"health":"up"' | wc -l)
+
+  if [ "$up" = 10 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "Prometheus target up：$(up_targets) / 10（約 $((i*10)) 秒）"
+echo "Prometheus target up：$up / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -10742,12 +11464,17 @@ cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem
 # 2. truststore 加一個 alias bank-root-g3：bundle 切開後，/tmp/root-01 是第二張（G3）
 csplit -s -z -f /tmp/root- bank-root.pem '/BEGIN CERT/' '{*}'
 
-if ! keytool -importcert -noprompt -alias bank-root-g3 -file /tmp/root-01 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass > /dev/null 2>&1; then
+if ! keytool -importcert -noprompt -alias bank-root-g3 -file /tmp/root-01 \
+  -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass > /dev/null 2>&1; then
   echo "（bank-root-g3 沒有加進去：可能已經在 truststore 裡，看下一行）"
 fi
 
 rm -f /tmp/root-*
-echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')"
+aliases=$(keytool -list \
+  -keystore truststore.p12 \
+  -storetype PKCS12 \
+  -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1)
+echo "truststore：$(echo "$aliases" | paste -sd' ')"
 
 # 3. 派送：truststore 到 10 台
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
@@ -10843,33 +11570,45 @@ cd ~/kafka-lab
 mv ca/g2/issuing.crt ca/g2/issuing-under-g2.crt
 cp ca/g2/issuing-g3.crt ca/g2/issuing.crt
 
-# rechain <憑證檔>：只留第一張（leaf），後面接上新中繼 ca/g2/issuing.crt
-#   例：rechain images/web/tls/repo.crt → repo.crt 變成「原本的 leaf＋新中繼」
-rechain() {
-  awk '/BEGIN CERT/{n++} n==1' "$1" > "$1.new"
-  cat ca/g2/issuing.crt >> "$1.new"
-  mv "$1.new" "$1"
-}
-
-# 2. AD：取回現在的憑證檔、換鏈、放回去，停掉 samba 讓它重讀（啟動程式會自己再開）
+# 2. AD：取回現在的憑證檔、換鏈（只留第一張 leaf，後面接上新中繼）、放回去，停掉 samba 讓它重讀（啟動程式會自己再開）
 tls=/var/lib/samba/private/tls
-podman cp lab-ad01-1:$tls/cert.pem "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")"
-rechain ca/exchange/ad01-cert.pem
-podman cp "$(cygpath -m "$PWD/ca/exchange/ad01-cert.pem")" lab-ad01-1:$tls/cert.pem
+ad_cert=ca/exchange/ad01-cert.pem
+
+podman cp lab-ad01-1:$tls/cert.pem "$(cygpath -m "$PWD/$ad_cert")"
+
+sed -n '1,/END CERT/p' $ad_cert > $ad_cert.new
+cat ca/g2/issuing.crt >> $ad_cert.new
+mv $ad_cert.new $ad_cert
+
+podman cp "$(cygpath -m "$PWD/$ad_cert")" lab-ad01-1:$tls/cert.pem
 podman exec lab-ad01-1 chmod 644 $tls/cert.pem
 podman exec lab-ad01-1 pkill -x samba
 sleep 8
 
-# 3. 套件庫：換鏈、重啟 httpd
-rechain images/web/tls/repo.crt
+# 3. 套件庫：一樣換鏈（只留第一張 leaf，後面接上新中繼），重啟 httpd
+repo_cert=images/web/tls/repo.crt
+
+sed -n '1,/END CERT/p' $repo_cert > $repo_cert.new
+cat ca/g2/issuing.crt >> $repo_cert.new
+mv $repo_cert.new $repo_cert
+
 podman exec lab-repo01-1 systemctl restart httpd
 
 # 4. 新中繼交給小安
 podman cp "$(cygpath -m "$PWD/ca/g2/issuing.crt")" lab-ops02-1:/root/pki/bank-issuing-new.pem
 
-# 5. 從操作機看兩台出示的中繼（第二張）是誰簽的
+# 5. 從操作機看兩台出示的中繼（第二張）是誰簽的（在操作機執行 EOF 之前的那一段，$1 是主機:埠）
+#    拿掉第一張（leaf，第一個 END CERTIFICATE 之前），剩下的第一張就是中繼
 for ep in ad01.poc.lab:636 repo01.poc.lab:443; do
-  issuer=$(podman exec lab-ops02-1 bash -c "openssl s_client -connect $ep -showcerts < /dev/null 2> /dev/null | awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'")
+  issuer=$(podman exec -i lab-ops02-1 bash -s -- $ep <<'EOF'
+after_leaf=$(openssl s_client -connect $1 -showcerts < /dev/null 2> /dev/null | sed '1,/END CERT/d')
+
+echo "$after_leaf" \
+  | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname \
+  | sed 's/.*CN=//; s/,.*//'
+EOF
+)
+
   echo "$ep 中繼的簽發者：$issuer"
 done
 ```
@@ -10888,36 +11627,43 @@ repo01.poc.lab:443 中繼的簽發者：PoC Bank Root CA G3
 ```bash
 cd ~/pki
 new=bank-issuing-new.pem
-
-# cn_of <-subject|-issuer>：從 stdin 讀一張憑證，印主旨或簽發者的 CN
-cn_of() {
-  openssl x509 -noout $1 -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-# key_hash：從 stdin 讀一張憑證，印公鑰雜湊的前 12 碼
-key_hash() {
-  openssl x509 -noout -pubkey | sha256sum | cut -c1-12
-}
+anchor=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
 # 1. 現在 p12 裡的中繼（cp-server.crt 的第二張）和銀行給的新中繼：名稱、key 要相同，只差簽發者
-current=$(awk '/BEGIN CERT/{n++} n==2' certs/cp-server.crt)
-echo "現在的中繼：$(echo "$current" | cn_of -subject)（簽發者 $(echo "$current" | cn_of -issuer)）key=$(echo "$current" | key_hash)"
-echo "新的中繼：  $(cn_of -subject < $new)（簽發者 $(cn_of -issuer < $new)）key=$(key_hash < $new)"
+#    拿掉第一張（leaf，第一個 END CERTIFICATE 之前），剩下的就是中繼
+current=/tmp/current-issuing.pem
+sed '1,/END CERT/d' certs/cp-server.crt > $current
+
+subject=$(openssl x509 -in $current -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+issuer=$(openssl x509 -in $current -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+key=$(openssl x509 -in $current -noout -pubkey | sha256sum | cut -c1-12)
+echo "現在的中繼：$subject（簽發者 $issuer）key=$key"
+rm -f $current
+
+subject=$(openssl x509 -in $new -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+issuer=$(openssl x509 -in $new -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
+key=$(openssl x509 -in $new -noout -pubkey | sha256sum | cut -c1-12)
+echo "新的中繼：  $subject（簽發者 $issuer）key=$key"
 
 # 2. 每一張：「現在的 leaf＋新中繼」、驗鏈、包成 p12（私鑰與 keystore 密碼都不動），放在 next/certs/
 install -d -m 0700 next next/certs
 
 for name in $(awk '{print $1}' requests.txt); do
-  awk '/BEGIN CERT/{n++} n==1' certs/$name.crt > next/certs/$name.crt
+  sed -n '1,/END CERT/p' certs/$name.crt > next/certs/$name.crt
   cat $new >> next/certs/$name.crt
 
-  if openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted $new next/certs/$name.crt > /dev/null 2>&1; then
+  if openssl verify -CAfile $anchor -untrusted $new next/certs/$name.crt > /dev/null 2>&1; then
     chain=ok
   else
     chain=FAIL
   fi
 
-  openssl pkcs12 -export -name $name -inkey keys/$name.key -in next/certs/$name.crt -out next/certs/$name.p12 -passout file:store.pass
+  openssl pkcs12 -export -name $name \
+    -inkey keys/$name.key \
+    -in next/certs/$name.crt \
+    -out next/certs/$name.p12 \
+    -passout file:store.pass
+
   chmod 0600 next/certs/$name.p12
 
   echo "$name: leaf=$(openssl x509 -in next/certs/$name.crt -noout -serial | tail -c 9)（不變） chain=$chain"
@@ -10939,27 +11685,7 @@ kafka-internal: leaf=7E8C05F2（不變） chain=ok
 cd ~/pki/next
 g3="PoC Bank Root CA G3"
 
-# chain_issuer <主機:埠>：那個端點出示的第二張（中繼）是誰簽的
-chain_issuer() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) -showcerts < /dev/null 2> /dev/null | awk '/BEGIN CERT/{n++} n==2' \
-    | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-# new_or_old <主機:埠>：中繼是 G3 簽的（新鏈）就印 new，否則印 OLD
-new_or_old() {
-  if [ "$(chain_issuer $1)" = "$g3" ]; then
-    echo new
-  else
-    echo OLD
-  fi
-}
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# 1. controller：放新的 kafka-internal.p12、重啟、等 active，再等 9093 出示新鏈（在那台執行 EOF 之前的那一段）
+# controller：放新的 kafka-internal.p12、重啟、等 active，再等 9093 出示新鏈（在那台執行 EOF 之前的那一段）
 for h in kc01 kc02 kc03; do
   scp -q certs/kafka-internal.p12 $h.poc.lab:/tmp/
 
@@ -10977,18 +11703,43 @@ for i in $(seq 1 30); do
 done
 EOF
 
+  # 9093 出示的第二張（中繼）是誰簽的：拿掉第一張 leaf，剩下的第一張就是中繼；每 2 秒看一次，最多 30 次
   for i in $(seq 1 30); do
-    if [ "$(chain_issuer $h.poc.lab:9093)" = "$g3" ]; then
+    after_leaf=$(openssl s_client -connect $h.poc.lab:9093 -servername $h.poc.lab -showcerts \
+      < /dev/null 2> /dev/null | sed '1,/END CERT/d')
+    issuer=$(echo "$after_leaf" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null \
+      | sed 's/.*CN=//; s/,.*//')
+
+    if [ "$issuer" = "$g3" ]; then
       break
     fi
 
     sleep 2
   done
 
-  echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$(new_or_old $h.poc.lab:9093)"
-done
+  # 中繼是 G3 簽的（新鏈）就印 new，否則印 OLD
+  if [ "$issuer" = "$g3" ]; then
+    result=new
+  else
+    result=OLD
+  fi
 
-# 2. broker：放兩個 p12、重啟、等 MDS 回 200；看 9092 與 9095 出示的鏈
+  echo "$h $(ssh $h.poc.lab systemctl is-active confluent-server) 9093=$result"
+done
+```
+
+```out
+kc01 active 9093=new
+（3 行）
+```
+
+broker 接著做，同樣一台健康了才做下一台：
+
+```bash
+cd ~/pki/next
+g3="PoC Bank Root CA G3"
+
+# broker：放兩個 p12、重啟、等 MDS 回 200；看 9092 與 9095 出示的鏈
 for h in kb01 kb02 kb03 kb04; do
   scp -q certs/kafka-internal.p12 certs/cp-server.p12 $h.poc.lab:/tmp/
 
@@ -11001,76 +11752,104 @@ rm -f /tmp/*.p12
 sudo systemctl restart confluent-server
 EOF
 
+  # 等那台 MDS（8090）回 200：每 5 秒看一次，最多 60 次
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h MDS=$(mds_code $h) 9092=$(new_or_old $h.poc.lab:9092) 9095=$(new_or_old $h.poc.lab:9095)"
+  # 9092 出示的第二張（中繼）是 G3 簽的（新鏈）就印 new，否則印 OLD
+  after_leaf=$(openssl s_client -connect $h.poc.lab:9092 -servername $h.poc.lab -showcerts \
+    < /dev/null 2> /dev/null | sed '1,/END CERT/d')
+  issuer=$(echo "$after_leaf" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null \
+    | sed 's/.*CN=//; s/,.*//')
+
+  if [ "$issuer" = "$g3" ]; then
+    result_9092=new
+  else
+    result_9092=OLD
+  fi
+
+  # 9095 同樣
+  after_leaf=$(openssl s_client -connect $h.poc.lab:9095 -servername $h.poc.lab -showcerts \
+    < /dev/null 2> /dev/null | sed '1,/END CERT/d')
+  issuer=$(echo "$after_leaf" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null \
+    | sed 's/.*CN=//; s/,.*//')
+
+  if [ "$issuer" = "$g3" ]; then
+    result_9095=new
+  else
+    result_9095=OLD
+  fi
+
+  mds_url=https://$h.poc.lab:8090/v1/metadata/id
+  echo "$h MDS=$(curl -s -o /dev/null -w '%{http_code}' $mds_url) 9092=$result_9092 9095=$result_9095"
 done
 ```
 
 ```out
-kc01 active 9093=new
-（3 行）
 kb01 MDS=200 9092=new 9095=new
 （4 行）
 ```
 
-REST Proxy 與 C3（C3 的 `cp-server.key`、`c3-monitoring.key` 沒變，照樣一起放，指令和 21.2.4 一致）：
+REST Proxy 與 C3（C3 的 `svc-c3.key` 沒變，照樣一起放，指令和 21.2.4 一致）：
 
 ```bash
 cd ~/pki/next
 g3="PoC Bank Root CA G3"
 
-# chain_issuer <主機:埠>：那個端點出示的第二張（中繼）是誰簽的（同上一塊）
-chain_issuer() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) -showcerts < /dev/null 2> /dev/null | awk '/BEGIN CERT/{n++} n==2' \
-    | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-# new_or_old <主機:埠>：中繼是 G3 簽的（新鏈）就印 new，否則印 OLD
-new_or_old() {
-  if [ "$(chain_issuer $1)" = "$g3" ]; then
-    echo new
-  else
-    echo OLD
-  fi
-}
-
-# c3_code：C3 畫面的 HTTP 狀態碼
-c3_code() {
-  curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
-
 # 1. C3：送新鏈的檔（兩把私鑰沒變，照樣一起放），在 c3-01 執行 EOF 之前的那一段：放檔、依序重啟三個服務
-scp -q certs/cp-server.p12 certs/cp-server.crt ../keys/cp-server.key certs/c3-monitoring.crt ../keys/c3-monitoring.key certs/svc-c3.p12 c3-01.poc.lab:/tmp/
+scp -q certs/svc-c3.p12 certs/svc-c3.crt ../keys/svc-c3.key c3-01.poc.lab:/tmp/
 
 ssh c3-01.poc.lab bash -s <<'EOF'
-for f in cp-server.p12 cp-server.crt cp-server.key c3-monitoring.crt c3-monitoring.key svc-c3.p12; do
+for f in svc-c3.p12 svc-c3.crt svc-c3.key; do
   sudo install -o root -g confluent -m 0640 /tmp/$f /etc/confluent/ssl/
 done
 
-rm -f /tmp/cp-server.* /tmp/c3-monitoring.* /tmp/svc-c3.p12
+rm -f /tmp/svc-c3.*
 
 for unit in prometheus alertmanager confluent-control-center; do
   sudo systemctl restart $unit
 done
 EOF
 
-# 2. 等畫面回 200（每 5 秒看一次，最多 60 次），看 9021、9090 出示的鏈
+# 2. 等畫面回 200（每 5 秒看一次，最多 60 次）
 for i in $(seq 1 60); do
-  if [ "$(c3_code)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "c3-01 UI=$(c3_code) 9021=$(new_or_old c3-01.poc.lab:9021) 9090=$(new_or_old c3-01.poc.lab:9090)"
+# 3. 看 9021、9090 出示的鏈：第二張（中繼）是 G3 簽的（新鏈）就印 new，否則印 OLD
+after_leaf=$(openssl s_client -connect c3-01.poc.lab:9021 -servername c3-01.poc.lab -showcerts \
+  < /dev/null 2> /dev/null | sed '1,/END CERT/d')
+issuer=$(echo "$after_leaf" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null \
+  | sed 's/.*CN=//; s/,.*//')
+
+if [ "$issuer" = "$g3" ]; then
+  result_9021=new
+else
+  result_9021=OLD
+fi
+
+after_leaf=$(openssl s_client -connect c3-01.poc.lab:9090 -servername c3-01.poc.lab -showcerts \
+  < /dev/null 2> /dev/null | sed '1,/END CERT/d')
+issuer=$(echo "$after_leaf" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null \
+  | sed 's/.*CN=//; s/,.*//')
+
+if [ "$issuer" = "$g3" ]; then
+  result_9090=new
+else
+  result_9090=OLD
+fi
+
+c3_url=https://c3-01.poc.lab:9021/
+echo "c3-01 UI=$(curl -s -o /dev/null -w '%{http_code}' $c3_url) 9021=$result_9021 9090=$result_9090"
 ```
 
 ```out
@@ -11089,17 +11868,17 @@ LB：rest01（停用） rest02
 
 @role 小安 | ops02 | root
 
-REST Proxy 照 12.1 一台一台換：新的 `cp-server.p12`、`svc-rest.p12` 複製過去、裝好再重啟。
+REST Proxy 照 12.1 一台一台換：新的 `svc-rest.p12` 複製過去、裝好再重啟。
 
 ```bash
 cd ~/pki/next
 
-# 重啟前在那台要執行的指令：放兩個新的 p12、刪掉 /tmp 的副本（set -e：任何一行失敗就不重啟）
+# 重啟前在那台要執行的指令：放新的 p12、刪掉 /tmp 的副本（set -e：任何一行失敗就不重啟）
 before='set -e
-sudo install -o root -g confluent -m 0640 /tmp/cp-server.p12 /tmp/svc-rest.p12 /etc/confluent/ssl/
-rm -f /tmp/cp-server.p12 /tmp/svc-rest.p12'
+sudo install -o root -g confluent -m 0640 /tmp/svc-rest.p12 /etc/confluent/ssl/
+rm -f /tmp/svc-rest.p12'
 
-~/conf/rest-restart.sh rest01 -c "certs/cp-server.p12 certs/svc-rest.p12" -b "$before"
+~/conf/rest-restart.sh rest01 -c "certs/svc-rest.p12" -b "$before"
 ```
 
 ```out
@@ -11125,10 +11904,10 @@ cd ~/pki/next
 
 # 重啟前在那台要執行的指令（同 rest01）
 before='set -e
-sudo install -o root -g confluent -m 0640 /tmp/cp-server.p12 /tmp/svc-rest.p12 /etc/confluent/ssl/
-rm -f /tmp/cp-server.p12 /tmp/svc-rest.p12'
+sudo install -o root -g confluent -m 0640 /tmp/svc-rest.p12 /etc/confluent/ssl/
+rm -f /tmp/svc-rest.p12'
 
-~/conf/rest-restart.sh rest02 -c "certs/cp-server.p12 certs/svc-rest.p12" -b "$before"
+~/conf/rest-restart.sh rest02 -c "certs/svc-rest.p12" -b "$before"
 ```
 
 ```out
@@ -11153,14 +11932,14 @@ LB：rest01 rest02
 cd ~/pki/next
 g3="PoC Bank Root CA G3"
 
-# chain_issuer <主機:埠>：那個端點出示的第二張（中繼）是誰簽的
-chain_issuer() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) -showcerts < /dev/null 2> /dev/null | awk '/BEGIN CERT/{n++} n==2' \
-    | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
 for h in rest01 rest02; do
-  if [ "$(chain_issuer $h.poc.lab:8082)" = "$g3" ]; then
+  # 那個端點出示的第二張（中繼）是誰簽的：拿掉第一張 leaf，剩下的第一張就是中繼
+  after_leaf=$(openssl s_client -connect $h.poc.lab:8082 -servername $h.poc.lab -showcerts \
+    < /dev/null 2> /dev/null | sed '1,/END CERT/d')
+  issuer=$(echo "$after_leaf" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null \
+    | sed 's/.*CN=//; s/,.*//')
+
+  if [ "$issuer" = "$g3" ]; then
     echo "$h 8082=new"
   else
     echo "$h 8082=OLD"
@@ -11173,7 +11952,7 @@ rest01 8082=new
 rest02 8082=new
 ```
 
-換成正本：私鑰不動，只換 `.crt`／`.p12`；舊的留在 `~/pki/old-<日期時間>/certs/`（階段三的反向驗證會用到）。緊急身分的 PEM 換到 `~/secrets/opmenu-breakglass.pem`；`app-legacy-billing` 的新 p12 交給應用程式團隊，**一定要在階段三之前換上**：
+換成正本：私鑰不動，只換 `.crt`／`.p12`；舊的留在 `~/pki/old-<日期時間>/certs/`（階段三的反向驗證會用到）。緊急身分的 PEM 換到 `~/secrets/svc-ops.pem`；`app-legacy-billing` 的新 p12 交給應用程式團隊，**一定要在階段三之前換上**：
 
 ```bash
 cd ~/pki
@@ -11194,16 +11973,29 @@ mv bank-issuing-new.pem $old/
 # 2. 操作機自己用的兩個身分馬上試：svc-ops（管理 client）、kafka-internal（查 quorum）
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-echo "svc-ops 管理 client：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2> /dev/null | wc -l) 個 topic"
-echo "kafka-internal 查 quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2> /dev/null | grep -o 'LeaderId: *[0-9]*')"
 
-# rest_with <憑證> <私鑰>：用這組 client 憑證經 LB 打 REST，印 HTTP 狀態碼
-rest_with() {
-  curl -s --cert $1 --key $2 -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters
-}
+echo "svc-ops 管理 client：$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --list 2> /dev/null | wc -l) 個 topic"
 
-# 3. app-legacy-billing：同一把私鑰，新鏈與舊鏈（G2 還在信任清單裡）都能用
-echo "app-legacy-billing 新鏈：REST=$(rest_with certs/app-legacy-billing.crt keys/app-legacy-billing.key)；舊鏈（G2 還信）：REST=$(rest_with $old/certs/app-legacy-billing.crt keys/app-legacy-billing.key)"
+echo "kafka-internal 查 quorum：$(kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --status 2> /dev/null | grep -o 'LeaderId: *[0-9]*')"
+
+# 3. app-legacy-billing：同一把私鑰，新鏈與舊鏈（G2 還在信任清單裡）都能用；經 LB 打 REST，印 HTTP 狀態碼（同一行）
+rest_url=https://rest.poc.lab:8082/v3/clusters
+
+printf 'app-legacy-billing 新鏈：REST=%s' "$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert certs/app-legacy-billing.crt \
+  --key keys/app-legacy-billing.key \
+  $rest_url)"
+
+printf '；舊鏈（G2 還信）：REST=%s\n' "$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert $old/certs/app-legacy-billing.crt \
+  --key keys/app-legacy-billing.key \
+  $rest_url)"
 ```
 
 ```out
@@ -11212,25 +12004,25 @@ kafka-internal 查 quorum：LeaderId: 1
 app-legacy-billing 新鏈：REST=200；舊鏈（G2 還信）：REST=200
 ```
 
-緊急身分的 PEM 換了，操作機上的 `~/secrets/opmenu-breakglass.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
+`svc-ops` 的憑證換了，緊急模式用的 PEM 操作機上的 `~/secrets/svc-ops.pem` 也要換（舊的另存 `.prev`，到期前都還有效）：
 
 @role 小安 | ops02 | root
 
 ```bash
 # 1. 舊的另存 .prev（到期前都還有效）
-if [ -f ~/secrets/opmenu-breakglass.pem ]; then
-  cp -p ~/secrets/opmenu-breakglass.pem ~/secrets/opmenu-breakglass.prev.pem
+if [ -f ~/secrets/svc-ops.pem ]; then
+  cp -p ~/secrets/svc-ops.pem ~/secrets/svc-ops.prev.pem
 fi
 
 # 2. 新的：私鑰＋憑證鏈接成一個 PEM 檔（0600）
-install -m 0600 /dev/null ~/secrets/opmenu-breakglass.pem
-cat ~/pki/keys/opmenu-breakglass.key ~/pki/certs/opmenu-breakglass.crt > ~/secrets/opmenu-breakglass.pem
+install -m 0600 /dev/null ~/secrets/svc-ops.pem
+cat ~/pki/keys/svc-ops.key ~/pki/certs/svc-ops.crt > ~/secrets/svc-ops.pem
 
-echo "opmenu-breakglass 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/opmenu-breakglass.pem -noout -serial | tail -c 9)"
+echo "svc-ops 已更新，序號末 8 碼 $(openssl x509 -in ~/secrets/svc-ops.pem -noout -serial | tail -c 9)"
 ```
 
 ```out
-opmenu-breakglass 已更新，序號末 8 碼 …
+svc-ops 已更新，序號末 8 碼 …
 ```
 
 進階段三之前，每個端點出示的中繼都要是 G3 簽的（銀行的三台也算）：
@@ -11238,16 +12030,22 @@ opmenu-breakglass 已更新，序號末 8 碼 …
 @role 小安 | ops02 | root
 
 ```bash
-# chain_issuer <主機:埠>：那個端點出示的第二張（中繼）是誰簽的（沒有回應就是空的）
-chain_issuer() {
-  openssl s_client -connect $1 -servername $(echo $1 | cut -d: -f1) -showcerts < /dev/null 2> /dev/null | awk '/BEGIN CERT/{n++} n==2' \
-    | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
 # 中繼不是 G3 簽的端點一個一個列出來（銀行的 AD、套件庫也算）
+endpoints="kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093"
+endpoints="$endpoints kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092"
+endpoints="$endpoints kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071"
+endpoints="$endpoints rest01.poc.lab:8082 rest02.poc.lab:8082 rest01.poc.lab:7071"
+endpoints="$endpoints c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071"
+endpoints="$endpoints ad01.poc.lab:636 repo01.poc.lab:443"
+
 bad=0
-for ep in kc01.poc.lab:9093 kc02.poc.lab:9093 kc03.poc.lab:9093 kb01.poc.lab:9092 kb02.poc.lab:9092 kb03.poc.lab:9092 kb04.poc.lab:9092 kb01.poc.lab:9095 kb01.poc.lab:8090 kb01.poc.lab:7071 kc01.poc.lab:7071 rest01.poc.lab:8082 rest02.poc.lab:8082 rest01.poc.lab:7071 c3-01.poc.lab:9021 c3-01.poc.lab:9090 c3-01.poc.lab:7071 ad01.poc.lab:636 repo01.poc.lab:443; do
-  issuer=$(chain_issuer $ep)
+for ep in $endpoints; do
+  # 那個端點出示的第二張（中繼）是誰簽的（沒有回應就是空的）：拿掉第一張 leaf，剩下的第一張就是中繼
+  host=$(echo $ep | cut -d: -f1)
+  after_leaf=$(openssl s_client -connect $ep -servername $host -showcerts < /dev/null 2> /dev/null \
+    | sed '1,/END CERT/d')
+  issuer=$(echo "$after_leaf" | openssl x509 -noout -issuer -nameopt sep_comma_plus,sname 2> /dev/null \
+    | sed 's/.*CN=//; s/,.*//')
 
   if [ "$issuer" != "PoC Bank Root CA G3" ]; then
     if [ -z "$issuer" ]; then
@@ -11308,21 +12106,20 @@ ops02:1 kc01:1 kc02:1 kc03:1 kb01:1 kb02:1 kb03:1 kb04:1 rest01:1 rest02:1 c3-01
 cp ~/kafka-lab/ca/g3/root.crt ~/kafka-lab/bank-monitoring/prometheus/confluent/ca.pem
 podman restart lab-mon-prometheus > /dev/null
 
-# up_targets：Prometheus 上 health 是 up 的 target 數
-up_targets() {
-  podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null | grep -o '"health":"up"' | wc -l
-}
-
 # 2. 等 10 個 target 都回到 up：每 10 秒看一次，最多 12 次
 for i in $(seq 1 12); do
-  if [ "$(up_targets)" = 10 ]; then
+  # Prometheus 上 health 是 up 的 target 數
+  up=$(podman exec lab-mon-prometheus wget -qO- http://localhost:9090/api/v1/targets 2> /dev/null \
+    | grep -o '"health":"up"' | wc -l)
+
+  if [ "$up" = 10 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "Prometheus target up：$(up_targets) / 10（約 $((i*10)) 秒）"
+echo "Prometheus target up：$up / 10（約 $((i*10)) 秒）"
 ```
 
 ```out
@@ -11339,7 +12136,11 @@ cp bank-root.pem ~/monitoring/to-bank/prometheus/ca.pem
 
 # 2. truststore 拿掉 G2 的 alias bank-root-g2
 keytool -delete -alias bank-root-g2 -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass
-echo "truststore：$(keytool -list -keystore truststore.p12 -storetype PKCS12 -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' ')"
+aliases=$(keytool -list \
+  -keystore truststore.p12 \
+  -storetype PKCS12 \
+  -storepass:file ../store.pass 2> /dev/null | grep trustedCertEntry | cut -d, -f1)
+echo "truststore：$(echo "$aliases" | paste -sd' ')"
 
 # 3. 派送：truststore 到 10 台
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
@@ -11430,18 +12231,24 @@ LB：rest01 rest02
 cd ~/pki
 last=$(ls -d old-* | tail -1)   # 21.4.4 換鏈時留下的那一份（舊鏈）
 
-# rest_with <憑證> <私鑰>：用這組 client 憑證經 LB 打 REST，印 HTTP 狀態碼（000 = TLS 就被拒絕）
-rest_with() {
-  curl -s --cert $1 --key $2 -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters
-}
+# 1. 同一張 leaf、同一把私鑰：配舊鏈要被拒、配新鏈要通過；經 LB 打 REST，印 HTTP 狀態碼（000 = TLS 就被拒絕）
+rest_url=https://rest.poc.lab:8082/v3/clusters
 
-# 1. 同一張 leaf、同一把私鑰：配舊鏈要被拒、配新鏈要通過
-echo "舊鏈 → REST：$(rest_with $last/certs/app-legacy-billing.crt keys/app-legacy-billing.key)（000 = TLS 直接拒絕）"
-echo "新鏈 → REST：$(rest_with certs/app-legacy-billing.crt keys/app-legacy-billing.key)"
+echo "舊鏈 → REST：$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert $last/certs/app-legacy-billing.crt \
+  --key keys/app-legacy-billing.key \
+  $rest_url)（000 = TLS 直接拒絕）"
+
+echo "新鏈 → REST：$(curl -s -o /dev/null -w '%{http_code}' \
+  --cert certs/app-legacy-billing.crt \
+  --key keys/app-legacy-billing.key \
+  $rest_url)"
 
 # 2. AD、套件庫照常
 password=$(cat ~/secrets/ad-test-users.pass)
-echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -u alice:$password -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
+echo "alice 登入 MDS（MDS 要用 LDAPS 連 AD）：$(curl -s -o /dev/null -w '%{http_code}' \
+  -u alice:$password \
+  https://kb01.poc.lab:8090/security/1.0/authenticate)"
 unset password
 
 echo "套件庫：$(curl -s -o /dev/null -w '%{http_code}' https://repo01.poc.lab/confluent/repodata/repomd.xml)"
@@ -11473,9 +12280,9 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 | 憑證 | 誰出示 | blackbox 探得到？ | 操作機腳本 |
 |---|---|---|---|
 | `kafka-internal` | controller 9093、broker 9092 | 探得到（mTLS 的 listener 也會先出示自己的憑證） | 有 |
-| `cp-server` | broker 9094／9095／9096／8090、REST 8082（兩台＋LB）、C3 9021 | 探得到 | 有 |
-| 同上兩張（7071 與 C3 9090） | 每台的 7071（JMX exporter，第 17 章：controller 用 `kafka-internal`、其他用 `cp-server`）、C3 內建 Prometheus 9090 | 不另外探：和上面兩列是同一張憑證、同一個到期日；7071 過期時銀行 Prometheus 本來就抓不到，`ConfluentTargetDown` 會響 | 有（同一個檔） |
-| `svc-rest`、`svc-c3`、`c3-monitoring`、`svc-ops`、`svc-backup`、`opmenu-breakglass`、app 憑證 | client 憑證，不對外 | 探不到 | 有（`~/pki/certs/*.crt`） |
+| `cp-server`、`svc-rest`、`svc-c3` | broker 9094／9095／8090（cp-server；9096 是同一張，不另外探）、REST 8082 兩台＋LB（svc-rest）、C3 9021（svc-c3） | 探得到 | 有 |
+| 同上兩張（7071 與 C3 9090） | 每台的 7071（JMX exporter，第 17 章：各用該元件自己的那張）、C3 內建 Prometheus 9090 | 不另外探：和上面兩列是同一張憑證、同一個到期日；7071 過期時銀行 Prometheus 本來就抓不到，`ConfluentTargetDown` 會響 | 有（同一個檔） |
+| `svc-ops`、`svc-backup`、app 憑證 | client 憑證，不對外 | 探不到 | 有（`~/pki/certs/*.crt`） |
 | 銀行根、中繼（truststore；`bank-root.pem`） | — | 探到的是鏈裡最早到期的那一張（`probe_ssl_earliest_cert_expiry`） | 有（`bank-root.pem`） |
 | AD 的 LDAPS 憑證 | ad01 636 | 探得到（銀行的，順便看；它到期 MDS 就查不到 AD） | 無 |
 
@@ -11510,7 +12317,8 @@ for h in kb01 kb02 kb03 kb04; do
   targets="$targets\"$h.poc.lab:9092\", \"$h.poc.lab:9094\", \"$h.poc.lab:9095\", \"$h.poc.lab:8090\", "
 done
 
-targets="$targets\"rest01.poc.lab:8082\", \"rest02.poc.lab:8082\", \"rest.poc.lab:8082\", \"c3-01.poc.lab:9021\", \"ad01.poc.lab:636\""
+targets="$targets\"rest01.poc.lab:8082\", \"rest02.poc.lab:8082\", \"rest.poc.lab:8082\", "
+targets="$targets\"c3-01.poc.lab:9021\", \"ad01.poc.lab:636\""
 
 # 3. scrape 設定：每個端點一個 target，經 exporter 的 /probe（EOF 沒加引號：$targets 會換成上面那一串）
 cat > scrape-blackbox.yml <<EOF
@@ -11527,7 +12335,10 @@ scrape_configs:
       - { target_label: __address__, replacement: BLACKBOX-EXPORTER:9115 }
 EOF
 
-echo "scrape-blackbox.yml：$(grep -o '"[^"]*:[0-9]*"' scrape-blackbox.yml | wc -l) 個端點；blackbox.yml：$(grep -c prober blackbox.yml) 個模組"
+# 4. 確認：scrape 檔裡有幾個端點、blackbox.yml 有幾個模組
+endpoints=$(grep -o '"[^"]*:[0-9]*"' scrape-blackbox.yml | wc -l)
+modules=$(awk '/prober/ {c++} END {print c + 0}' blackbox.yml)
+echo "scrape-blackbox.yml：$endpoints 個端點；blackbox.yml：$modules 個模組"
 ```
 
 ```out
@@ -11567,7 +12378,9 @@ groups:
           summary: "{{ $labels.instance }}: TLS probe failed"
           description: "blackbox_exporter could not complete a TLS handshake with {{ $labels.instance }} for 10 minutes: the service is down (see ConfluentTargetDown) or its certificate is no longer valid for the bank root CA the exporter trusts (expired, or the CA changed: guide 21.3)."
 EOF
-echo "confluent-alerts-cert.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/prometheus/confluent-alerts-cert.yml) 條規則"
+
+rules_file=~/monitoring/to-bank/prometheus/confluent-alerts-cert.yml
+echo "confluent-alerts-cert.yml: $(grep -c '^      - alert:' $rules_file) 條規則"
 ```
 
 ```out
@@ -11637,26 +12450,43 @@ mkdir -p blackbox
 # 1. 從操作機取出 to-bank/prometheus/，放成 lab 容器要的樣子（exporter 的位址換成容器名稱）
 podman cp lab-ops02-1:/root/monitoring/to-bank/prometheus "$(cygpath -m "$PWD/to-bank-prom")"
 cp to-bank-prom/blackbox.yml blackbox/
-cp to-bank-prom/scrape-blackbox.yml to-bank-prom/confluent-alerts-cert.yml to-bank-prom/cert-expiry-rules-test.yml prometheus/confluent/
+cp to-bank-prom/scrape-blackbox.yml prometheus/confluent/
+cp to-bank-prom/confluent-alerts-cert.yml prometheus/confluent/
+cp to-bank-prom/cert-expiry-rules-test.yml prometheus/confluent/
 rm -rf to-bank-prom
 sed -i 's/BLACKBOX-EXPORTER:9115/lab-mon-blackbox:9115/' prometheus/confluent/scrape-blackbox.yml
 
 # 2. exporter 要認得各主機的名稱：每台一個 --add-host（寫法：主機:IP 的最後一段）
 hosts=""
-for entry in kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34 rest01:41 rest02:42 c3-01:51 ad01:11 lb01:12 rest:12; do
+entries="kc01:21 kc02:22 kc03:23 kb01:31 kb02:32 kb03:33 kb04:34"
+entries="$entries rest01:41 rest02:42 c3-01:51 ad01:11 lb01:12 rest:12"
+
+for entry in $entries; do
   name=$(echo $entry | cut -d: -f1)
   last=$(echo $entry | cut -d: -f2)
   hosts="$hosts --add-host $name.poc.lab:172.35.0.$last"
 done
 
 # 3. 起 blackbox_exporter（舊的有的話先移除）
+blackbox_conf=$(cygpath -m "$PWD/blackbox/blackbox.yml")
+confluent_dir=$(cygpath -m "$PWD/prometheus/confluent")
+
 podman rm -f --ignore lab-mon-blackbox > /dev/null
-podman run -d --restart unless-stopped --name lab-mon-blackbox --network lab_labnet --memory 64m $hosts \
-  -v "$(cygpath -m "$PWD/blackbox/blackbox.yml"):/etc/blackbox_exporter/config.yml:ro" -v "$(cygpath -m "$PWD/prometheus/confluent"):/etc/prometheus/confluent:ro" \
-  prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml > /dev/null
+podman run -d --restart unless-stopped \
+  --name lab-mon-blackbox \
+  --network lab_labnet \
+  --memory 64m \
+  $hosts \
+  -v "$blackbox_conf:/etc/blackbox_exporter/config.yml:ro" \
+  -v "$confluent_dir:/etc/prometheus/confluent:ro" \
+  prom/blackbox-exporter:v0.25.0 \
+  --config.file=/etc/blackbox_exporter/config.yml > /dev/null
 
 # 4. Prometheus 改讀 scrape-*.yml 與 confluent-alerts*.yml，重啟，等它就緒（每 5 秒看一次，最多 12 次）
-sed -i 's#scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]#scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]#; s#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml
+old_scrape='scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]'
+new_scrape='scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]'
+sed -i "s#$old_scrape#$new_scrape#" prometheus/prometheus.yml
+sed -i 's#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' prometheus/prometheus.yml
 podman restart lab-mon-prometheus > /dev/null
 
 for i in $(seq 1 12); do
@@ -11667,7 +12497,9 @@ for i in $(seq 1 12); do
   sleep 5
 done
 
-echo "lab-mon-blackbox：$(podman inspect -f '{{.State.Status}}' lab-mon-blackbox)；prometheus.yml：$(grep -c 'scrape-\*.yml' prometheus/prometheus.yml) 行用萬用字元"
+blackbox_state=$(podman inspect -f '{{.State.Status}}' lab-mon-blackbox)
+wildcard_lines=$(awk '/scrape-\*.yml/ {c++} END {print c + 0}' prometheus/prometheus.yml)
+echo "lab-mon-blackbox：$blackbox_state；prometheus.yml：$wildcard_lines 行用萬用字元"
 ```
 
 ```out
@@ -11678,11 +12510,13 @@ lab-mon-blackbox：running；prometheus.yml：1 行用萬用字元
 
 ```bash
 # 1. promtool test rules（在 Prometheus 容器裡跑，它自帶 promtool）
-podman exec -w /etc/prometheus/confluent lab-mon-prometheus sh -c 'promtool test rules cert-expiry-rules-test.yml 2>&1 | grep -oE "SUCCESS|FAIL" | head -1'
+podman exec -w /etc/prometheus/confluent lab-mon-prometheus sh -c \
+  'promtool test rules cert-expiry-rules-test.yml 2>&1 | grep -oE "SUCCESS|FAIL" | head -1'
 
-# prom_status：在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印 cert-expiry 的 target 數與規則數
-prom_status() {
-  podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
+# 2. 等 24 個 target 全 up、規則載入沒錯：每 10 秒看一次，最多 36 次（第一次抓要等一個 scrape_interval）
+#    每一次都在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印 cert-expiry 的 target 數與規則數
+for i in $(seq 1 36); do
+  status=$(podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
 curl -s http://lab-mon-prometheus:9090/api/v1/targets | python3 -c '
 import json, sys
 t = [x for x in json.load(sys.stdin)["data"]["activeTargets"] if x["labels"]["job"] == "cert-expiry"]
@@ -11694,11 +12528,7 @@ g = json.load(sys.stdin)["data"]["groups"]
 r = [x for y in g for x in y["rules"]]
 print("告警規則 %d 條（%s），載入有錯 %d 條" % (len(r), "、".join(y["name"] for y in g), sum(x["health"] != "ok" for x in r)))'
 EOF
-}
-
-# 2. 等 24 個 target 全 up、規則載入沒錯：每 10 秒看一次，最多 36 次（第一次抓要等一個 scrape_interval）
-for i in $(seq 1 36); do
-  status=$(prom_status)
+)
 
   if echo "$status" | grep -q "target up 24 / 24"; then
     if echo "$status" | grep -q "載入有錯 0 條"; then
@@ -11723,7 +12553,8 @@ cert-expiry target up 24 / 24
 ```bash
 # 在 labnet 上起一個臨時容器，執行 EOF 之前的那一段：問 Prometheus 每個端點剩幾天，排好印出
 podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
-curl -s --data-urlencode 'query=(probe_ssl_earliest_cert_expiry{job="cert-expiry"} - time()) / 86400' http://lab-mon-prometheus:9090/api/v1/query | python3 -c '
+query='(probe_ssl_earliest_cert_expiry{job="cert-expiry"} - time()) / 86400'
+curl -s --data-urlencode "query=$query" http://lab-mon-prometheus:9090/api/v1/query | python3 -c '
 import json, sys
 rs = sorted(json.load(sys.stdin)["data"]["result"], key=lambda r: r["metric"]["instance"])
 for r in rs: print("%-24s 剩 %3d 天" % (r["metric"]["instance"], float(r["value"][1])))
@@ -11790,7 +12621,8 @@ for f in $(cert_files); do
   # 2. 剩幾天、CN
   count=$((count + 1))
   days=$(( ($(date -d "$end" +%s) - now) / 86400 ))
-  cn=$(openssl x509 -in "$f" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
+  # 主旨裡的 CN，例：subject=C=TW,O=Bank,CN=svc-ops → svc-ops
+  cn=$(openssl x509 -in "$f" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
   msg="$(basename "$f")（CN=$cn）到期 $(date -d "$end" +%F)，剩 $days 天"
 
   # 3. 過期 → err；快到期 → warning（結束碼還是 0 的話改成 2）；其他照印
@@ -11840,7 +12672,11 @@ tmp=$(mktemp -d)
 mkdir $tmp/ca
 
 # 1. 5 天後到期的自簽憑證
-openssl req -x509 -newkey rsa:2048 -nodes -keyout $tmp/k.key -subj "/CN=soon-test" -days 5 -out $tmp/soon.crt 2> /dev/null
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout $tmp/k.key \
+  -subj "/CN=soon-test" \
+  -days 5 \
+  -out $tmp/soon.crt 2> /dev/null
 
 # 2. 已經過期的憑證：用 openssl ca 指定起訖日（暫存的 CA 檔放在子目錄 ca/，腳本不會掃到；EOF 沒加引號，$tmp 會換成值）
 openssl req -new -newkey rsa:2048 -nodes -keyout $tmp/ca/k2.key -subj "/CN=expired-test" -out $tmp/ca/e.csr 2> /dev/null
@@ -11975,16 +12811,18 @@ syslog：檢查了 10 張憑證，結束碼 0
 install -m 0600 /dev/null ~/conf/client-backup.properties
 sed 's#/svc-ops.p12#/svc-backup.p12#' ~/conf/client-admin.properties > ~/conf/client-backup.properties
 
-# days_left <憑證>：還有幾天到期
-days_left() {
-  local end
-  end=$(openssl x509 -in $1 -noout -enddate | cut -d= -f2)
-  echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
-}
-
 # 2. 確認：指向 svc-backup 的地方、憑證的 CN、剩幾天
-cn=$(openssl x509 -in ~/pki/certs/svc-backup.crt -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
-echo "client-backup.properties：$(grep -c svc-backup ~/conf/client-backup.properties) 處指向 svc-backup；憑證 $cn，剩 $(days_left ~/pki/certs/svc-backup.crt) 天"
+crt=~/pki/certs/svc-backup.crt
+pointing=$(awk '/svc-backup/ {c++} END {print c + 0}' ~/conf/client-backup.properties)
+
+# 主旨裡的 CN，例：subject=C=TW,O=Bank,CN=svc-backup → svc-backup
+cn=$(openssl x509 -in $crt -noout -subject -nameopt sep_comma_plus,sname | grep -o 'CN=[^,]*' | cut -d= -f2)
+
+# 到期日換算成還有幾天
+end=$(openssl x509 -in $crt -noout -enddate | cut -d= -f2)
+days_left=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+
+echo "client-backup.properties：$pointing 處指向 svc-backup；憑證 $cn，剩 $days_left 天"
 ```
 
 ```out
@@ -12014,12 +12852,19 @@ cluster_id=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[
 # 1. svc-ops 登入 MDS，給 svc-backup 綁 SecurityAdmin（只能看 role binding）
 confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
   --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null
-confluent iam rbac role-binding create --principal User:svc-backup --role SecurityAdmin --kafka-cluster $cluster_id > /dev/null
+confluent iam rbac role-binding create \
+  --principal User:svc-backup \
+  --role SecurityAdmin \
+  --kafka-cluster $cluster_id > /dev/null
 
 # 2. 兩條 ACL：所有 topic、cluster 本身的 Describe 與 DescribeConfigs
 A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
-kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --topic '*' > /dev/null
-kafka-acls $A --add --allow-principal User:svc-backup --operation Describe --operation DescribeConfigs --cluster > /dev/null
+kafka-acls $A --add --allow-principal User:svc-backup \
+  --operation Describe --operation DescribeConfigs \
+  --topic '*' > /dev/null
+kafka-acls $A --add --allow-principal User:svc-backup \
+  --operation Describe --operation DescribeConfigs \
+  --cluster > /dev/null
 
 # 3. 確認（binding 表頭兩行不印；ACL 數「operation=」的行）
 confluent iam rbac role-binding list --principal User:svc-backup --kafka-cluster $cluster_id | tail -n +3
@@ -12039,18 +12884,30 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 B="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-backup.properties"
 
 # 1. 讀訊息：要被拒
-echo "讀訊息：$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9094 --consumer.config ~/conf/client-backup.properties --topic orders.events --from-beginning --max-messages 1 --timeout-ms 10000 2>&1 | grep -o '[A-Za-z]*AuthorizationException' | head -1)"
+echo "讀訊息：$(kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --consumer.config ~/conf/client-backup.properties \
+  --topic orders.events \
+  --from-beginning --max-messages 1 --timeout-ms 10000 2>&1 | grep -o '[A-Za-z]*AuthorizationException' | head -1)"
 
 # 2. 建 topic：要被拒
-echo "建 topic：$(kafka-topics $B --create --topic backup-sneak --partitions 1 --replication-factor 3 2>&1 | grep -o '[A-Za-z]*AuthorizationException' | head -1)"
+echo "建 topic：$(kafka-topics $B --create \
+  --topic backup-sneak \
+  --partitions 1 --replication-factor 3 2>&1 | grep -o '[A-Za-z]*AuthorizationException' | head -1)"
 
 # 3. 改 role binding：要被拒（confluent CLI 用暫時的 HOME 登入 svc-backup，不蓋掉操作機原本的登入；用完即刪）
 cluster_id=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 tmp=$(mktemp -d)
 
-HOME=$tmp confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
-  --certificate-only --client-cert-path ~/pki/certs/svc-backup.crt --client-key-path ~/pki/keys/svc-backup.key > /dev/null
-echo "改 role binding：$(HOME=$tmp confluent iam rbac role-binding create --principal User:svc-backup --role SystemAdmin --kafka-cluster $cluster_id 2>&1 | grep -o '40[0-9] [A-Za-z]*' | head -1)"
+HOME=$tmp confluent login --url https://kb01.poc.lab:8090 \
+  --certificate-authority-path ~/pki/certs/bank-root.pem \
+  --certificate-only \
+  --client-cert-path ~/pki/certs/svc-backup.crt \
+  --client-key-path ~/pki/keys/svc-backup.key > /dev/null
+echo "改 role binding：$(HOME=$tmp confluent iam rbac role-binding create \
+  --principal User:svc-backup \
+  --role SystemAdmin \
+  --kafka-cluster $cluster_id 2>&1 | grep -o '40[0-9] [A-Za-z]*' | head -1)"
 
 rm -rf $tmp
 ```
@@ -12083,13 +12940,15 @@ keep_days=${KEEP_DAYS:-30}
 backup_root=${BACKUP_ROOT:-$HOME/backup/metadata}
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-backup.properties"
+brokers=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094
+A="--bootstrap-server $brokers --command-config $HOME/conf/client-backup.properties"
 
 out=$backup_root/$(date +%Y%m%d-%H%M)
 install -d -m 0700 "$out"
 failed=""
 
 # save <檔名> <指令…>：指令的輸出存成 <檔名>；失敗或是空的就記下來，錯誤訊息留在 <檔名>.err
+#   例：save topics.txt kafka-topics $A --describe → 寫出 $out/topics.txt
 save() {
   local file=$1
   shift
@@ -12105,16 +12964,42 @@ save() {
 }
 
 # features：features 清單，拿掉每次都不同的 Epoch
+#   例：Feature: metadata.version	FinalizedVersionLevel: 27	Epoch: 1234
+#       → Feature: metadata.version	FinalizedVersionLevel: 27
 features() {
   kafka-features $A describe | sed 's/[[:space:]]*Epoch: [0-9]*//'
 }
 
 # acls：ACL 一條一行：資源類型|名稱|比對方式|principal|host|操作|ALLOW/DENY，排好順序（26.4 的 cluster-restore-all.sh 照這個格式建回來）
+#   kafka-acls --list 的輸入，一個資源標題底下有多條 ACL：
+#     Current ACLs for resource `ResourcePattern(resourceType=TOPIC, name=*, patternType=LITERAL)`:
+#         (principal=User:svc-backup, host=*, operation=DESCRIBE, permissionType=ALLOW)
+#   輸出：TOPIC|*|LITERAL|User:svc-backup|*|DESCRIBE|ALLOW
 acls() {
-  kafka-acls $A --list | awk '/^Current ACLs for resource/{s=$0; sub(/.*resourceType=/,"",s); sub(/\)`:.*/,"",s); gsub(/, name=|, patternType=/,"|",s); r=s; next} /principal=/{s=$0; sub(/^[ \t]*\(principal=/,"",s); sub(/\)[ \t]*$/,"",s); gsub(/, host=|, operation=|, permissionType=/,"|",s); print r"|"s}' | LC_ALL=C sort
+  kafka-acls $A --list | awk '
+    /^Current ACLs for resource/ {
+      # 資源標題：留下 TOPIC|*|LITERAL 記在 r，給底下每一條 ACL 用
+      s = $0
+      sub(/.*resourceType=/, "", s)
+      sub(/\)`:.*/, "", s)
+      gsub(/, name=|, patternType=/, "|", s)
+      r = s
+      next
+    }
+
+    /principal=/ {
+      # 一條 ACL：留下 User:svc-backup|*|DESCRIBE|ALLOW，前面接上資源
+      s = $0
+      sub(/^[ \t]*\(principal=/, "", s)
+      sub(/\)[ \t]*$/, "", s)
+      gsub(/, host=|, operation=|, permissionType=/, "|", s) # lint-ok: awk 的 | 不是管線
+      print r "|" s
+    }
+  ' | LC_ALL=C sort
 }
 
 # scram_and_quotas：每個帳號的 SCRAM（只有機制與迭代次數，沒有密碼）與配額，排好順序
+#   例：SCRAM credential configs for user-principal 'app-restore' are SCRAM-SHA-512=iterations=8192
 scram_and_quotas() {
   kafka-configs $A --describe --entity-type users | LC_ALL=C sort
 }
@@ -12131,20 +13016,31 @@ save acls.txt           acls
 export HOME_CLI=$backup_root/.cli
 install -d -m 0700 "$HOME_CLI"
 
-# cli <參數…>：用這支腳本自己的 HOME 跑 confluent
+# cli <參數…>：用這支腳本自己的 HOME 跑 confluent，例：cli iam rbac role list -o json
 cli() {
   HOME=$HOME_CLI confluent "$@"
 }
 
 cluster_id=$(curl -s https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 
+# clean_table：把 confluent 的表格去掉對齊空白、排好順序（從標準輸入讀）
+#   例：「  User:alice | DeveloperRead | Topic | orders | LITERAL 」→「User:alice|DeveloperRead|Topic|orders|LITERAL」
+clean_table() {
+  sed 's/ *| */|/g; s/^ *//; s/ *$//' | LC_ALL=C sort
+}
+
 # rbac：每個有 binding 的 principal 一段：「== principal」，底下是它的每一條 binding（去掉表格對齊空白、排好順序）
+#   例：== User:alice
+#       User:alice|DeveloperRead|Topic|orders|LITERAL
 rbac() {
   local roles role principals principal list
 
   # 2a. svc-backup 登入 MDS
-  if ! cli login --url https://kb01.poc.lab:8090 --certificate-authority-path "$HOME/pki/certs/bank-root.pem" --certificate-only \
-    --client-cert-path "$HOME/pki/certs/svc-backup.crt" --client-key-path "$HOME/pki/keys/svc-backup.key" > /dev/null; then
+  if ! cli login --url https://kb01.poc.lab:8090 \
+    --certificate-authority-path "$HOME/pki/certs/bank-root.pem" \
+    --certificate-only \
+    --client-cert-path "$HOME/pki/certs/svc-backup.crt" \
+    --client-key-path "$HOME/pki/keys/svc-backup.key" > /dev/null; then
     return 1
   fi
 
@@ -12162,7 +13058,7 @@ rbac() {
   # 2c. 每個 principal 一段
   for principal in $principals; do
     echo "== $principal"
-    cli iam rbac role-binding list --principal "$principal" --kafka-cluster "$cluster_id" | tail -n +3 | sed 's/ *| */|/g; s/^ *//; s/ *$//' | LC_ALL=C sort
+    cli iam rbac role-binding list --principal "$principal" --kafka-cluster "$cluster_id" | tail -n +3 | clean_table
   done
 }
 
@@ -12200,7 +13096,7 @@ for f in *.txt; do
 done
 
 echo "RBAC 的 principal：$(grep -c '^== ' rbac.txt) 個；SHA256SUMS：$(wc -l < SHA256SUMS) 個檔"
-echo "密碼字樣：$(grep -ciE 'password=|salt|stored_key' *.txt | awk -F: '{s+=$2} END {print s}')"
+echo "密碼字樣：$(cat *.txt | grep -ciE 'password=|salt|stored_key')"
 ```
 
 ```out
@@ -12278,8 +13174,12 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 1. 造一個變化：新建 orders.backup-demo
-kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --create --if-not-exists \
-  --topic orders.backup-demo --partitions 1 --replication-factor 3 > /dev/null
+kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --create --if-not-exists \
+  --topic orders.backup-demo \
+  --partitions 1 --replication-factor 3 > /dev/null
 
 # 2. 等到下一分鐘再匯出一次（備份目錄以分鐘命名，同一分鐘再匯出會蓋掉前一份）
 last=$(ls -d ~/backup/metadata/20* | tail -1)
@@ -12290,7 +13190,8 @@ done
 
 ~/conf/metadata-backup.sh > /dev/null
 
-echo "新建 orders.backup-demo 後再匯出：$(basename $(ls -d ~/backup/metadata/20* | tail -1))（上一份 $(basename $last)）"
+newest=$(ls -d ~/backup/metadata/20* | tail -1)
+echo "新建 orders.backup-demo 後再匯出：$(basename $newest)（上一份 $(basename $last)）"
 ```
 
 ```out
@@ -12305,17 +13206,27 @@ older=$(ls -d 20* | tail -2 | head -1)
 newer=$(ls -d 20* | tail -1)
 echo "比對 $older → $newer"
 
-# 1. 每個檔：依檔名把兩份 SHA256SUMS 接起來，sha256 相同還是有變
+# 1. 每個檔：依檔名把兩份 SHA256SUMS 接起來（每行：檔名 舊 sha256 新 sha256），sha256 相同還是有變
 sort -k2 $older/SHA256SUMS > /tmp/sums-older
 sort -k2 $newer/SHA256SUMS > /tmp/sums-newer
-join -1 2 -2 2 /tmp/sums-older /tmp/sums-newer | awk '{printf "%-18s %s\n", $1, ($2 == $3 ? "相同" : "有變")}'
+join -1 2 -2 2 /tmp/sums-older /tmp/sums-newer > /tmp/sums-joined
+
+while read -r name older_sum newer_sum; do
+  if [ "$older_sum" = "$newer_sum" ]; then
+    result=相同
+  else
+    result=有變
+  fi
+
+  printf '%-18s %s\n' "$name" "$result"
+done < /tmp/sums-joined
 
 # 2. topics.txt 多出來的 topic
 grep -o 'Topic: [^[:space:]]*' $older/topics.txt | sort -u > /tmp/topics-older
 grep -o 'Topic: [^[:space:]]*' $newer/topics.txt | sort -u > /tmp/topics-newer
 echo "topics.txt 多出來的：$(grep -vxFf /tmp/topics-older /tmp/topics-newer | paste -sd' ')"
 
-rm -f /tmp/sums-older /tmp/sums-newer /tmp/topics-older /tmp/topics-newer
+rm -f /tmp/sums-older /tmp/sums-newer /tmp/sums-joined /tmp/topics-older /tmp/topics-newer
 ```
 
 ```out
@@ -12336,10 +13247,16 @@ topics.txt 多出來的：Topic: orders.backup-demo
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --delete --topic orders.backup-demo > /dev/null 2>&1
+kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --delete --topic orders.backup-demo > /dev/null 2>&1
 sleep 3
 
-echo "orders.backup-demo 還在嗎：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --list 2> /dev/null | grep -cx orders.backup-demo)"
+echo "orders.backup-demo 還在嗎：$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --list 2> /dev/null | grep -cx orders.backup-demo)"
 ```
 
 ```out
@@ -12356,10 +13273,13 @@ orders.backup-demo 還在嗎：0
 # 1. 新匯出一份備份
 b=$(~/conf/metadata-backup.sh)
 
-# 2. alice 從 OP menu 44 拍一次快照（只印最後一行；檔名裡的時間換成 <時間>）
+# 2. alice 從 OP menu 44 拍一次快照（只印最後一行）
+#    sed 拿掉終端機的顏色碼，再把檔名裡的時間換成 <時間>，例：snapshot-20261025-010203-alice → snapshot-<時間>-alice
 password=$(cat ~/secrets/ad-test-users.pass)
-env OPMENU_USER=alice OPMENU_PASS="$password" OPMENU_YES=1 JAVA_HOME=/opt/java/current /opt/opmenu/opmenu.sh --run 44 snapshot 2>&1 < /dev/null \
-  | tail -1 | sed 's/\x1b\[[0-9;]*m//g; s/[0-9]\{8\}-[0-9]\{6\}/<時間>/'
+env OPMENU_USER=alice OPMENU_PASS="$password" OPMENU_YES=1 JAVA_HOME=/opt/java/current \
+  /opt/opmenu/opmenu.sh --run 44 snapshot 2>&1 < /dev/null \
+  | tail -1 \
+  | sed 's/\x1b\[[0-9;]*m//g; s/[0-9]\{8\}-[0-9]\{6\}/<時間>/'
 unset password
 
 # 3. 最新的快照和剛才的備份逐檔比 sha256
@@ -12411,7 +13331,10 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 A="--bootstrap-server kb01.poc.lab:9094 --command-config /root/conf/client-admin.properties"
 
 # 1. topic：3 個 partition，帶一個動態設定（retention 1 小時）；topic 名稱有點號的那句 WARNING 不印
-kafka-topics $A --create --if-not-exists --topic orders.restore-demo --partitions 3 --replication-factor 3 --config retention.ms=3600000 2> /dev/null | grep -v WARNING
+kafka-topics $A --create --if-not-exists \
+  --topic orders.restore-demo \
+  --partitions 3 --replication-factor 3 \
+  --config retention.ms=3600000 2> /dev/null | grep -v WARNING
 
 # 2. 帳號：密碼檔（已經有就沿用；0600）、SCRAM、配額
 if [ ! -s ~/secrets/app-restore.pass ]; then
@@ -12419,8 +13342,10 @@ if [ ! -s ~/secrets/app-restore.pass ]; then
   openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/app-restore.pass
 fi
 
-kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/app-restore.pass)]" > /dev/null
-kafka-configs $A --alter --entity-type users --entity-name app-restore --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' > /dev/null
+kafka-configs $A --alter --entity-type users --entity-name app-restore \
+  --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/app-restore.pass)]" > /dev/null
+kafka-configs $A --alter --entity-type users --entity-name app-restore \
+  --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' > /dev/null
 
 # 3. 三條 binding（svc-ops 登入 MDS）
 source ~/conf/kraft.env
@@ -12428,11 +13353,22 @@ confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/p
   --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null
 
 for role in DeveloperRead DeveloperWrite; do
-  confluent iam rbac role-binding create --principal User:app-restore --role $role --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID > /dev/null
+  confluent iam rbac role-binding create \
+    --principal User:app-restore \
+    --role $role \
+    --resource Topic:orders.restore-demo \
+    --kafka-cluster $CLUSTER_ID > /dev/null
 done
-confluent iam rbac role-binding create --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID > /dev/null
 
-echo "演練物件：topic、帳號（含配額）、binding $(confluent iam rbac role-binding list --principal User:app-restore --kafka-cluster $CLUSTER_ID | grep -c app-restore) 條"
+confluent iam rbac role-binding create \
+  --principal User:app-restore \
+  --role DeveloperRead \
+  --resource Group:restore- --prefix \
+  --kafka-cluster $CLUSTER_ID > /dev/null
+
+echo "演練物件：topic、帳號（含配額）、binding $(confluent iam rbac role-binding list \
+  --principal User:app-restore \
+  --kafka-cluster $CLUSTER_ID | grep -c app-restore) 條"
 
 # 4. 備份一次，確認三樣都在備份裡
 d=$(bash ~/conf/metadata-backup.sh)
@@ -12462,16 +13398,33 @@ kafka-topics $A --delete --topic orders.restore-demo
 
 # 2. 刪三條 binding
 for role in DeveloperRead DeveloperWrite; do
-  confluent iam rbac role-binding delete --principal User:app-restore --role $role --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID --force > /dev/null
+  confluent iam rbac role-binding delete \
+    --principal User:app-restore \
+    --role $role \
+    --resource Topic:orders.restore-demo \
+    --kafka-cluster $CLUSTER_ID --force > /dev/null
 done
-confluent iam rbac role-binding delete --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID --force > /dev/null
+
+confluent iam rbac role-binding delete \
+  --principal User:app-restore \
+  --role DeveloperRead \
+  --resource Group:restore- --prefix \
+  --kafka-cluster $CLUSTER_ID --force > /dev/null
 
 # 3. 刪帳號：SCRAM 憑據和配額分開刪
-kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config SCRAM-SHA-512 > /dev/null
-kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config producer_byte_rate,consumer_byte_rate,request_percentage > /dev/null
+kafka-configs $A --alter --entity-type users --entity-name app-restore \
+  --delete-config SCRAM-SHA-512 > /dev/null
+kafka-configs $A --alter --entity-type users --entity-name app-restore \
+  --delete-config producer_byte_rate,consumer_byte_rate,request_percentage > /dev/null
 
-# 4. 三樣都沒了
-echo "topic 還在：$(kafka-topics $A --list | grep -c '^orders.restore-demo$')；binding：$(confluent iam rbac role-binding list --principal User:app-restore --kafka-cluster $CLUSTER_ID | grep -c app-restore)；帳號設定：$(kafka-configs $A --describe --entity-type users --entity-name app-restore | grep -c .)"
+# 4. 三樣都沒了（用 awk 數：數到 0 是正常結果，不能讓指令以失敗結束）
+topic_left=$(kafka-topics $A --list | awk '/^orders.restore-demo$/ {c++} END {print c + 0}')
+binding_left=$(confluent iam rbac role-binding list \
+  --principal User:app-restore \
+  --kafka-cluster $CLUSTER_ID | awk '/app-restore/ {c++} END {print c + 0}')
+setting_left=$(kafka-configs $A --describe \
+  --entity-type users --entity-name app-restore | awk '/./ {c++} END {print c + 0}')
+echo "topic 還在：$topic_left；binding：$binding_left；帳號設定：$setting_left"
 ```
 
 ```out
@@ -12515,9 +13468,10 @@ fi
 # ---- 1. topic ----
 if [ "$topic" != - ]; then
   # topics.txt 裡這個 topic 的第一行：PartitionCount 與 ReplicationFactor
+  #   例：Topic: orders.restore-demo	TopicId: x	PartitionCount: 3	ReplicationFactor: 3 → partitions=3、rf=3
   line=$(grep -P "^Topic: $topic\t" "$backup/topics.txt" | head -1)
-  partitions=$(echo "$line" | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')
-  rf=$(echo "$line" | sed -n 's/.*ReplicationFactor: \([0-9]*\).*/\1/p')
+  partitions=$(echo "$line" | grep -o 'PartitionCount: [0-9]*' | cut -d' ' -f2)
+  rf=$(echo "$line" | grep -o 'ReplicationFactor: [0-9]*' | cut -d' ' -f2)
 
   if [ -z "$partitions" ]; then
     echo "備份裡沒有 topic $topic"
@@ -12525,7 +13479,12 @@ if [ "$topic" != - ]; then
   fi
 
   # 動態設定：topic-configs.txt 裡「Dynamic configs for topic <名稱> are:」底下那幾行的第一欄（key=value）
-  configs=$(awk -v t="$topic" '$0 == "Dynamic configs for topic " t " are:"{p=1;next} /^Dynamic configs/{p=0} p{print $1}' "$backup/topic-configs.txt")
+  #   例：  retention.ms=3600000 sensitive=false synonyms=… → retention.ms=3600000
+  configs=$(awk -v t="$topic" '
+    $0 == "Dynamic configs for topic " t " are:" { p = 1; next }
+    /^Dynamic configs/ { p = 0 }
+    p { print $1 }
+  ' "$backup/topic-configs.txt")
   config_args=""
   config_count=0
 
@@ -12534,17 +13493,22 @@ if [ "$topic" != - ]; then
     config_count=$((config_count + 1))
   done
 
-  if kafka-topics $A --create --topic "$topic" --partitions "$partitions" --replication-factor "$rf" $config_args > /dev/null; then
+  if kafka-topics $A --create --topic "$topic" \
+    --partitions "$partitions" --replication-factor "$rf" $config_args > /dev/null; then
     echo "topic $topic：partitions=$partitions rf=$rf 動態設定 $config_count 個"
   fi
 fi
 
 # ---- 2. role binding 與 SCRAM 帳號 ----
 if [ "$user" != - ]; then
-  confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
-    --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null
+  confluent login --url https://kb01.poc.lab:8090 \
+    --certificate-authority-path ~/pki/certs/bank-root.pem \
+    --certificate-only \
+    --client-cert-path ~/pki/certs/svc-ops.crt \
+    --client-key-path ~/pki/keys/svc-ops.key > /dev/null
 
   # create_binding <參數…>：建一條 binding；只有 50003（auth topic 的 leader 剛搬家，MDS 內部的 producer 不重試）才再送一次
+  #   例：create_binding --principal User:app-restore --role DeveloperRead --kafka-cluster "$CLUSTER_ID"
   create_binding() {
     local result
 
@@ -12561,8 +13525,13 @@ if [ "$user" != - ]; then
   }
 
   # rbac.txt 裡這個帳號那一段（「== User:<帳號>」到下一個「== 」之前）；一行一條：principal|角色|資源類型|資源名稱|比對方式
+  #   例：User:app-restore|DeveloperRead|Group|restore-|PREFIXED
   bindings=$(mktemp)
-  awk -v u="User:$user" '$0 == "== " u {p=1;next} /^== /{p=0} p' "$backup/rbac.txt" > $bindings
+  awk -v u="User:$user" '
+    $0 == "== " u { p = 1; next }
+    /^== / { p = 0 }
+    p
+  ' "$backup/rbac.txt" > $bindings
   count=0
 
   while IFS='|' read -r principal role rtype rname pattern; do
@@ -12579,11 +13548,13 @@ if [ "$user" != - ]; then
         count=$((count + 1))
       fi
     elif [ "$pattern" = PREFIXED ]; then
-      if create_binding --principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID" --resource "$rtype:$rname" --prefix; then
+      if create_binding --principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID" \
+        --resource "$rtype:$rname" --prefix; then
         count=$((count + 1))
       fi
     else
-      if create_binding --principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID" --resource "$rtype:$rname"; then
+      if create_binding --principal "$principal" --role "$role" --kafka-cluster "$CLUSTER_ID" \
+        --resource "$rtype:$rname"; then
         count=$((count + 1))
       fi
     fi
@@ -12593,11 +13564,15 @@ if [ "$user" != - ]; then
   echo "role binding：$count 條"
 
   # SCRAM 的迭代次數（沒有就用 8192）與配額：users.txt 裡這個帳號的那兩行
-  iterations=$(grep "SCRAM credential configs for user-principal '$user'" "$backup/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
+  scram_line=$(grep "SCRAM credential configs for user-principal '$user'" "$backup/users.txt")
+  iterations=$(echo "$scram_line" | grep -o 'iterations=[0-9]*' | head -1)
   if [ -z "$iterations" ]; then
     iterations=iterations=8192
   fi
 
+  # 配額：去掉句子開頭與數字的 .0、逗號後的空白
+  #   例：Quota configs for user-principal 'a' are consumer_byte_rate=2097152.0, request_percentage=25.0
+  #       → consumer_byte_rate=2097152,request_percentage=25
   quota=$(grep "Quota configs for user-principal '$user'" "$backup/users.txt" | sed 's/.* are //; s/\.0\b//g; s/, /,/g')
 
   if [ ! -s ~/secrets/$user.pass ]; then
@@ -12605,7 +13580,8 @@ if [ "$user" != - ]; then
     exit 1
   fi
 
-  if kafka-configs $A --alter --entity-type users --entity-name "$user" --add-config "SCRAM-SHA-512=[$iterations,password=$(cat ~/secrets/$user.pass)]" > /dev/null; then
+  if kafka-configs $A --alter --entity-type users --entity-name "$user" \
+    --add-config "SCRAM-SHA-512=[$iterations,password=$(cat ~/secrets/$user.pass)]" > /dev/null; then
     echo "SCRAM $user：$iterations"
   fi
 
@@ -12618,13 +13594,24 @@ fi
 
 # ---- 3. 驗證 ----
 if [ "$topic" != - ]; then
-  summary=$(kafka-topics $A --describe --topic $topic | head -1 | grep -o 'PartitionCount: [0-9]*.ReplicationFactor: [0-9]*' | tr '\t' ' ')
-  topic_configs=$(kafka-configs $A --describe --entity-type topics --entity-name $topic | grep -o '^  [a-z.]*=[^ ]*' | tr -d ' ' | paste -sd, -)
+  # 第一行的 PartitionCount 與 ReplicationFactor，例：PartitionCount: 3 ReplicationFactor: 3
+  summary=$(kafka-topics $A --describe --topic $topic \
+    | head -1 \
+    | grep -o 'PartitionCount: [0-9]*.ReplicationFactor: [0-9]*' \
+    | tr '\t' ' ')
+
+  # 動態設定 key=value，逗號接起來，例：retention.ms=3600000
+  topic_configs=$(kafka-configs $A --describe --entity-type topics --entity-name $topic \
+    | grep -o '^  [a-z.]*=[^ ]*' \
+    | tr -d ' ' \
+    | paste -sd, -)
   echo "describe：$summary；$topic_configs"
 fi
 
 if [ "$user" != - ]; then
-  binding_count=$(confluent iam rbac role-binding list --principal User:$user --kafka-cluster $CLUSTER_ID | grep -c "User:$user")
+  binding_count=$(confluent iam rbac role-binding list \
+    --principal User:$user \
+    --kafka-cluster $CLUSTER_ID | grep -c "User:$user")
   setting_count=$(kafka-configs $A --describe --entity-type users --entity-name $user | grep -c .)
   echo "binding：$binding_count 條；帳號設定：$setting_count 行"
 fi
@@ -12656,23 +13643,46 @@ source ~/conf/kraft.env
 
 # 1. 用重建的帳號從 9095 寫一筆、讀回來（連線設定借 app-orders 那一份，帳密換成 app-restore；暫存檔用完即刪）
 conf=$(mktemp)
+login_module=org.apache.kafka.common.security.scram.ScramLoginModule
+password=$(cat ~/secrets/app-restore.pass)
 grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
-echo "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"app-restore\" password=\"$(cat ~/secrets/app-restore.pass)\";" >> $conf
+echo "sasl.jaas.config=$login_module required username=\"app-restore\" password=\"$password\";" >> $conf
+unset password
 
-echo "restore-$(date +%s)" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config $conf --topic orders.restore-demo > /dev/null 2>&1
-echo "app-restore 寫一筆：ok；讀回：$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config $conf --topic orders.restore-demo --group restore-check --from-beginning --max-messages 1 --timeout-ms 20000 2> /dev/null | grep -c restore-)"
+echo "restore-$(date +%s)" | kafka-console-producer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --producer.config $conf \
+  --topic orders.restore-demo > /dev/null 2>&1
+
+echo "app-restore 寫一筆：ok；讀回：$(kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --consumer.config $conf \
+  --topic orders.restore-demo \
+  --group restore-check \
+  --from-beginning --max-messages 1 --timeout-ms 20000 2> /dev/null | grep -c restore-)"
 rm -f $conf
 
 # 2. 清掉演練物件：topic、三條 binding、帳號（SCRAM 與配額分開刪）、密碼檔
 kafka-topics $A --delete --topic orders.restore-demo
 
 for role in DeveloperRead DeveloperWrite; do
-  confluent iam rbac role-binding delete --principal User:app-restore --role $role --resource Topic:orders.restore-demo --kafka-cluster $CLUSTER_ID --force > /dev/null
+  confluent iam rbac role-binding delete \
+    --principal User:app-restore \
+    --role $role \
+    --resource Topic:orders.restore-demo \
+    --kafka-cluster $CLUSTER_ID --force > /dev/null
 done
-confluent iam rbac role-binding delete --principal User:app-restore --role DeveloperRead --resource Group:restore- --prefix --kafka-cluster $CLUSTER_ID --force > /dev/null
 
-kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config SCRAM-SHA-512 > /dev/null
-kafka-configs $A --alter --entity-type users --entity-name app-restore --delete-config producer_byte_rate,consumer_byte_rate,request_percentage > /dev/null
+confluent iam rbac role-binding delete \
+  --principal User:app-restore \
+  --role DeveloperRead \
+  --resource Group:restore- --prefix \
+  --kafka-cluster $CLUSTER_ID --force > /dev/null
+
+kafka-configs $A --alter --entity-type users --entity-name app-restore \
+  --delete-config SCRAM-SHA-512 > /dev/null
+kafka-configs $A --alter --entity-type users --entity-name app-restore \
+  --delete-config producer_byte_rate,consumer_byte_rate,request_percentage > /dev/null
 rm -f ~/secrets/app-restore.pass
 
 echo "演練物件已清掉"
@@ -12704,7 +13714,10 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # kafka-log-dirs 的最後一行是 JSON；python 整理成每台一行
-kafka-log-dirs --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe 2> /dev/null | tail -1 | python3 -c '
+kafka-log-dirs \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --describe 2> /dev/null | tail -1 | python3 -c '
 import json, sys, collections
 d = json.load(sys.stdin)
 for b in sorted(d["brokers"], key=lambda b: b["broker"]):
@@ -12713,7 +13726,9 @@ for b in sorted(d["brokers"], key=lambda b: b["broker"]):
         for p in ld["partitions"]:
             by[p["partition"].rsplit("-", 1)[0]] += p["size"]
         top = ", ".join("%s %.1f MB" % (t, s / 1048576) for t, s in by.most_common(3))
-        print("broker %s %s: %.1f MB, %d partitions; 最大: %s" % (b["broker"], ld["logDir"], sum(by.values()) / 1048576, len(ld["partitions"]), top))'
+        total = sum(by.values()) / 1048576
+        count = len(ld["partitions"])
+        print("broker %s %s: %.1f MB, %d partitions; 最大: %s" % (b["broker"], ld["logDir"], total, count, top))'
 ```
 
 ```out
@@ -12729,8 +13744,11 @@ lab 裡最大的是 `_confluent-telemetry-metrics`（Confluent 自己的 telemet
 
 ```bash
 # 每台一行：用了多少 / 總共多少（百分比）掛在哪裡
+#   df 的最後一行：檔案系統 總共 已用 剩餘 百分比 掛載點，例：/dev/sda1 1007G 149G 807G 16% /
 for h in kb01 kb02 kb03 kb04; do
-  ssh $h.poc.lab "df -h /var/lib/kafka | awk -v h=$h 'NR==2 {print h\": \"\$3\" 用 / \"\$2\"（\"\$5\"）掛在 \"\$6}'"
+  line=$(ssh $h.poc.lab 'df -h /var/lib/kafka' | tail -1)
+  read -r _ size used _ percent mount <<< "$line"
+  echo "$h: $used 用 / $size（$percent）掛在 $mount"
 done
 ```
 
@@ -12750,19 +13768,16 @@ kb04: 149G 用 / 1007G（16%）掛在 /
 ```bash
 # 在 labnet 上起一個臨時容器，執行 EOF 之前的那一段
 podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
-# q <PromQL>：查一次即時值，印 Prometheus 回的 JSON
-q() {
-  curl -s --data-urlencode "query=$1" http://lab-mon-prometheus:9090/api/v1/query
-}
-
 # 1. 依 topic 加總、最大的三個
-q "topk(3, sum by (topic) (kafka_log_log_size))" | python3 -c '
+curl -s --data-urlencode "query=topk(3, sum by (topic) (kafka_log_log_size))" \
+  http://lab-mon-prometheus:9090/api/v1/query | python3 -c '
 import json, sys
 for r in json.load(sys.stdin)["data"]["result"]:
     print("%-32s %.1f MB（三個 replica 合計）" % (r["metric"]["topic"], float(r["value"][1]) / 1048576))'
 
 # 2. log dir 沒有離線的 broker 數
-q 'count(kafka_log_logmanager_logdirectoryoffline{job="kafka-broker"} == 0)' | python3 -c '
+curl -s --data-urlencode 'query=count(kafka_log_logmanager_logdirectoryoffline{job="kafka-broker"} == 0)' \
+  http://lab-mon-prometheus:9090/api/v1/query | python3 -c '
 import json, sys
 print("log dir 正常的 broker：%s / 4" % json.load(sys.stdin)["data"]["result"][0]["value"][1])'
 EOF
@@ -12813,7 +13828,9 @@ groups:
           summary: "{{ $labels.instance }}: Kafka data disk above 80%"
           description: "The data disk of {{ $labels.instance }} is {{ $value | humanizePercentage }} full. Follow guide 24.3: find the biggest topics (kafka-log-dirs), shorten retention or move partitions, then grow the disk (24.4). At 100% the broker stops."
 EOF
-echo "confluent-alerts-disk.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/prometheus/confluent-alerts-disk.yml) 條規則"
+
+rules_file=~/monitoring/to-bank/prometheus/confluent-alerts-disk.yml
+echo "confluent-alerts-disk.yml: $(grep -c '^      - alert:' $rules_file) 條規則"
 ```
 
 ```out
@@ -12828,7 +13845,8 @@ confluent-alerts-disk.yml: 2 條規則
 cd ~/kafka-lab/bank-monitoring
 
 # 1. 規則檔從 ops02 複製到 Prometheus 掛著的資料夾
-podman cp lab-ops02-1:/root/monitoring/to-bank/prometheus/confluent-alerts-disk.yml "$(cygpath -m "$PWD/prometheus/confluent/confluent-alerts-disk.yml")"
+target_file=$(cygpath -m "$PWD/prometheus/confluent/confluent-alerts-disk.yml")
+podman cp lab-ops02-1:/root/monitoring/to-bank/prometheus/confluent-alerts-disk.yml "$target_file"
 
 # 2. rule_files 還是單一檔名的話，改成 confluent-alerts*.yml
 if ! grep -q 'confluent-alerts\*\.yml' prometheus/prometheus.yml; then
@@ -12846,20 +13864,17 @@ for i in $(seq 1 12); do
   sleep 5
 done
 
-# rule_status：在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印規則數、群組名稱、載入有錯幾條
-rule_status() {
-  podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
+# 4. 等新規則過一次 evaluation（health 從 unknown 變 ok）：每 5 秒看一次，最多 20 次
+#    每一次都在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印規則數、群組名稱、載入有錯幾條
+for i in $(seq 1 20); do
+  status=$(podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
 curl -s http://lab-mon-prometheus:9090/api/v1/rules | python3 -c '
 import json, sys
 g = json.load(sys.stdin)["data"]["groups"]
 r = [x for y in g for x in y["rules"]]
 print("告警規則 %d 條（%s），載入有錯 %d 條" % (len(r), "、".join(y["name"] for y in g), sum(x["health"] != "ok" for x in r)))'
 EOF
-}
-
-# 4. 等新規則過一次 evaluation（health 從 unknown 變 ok）：每 5 秒看一次，最多 20 次
-for i in $(seq 1 20); do
-  status=$(rule_status)
+)
 
   if echo "$status" | grep -q '載入有錯 0 條'; then
     break
@@ -12900,24 +13915,33 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
 
-# sz：示範 topic 每個 replica 的大小，例：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
-sz() {
-  kafka-log-dirs $A --describe --topic-list orders.disk-demo 2> /dev/null | tail -1 | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-print(", ".join("broker %s %d KB" % (b["broker"], p["size"] // 1024) for b in sorted(d["brokers"], key=lambda b: b["broker"]) for ld in b["logDirs"] for p in ld["partitions"]))'
-}
-
 # 1. 示範 topic：1 個 partition、3 份 replica、segment 1 MB
-kafka-topics $A --create --if-not-exists --topic orders.disk-demo --partitions 1 --replication-factor 3 --config segment.bytes=1048576 > /dev/null 2>&1
+kafka-topics $A --create --if-not-exists \
+  --topic orders.disk-demo \
+  --partitions 1 --replication-factor 3 \
+  --config segment.bytes=1048576 > /dev/null 2>&1
 
 # 2. 寫 50000 筆 × 100 B（從 9095 用 app-orders 的帳號）
-kafka-producer-perf-test --topic orders.disk-demo --num-records 50000 --throughput -1 --record-size 100 \
-  --producer.config ~/conf/app-orders.properties --producer-props bootstrap.servers=kb01.poc.lab:9095 2>&1 | tail -1 | grep -o '^[0-9]* records sent'
+kafka-producer-perf-test \
+  --topic orders.disk-demo \
+  --num-records 50000 --throughput -1 --record-size 100 \
+  --producer.config ~/conf/app-orders.properties \
+  --producer-props bootstrap.servers=kb01.poc.lab:9095 2>&1 | tail -1 | grep -o '^[0-9]* records sent'
 
-# 3. 每個 replica 多大、在哪幾台
+# 3. 每個 replica 多大，例：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
 sleep 3
-echo "寫入後：$(sz)"
+size=$(kafka-log-dirs $A --describe --topic-list orders.disk-demo 2> /dev/null | tail -1 | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sizes = []
+for b in sorted(d["brokers"], key=lambda b: b["broker"]):
+    for ld in b["logDirs"]:
+        for p in ld["partitions"]:
+            sizes.append("broker %s %d KB" % (b["broker"], p["size"] // 1024))
+print(", ".join(sizes))')
+echo "寫入後：$size"
+
+# 4. replica 在哪幾台
 echo "replica 在：$(kafka-topics $A --describe --topic orders.disk-demo 2> /dev/null | grep -o 'Replicas: [0-9,]*')"
 ```
 
@@ -12934,21 +13958,24 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
 
-# sz：示範 topic 每個 replica 的大小，例：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
-sz() {
-  kafka-log-dirs $A --describe --topic-list orders.disk-demo 2> /dev/null | tail -1 | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-print(", ".join("broker %s %d KB" % (b["broker"], p["size"] // 1024) for b in sorted(d["brokers"], key=lambda b: b["broker"]) for ld in b["logDirs"] for p in ld["partitions"]))'
-}
-
 # 1. retention 改成 60 秒
-kafka-configs $A --alter --entity-type topics --entity-name orders.disk-demo --add-config retention.ms=60000 > /dev/null 2>&1
+kafka-configs $A --alter \
+  --entity-type topics --entity-name orders.disk-demo \
+  --add-config retention.ms=60000 > /dev/null 2>&1
 echo "retention.ms=60000 已設 $(date +%T)"
 
 # 2. 等 broker 的 retention 檢查把三個 replica 都刪到 1 MB 以下：每 10 秒看一次，最多 42 次（7 分鐘）
+#    size 的樣子，例：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
 for i in $(seq 1 42); do
-  size=$(sz)
+  size=$(kafka-log-dirs $A --describe --topic-list orders.disk-demo 2> /dev/null | tail -1 | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sizes = []
+for b in sorted(d["brokers"], key=lambda b: b["broker"]):
+    for ld in b["logDirs"]:
+        for p in ld["partitions"]:
+            sizes.append("broker %s %d KB" % (b["broker"], p["size"] // 1024))
+print(", ".join(sizes))')
 
   if ! echo "$size" | grep -qE '[1-9][0-9]{3} KB'; then
     break
@@ -12960,7 +13987,9 @@ done
 echo "等了約 $((i * 10)) 秒：$size"
 
 # 3. 改回 broker 預設
-kafka-configs $A --alter --entity-type topics --entity-name orders.disk-demo --delete-config retention.ms > /dev/null 2>&1
+kafka-configs $A --alter \
+  --entity-type topics --entity-name orders.disk-demo \
+  --delete-config retention.ms > /dev/null 2>&1
 echo "retention.ms 已改回 broker 預設"
 ```
 
@@ -12976,44 +14005,77 @@ retention.ms 已改回 broker 預設
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
-
-# sz：示範 topic 每個 replica 的大小，例：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
-sz() {
-  kafka-log-dirs $A --describe --topic-list orders.disk-demo 2> /dev/null | tail -1 | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-print(", ".join("broker %s %d KB" % (b["broker"], p["size"] // 1024) for b in sorted(d["brokers"], key=lambda b: b["broker"]) for ld in b["logDirs"] for p in ld["partitions"]))'
-}
+json=~/conf/disk-demo-reassign.json
 
 # 1. 再寫 50000 筆，讓它有東西可搬
-kafka-producer-perf-test --topic orders.disk-demo --num-records 50000 --throughput -1 --record-size 100 \
-  --producer.config ~/conf/app-orders.properties --producer-props bootstrap.servers=kb01.poc.lab:9095 > /dev/null 2>&1
+kafka-producer-perf-test \
+  --topic orders.disk-demo \
+  --num-records 50000 --throughput -1 --record-size 100 \
+  --producer.config ~/conf/app-orders.properties \
+  --producer-props bootstrap.servers=kb01.poc.lab:9095 > /dev/null 2>&1
 sleep 3
-echo "搬之前：$(sz)"
 
-# 2. reassignment JSON：partition 0 的新 replica 名單是 102,103,104（kb01 = 101 不在裡面）
-echo '{"version":1,"partitions":[{"topic":"orders.disk-demo","partition":0,"replicas":[102,103,104]}]}' > ~/conf/disk-demo-reassign.json
+# 2. 搬之前每個 replica 多大，例：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
+size=$(kafka-log-dirs $A --describe --topic-list orders.disk-demo 2> /dev/null | tail -1 | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sizes = []
+for b in sorted(d["brokers"], key=lambda b: b["broker"]):
+    for ld in b["logDirs"]:
+        for p in ld["partitions"]:
+            sizes.append("broker %s %d KB" % (b["broker"], p["size"] // 1024))
+print(", ".join(sizes))')
+echo "搬之前：$size"
 
-# 3. 開始搬
-kafka-reassign-partitions $A --reassignment-json-file ~/conf/disk-demo-reassign.json --execute 2>&1 | grep -E '^Successfully|^Error'
+# 3. reassignment JSON：partition 0 的新 replica 名單是 102,103,104（kb01 = 101 不在裡面）
+cat > $json <<'EOF'
+{"version":1,"partitions":[{"topic":"orders.disk-demo","partition":0,"replicas":[102,103,104]}]}
+EOF
 
-# 4. 等 --verify 說 completed：每 5 秒看一次，最多 30 次
+# 4. 開始搬
+kafka-reassign-partitions $A --reassignment-json-file $json --execute 2>&1 | grep -E '^Successfully|^Error'
+```
+
+```out
+搬之前：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
+Successfully started partition reassignment for orders.disk-demo-0
+```
+
+等它搬完，再看 replica 的位置和 kb01 上的目錄：
+
+```bash
+export JAVA_HOME=/opt/java/current
+export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
+json=~/conf/disk-demo-reassign.json
+
+# 1. 等 --verify 說 completed：每 5 秒看一次，最多 30 次
 t0=$(date +%s)
 
 for i in $(seq 1 30); do
-  if kafka-reassign-partitions $A --reassignment-json-file ~/conf/disk-demo-reassign.json --verify 2> /dev/null | grep -q 'is completed'; then
+  if kafka-reassign-partitions $A --reassignment-json-file $json --verify 2> /dev/null | grep -q 'is completed'; then
     break
   fi
 
   sleep 5
 done
 
-echo "搬完（$(( $(date +%s) - t0 )) 秒）：$(sz)"
+# 2. 搬完每個 replica 多大、在哪幾台
+size=$(kafka-log-dirs $A --describe --topic-list orders.disk-demo 2> /dev/null | tail -1 | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sizes = []
+for b in sorted(d["brokers"], key=lambda b: b["broker"]):
+    for ld in b["logDirs"]:
+        for p in ld["partitions"]:
+            sizes.append("broker %s %d KB" % (b["broker"], p["size"] // 1024))
+print(", ".join(sizes))')
+echo "搬完（$(( $(date +%s) - t0 )) 秒）：$size"
 echo "replica 在：$(kafka-topics $A --describe --topic orders.disk-demo 2> /dev/null | grep -o 'Replicas: [0-9,]*')"
 
-# 5. kb01 上那個 partition 的目錄還在不在（資料目錄是 0750，要 sudo find；名稱完全相同才算）
+# 3. kb01 上那個 partition 的目錄還在不在（資料目錄是 0750，要 sudo find；名稱完全相同才算）
 sleep 5
-count=$(ssh kb01.poc.lab 'sudo find /var/lib/kafka/data -maxdepth 1 -name orders.disk-demo-0' | awk 'END {print NR}')
+count=$(ssh kb01.poc.lab 'sudo find /var/lib/kafka/data -maxdepth 1 -name orders.disk-demo-0' | wc -l)
 
 if [ "$count" = 0 ]; then
   echo "kb01 上的目錄：不存在"
@@ -13023,8 +14085,6 @@ fi
 ```
 
 ```out
-搬之前：broker 101 5370 KB, broker 102 5370 KB, broker 103 5370 KB
-Successfully started partition reassignment for orders.disk-demo-0
 搬完（3 秒）：broker 102 5370 KB, broker 103 5370 KB, broker 104 5370 KB
 replica 在：Replicas: 102,103,104
 kb01 上的目錄：不存在
@@ -13036,7 +14096,10 @@ kb01 上的目錄：不存在
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --delete --topic orders.disk-demo
+kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --delete --topic orders.disk-demo
 rm -f ~/conf/disk-demo-reassign.json
 echo "orders.disk-demo 已刪"
 ```
@@ -13089,7 +14152,10 @@ controller 的 quorum 是動態的（第 10 章用 `--initial-controllers` 格�
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication
+kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --replication
 ```
 
 ```out
@@ -13133,9 +14199,12 @@ kc03 data: 0 files, cp-kafka:confluent:750
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-# 1. 等 15 秒，看 kc01、kc02 眼中的 quorum（只列 controller，node id < 100）
+# 1. 等 15 秒，看 kc01、kc02 眼中的 quorum（只留標題列和 controller：node id 1、2 位數；broker 是 101 起跳）
 sleep 15
-kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication | awk 'NR==1 || $1<100'
+kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --replication | awk '/^(NodeId|[0-9][0-9]?[[:space:]])/ {print $0}'
 
 # 2. 叢集照常：MDS 還回 200
 echo "MDS：$(curl -s -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/v1/metadata/id)"
@@ -13161,16 +14230,17 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config $HOME/conf/client-internal.properties"
 
 # 1. 舊成員的 directory id（node id 3 那一行的第二欄）
-OLD_DIR=$(kafka-metadata-quorum $Q describe --replication | awk '$1==3 {print $2}')
+OLD_DIR=$(kafka-metadata-quorum $Q describe --replication | grep '^3[[:space:]]' | awk '{print $2}')
 echo "移出 3 / $OLD_DIR"
 
 # 2. 移出 quorum
 kafka-metadata-quorum $Q remove-controller --controller-id 3 --controller-directory-id $OLD_DIR
 
-# 3. 目前的成員（CurrentVoters 裡的 id）
+# 3. 目前的成員（CurrentVoters 那一行裡的 id）
 sleep 5
-voters=$(kafka-metadata-quorum $Q describe --status | grep CurrentVoters | grep -o '"id": [0-9]*' | cut -d' ' -f2 | paste -sd' ')
-echo "目前的成員：$voters"
+voter_line=$(kafka-metadata-quorum $Q describe --status | awk '/CurrentVoters/ {print $0}')
+voter_ids=$(echo "$voter_line" | grep -o '"id": [0-9]*' | cut -d' ' -f2)
+echo "目前的成員：$(echo "$voter_ids" | paste -sd' ')"
 ```
 
 ```out
@@ -13190,38 +14260,46 @@ source ~/conf/kraft.env
 
 # 1. 在 kc03 上以 root 執行 EOF 之前的那一段（$1 = cluster id）：以觀察者格式化、啟動、印新的 directory id
 ssh kc03.poc.lab sudo bash -e -s -- $CLUSTER_ID <<'EOF'
-# run <指令…>：帶著 master key（設定檔有 ${securepass:…}，第 15 章）以 cp-kafka 身分執行
-run() {
-  set -a
-  . /etc/confluent/service.env
-  set +a
-  runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
-}
+# 讀 master key（設定檔有 ${securepass:…}，第 15 章，格式化工具也要拿得到）
+set -a
+. /etc/confluent/service.env
+set +a
 
-run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml   kafka-storage format --cluster-id $1 --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1
+# 以 cp-kafka 身分格式化（只看最後一行）
+runuser -u cp-kafka -- env \
+  CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format \
+    --cluster-id $1 \
+    --config /etc/confluent/kafka/server.properties \
+    --no-initial-controllers 2>&1 | tail -1
 
 systemctl start confluent-server
-echo "kc03 $(systemctl is-active confluent-server) dir=$(sed -n 's/^directory.id=//p' /var/lib/kafka/data/meta.properties)"
+new_dir=$(sed -n 's/^directory.id=//p' /var/lib/kafka/data/meta.properties)
+echo "kc03 $(systemctl is-active confluent-server) dir=$new_dir"
 EOF
 
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-
-# kc03_state：kc03 在 quorum 裡的 Lag 與狀態，例：0 Observer
-kc03_state() {
-  kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication 2> /dev/null | awk '$1==3 {print $4, $NF}'
-}
+Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config $HOME/conf/client-internal.properties"
 
 # 2. 等 kc03 追上（Lag 0、Observer）：每 5 秒看一次，最多 60 次
+#    describe 的欄位：NodeId DirectoryId LogEndOffset Lag … Status；取 node id 3 那一行的第 4 欄與最後一欄
 for i in $(seq 1 60); do
-  if [ "$(kc03_state)" = "0 Observer" ]; then
+  kc03_line=$(kafka-metadata-quorum $Q describe --replication 2> /dev/null | awk '/^3[[:space:]]/ {print $0}')
+  lag=$(echo "$kc03_line" | awk '{print $4}')
+  state=$(echo "$kc03_line" | awk '{print $NF}')
+
+  if [ "$lag $state" = "0 Observer" ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "kc03：$(kc03_state | awk '{print "Lag="$1, $2}')"
+echo "kc03：Lag=$lag $state"
 ```
 
 ```out
@@ -13241,13 +14319,10 @@ kc03：Lag=0 Observer
 ```bash
 # 1. 在 kc03 上以 root 執行 EOF 之前的那一段
 ssh kc03.poc.lab sudo bash -e -s <<'EOF'
-# run <指令…>：帶著 master key（設定檔有 ${securepass:…}，第 15 章）以 cp-kafka 身分執行
-run() {
-  set -a
-  . /etc/confluent/service.env
-  set +a
-  runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
-}
+# 讀 master key（設定檔有 ${securepass:…}，第 15 章）
+set -a
+. /etc/confluent/service.env
+set +a
 
 # 這台的 server.properties 加一行 security.protocol=SSL，當 add-controller 的 --command-config（0640 root:confluent，用完就刪）
 conf=/etc/confluent/kafka/add-controller.properties
@@ -13255,7 +14330,16 @@ install -m 0640 -o root -g confluent /dev/null $conf
 cat /etc/confluent/kafka/server.properties > $conf
 echo security.protocol=SSL >> $conf
 
-run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml   kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 --command-config $conf add-controller 2>&1 | grep -v WARN | tail -1
+# 以 cp-kafka 身分登記（WARN 不看，只看最後一行）
+runuser -u cp-kafka -- env \
+  CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-metadata-quorum \
+    --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093 \
+    --command-config $conf \
+    add-controller 2>&1 | grep -v WARN | tail -1
 
 rm -f $conf
 EOF
@@ -13263,9 +14347,12 @@ EOF
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-# 2. 三個成員都在
+# 2. 三個成員都在（只留標題列和 controller：node id 1、2 位數）
 sleep 10
-kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --replication | awk 'NR==1 || $1<100'
+kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --replication | awk '/^(NodeId|[0-9][0-9]?[[:space:]])/ {print $0}'
 ```
 
 ```out
@@ -13281,30 +14368,22 @@ NodeId  DirectoryId             LogEndOffset  Lag  …  Status
 ```bash
 CA=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
-# metric_count：kc03 7071 上 kafka_ 開頭的指標數，例：973
-metric_count() {
-  curl -s --cacert $CA https://kc03.poc.lab:7071/metrics | awk '/^kafka_/ {c++} END {print c + 0}'
-}
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# 1. 等 kc03 的監控端點有指標：每 10 秒看一次，最多 24 次
+# 1. 等 kc03 的監控端點有指標（kafka_ 開頭的超過 20 個）：每 10 秒看一次，最多 24 次
 for i in $(seq 1 24); do
-  if [ "$(metric_count)" -gt 20 ]; then
+  metrics=$(curl -s --cacert $CA https://kc03.poc.lab:7071/metrics | awk '/^kafka_/ {c++} END {print c + 0}')
+
+  if [ "$metrics" -gt 20 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "kc03 7071：$(metric_count)個指標"
+echo "kc03 7071：${metrics}個指標"
 
-# 2. 四台 MDS
+# 2. 四台 MDS（8090）的 HTTP 狀態碼
 for h in kb01 kb02 kb03 kb04; do
-  printf "%s MDS=%s " $h "$(mds_code $h)"
+  printf "%s MDS=%s " $h "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
 echo
 ```
@@ -13338,21 +14417,22 @@ lab 裡：用 kb04（node id 104）演練：先縮減、再當成一台空的新
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
+BROKERS=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094
+A="--bootstrap-server $BROKERS --command-config $HOME/conf/client-admin.properties"
 
-# replicas_on_104：所有 topic 的 replica 名單裡出現 104 的次數，例：80
-replicas_on_104() {
-  kafka-topics $A --describe 2> /dev/null | awk '/Replicas:/ {for (i=1;i<=NF;i++) if ($i=="Replicas:") {n=split($(i+1),r,","); for (j=1;j<=n;j++) if (r[j]==104) c++}} END {print c+0}'
-}
-
-# under_replicated：under-replicated 的 partition 數，例：0
-under_replicated() {
-  kafka-topics $A --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
-
+# 1. Self-Balancing 的狀態
 echo "Self-Balancing：$(kafka-rebalance-cluster $A --status 2> /dev/null | grep -o 'Balancer status: [A-Z_]*')"
-echo "under-replicated：$(under_replicated)"
-echo "kb04（104）上的 replica：$(replicas_on_104)"
+
+# 2. under-replicated 的 partition 數
+under=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+echo "under-replicated：$under"
+
+# 3. replica 名單裡有 104 的 partition 數（名單的樣子：Replicas: 101,102,104）
+on_104=$(kafka-topics $A --describe 2> /dev/null \
+  | grep -oE 'Replicas: [0-9,]+' \
+  | awk '/[ ,]104(,|$)/ {c++} END {print c + 0}')
+echo "kb04（104）上的 replica：$on_104"
 ```
 
 ```out
@@ -13372,8 +14452,14 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 1. 背景寫入 60000 筆、每秒 50 筆（輸出寫到 ~/scale-load.log，最後一塊看結果）
-nohup kafka-producer-perf-test --topic orders.events --num-records 60000 --throughput 50 --record-size 200 \
-  --producer.config ~/conf/app-orders.properties --producer-props acks=all bootstrap.servers=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095 > ~/scale-load.log 2>&1 &
+nohup kafka-producer-perf-test \
+  --topic orders.events \
+  --num-records 60000 \
+  --throughput 50 \
+  --record-size 200 \
+  --producer.config ~/conf/app-orders.properties \
+  --producer-props acks=all bootstrap.servers=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095 \
+  > ~/scale-load.log 2>&1 &
 
 # 2. 確認它在跑
 sleep 5
@@ -13389,19 +14475,17 @@ echo "背景寫入已開始：$(pgrep -fc ProducerPerformance) 個"
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
+BROKERS=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094
+A="--bootstrap-server $BROKERS --command-config $HOME/conf/client-admin.properties"
 
 # 1. 送出移除
 kafka-remove-brokers $A --delete --broker-id 104 2>&1 | grep -v WARN | head -3
 
-# removal_status：104 那一段的移除狀態（從「Broker 104 removal status」那行到下一個 broker 之前）
-removal_status() {
-  kafka-remove-brokers $A --describe 2> /dev/null | awk '/^Broker [0-9]+ removal status/ {on = ($2 == 104)} on'
-}
-
 # 2. 等到 SUCCESS（或 FAIL）：每 30 秒看一次，最多 60 次
+#    --describe 一台 broker 一段，開頭是「Broker 104 removal status - …」；只留 104 那一段（到下一台的開頭之前）
 for i in $(seq 1 60); do
-  status=$(removal_status)
+  status=$(kafka-remove-brokers $A --describe 2> /dev/null \
+    | sed -n '/^Broker 104 /,/^Broker [0-9]/{ /^Broker [0-9]/!p; /^Broker 104 /p; }')
 
   if echo "$status" | grep -q 'removal status - SUCCESS'; then
     break
@@ -13418,7 +14502,9 @@ echo "$status"
 
 # 3. kb04 已經自己關掉 broker；停用服務，免得主機重開又加回來
 ssh kb04.poc.lab 'sudo systemctl disable --now confluent-server > /dev/null 2>&1'
-echo "kb04 confluent-server：$(ssh kb04.poc.lab systemctl is-active confluent-server) / $(ssh kb04.poc.lab systemctl is-enabled confluent-server)"
+printf 'kb04 confluent-server：%s / %s\n' \
+  "$(ssh kb04.poc.lab systemctl is-active confluent-server)" \
+  "$(ssh kb04.poc.lab systemctl is-enabled confluent-server)"
 ```
 
 ```out
@@ -13437,21 +14523,23 @@ kb04 confluent-server：inactive / disabled
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
+BROKERS=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094
+A="--bootstrap-server $BROKERS --command-config $HOME/conf/client-admin.properties"
 
-# replicas_on_104：所有 topic 的 replica 名單裡出現 104 的次數，例：80
-replicas_on_104() {
-  kafka-topics $A --describe 2> /dev/null | awk '/Replicas:/ {for (i=1;i<=NF;i++) if ($i=="Replicas:") {n=split($(i+1),r,","); for (j=1;j<=n;j++) if (r[j]==104) c++}} END {print c+0}'
-}
+# 1. replica 名單裡有 104 的 partition 數（名單的樣子：Replicas: 101,102,104）
+on_104=$(kafka-topics $A --describe 2> /dev/null \
+  | grep -oE 'Replicas: [0-9,]+' \
+  | awk '/[ ,]104(,|$)/ {c++} END {print c + 0}')
+echo "104 上的 replica：$on_104"
 
-# under_replicated：under-replicated 的 partition 數，例：0
-under_replicated() {
-  kafka-topics $A --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
+# 2. under-replicated 的 partition 數
+under=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+echo "under-replicated：$under"
 
-echo "104 上的 replica：$(replicas_on_104)"
-echo "under-replicated：$(under_replicated)"
-echo "叢集裡的 broker：$(kafka-broker-api-versions $A 2> /dev/null | grep -o '(id: [0-9]*' | grep -o '[0-9]*' | sort | paste -sd' ')"
+# 3. 叢集裡的 broker（輸出每台一行，帶「(id: 101」）
+broker_ids=$(kafka-broker-api-versions $A 2> /dev/null | grep -o '(id: [0-9]*' | cut -d' ' -f2)
+echo "叢集裡的 broker：$(echo "$broker_ids" | sort | paste -sd' ')"
 ```
 
 ```out
@@ -13473,36 +14561,37 @@ source ~/conf/kraft.env
 
 # 1. 在 kb04 上以 root 執行 EOF 之前的那一段（$1 = cluster id）：清空資料目錄、以觀察者格式化、啟用並啟動
 ssh kb04.poc.lab sudo bash -e -s -- $CLUSTER_ID <<'EOF'
-# run <指令…>：帶著 master key（設定檔有 ${securepass:…}，第 15 章）以 cp-kafka 身分執行
-run() {
-  set -a
-  . /etc/confluent/service.env
-  set +a
-  runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
-}
+# 讀 master key（設定檔有 ${securepass:…}，第 15 章，格式化工具也要拿得到）
+set -a
+. /etc/confluent/service.env
+set +a
 
 find /var/lib/kafka/data -mindepth 1 -delete
 
-run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml   kafka-storage format --cluster-id $1 --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1
+# 以 cp-kafka 身分格式化（只看最後一行）
+runuser -u cp-kafka -- env \
+  CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format \
+    --cluster-id $1 \
+    --config /etc/confluent/kafka/server.properties \
+    --no-initial-controllers 2>&1 | tail -1
 
 systemctl enable --now confluent-server > /dev/null 2>&1
 EOF
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
 # 2. 等 kb04 的 MDS 回 200：每 5 秒看一次，最多 60 次
 for i in $(seq 1 60); do
-  if [ "$(mds_code kb04)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "kb04 MDS=$(mds_code kb04)"
+echo "kb04 MDS=$(curl -s -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)"
 ```
 
 ```out
@@ -13517,22 +14606,17 @@ Self-Balancing 發現空的 broker 會自己開始搬（不用下指令）。它
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
-
-# replicas_on_104：所有 topic 的 replica 名單裡出現 104 的次數，例：80
-replicas_on_104() {
-  kafka-topics $A --describe 2> /dev/null | awk '/Replicas:/ {for (i=1;i<=NF;i++) if ($i=="Replicas:") {n=split($(i+1),r,","); for (j=1;j<=n;j++) if (r[j]==104) c++}} END {print c+0}'
-}
-
-# under_replicated：under-replicated 的 partition 數，例：0
-under_replicated() {
-  kafka-topics $A --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
+BROKERS=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094,kb04.poc.lab:9094
+A="--bootstrap-server $BROKERS --command-config $HOME/conf/client-admin.properties"
 
 # 1. 等 104 上有 replica、而且沒有 under-replicated：每 30 秒看一次，最多 60 次
+#    名單的樣子：Replicas: 101,102,104
 for i in $(seq 1 60); do
-  n=$(replicas_on_104)
-  u=$(under_replicated)
+  n=$(kafka-topics $A --describe 2> /dev/null \
+    | grep -oE 'Replicas: [0-9,]+' \
+    | awk '/[ ,]104(,|$)/ {c++} END {print c + 0}')
+  u=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+    | awk '/Partition:/ {c++} END {print c + 0}')
 
   if [ "$n" -gt 0 ]; then
     if [ "$u" = 0 ]; then
@@ -13569,7 +14653,9 @@ done
 
 # 2. 最後一行是總結；再數 ERROR 行與 leader 搬家時的重試警告
 tail -1 ~/scale-load.log
-echo "錯誤（ERROR 行）：$(awk '/\] ERROR / {c++} END {print c + 0}' ~/scale-load.log)；leader 搬家時的重試警告（WARN，會自動重送）：$(awk '/NOT_LEADER_OR_FOLLOWER/ {c++} END {print c + 0}' ~/scale-load.log)"
+errors=$(awk '/\] ERROR / {c++} END {print c + 0}' ~/scale-load.log)
+retries=$(awk '/NOT_LEADER_OR_FOLLOWER/ {c++} END {print c + 0}' ~/scale-load.log)
+echo "錯誤（ERROR 行）：$errors；leader 搬家時的重試警告（WARN，會自動重送）：$retries"
 ```
 
 ```out
@@ -13596,8 +14682,14 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 1. 從 _confluent-command 讀出最後一個 JWT（eyJ 開頭、三段用點隔開）
-jwt=$(timeout 90 kafka-console-consumer --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --consumer.config ~/conf/client-admin.properties \
-  --topic _confluent-command --from-beginning --timeout-ms 20000 2> /dev/null | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' | tail -1)
+jwt=$(timeout 90 kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 \
+  --consumer.config ~/conf/client-admin.properties \
+  --topic _confluent-command \
+  --from-beginning \
+  --timeout-ms 20000 2> /dev/null \
+  | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' \
+  | tail -1)
 
 # 2. 中間那段是 base64url：換回一般 base64 的字元、補 = 到 4 的倍數，再解開
 payload=$(echo "$jwt" | cut -d. -f2 | tr '_-' '/+')
@@ -13646,7 +14738,10 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 1. 最後一個 JWT
 jwt=$(timeout 90 kafka-console-consumer --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 \
-  --consumer.config /root/conf/client-admin.properties --topic _confluent-command --from-beginning --timeout-ms 20000 2> /dev/null \
+  --consumer.config /root/conf/client-admin.properties \
+  --topic _confluent-command \
+  --from-beginning \
+  --timeout-ms 20000 2> /dev/null \
   | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' | tail -1)
 
 # 2. 中間那段 base64url → base64、補 = 到 4 的倍數、解開
@@ -13793,7 +14888,11 @@ echo "$d" > ~/conf/reset-from.txt
 echo "重置前的備份：$d"
 
 # 2. 備份裡有多少東西
-echo "topic $(grep -c '^Topic:' $d/topics.txt) 個；principal $(grep -c '^== ' $d/rbac.txt) 個；SCRAM 帳號 $(grep -c 'SCRAM credential configs' $d/users.txt) 個；ACL $(grep -c '|' $d/acls.txt) 條"
+printf 'topic %s 個；principal %s 個；SCRAM 帳號 %s 個；ACL %s 條\n' \
+  "$(grep -c '^Topic:' $d/topics.txt)" \
+  "$(grep -c '^== ' $d/rbac.txt)" \
+  "$(grep -c 'SCRAM credential configs' $d/users.txt)" \
+  "$(grep -c '|' $d/acls.txt)"
 
 # 3. 每個 SCRAM 帳號在 ~/secrets 有沒有密碼檔
 missing=""
@@ -13822,21 +14921,19 @@ topic 18 個；principal 15 個；SCRAM 帳號 6 個；ACL 4 條
 第 2 步：停掉所有服務（C3 → REST Proxy → broker → controller）。Java 程式收到停止訊號時以 143 結束，systemd 會標成 `failed`，所以順手 `reset-failed`，結果應該全部是 `inactive`：
 
 ```bash
-# stop_unit <主機> <unit>：停服務；Java 收到停止訊號以 143 結束、被標成 failed，所以順手 reset-failed
-stop_unit() {
-  ssh $1.poc.lab "sudo systemctl stop $2"
-  ssh $1.poc.lab "sudo systemctl reset-failed $2"
-}
-
 # 1. 依序停：C3 → REST Proxy → broker → controller
-stop_unit c3-01 confluent-control-center
+#    Java 收到停止訊號以 143 結束、被標成 failed，所以每台都接著 reset-failed
+ssh c3-01.poc.lab 'sudo systemctl stop confluent-control-center'
+ssh c3-01.poc.lab 'sudo systemctl reset-failed confluent-control-center'
 
 for h in rest01 rest02; do
-  stop_unit $h confluent-kafka-rest
+  ssh $h.poc.lab 'sudo systemctl stop confluent-kafka-rest'
+  ssh $h.poc.lab 'sudo systemctl reset-failed confluent-kafka-rest'
 done
 
 for h in kb01 kb02 kb03 kb04 kc01 kc02 kc03; do
-  stop_unit $h confluent-server
+  ssh $h.poc.lab 'sudo systemctl stop confluent-server'
+  ssh $h.poc.lab 'sudo systemctl reset-failed confluent-server'
 done
 
 # 2. 每台啟用中的 Confluent 服務現在的狀態（應該全部 inactive；每台執行 EOF 之前的那一段）
@@ -13873,8 +14970,10 @@ for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
 done
 
 # 2. C3 的 Streams 狀態：數字開頭的目錄（prometheus、alertmanager 是畫面的歷史，留著）
-ssh c3-01.poc.lab 'sudo find /var/lib/confluent/control-center -mindepth 1 -maxdepth 1 -name "[0-9]*" -exec rm -rf {} +'
-echo "c3-01：Streams 狀態目錄剩 $(ssh c3-01.poc.lab 'sudo find /var/lib/confluent/control-center -mindepth 1 -maxdepth 1 -name "[0-9]*"' | wc -l) 個（prometheus、alertmanager 留著）"
+c3_dir=/var/lib/confluent/control-center
+ssh c3-01.poc.lab "sudo find $c3_dir -mindepth 1 -maxdepth 1 -name '[0-9]*' -exec rm -rf {} +"
+left=$(ssh c3-01.poc.lab "sudo find $c3_dir -mindepth 1 -maxdepth 1 -name '[0-9]*'" | wc -l)
+echo "c3-01：Streams 狀態目錄剩 $left 個（prometheus、alertmanager 留著）"
 ```
 
 ```out
@@ -13902,55 +15001,79 @@ done
 source ~/conf/kraft.env
 IC="1@kc01.poc.lab:9093:$DIR_ID_kc01,2@kc02.poc.lab:9093:$DIR_ID_kc02,3@kc03.poc.lab:9093:$DIR_ID_kc03"
 
-# 3. controller：格式化並寫入 kafka-admin（密碼檔先 scp 到那台，讀完就刪）；每台以 root 執行 EOF 之前的那一段（$1 = cluster id、$2 = 初始成員）
+# 3. controller：格式化並寫入 kafka-admin（密碼檔先 scp 到那台，讀完就刪）
+#    每台以 root 執行 EOF 之前的那一段（$1 = cluster id、$2 = 初始成員）
 for h in kc01 kc02 kc03; do
   scp -q ~/secrets/kafka-admin.pass $h.poc.lab:/tmp/ka.pass
   ssh $h.poc.lab sudo bash -e -s -- $CLUSTER_ID $IC <<'EOF'
-# run <指令…>：帶著 master key（設定檔有 ${securepass:…}，第 15 章）以 cp-kafka 身分執行
-run() {
-  set -a
-  . /etc/confluent/service.env
-  set +a
-  runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
-}
+# 讀 master key（設定檔有 ${securepass:…}，第 15 章，格式化工具也要拿得到）
+set -a
+. /etc/confluent/service.env
+set +a
 
 password=$(cat /tmp/ka.pass)
 rm -f /tmp/ka.pass
 
-run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-  kafka-storage format --cluster-id $1 --config /etc/confluent/kafka/server.properties --initial-controllers $2 \
-  --add-scram "SCRAM-SHA-512=[name=kafka-admin,password=$password]" 2>&1 | grep -v -i scram | tail -1
+# 以 cp-kafka 身分格式化（有 scram 字樣的行不印，只看最後一行）
+runuser -u cp-kafka -- env \
+  CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format \
+    --cluster-id $1 \
+    --config /etc/confluent/kafka/server.properties \
+    --initial-controllers $2 \
+    --add-scram "SCRAM-SHA-512=[name=kafka-admin,password=$password]" 2>&1 | grep -v -i scram | tail -1
 
 printf '%-5s cluster.id=%s\n' $(hostname) "$(sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)"
 EOF
 done
-
-# 4. broker：以觀察者格式化
-for h in kb01 kb02 kb03 kb04; do
-  ssh $h.poc.lab sudo bash -e -s -- $CLUSTER_ID <<'EOF'
-# run <指令…>：帶著 master key（設定檔有 ${securepass:…}，第 15 章）以 cp-kafka 身分執行
-run() {
-  set -a
-  . /etc/confluent/service.env
-  set +a
-  runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
-}
-
-run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
-  kafka-storage format --cluster-id $1 --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1
-
-printf '%-5s cluster.id=%s\n' $(hostname) "$(sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)"
-EOF
-done
-
-# 5. 新舊 cluster id
-echo "新的 cluster id：$CLUSTER_ID（舊的：$(grep CLUSTER_ID $(ls -t ~/conf/kraft.env.before-reset-* | head -1) | cut -d= -f2)）"
 ```
 
 ```out
 Formatting dynamic metadata voter directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
 kc01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx
 …
+```
+
+@role 小安 | ops02 | root | 只在需要時做（會清空叢集，整本實跑不執行）
+
+接著格式化 broker，再對一下新舊 cluster id：
+
+```bash
+source ~/conf/kraft.env
+
+# 4. broker：以觀察者格式化；每台以 root 執行 EOF 之前的那一段（$1 = cluster id）
+for h in kb01 kb02 kb03 kb04; do
+  ssh $h.poc.lab sudo bash -e -s -- $CLUSTER_ID <<'EOF'
+# 讀 master key（設定檔有 ${securepass:…}，第 15 章，格式化工具也要拿得到）
+set -a
+. /etc/confluent/service.env
+set +a
+
+# 以 cp-kafka 身分格式化（只看最後一行）
+runuser -u cp-kafka -- env \
+  CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format \
+    --cluster-id $1 \
+    --config /etc/confluent/kafka/server.properties \
+    --no-initial-controllers 2>&1 | tail -1
+
+printf '%-5s cluster.id=%s\n' $(hostname) "$(sed -n 's/^cluster.id=//p' /var/lib/kafka/data/meta.properties)"
+EOF
+done
+
+# 5. 新舊 cluster id（舊的從最新一份另存的 kraft.env 讀）
+old_env=$(ls -t ~/conf/kraft.env.before-reset-* | head -1)
+old_id=$(grep CLUSTER_ID $old_env | cut -d= -f2)
+echo "新的 cluster id：$CLUSTER_ID（舊的：$old_id）"
+```
+
+```out
 Formatting metadata directory /var/lib/kafka/data with confluent.metadata.version 4.2-IV1A.
 kb01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx
 …
@@ -13965,29 +15088,8 @@ kb01  cluster.id=xxxxxxxxxxxxxxxxxxxxxx
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 CA=/etc/pki/ca-trust/source/anchors/bank-root.pem
-
-# quorum_status：controller quorum 的狀態（describe --status 的輸出）
-quorum_status() {
-  kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2> /dev/null
-}
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# mds_ready：四台 broker 裡 MDS 回 200 的台數，例：4
-mds_ready() {
-  local n=0
-
-  for b in kb01 kb02 kb03 kb04; do
-    if [ "$(mds_code $b)" = 200 ]; then
-      n=$((n + 1))
-    fi
-  done
-
-  echo $n
-}
+CONTROLLERS=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
+Q="--bootstrap-controller $CONTROLLERS --command-config $HOME/conf/client-internal.properties"
 
 # 1. 啟動 controller，等 quorum 有 leader：每 5 秒看一次，最多 30 次
 for h in kc01 kc02 kc03; do
@@ -13995,14 +15097,17 @@ for h in kc01 kc02 kc03; do
 done
 
 for i in $(seq 1 30); do
-  if quorum_status | grep -q '^LeaderId: *[0-9]'; then
+  if kafka-metadata-quorum $Q describe --status 2> /dev/null | grep -q '^LeaderId: *[0-9]'; then
     break
   fi
 
   sleep 5
 done
 
-quorum_status | grep -E "^(ClusterId|LeaderId|CurrentVoters)" | sed -E 's/("directoryId"|"endpoints")[^}]*//g'
+# 只看這三行；CurrentVoters 裡的 directoryId、endpoints 太長，拿掉
+kafka-metadata-quorum $Q describe --status 2> /dev/null \
+  | grep -E '^(ClusterId|LeaderId|CurrentVoters)' \
+  | sed 's/"directoryId"[^}]*//g; s/"endpoints"[^}]*//g'
 
 # 2. 啟動 broker，等四台 MDS 都回 200：每 5 秒看一次，最多 60 次
 for h in kb01 kb02 kb03 kb04; do
@@ -14010,7 +15115,18 @@ for h in kb01 kb02 kb03 kb04; do
 done
 
 for i in $(seq 1 60); do
-  if [ "$(mds_ready)" = 4 ]; then
+  # 這一輪有幾台回 200
+  ready=0
+
+  for b in kb01 kb02 kb03 kb04; do
+    url=https://$b.poc.lab:8090/v1/metadata/id
+
+    if [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA $url)" = 200 ]; then
+      ready=$((ready + 1))
+    fi
+  done
+
+  if [ "$ready" = 4 ]; then
     break
   fi
 
@@ -14018,7 +15134,8 @@ for i in $(seq 1 60); do
 done
 
 # 3. MDS 看到的要是新的 cluster id
-echo "broker 的 MDS 回 200：$(mds_ready) / 4（約 $((i * 5)) 秒）；MDS 看到的 cluster id：$(curl -s --cacert $CA https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)"
+mds_cluster=$(curl -s --cacert $CA https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+echo "broker 的 MDS 回 200：$ready / 4（約 $((i * 5)) 秒）；MDS 看到的 cluster id：$mds_cluster"
 ```
 
 ```out
@@ -14035,11 +15152,18 @@ export JAVA_HOME=/opt/java/current
 source ~/conf/kraft.env
 
 # 1. 用 kafka-internal 的憑證登入 MDS（super.users 只有它，叢集剛起來時只有它能寫 binding）
-confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
-  --certificate-only --client-cert-path ~/pki/certs/kafka-internal.crt --client-key-path ~/pki/keys/kafka-internal.key > /dev/null
+confluent login \
+  --url https://kb01.poc.lab:8090 \
+  --certificate-authority-path ~/pki/certs/bank-root.pem \
+  --certificate-only \
+  --client-cert-path ~/pki/certs/kafka-internal.crt \
+  --client-key-path ~/pki/keys/kafka-internal.key > /dev/null
 
 # 2. 第一條 binding，然後列出來看
-confluent iam rbac role-binding create --principal User:svc-ops --role SystemAdmin --kafka-cluster "$CLUSTER_ID" > /dev/null
+confluent iam rbac role-binding create \
+  --principal User:svc-ops \
+  --role SystemAdmin \
+  --kafka-cluster "$CLUSTER_ID" > /dev/null
 confluent iam rbac role-binding list --principal User:svc-ops --kafka-cluster "$CLUSTER_ID" | tail -n +3
 ```
 
@@ -14078,17 +15202,27 @@ topic_count=0
 for topic in $(grep -oP '^Topic: \K[^\t]+' "$backup/topics.txt" | grep '\.' | grep -v '^_'); do
   # topics.txt 裡這個 topic 的第一行：PartitionCount 與 ReplicationFactor
   line=$(grep -P "^Topic: $topic\t" "$backup/topics.txt" | head -1)
-  partitions=$(echo "$line" | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')
-  rf=$(echo "$line" | sed -n 's/.*ReplicationFactor: \([0-9]*\).*/\1/p')
+  partitions=$(echo "$line" | grep -o 'PartitionCount: [0-9]*' | cut -d' ' -f2)
+  rf=$(echo "$line" | grep -o 'ReplicationFactor: [0-9]*' | cut -d' ' -f2)
 
   # 動態設定：topic-configs.txt 裡「Dynamic configs for topic <名稱> are:」底下那幾行的第一欄（key=value）
   config_args=""
 
-  for kv in $(awk -v t="$topic" '$0 == "Dynamic configs for topic " t " are:"{p=1;next} /^Dynamic configs/{p=0} p{print $1}' "$backup/topic-configs.txt"); do
+  config_lines=$(awk -v t="$topic" '
+    $0 == "Dynamic configs for topic " t " are:" { p = 1; next }
+    /^Dynamic configs/ { p = 0 }
+    p { print $1 }
+  ' "$backup/topic-configs.txt")
+
+  for kv in $config_lines; do
     config_args="$config_args --config $kv"
   done
 
-  if kafka-topics $A --create --if-not-exists --topic "$topic" --partitions "$partitions" --replication-factor "$rf" $config_args > /dev/null 2>&1; then
+  if kafka-topics $A --create --if-not-exists \
+    --topic "$topic" \
+    --partitions "$partitions" \
+    --replication-factor "$rf" \
+    $config_args > /dev/null 2>&1; then
     topic_count=$((topic_count + 1))
   else
     echo "topic $topic 失敗"
@@ -14100,7 +15234,9 @@ echo "topic：$topic_count 個"
 
 # ---- 2. role binding：rbac.txt 裡每個 principal 的每一行（一行一條：principal|角色|資源類型|資源名稱|比對方式）----
 if ! confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
-  --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null; then
+  --certificate-only \
+  --client-cert-path ~/pki/certs/svc-ops.crt \
+  --client-key-path ~/pki/keys/svc-ops.key > /dev/null; then
   echo "svc-ops 登不進 MDS（第 6 步做了嗎？）"
   exit 1
 fi
@@ -14169,7 +15305,9 @@ scram_count=0
 missing=""
 
 for user in $(grep -o "SCRAM credential configs for user-principal '[^']*'" "$backup/users.txt" | cut -d"'" -f2); do
-  iterations=$(grep "SCRAM credential configs for user-principal '$user'" "$backup/users.txt" | grep -o 'iterations=[0-9]*' | head -1)
+  iterations=$(grep "SCRAM credential configs for user-principal '$user'" "$backup/users.txt" \
+    | grep -o 'iterations=[0-9]*' \
+    | head -1)
 
   if [ -z "$iterations" ]; then
     iterations=iterations=8192
@@ -14181,7 +15319,10 @@ for user in $(grep -o "SCRAM credential configs for user-principal '[^']*'" "$ba
   fi
 
   # 出錯時 kafka-configs 會印出密碼，所以輸出丟掉
-  if kafka-configs $A --alter --entity-type users --entity-name "$user" --add-config "SCRAM-SHA-512=[$iterations,password=$(cat ~/secrets/$user.pass)]" > /dev/null 2>&1; then
+  user_password=$(cat ~/secrets/$user.pass)
+
+  if kafka-configs $A --alter --entity-type users --entity-name "$user" \
+    --add-config "SCRAM-SHA-512=[$iterations,password=$user_password]" > /dev/null 2>&1; then
     scram_count=$((scram_count + 1))
   else
     echo "SCRAM $user 失敗"
@@ -14198,7 +15339,11 @@ echo "SCRAM 帳號：$scram_count 個；沒有密碼檔：$missing"
 # ---- 4. 配額（有些是只用憑證的帳號，沒有 SCRAM 也有配額）：一行一個「帳號 key=value,key=value」----
 quota_count=0
 quotas=$(mktemp)
-grep "^Quota configs for user-principal" "$backup/users.txt" | sed "s/^Quota configs for user-principal '\([^']*\)' are /\1 /; s/\.0\b//g; s/, /,/g" > $quotas
+grep "^Quota configs for user-principal" "$backup/users.txt" | sed \
+  -e "s/^Quota configs for user-principal '//" \
+  -e "s/' are / /" \
+  -e 's/\.0\b//g' \
+  -e 's/, /,/g' > $quotas
 
 while read -r user quota; do
   if kafka-configs $A --alter --entity-type users --entity-name "$user" --add-config "$quota" > /dev/null 2>&1; then
@@ -14246,7 +15391,15 @@ while IFS='|' read -r rtype name pat principal host op perm; do
   fi
 
   # 操作：備份裡是 DESCRIBE_CONFIGS 這種寫法，kafka-acls 要 DescribeConfigs
-  operation=$(awk -v s="$op" 'BEGIN{n=split(tolower(s),a,"_"); for(i=1;i<=n;i++) printf "%s", toupper(substr(a[i],1,1)) substr(a[i],2)}')
+  operation=$(awk -v s="$op" '
+    BEGIN {
+      n = split(tolower(s), a, "_")
+
+      for (i = 1; i <= n; i++) {
+        printf "%s", toupper(substr(a[i], 1, 1)) substr(a[i], 2)
+      }
+    }
+  ')
 
   # 誰：ALLOW 或 DENY；host 不是 * 才指定
   if [ "$perm" = DENY ]; then
@@ -14276,7 +15429,12 @@ echo "ACL：$acl_count 條"
 # ---- 6. broker 動態設定（叢集層級的預設值）----
 default_count=0
 
-for kv in $(awk '/^Default configs for brokers/{p=1;next} p{print $1}' "$backup/broker-configs.txt"); do
+config_lines=$(awk '
+  /^Default configs for brokers/ { p = 1; next }
+  p { print $1 }
+' "$backup/broker-configs.txt")
+
+for kv in $config_lines; do
   if kafka-configs $A --alter --entity-type brokers --entity-default --add-config "$kv" > /dev/null 2>&1; then
     default_count=$((default_count + 1))
   else
@@ -14313,15 +15471,8 @@ broker 動態設定：1 個
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
-# rest_code：經 LB 的 REST Proxy（用 app-legacy-billing 的憑證）的 HTTP 狀態碼
-rest_code() {
-  curl -s -o /dev/null -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters
-}
-
-# c3_code：C3 首頁的 HTTP 狀態碼
-c3_code() {
-  curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
+# 經 LB 的 REST Proxy 用 app-legacy-billing 的憑證
+REST_CERT="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key"
 
 # 1. 啟動 REST Proxy 與 C3
 for h in rest01 rest02; do
@@ -14332,8 +15483,8 @@ ssh c3-01.poc.lab 'sudo systemctl start confluent-control-center'
 
 # 2. 等兩個都回 200：每 5 秒看一次，最多 60 次
 for i in $(seq 1 60); do
-  if [ "$(rest_code)" = 200 ]; then
-    if [ "$(c3_code)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' $REST_CERT https://rest.poc.lab:8082/v3/clusters)" = 200 ]; then
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
       break
     fi
   fi
@@ -14341,11 +15492,20 @@ for i in $(seq 1 60); do
   sleep 5
 done
 
-echo "REST 經 LB=$(rest_code) C3=$(c3_code)（約 $((i * 5)) 秒）"
+printf 'REST 經 LB=%s C3=%s（約 %s 秒）\n' \
+  "$(curl -s -o /dev/null -w '%{http_code}' $REST_CERT https://rest.poc.lab:8082/v3/clusters)" \
+  "$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)" \
+  "$((i * 5))"
 
 # 3. license：26.1 的讀法
-jwt=$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9094 --consumer.config ~/conf/client-admin.properties --topic _confluent-command \
-  --from-beginning --timeout-ms 20000 2> /dev/null | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' | tail -1)
+jwt=$(kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --consumer.config ~/conf/client-admin.properties \
+  --topic _confluent-command \
+  --from-beginning \
+  --timeout-ms 20000 2> /dev/null \
+  | grep -a -o 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' \
+  | tail -1)
 payload=$(echo "$jwt" | cut -d. -f2 | tr '_-' '/+')
 
 while [ $(( ${#payload} % 4 )) != 0 ]; do
@@ -14353,10 +15513,11 @@ while [ $(( ${#payload} % 4 )) != 0 ]; do
 done
 
 claims=$(echo "$payload" | base64 -d 2> /dev/null)
+license_type=$(echo "$claims" | grep -o '"licenseType":"[^"]*"' | cut -d'"' -f4)
 expires_at=$(echo "$claims" | grep -o '"exp":[0-9]*' | cut -d: -f2)
-echo "license：$(echo "$claims" | grep -o '"licenseType":"[^"]*"' | cut -d'"' -f4)，到期 $(date -d @$expires_at '+%F %T')，剩 $(( (expires_at - $(date +%s)) / 86400 )) 天"
+echo "license：$license_type，到期 $(date -d @$expires_at '+%F %T')，剩 $(( (expires_at - $(date +%s)) / 86400 )) 天"
 
-unset jwt payload claims expires_at
+unset jwt payload claims license_type expires_at
 ```
 
 ```out
@@ -14403,13 +15564,24 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
 
 # 1. 兩個 topic：3 個 partition、RF 3；保留天數照申請單（inventory 3 天、shipping 7 天）
-kafka-topics $A --create --if-not-exists --topic inventory.stock --partitions 3 --replication-factor 3 --config retention.ms=259200000 > /dev/null
-kafka-topics $A --create --if-not-exists --topic shipping.events --partitions 3 --replication-factor 3 --config retention.ms=604800000 > /dev/null
+kafka-topics $A --create --if-not-exists \
+  --topic inventory.stock \
+  --partitions 3 \
+  --replication-factor 3 \
+  --config retention.ms=259200000 > /dev/null
+kafka-topics $A --create --if-not-exists \
+  --topic shipping.events \
+  --partitions 3 \
+  --replication-factor 3 \
+  --config retention.ms=604800000 > /dev/null
 
 # 2. 看 partition 數、RF、retention
 for t in inventory.stock shipping.events; do
-  summary=$(kafka-topics $A --describe --topic $t | head -1 | grep -oE 'PartitionCount: [0-9]+\s+ReplicationFactor: [0-9]+' | tr -s '\t' ' ')
-  retention=$(kafka-configs $A --describe --entity-type topics --entity-name $t | grep -oE 'retention.ms=[0-9]+' | head -1)
+  first_line=$(kafka-topics $A --describe --topic $t | head -1)
+  summary=$(echo "$first_line" | grep -oE 'PartitionCount: [0-9]+\s+ReplicationFactor: [0-9]+' | tr -s '\t' ' ')
+  retention=$(kafka-configs $A --describe --entity-type topics --entity-name $t \
+    | grep -oE 'retention.ms=[0-9]+' \
+    | head -1)
   echo "$t: $summary，retention $retention"
 done
 ```
@@ -14432,8 +15604,12 @@ A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin
 source ~/conf/kraft.env
 
 # svc-ops 登入 MDS（建 binding 用）
-confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
-  --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null
+confluent login \
+  --url https://kb01.poc.lab:8090 \
+  --certificate-authority-path ~/pki/certs/bank-root.pem \
+  --certificate-only \
+  --client-cert-path ~/pki/certs/svc-ops.crt \
+  --client-key-path ~/pki/keys/svc-ops.key > /dev/null
 
 for a in app-inventory-a app-inventory-b; do
   # 1. 密碼檔（0600）
@@ -14441,19 +15617,37 @@ for a in app-inventory-a app-inventory-b; do
   openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$a.pass
 
   # 2. SCRAM 帳號與配額（kafka-configs 出錯時會印出密碼，所以輸出丟掉）
-  kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/$a.pass)]" > /dev/null 2>&1
-  kafka-configs $A --alter --entity-type users --entity-name $a --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' > /dev/null 2>&1
+  kafka-configs $A --alter --entity-type users --entity-name $a \
+    --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat ~/secrets/$a.pass)]" > /dev/null 2>&1
+  kafka-configs $A --alter --entity-type users --entity-name $a \
+    --add-config 'producer_byte_rate=5242880,consumer_byte_rate=10485760,request_percentage=50' > /dev/null 2>&1
 
   # 3. 三條 binding：inventory. 前綴的寫與讀、inventory- 前綴的 consumer group
   for role in DeveloperWrite DeveloperRead; do
-    confluent iam rbac role-binding create --principal User:$a --role $role --resource Topic:inventory. --prefix --kafka-cluster $CLUSTER_ID > /dev/null
+    confluent iam rbac role-binding create \
+      --principal User:$a \
+      --role $role \
+      --resource Topic:inventory. \
+      --prefix \
+      --kafka-cluster $CLUSTER_ID > /dev/null
   done
-  confluent iam rbac role-binding create --principal User:$a --role DeveloperRead --resource Group:inventory- --prefix --kafka-cluster $CLUSTER_ID > /dev/null
+  confluent iam rbac role-binding create \
+    --principal User:$a \
+    --role DeveloperRead \
+    --resource Group:inventory- \
+    --prefix \
+    --kafka-cluster $CLUSTER_ID > /dev/null
 
   # 4. 確認：SCRAM 迭代次數、配額、binding 條數
-  scram=$(kafka-configs $A --describe --entity-type users --entity-name $a 2> /dev/null | grep -o 'SCRAM-SHA-512=iterations=[0-9]*' | head -1)
-  quota=$(kafka-configs $A --describe --entity-type users --entity-name $a 2> /dev/null | grep -o 'producer_byte_rate=[0-9.]*' | head -1)
-  echo "$a: SCRAM $scram，配額 $quota，binding $(confluent iam rbac role-binding list --principal User:$a --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"') 條"
+  scram=$(kafka-configs $A --describe --entity-type users --entity-name $a 2> /dev/null \
+    | grep -o 'SCRAM-SHA-512=iterations=[0-9]*' \
+    | head -1)
+  quota=$(kafka-configs $A --describe --entity-type users --entity-name $a 2> /dev/null \
+    | grep -o 'producer_byte_rate=[0-9.]*' \
+    | head -1)
+  binding_count=$(confluent iam rbac role-binding list --principal User:$a --kafka-cluster $CLUSTER_ID -o json \
+    | awk '/"role"/ {c++} END {print c + 0}')
+  echo "$a: SCRAM $scram，配額 $quota，binding $binding_count 條"
 done
 ```
 
@@ -14505,7 +15699,10 @@ d=""
 
 for c in ca ca/g2; do
   if [ -f $c/issuing.crt ]; then
-    if openssl verify -CAfile "$(cygpath -m ca/exchange/anchor.pem)" "$(cygpath -m $c/issuing.crt)" > /dev/null 2>&1; then
+    anchor=$(cygpath -m ca/exchange/anchor.pem)
+    issuing=$(cygpath -m $c/issuing.crt)
+
+    if openssl verify -CAfile "$anchor" "$issuing" > /dev/null 2>&1; then
       d=$c
     fi
   fi
@@ -14536,81 +15733,77 @@ signed app-shipping.csr -> app-shipping.crt
 ```bash
 cd ~/pki
 n=app-shipping
-
-# split_reply <名稱>：銀行回覆的 incoming/<名稱>.crt 拆成 leaf（第一張）和 issuers（其餘的中繼 CA）（同 9.3）
-split_reply() {
-  local name=$1
-
-  awk -v n=$name 'BEGIN{c=0} /BEGIN CERT/{c++} {print > ("incoming/" n ".part" c)}' incoming/$name.crt
-  mv incoming/$name.part1 incoming/$name.leaf.pem
-  cat incoming/$name.part[2-9] > incoming/$name.issuers.pem 2> /dev/null
-  rm -f incoming/$name.part*
-}
-
-# cert_pubkey <憑證>、key_pubkey <私鑰>：公鑰的 sha256 前 16 碼；兩個一樣 = 憑證和私鑰是一對
-cert_pubkey() {
-  openssl x509 -in "$1" -pubkey -noout | sha256sum | cut -c1-16
-}
-
-key_pubkey() {
-  openssl pkey -in "$1" -pubout 2> /dev/null | sha256sum | cut -c1-16
-}
-
-# cert_cn <憑證>：CN，例 app-shipping
-cert_cn() {
-  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
-}
-
-# cert_eku <憑證>：用途，例 TLSWebClientAuthentication
-cert_eku() {
-  openssl x509 -in "$1" -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' '
-}
-
-# cert_days <憑證>：還有幾天到期
-cert_days() {
-  local end
-  end=$(openssl x509 -in "$1" -noout -enddate | cut -d= -f2)
-  echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
-}
-
-# 1. 拆開回覆
-split_reply $n
 leaf=incoming/$n.leaf.pem
 
-# 2. 檢查：私鑰相符、CN、鏈驗得到銀行根憑證；EKU 與剩幾天直接印出來看
-if [ "$(cert_pubkey $leaf)" = "$(key_pubkey keys/$n.key)" ]; then
+# 1. 拆開回覆（同 9.3）：第一張是 leaf，其餘是中繼 CA
+sed '/END CERTIFICATE/q' incoming/$n.crt > $leaf
+sed '1,/END CERTIFICATE/d' incoming/$n.crt > incoming/$n.issuers.pem
+
+# 2. 私鑰相符：憑證和私鑰的公鑰 sha256 前 16 碼一樣，才是一對
+cert_pub=$(openssl x509 -in $leaf -pubkey -noout | sha256sum | cut -c1-16)
+key_pub=$(openssl pkey -in keys/$n.key -pubout 2> /dev/null | sha256sum | cut -c1-16)
+
+if [ "$cert_pub" = "$key_pub" ]; then
   key=ok
 else
   key=MISMATCH
 fi
 
-cn=$(cert_cn $leaf)
+# 3. CN 要等於帳號名（主旨的樣子：subject=CN=app-shipping,O=PoC Bank,C=TW）
+subject=$(openssl x509 -in $leaf -noout -subject -nameopt sep_comma_plus,sname)
+cn=$(echo "$subject" | grep -o 'CN=[^,]*' | cut -d= -f2)
+
 if [ "$cn" = "$n" ]; then
   cn=ok
 fi
 
-if openssl verify -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem -untrusted incoming/$n.issuers.pem $leaf > /dev/null 2>&1; then
+# 4. 鏈要驗得到銀行根憑證
+if openssl verify \
+  -CAfile /etc/pki/ca-trust/source/anchors/bank-root.pem \
+  -untrusted incoming/$n.issuers.pem \
+  $leaf > /dev/null 2>&1; then
   chain=ok
 else
   chain=FAIL
 fi
 
-printf '%s key=%s cn=%s eku=%s days=%s chain=%s\n' $n $key "$cn" "$(cert_eku $leaf)" "$(cert_days $leaf)" $chain
+# 5. EKU（用途，例 TLSWebClientAuthentication）與還有幾天到期，直接印出來看
+eku=$(openssl x509 -in $leaf -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' ')
+end_date=$(openssl x509 -in $leaf -noout -enddate | cut -d= -f2)
+end_epoch=$(date -d "$end_date" +%s)
+days=$(( (end_epoch - $(date +%s)) / 86400 ))
 
-# 3. 正式的 PEM（leaf＋中繼）
+printf '%s key=%s cn=%s eku=%s days=%s chain=%s\n' $n $key "$cn" "$eku" "$days" $chain
+```
+
+```out
+app-shipping key=ok cn=ok eku=TLSWebClientAuthentication days=364 chain=ok
+```
+
+檢查都過了，再做正式的 PEM 和交給應用程式的 p12：
+
+```bash
+cd ~/pki
+n=app-shipping
+
+# 1. 正式的 PEM（leaf＋中繼）
 cat incoming/$n.leaf.pem incoming/$n.issuers.pem > certs/$n.crt
 
-# 4. 交給應用程式的 p12：用它自己的密碼（0600），不用平台的 store.pass
+# 2. 交給應用程式的 p12：用它自己的密碼（0600），不用平台的 store.pass
 install -m 0600 /dev/null ~/secrets/$n-p12.pass
 openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > ~/secrets/$n-p12.pass
-openssl pkcs12 -export -name $n -inkey keys/$n.key -in certs/$n.crt -out certs/$n.p12 -passout file:$HOME/secrets/$n-p12.pass
+openssl pkcs12 -export \
+  -name $n \
+  -inkey keys/$n.key \
+  -in certs/$n.crt \
+  -out certs/$n.p12 \
+  -passout file:$HOME/secrets/$n-p12.pass
 chmod 0600 certs/$n.p12
 
 echo "certs/$n.crt、certs/$n.p12 做好（p12 密碼 ~/secrets/$n-p12.pass）"
 ```
 
 ```out
-app-shipping key=ok cn=ok eku=TLSWebClientAuthentication days=364 chain=ok
 certs/app-shipping.crt、certs/app-shipping.p12 做好（p12 密碼 ~/secrets/app-shipping-p12.pass）
 ```
 
@@ -14624,15 +15817,25 @@ source ~/conf/kraft.env
 
 # 1. 兩條 binding：shipping. 前綴的寫與讀
 for role in DeveloperWrite DeveloperRead; do
-  confluent iam rbac role-binding create --principal User:app-shipping --role $role --resource Topic:shipping. --prefix --kafka-cluster $CLUSTER_ID > /dev/null
+  confluent iam rbac role-binding create \
+    --principal User:app-shipping \
+    --role $role \
+    --resource Topic:shipping. \
+    --prefix \
+    --kafka-cluster $CLUSTER_ID > /dev/null
 done
 
 # 2. 配額
-kafka-configs $A --alter --entity-type users --entity-name app-shipping --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' > /dev/null 2>&1
+kafka-configs $A --alter --entity-type users --entity-name app-shipping \
+  --add-config 'producer_byte_rate=1048576,consumer_byte_rate=2097152,request_percentage=25' > /dev/null 2>&1
 
 # 3. 確認
-quota=$(kafka-configs $A --describe --entity-type users --entity-name app-shipping 2> /dev/null | grep -o 'producer_byte_rate=[0-9.]*' | head -1)
-echo "app-shipping: binding $(confluent iam rbac role-binding list --principal User:app-shipping --kafka-cluster $CLUSTER_ID -o json | grep -c '"role"') 條，配額 $quota"
+quota=$(kafka-configs $A --describe --entity-type users --entity-name app-shipping 2> /dev/null \
+  | grep -o 'producer_byte_rate=[0-9.]*' \
+  | head -1)
+binding_count=$(confluent iam rbac role-binding list --principal User:app-shipping --kafka-cluster $CLUSTER_ID -o json \
+  | awk '/"role"/ {c++} END {print c + 0}')
+echo "app-shipping: binding $binding_count 條，配額 $quota"
 ```
 
 ```out
@@ -14738,8 +15941,9 @@ install -d -m 0700 ~/handover
 
 # 1. 直連系統的交接檔（0600）：bootstrap、協定、兩個帳號的密碼；畫面不印內容
 f=~/handover/app-inventory-$(date +%F).txt
+bootstrap=kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095
 install -m 0600 /dev/null $f
-echo "app-inventory（$(date +%F)）：bootstrap kb01.poc.lab:9095,kb02.poc.lab:9095,kb03.poc.lab:9095,kb04.poc.lab:9095；SASL_SSL／SCRAM-SHA-512；平常用 -a" >> $f
+echo "app-inventory（$(date +%F)）：bootstrap $bootstrap；SASL_SSL／SCRAM-SHA-512；平常用 -a" >> $f
 
 for a in app-inventory-a app-inventory-b; do
   echo "$a $(cat ~/secrets/$a.pass)" >> $f
@@ -14784,22 +15988,43 @@ ssl.truststore.location=/root/pki/certs/truststore.p12
 ssl.truststore.password=$(cat ~/pki/store.pass)
 EOF
 
-# 2. 直連：寫一筆到 inventory.stock，用 inventory- 前綴的 group 讀回
+# 2. 直連：寫一筆到 inventory.stock，用 inventory- 前綴的 group 讀回（讀回：讀到這一筆的行數）
 msg="onboard-$(date +%s)"
-echo "$msg" | kafka-console-producer --bootstrap-server kb01.poc.lab:9095 --producer.config $conf --topic inventory.stock > /dev/null 2>&1
-echo "app-inventory-a 寫入 inventory.stock：ok；讀回：$(kafka-console-consumer --bootstrap-server kb01.poc.lab:9095 --consumer.config $conf --topic inventory.stock --group inventory-check --from-beginning --max-messages 1 --timeout-ms 30000 2> /dev/null | grep -c "^$msg$")"
+echo "$msg" | kafka-console-producer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --producer.config $conf \
+  --topic inventory.stock > /dev/null 2>&1
+echo "app-inventory-a 寫入 inventory.stock：ok；讀回：$(kafka-console-consumer \
+  --bootstrap-server kb01.poc.lab:9095 \
+  --consumer.config $conf \
+  --topic inventory.stock \
+  --group inventory-check \
+  --from-beginning \
+  --max-messages 1 \
+  --timeout-ms 30000 2> /dev/null | grep -c "^$msg$")"
 rm -f $conf
 
 # 3. 走 REST：經 LB POST 一筆；v3 produce 一律回 HTTP 200，成功或被拒看回應 JSON 的 error_code
+#    error_code 例：200（成功）、40301（沒權限）
 cluster_id=$(curl -s --cacert $CA https://kb01.poc.lab:8090/v1/metadata/id | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+SHIPPING_CERT="--cert $HOME/pki/certs/app-shipping.crt --key $HOME/pki/keys/app-shipping.key"
+TOPICS_URL=https://rest.poc.lab:8082/v3/clusters/$cluster_id/topics
 
-# rest_produce <topic> <內容>：用 app-shipping 的憑證寫一筆，印 error_code，例：200（成功）、40301（沒權限）
-rest_produce() {
-  curl -s --cacert $CA --cert ~/pki/certs/app-shipping.crt --key ~/pki/keys/app-shipping.key -X POST -H 'Content-Type: application/json' \
-    -d "{\"value\":{\"type\":\"JSON\",\"data\":\"$2\"}}" "https://rest.poc.lab:8082/v3/clusters/$cluster_id/topics/$1/records" | grep -o '"error_code":[0-9]*' | cut -d: -f2
-}
+# 寫自己的 topic
+own_topic=$(curl -s --cacert $CA $SHIPPING_CERT -X POST -H 'Content-Type: application/json' \
+  -d "{\"value\":{\"type\":\"JSON\",\"data\":\"$msg-rest\"}}" \
+  "$TOPICS_URL/shipping.events/records" \
+  | grep -o '"error_code":[0-9]*' \
+  | cut -d: -f2)
 
-echo "app-shipping 經 REST 寫入 shipping.events：error_code $(rest_produce shipping.events $msg-rest)；寫別人的 topic：error_code $(rest_produce inventory.stock x)（應被拒：40301）"
+# 寫別人的 topic（應被拒）
+other_topic=$(curl -s --cacert $CA $SHIPPING_CERT -X POST -H 'Content-Type: application/json' \
+  -d "{\"value\":{\"type\":\"JSON\",\"data\":\"x\"}}" \
+  "$TOPICS_URL/inventory.stock/records" \
+  | grep -o '"error_code":[0-9]*' \
+  | cut -d: -f2)
+
+echo "app-shipping 經 REST 寫入 shipping.events：error_code $own_topic；寫別人的 topic：error_code $other_topic（應被拒：40301）"
 ```
 
 ```out
@@ -14811,7 +16036,7 @@ app-shipping 經 REST 寫入 shipping.events：error_code 200；寫別人的 top
 
 @role 維運人員 | ops02 | root
 
-系統退役時反過來做（選單 37 做前兩步）：解除 binding → SCRAM 密碼覆寫成隨機值（帳號留著，稽核日誌裡的名字才查得到；配額一起拿掉）→ 憑證：從 `requests.txt` 拿掉、私鑰與憑證刪掉、到期不續（REST 的授權靠 binding，拿掉就進不來；REST 白名單裡的 CN 留著無害，下次照 12.1 重啟 REST 時一併拿掉）→ topic 等保留期過了再刪（lab 直接刪）。最後確認：舊密碼登不進、binding 0 條、topic 不在：
+系統退役時反過來做（選單 37 做前兩步）：解除 binding → SCRAM 密碼覆寫成隨機值（帳號留著，稽核日誌裡的名字才查得到；配額一起拿掉）→ 憑證：從 `requests.txt` 拿掉、私鑰與憑證刪掉、到期不續（REST 的授權靠 binding，拿掉就進不來；REST 白名單裡的 CN 留著無害，下次照 12.1 重啟 REST 時一併拿掉）→ topic 等保留期過了再刪（lab 直接刪）。最後確認：舊密碼登不進、binding 0 條、topic 不在。分三塊做，前兩塊沒有輸出：
 
 ```bash
 export JAVA_HOME=/opt/java/current
@@ -14822,65 +16047,75 @@ source ~/conf/kraft.env
 # 最後要證明舊密碼登不進：先記住
 old=$(cat ~/secrets/app-inventory-a.pass)
 
-# bindings_of <principal>：一行一條「角色|資源類型|名稱|比對方式」，例：DeveloperRead|Topic|inventory.|PREFIXED
-bindings_of() {
-  confluent iam rbac role-binding list --principal $1 --kafka-cluster $CLUSTER_ID -o json | python3 -c '
-import json, sys
-for b in json.load(sys.stdin):
-    print("|".join([b["role"], b.get("resource_type", ""), b.get("name", ""), b.get("pattern_type", "")]))'
-}
-
-# delete_binding <參數…>：刪一條 binding；只有 50003（auth topic 的 leader 剛搬家，見 28.4）才再送一次
-delete_binding() {
-  local result
-
-  if result=$(confluent iam rbac role-binding delete "$@" --force 2>&1); then
-    return 0
-  fi
-
-  if echo "$result" | grep -q "not the current leader"; then
-    confluent iam rbac role-binding delete "$@" --force > /dev/null 2>&1
-    return
-  fi
-
-  return 1
-}
-
 # 1. 三個帳號：解除每一條 binding、拿掉配額
 for p in app-inventory-a app-inventory-b app-shipping; do
+  # 這個帳號的 binding，一行一條「角色|資源類型|名稱|比對方式」，例：DeveloperRead|Topic|inventory.|PREFIXED
   list=$(mktemp)
-  bindings_of User:$p > $list
+  confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | python3 -c '
+import json, sys
+for b in json.load(sys.stdin):
+    print("|".join([b["role"], b.get("resource_type", ""), b.get("name", ""), b.get("pattern_type", "")]))' > $list
 
   while IFS='|' read -r role rtype rname pattern; do
+    # 這條 binding 的參數；PREFIXED 的多加 --prefix
+    binding="--principal User:$p --role $role --resource $rtype:$rname --kafka-cluster $CLUSTER_ID"
+
     if [ "$pattern" = PREFIXED ]; then
-      delete_binding --principal User:$p --role $role --resource $rtype:$rname --prefix --kafka-cluster $CLUSTER_ID
-    else
-      delete_binding --principal User:$p --role $role --resource $rtype:$rname --kafka-cluster $CLUSTER_ID
+      binding="$binding --prefix"
+    fi
+
+    # 刪；只有 50003（auth topic 的 leader 剛搬家，見 28.4）才再送一次，其他錯誤印出來並停下
+    if ! result=$(confluent iam rbac role-binding delete $binding --force 2>&1); then
+      if echo "$result" | grep -q "not the current leader"; then
+        confluent iam rbac role-binding delete $binding --force > /dev/null 2>&1
+      else
+        echo "$result"
+        false
+      fi
     fi
   done < $list
 
   rm -f $list
-  kafka-configs $A --alter --entity-type users --entity-name $p --delete-config producer_byte_rate,consumer_byte_rate,request_percentage > /dev/null 2>&1
+  kafka-configs $A --alter --entity-type users --entity-name $p \
+    --delete-config producer_byte_rate,consumer_byte_rate,request_percentage > /dev/null 2>&1
 done
+```
+
+```bash
+export JAVA_HOME=/opt/java/current
+export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
 
 # 2. 兩個 SCRAM 帳號：密碼覆寫成隨機值（帳號留著，稽核日誌裡的名字才查得到）、刪掉密碼檔
 for a in app-inventory-a app-inventory-b; do
-  kafka-configs $A --alter --entity-type users --entity-name $a --add-config "SCRAM-SHA-512=[iterations=8192,password=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)]" > /dev/null 2>&1
+  random_pass=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)
+  kafka-configs $A --alter --entity-type users --entity-name $a \
+    --add-config "SCRAM-SHA-512=[iterations=8192,password=$random_pass]" > /dev/null 2>&1
   rm -f ~/secrets/$a.pass
 done
+
+unset random_pass
 
 # 3. 憑證：從 requests.txt 拿掉、私鑰與憑證刪掉（到期不續）；交接檔一起刪
 cd ~/pki
 sed -i '/^app-shipping /d' requests.txt
-rm -f keys/app-shipping.key requests/app-shipping.csr incoming/app-shipping.* certs/app-shipping.crt certs/app-shipping.p12 ~/secrets/app-shipping-p12.pass
+rm -f keys/app-shipping.key requests/app-shipping.csr incoming/app-shipping.*
+rm -f certs/app-shipping.crt certs/app-shipping.p12 ~/secrets/app-shipping-p12.pass
 rm -rf ~/handover/app-inventory-*.txt ~/handover/app-shipping
 
 # 4. topic（正式環境等保留期過了再刪）
 for t in inventory.stock shipping.events; do
   kafka-topics $A --delete --topic $t > /dev/null 2>&1
 done
+```
 
-# 5. 舊密碼還登不登得進（暫存的 client 設定用完即刪）
+```bash
+export JAVA_HOME=/opt/java/current
+export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+A="--bootstrap-server kb01.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
+source ~/conf/kraft.env
+
+# 5. 舊密碼還登不登得進（$old 是第一塊記住的舊密碼；暫存的 client 設定用完即刪）
 conf=$(mktemp)
 cat > $conf <<EOF
 security.protocol=SASL_SSL
@@ -14904,11 +16139,16 @@ unset old
 binding_total=0
 
 for p in app-inventory-a app-inventory-b app-shipping; do
-  n=$(confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json | awk '/"role"/ {c++} END {print c + 0}')
+  n=$(confluent iam rbac role-binding list --principal User:$p --kafka-cluster $CLUSTER_ID -o json \
+    | awk '/"role"/ {c++} END {print c + 0}')
   binding_total=$((binding_total + n))
 done
 
-echo "舊密碼登入：$login；binding：$binding_total 條；topic：$(kafka-topics $A --list 2> /dev/null | grep -cE '^(inventory|shipping)\.')；pki 殘留：$(ls ~/pki/keys ~/pki/certs | grep -c app-shipping)"
+# 7. topic 與 ~/pki 的殘留
+topics_left=$(kafka-topics $A --list 2> /dev/null | awk '/^(inventory|shipping)\./ {c++} END {print c + 0}')
+pki_left=$(ls ~/pki/keys ~/pki/certs | awk '/app-shipping/ {c++} END {print c + 0}')
+
+echo "舊密碼登入：$login；binding：$binding_total 條；topic：$topics_left；pki 殘留：$pki_left"
 ```
 
 ```out
@@ -14957,39 +16197,40 @@ echo "舊密碼登入：$login；binding：$binding_total 條；topic：$(kafka-
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼；連不上是 000
-mds_code() {
-  curl -sk -m 5 -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# partitions <選項>：kafka-topics --describe 加上這個選項列出的 partition 數，例：partitions --under-replicated-partitions → 0
-partitions() {
-  kafka-topics $A --describe $1 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
+BROKERS=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094
+A="--bootstrap-server $BROKERS --command-config $HOME/conf/client-admin.properties"
+CONTROLLERS=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
+Q="--bootstrap-controller $CONTROLLERS --command-config $HOME/conf/client-internal.properties"
 
 # 1. quorum 的 leader（空白 = controller 沒有 leader，最嚴重）
-echo "quorum：$(kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2> /dev/null | grep -E '^LeaderId' | tr -s ' ')"
+echo "quorum：$(kafka-metadata-quorum $Q describe --status 2> /dev/null | grep -E '^LeaderId' | tr -s ' ')"
 
 # 2. 哪幾台 broker 在線
-echo "broker 在線：$(kafka-broker-api-versions $A 2> /dev/null | grep -oE '^[a-z0-9.]+:9094' | sort | paste -sd' ')"
+online=$(kafka-broker-api-versions $A 2> /dev/null | grep -oE '^[a-z0-9.]+:9094' | sort)
+echo "broker 在線：$(echo "$online" | paste -sd' ')"
 
 # 3. under-replicated 與 offline 的 partition 數
-echo "under-replicated：$(partitions --under-replicated-partitions)；offline：$(partitions --unavailable-partitions)"
+under=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+offline=$(kafka-topics $A --describe --unavailable-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+echo "under-replicated：$under；offline：$offline"
 
-# 4. 每台 broker 的 MDS
+# 4. 每台 broker 的 MDS（8090）的 HTTP 狀態碼；連不上是 000
 # （用 printf 印，不存進變數：連不上時 curl 的結束碼不是 0，存進變數會讓那一行算失敗）
 printf "MDS："
 
 for h in kb01 kb02 kb03 kb04; do
-  printf "%s=%s " $h "$(mds_code $h)"
+  printf "%s=%s " $h "$(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
 
 echo
 
 # 5. REST 經 LB（用 app-legacy-billing 的憑證）與 C3
-echo "REST 經 LB：$(curl -s -m 30 -o /dev/null -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)；C3：$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+REST_CERT="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key"
+printf 'REST 經 LB：%s；C3：%s\n' \
+  "$(curl -s -m 30 -o /dev/null -w '%{http_code}' $REST_CERT https://rest.poc.lab:8082/v3/clusters)" \
+  "$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
 ```
 
 ```out
@@ -15012,7 +16253,9 @@ podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
 curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c '
 import json, sys
 a = json.load(sys.stdin)["data"]["alerts"]
-firing = sorted(set(x["labels"]["alertname"] + "(" + x["labels"].get("hostname", x["labels"].get("env", "")) + ")" for x in a if x["state"] == "firing"))
+firing = sorted(set(
+    x["labels"]["alertname"] + "(" + x["labels"].get("hostname", x["labels"].get("env", "")) + ")"
+    for x in a if x["state"] == "firing"))
 pending = sorted(set(x["labels"]["alertname"] for x in a if x["state"] == "pending"))
 print("firing：" + (", ".join(firing) or "無") + "；pending：" + (", ".join(pending) or "無"))'
 EOF
@@ -15053,34 +16296,40 @@ kb04 confluent-server：failed 03:35:36
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼；連不上是 000
-mds_code() {
-  curl -sk -m 5 -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# partitions <選項>：kafka-topics --describe 加上這個選項列出的 partition 數
-partitions() {
-  kafka-topics $A --describe $1 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
+BROKERS=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094
+A="--bootstrap-server $BROKERS --command-config $HOME/conf/client-admin.properties"
 
 # 1. 快照（28.2 的前幾項）；多印一個 under-replicated 的 partition，看缺的是哪個 broker id
-echo "broker 在線：$(kafka-broker-api-versions $A 2> /dev/null | grep -oE '^[a-z0-9.]+:9094' | sort | paste -sd' ')"
-echo "under-replicated：$(partitions --under-replicated-partitions)；offline：$(partitions --unavailable-partitions)；缺的 broker：$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null | grep -oE 'Replicas: [0-9,]+\s+Isr: [0-9,]+' | head -1)"
+online=$(kafka-broker-api-versions $A 2> /dev/null | grep -oE '^[a-z0-9.]+:9094' | sort)
+echo "broker 在線：$(echo "$online" | paste -sd' ')"
 
-# （用 printf 印，不存進變數：連不上時 curl 的結束碼不是 0，存進變數會讓那一行算失敗）
+under=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+offline=$(kafka-topics $A --describe --unavailable-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+missing=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+  | grep -oE 'Replicas: [0-9,]+\s+Isr: [0-9,]+' \
+  | head -1)
+echo "under-replicated：$under；offline：$offline；缺的 broker：$missing"
+
+# （用 printf 印，不存進變數：連不上時 curl 的結束碼不是 0，存進變數會讓那一行算失敗；連不上是 000）
 printf "MDS："
 
 for h in kb01 kb02 kb03 kb04; do
-  printf "%s=%s " $h "$(mds_code $h)"
+  printf "%s=%s " $h "$(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
 
 echo
-echo "REST 經 LB：$(curl -s -m 30 -o /dev/null -w '%{http_code}' --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key https://rest.poc.lab:8082/v3/clusters)；C3：$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+
+REST_CERT="--cert $HOME/pki/certs/app-legacy-billing.crt --key $HOME/pki/keys/app-legacy-billing.key"
+printf 'REST 經 LB：%s；C3：%s\n' \
+  "$(curl -s -m 30 -o /dev/null -w '%{http_code}' $REST_CERT https://rest.poc.lab:8082/v3/clusters)" \
+  "$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
 
 # 2. 那一台：服務狀態、日誌最後一行（前 120 字）
-echo "kb04：$(ssh kb04.poc.lab systemctl is-active confluent-server)；日誌最後一行：$(ssh kb04.poc.lab 'sudo journalctl -u confluent-server -n 200 --no-pager' | tail -1 | cut -c1-120)"
+#    is-active 在服務沒起來時結束碼不是 0，所以同樣放在 printf 的參數裡
+last_log=$(ssh kb04.poc.lab 'sudo journalctl -u confluent-server -n 200 --no-pager' | tail -1 | cut -c1-120)
+printf 'kb04：%s；日誌最後一行：%s\n' "$(ssh kb04.poc.lab systemctl is-active confluent-server)" "$last_log"
 ```
 
 ```out
@@ -15096,21 +16345,20 @@ kb04：failed；日誌最後一行：Oct 29 03:35:36 kb04 systemd[1]: confluent-
 告警：`ConfluentTargetDown` 2 分鐘後 firing、`KafkaUnderReplicatedPartitions` 5 分鐘後 firing（`for` 是故意放寬的，滾動重啟時才不會叫人）。lab 每 10 秒看一次、最多等 7 分鐘：
 
 ```bash
-# alerts：在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印 firing（附主機或 env）與 pending 的告警（同 28.2）
-alerts() {
-  podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
+# 等 KafkaUnderReplicatedPartitions 變 firing：每 10 秒看一次，最多 42 次（7 分鐘）
+for i in $(seq 1 42); do
+  # 在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印 firing（附主機或 env）與 pending 的告警（同 28.2）
+  status=$(podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
 curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c '
 import json, sys
 a = json.load(sys.stdin)["data"]["alerts"]
-firing = sorted(set(x["labels"]["alertname"] + "(" + x["labels"].get("hostname", x["labels"].get("env", "")) + ")" for x in a if x["state"] == "firing"))
+firing = sorted(set(
+    x["labels"]["alertname"] + "(" + x["labels"].get("hostname", x["labels"].get("env", "")) + ")"
+    for x in a if x["state"] == "firing"))
 pending = sorted(set(x["labels"]["alertname"] for x in a if x["state"] == "pending"))
 print("firing：" + (", ".join(firing) or "無") + "；pending：" + (", ".join(pending) or "無"))'
 EOF
-}
-
-# 等 KafkaUnderReplicatedPartitions 變 firing：每 10 秒看一次，最多 42 次（7 分鐘）
-for i in $(seq 1 42); do
-  status=$(alerts)
+  )
 
   if echo "$status" | grep -qE 'firing：[^；]*KafkaUnderReplicatedPartitions'; then
     break
@@ -15136,17 +16384,8 @@ echo "等了約 $((i * 10)) 秒：$status"
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-A="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼；連不上是 000
-mds_code() {
-  curl -sk -m 5 -o /dev/null -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# partitions <選項>：kafka-topics --describe 加上這個選項列出的 partition 數
-partitions() {
-  kafka-topics $A --describe $1 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
+BROKERS=kb01.poc.lab:9094,kb02.poc.lab:9094,kb03.poc.lab:9094
+A="--bootstrap-server $BROKERS --command-config $HOME/conf/client-admin.properties"
 
 # 1. 重啟那一台
 ssh kb04.poc.lab 'sudo systemctl restart confluent-server'
@@ -15154,8 +16393,11 @@ echo "kb04：$(ssh kb04.poc.lab systemctl is-active confluent-server)"
 
 # 2. 等 under-replicated 歸零、kb04 的 MDS 回 200：每 10 秒看一次，最多 30 次
 for i in $(seq 1 30); do
-  if [ "$(partitions --under-replicated-partitions)" = 0 ]; then
-    if [ "$(mds_code kb04)" = 200 ]; then
+  under=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+    | awk '/Partition:/ {c++} END {print c + 0}')
+
+  if [ "$under" = 0 ]; then
+    if [ "$(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
   fi
@@ -15163,7 +16405,14 @@ for i in $(seq 1 30); do
   sleep 10
 done
 
-echo "等了約 $((i * 10)) 秒：under-replicated $(partitions --under-replicated-partitions)、kb04 MDS $(mds_code kb04)；broker 在線：$(kafka-broker-api-versions $A 2> /dev/null | grep -oE '^[a-z0-9.]+:9094' | wc -l) / 4"
+under=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+online=$(kafka-broker-api-versions $A 2> /dev/null | grep -oE '^[a-z0-9.]+:9094' | wc -l)
+printf '等了約 %s 秒：under-replicated %s、kb04 MDS %s；broker 在線：%s / 4\n' \
+  "$((i * 10))" \
+  "$under" \
+  "$(curl -sk -m 5 -o /dev/null -w '%{http_code}' https://kb04.poc.lab:8090/v1/metadata/id)" \
+  "$online"
 ```
 
 ```out
@@ -15176,19 +16425,16 @@ kb04：active
 告警自己解除（條件不成立就從 firing 消失，Alertmanager 送 resolved）：
 
 ```bash
-# firing_names：在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印現在 firing 的告警名稱
-firing_names() {
-  podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
+# 等 firing 變成無：每 10 秒看一次，最多 18 次
+for i in $(seq 1 18); do
+  # 在 labnet 上起一個臨時容器（執行 EOF 之前的那一段），印現在 firing 的告警名稱
+  status=$(podman run --rm -i --network lab_labnet lab-node:96 bash -s <<'EOF'
 curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c '
 import json, sys
 a = json.load(sys.stdin)["data"]["alerts"]
 print("firing：" + (", ".join(sorted(set(x["labels"]["alertname"] for x in a if x["state"] == "firing"))) or "無"))'
 EOF
-}
-
-# 等 firing 變成無：每 10 秒看一次，最多 18 次
-for i in $(seq 1 18); do
-  status=$(firing_names)
+  )
 
   if echo "$status" | grep -q '^firing：無'; then
     break
@@ -15243,8 +16489,10 @@ lab 用「網路團隊在 broker 上擋掉操作機連 8090」模擬（只加 ru
 
 ```bash
 # 每台 broker 加一條 runtime 規則：擋操作機（172.35.0.10）連 8090
+rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject'
+
 for h in kb01 kb02 kb03 kb04; do
-  echo "$h: $(podman exec lab-$h-1 firewall-cmd --add-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"
+  echo "$h: $(podman exec lab-$h-1 firewall-cmd --add-rich-rule="$rule")"
 done
 ```
 
@@ -15268,18 +16516,18 @@ fi
 
 CA=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
-# port_open <主機> <port>：TCP 連得上印「通」，否則「不通」
-port_open() {
-  if timeout 5 bash -c "< /dev/tcp/$1/$2" 2> /dev/null; then
-    echo 通
-  else
-    echo 不通
-  fi
-}
-
 # 1. 每台 broker：8090（MDS）與 9095（SCRAM）
 for h in kb01 kb02 kb03 kb04; do
-  printf '%s 8090=%s 9095=%s\n' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)" "$(port_open $h.poc.lab 9095)"
+  # 9095：TCP 連得上是「通」，否則「不通」
+  if timeout 5 bash -c "< /dev/tcp/$h.poc.lab/9095" 2> /dev/null; then
+    port_9095=通
+  else
+    port_9095=不通
+  fi
+
+  printf '%s 8090=%s 9095=%s\n' $h \
+    "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)" \
+    "$port_9095"
 done
 
 # 2. bob 用選單 11：AD 登入失敗，進入緊急主機模式（只看前四行，每行前 120 個字元）
@@ -15335,23 +16583,28 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 1. 暫存的連線設定：借 app-orders 那一份，帳密換成 kafka-admin（暫存目錄最後刪掉；密碼不印）
 tmp=$(mktemp -d)
-grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/admin.properties
-echo "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-admin\" password=\"$(cat ~/secrets/kafka-admin.pass)\";" >> $tmp/admin.properties
-A="--bootstrap-server kb01.poc.lab:9095,kb02.poc.lab:9095 --command-config $tmp/admin.properties"
-
-# partitions <選項>：kafka-topics --describe 加上這個選項列出的 partition 數
-partitions() {
-  kafka-topics $A --describe $1 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
+conf=$tmp/admin.properties
+scram_module=org.apache.kafka.common.security.scram.ScramLoginModule
+password=$(cat ~/secrets/kafka-admin.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
+echo "sasl.jaas.config=$scram_module required username=\"kafka-admin\" password=\"$password\";" >> $conf
+unset password
+A="--bootstrap-server kb01.poc.lab:9095,kb02.poc.lab:9095 --command-config $conf"
 
 # 2. 查狀態
-echo "topic 數：$(kafka-topics $A --list | wc -l)；under-replicated：$(partitions --under-replicated-partitions)；offline：$(partitions --unavailable-partitions)"
+topic_count=$(kafka-topics $A --list | wc -l)
+under=$(kafka-topics $A --describe --under-replicated-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+offline=$(kafka-topics $A --describe --unavailable-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')
+echo "topic 數：$topic_count；under-replicated：$under；offline：$offline"
 
 # 3. 建 topic、改 retention、刪 topic
 kafka-topics $A --create --topic orders.mds-down --partitions 3 --replication-factor 3 > /dev/null 2>&1
 echo "建立 orders.mds-down：OK"
 
-kafka-configs $A --alter --entity-type topics --entity-name orders.mds-down --add-config retention.ms=86400000 > /dev/null 2>&1
+kafka-configs $A --alter --entity-type topics --entity-name orders.mds-down \
+  --add-config retention.ms=86400000 > /dev/null 2>&1
 kafka-configs $A --describe --entity-type topics --entity-name orders.mds-down | grep -o 'retention.ms=[0-9]*' | head -1
 
 kafka-topics $A --delete --topic orders.mds-down
@@ -15375,8 +16628,10 @@ retention.ms=86400000
 
 ```bash
 # 每台 broker 拿掉那條 runtime 規則
+rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject'
+
 for h in kb01 kb02 kb03 kb04; do
-  echo "$h: $(podman exec lab-$h-1 firewall-cmd --remove-rich-rule='rule family="ipv4" source address="172.35.0.10" port port="8090" protocol="tcp" reject')"
+  echo "$h: $(podman exec lab-$h-1 firewall-cmd --remove-rich-rule="$rule")"
 done
 ```
 
@@ -15394,7 +16649,8 @@ CA=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
 # 1. 四台的 8090 回來了
 for h in kb01 kb02 kb03 kb04; do
-  printf '%s 8090=%s  ' $h "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)"
+  printf '%s 8090=%s  ' $h \
+    "$(curl -s -m 5 -o /dev/null -w '%{http_code}' --cacert $CA https://$h.poc.lab:8090/v1/metadata/id)"
 done
 echo
 
@@ -15411,24 +16667,31 @@ kb01 8090=200  kb02 8090=200  kb03 8090=200  kb04 8090=200
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-BS=kb01.poc.lab:9094
 tmp=$(mktemp -d)   # 暫存目錄：新舊密碼與連線設定都放這裡，最後刪掉
+conf=$tmp/c.properties
+scram_module=org.apache.kafka.common.security.scram.ScramLoginModule
 
-# admin_login <密碼檔>：用這個密碼以 kafka-admin 從 9095 列 topic，印「登入成功」或「被拒」
-#   連線設定借 app-orders 那一份，帳密那一行換掉
-admin_login() {
-  grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $tmp/c.properties
-  echo "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-admin\" password=\"$(cat $1)\";" >> $tmp/c.properties
+# 1. 模擬一次緊急使用：用目前的密碼以 kafka-admin 從 9095 列 topic（連線設定借 app-orders 那一份，帳密那一行換掉）
+password=$(cat ~/secrets/kafka-admin.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
+echo "sasl.jaas.config=$scram_module required username=\"kafka-admin\" password=\"$password\";" >> $conf
+unset password
 
-  if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $tmp/c.properties --list > /dev/null 2>&1; then
-    echo 登入成功
-  else
-    echo 被拒
-  fi
-}
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
+  echo "緊急使用（目前的密碼）：登入成功"
+else
+  echo "緊急使用（目前的密碼）：被拒"
+fi
+```
 
-# 1. 模擬一次緊急使用（目前的密碼）
-echo "緊急使用（目前的密碼）：$(admin_login ~/secrets/kafka-admin.pass)"
+```out
+緊急使用（目前的密碼）：登入成功
+```
+
+用完照 20.2 換掉密碼，確認新密碼登得進、舊密碼被拒（`$tmp`、`$conf`、`$scram_module` 沿用上一塊的）：
+
+```bash
+BS=kb01.poc.lab:9094
 
 # 2. 留一份舊密碼，產生新密碼（0600）
 cp -p ~/secrets/kafka-admin.pass $tmp/old.pass
@@ -15436,7 +16699,8 @@ install -m 0600 /dev/null $tmp/new.pass
 openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24 > $tmp/new.pass
 
 # 3. 叢集改成功，才換掉 ~/secrets/kafka-admin.pass（kafka-configs 出錯會把密碼印出來，所以輸出全丟）
-if kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --alter --entity-type users --entity-name kafka-admin \
+if kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties \
+  --alter --entity-type users --entity-name kafka-admin \
   --add-config "SCRAM-SHA-512=[iterations=8192,password=$(cat $tmp/new.pass)]" > /dev/null 2>&1; then
   install -m 0600 $tmp/new.pass ~/secrets/kafka-admin.pass
 else
@@ -15445,15 +16709,39 @@ else
   false
 fi
 
-# 4. 確認：SCRAM 憑據還在；新密碼登得進、舊密碼被拒
-echo "kafka-admin: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties --describe --entity-type users --entity-name kafka-admin 2> /dev/null | grep -o 'SCRAM-SHA-512=[^ ]*')"
-echo "換完：新密碼 $(admin_login ~/secrets/kafka-admin.pass)；舊密碼 $(admin_login $tmp/old.pass)"
+# 4. 確認：SCRAM 憑據還在
+echo "kafka-admin: $(kafka-configs --bootstrap-server $BS --command-config ~/conf/client-admin.properties \
+  --describe --entity-type users --entity-name kafka-admin 2> /dev/null | grep -o 'SCRAM-SHA-512=[^ ]*')"
+
+# 5. 新密碼登得進嗎
+password=$(cat ~/secrets/kafka-admin.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
+echo "sasl.jaas.config=$scram_module required username=\"kafka-admin\" password=\"$password\";" >> $conf
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
+  new_result=登入成功
+else
+  new_result=被拒
+fi
+
+# 6. 舊密碼應該被拒
+password=$(cat $tmp/old.pass)
+grep -v '^sasl.jaas.config' ~/conf/app-orders.properties > $conf
+echo "sasl.jaas.config=$scram_module required username=\"kafka-admin\" password=\"$password\";" >> $conf
+unset password
+
+if kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config $conf --list > /dev/null 2>&1; then
+  old_result=登入成功
+else
+  old_result=被拒
+fi
+
+echo "換完：新密碼 $new_result；舊密碼 $old_result"
 
 rm -rf $tmp
 ```
 
 ```out
-緊急使用（目前的密碼）：登入成功
 kafka-admin: SCRAM-SHA-512=iterations=8192
 換完：新密碼 登入成功；舊密碼 被拒
 ```
@@ -15518,13 +16806,19 @@ tar -C ~/repo -cf - confluent | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/r
 
 # 4. 從 c3-01 看套件庫裡有哪些版本（執行 EOF 之前的那一段）
 ssh c3-01.poc.lab bash -s <<'EOF'
-# versions <套件>：套件庫 confluent-internal 裡這個套件有哪些版本，例：8.2.4 8.3.2（--refresh：剛推上去）
-versions() {
-  sudo dnf -q --refresh --showduplicates list $1 2> /dev/null | awk '/confluent-internal/ {print $2}' | sed 's/^1://; s/-1$//' | sort -uV | paste -sd' ' -
-}
+# confluent-server：套件庫 confluent-internal 裡有哪些版本（--refresh：剛推上去）
+list=$(sudo dnf -q --refresh --showduplicates list confluent-server 2> /dev/null)
+raw=$(echo "$list" | awk '/confluent-internal/ {print $2}')
 
-echo "套件庫裡的 confluent-server：$(versions confluent-server)"
-echo "套件庫裡的 C3：$(versions confluent-control-center-next-gen)"
+# 版本欄長這樣：1:8.3.2-1，去掉頭尾變成 8.3.2
+versions=$(echo "$raw" | sed 's/^1://; s/-1$//' | sort -uV)
+echo "套件庫裡的 confluent-server：$(echo "$versions" | paste -sd' ' -)"
+
+# C3：同樣的做法
+list=$(sudo dnf -q --refresh --showduplicates list confluent-control-center-next-gen 2> /dev/null)
+raw=$(echo "$list" | awk '/confluent-internal/ {print $2}')
+versions=$(echo "$raw" | sed 's/^1://; s/-1$//' | sort -uV)
+echo "套件庫裡的 C3：$(echo "$versions" | paste -sd' ' -)"
 EOF
 ```
 
@@ -15540,20 +16834,32 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 1. 現在的 features（metadata 版本）
-kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe 2> /dev/null | grep confluent.metadata.version | tr -s ' \t' ' '
+kafka-features \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  describe 2> /dev/null | grep confluent.metadata.version | tr -s ' \t' ' '
 
 # 2. quorum 有 leader
-kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093 --command-config ~/conf/client-internal.properties describe --status 2> /dev/null | grep LeaderId
+kafka-metadata-quorum \
+  --bootstrap-controller kc01.poc.lab:9093 \
+  --command-config ~/conf/client-internal.properties \
+  describe --status 2> /dev/null | grep LeaderId
 
 # 3. 套件庫裡有新版（@ 開頭的是這台裝著的）
 dnf -q --refresh list --showduplicates confluent-server 2> /dev/null | grep confluent-internal | tr -s ' '
 
 # 4. 沒有沒追上的複本
-echo "under-replicated: $(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}')"
+echo "under-replicated: $(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}')"
 
 # 5. 8.3 拿掉的設定：每台 server.properties 裡有幾行（要全部是 0）
+removed='message.format.version|message.downconversion.enable'
+removed="$removed|message.timestamp.difference.max.ms|log.message.format.version"
+
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04; do
-  printf '%s:%s ' $h "$(ssh $h.poc.lab 'sudo grep -cE "^(message.format.version|message.downconversion.enable|message.timestamp.difference.max.ms|log.message.format.version)" /etc/confluent/kafka/server.properties')"
+  printf '%s:%s ' $h "$(ssh $h.poc.lab "sudo grep -cE '^($removed)' /etc/confluent/kafka/server.properties")"
 done
 echo
 ```
@@ -15580,16 +16886,23 @@ export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 B=~/upgrade-backup/$(date +%Y%m%d-%H%M)
 install -d -m 0700 $B
 
-# 1. 每台的 /etc/confluent 與 systemd drop-in，打包回操作機（service.env 不放進來）
+# 1. 每台的 /etc/confluent 與 systemd drop-in，打包回操作機（service.env 不放進來；每台執行 EOF 之前的那一段）
 #    drop-in 目錄用絕對路徑找、再去掉開頭的 /（tar 用 -C /，要相對路徑）
 for h in kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01; do
-  ssh $h.poc.lab 'sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent $(ls -d /etc/systemd/system/confluent-*.service.d 2> /dev/null | cut -c2-)' > $B/$h.tar.gz
+  ssh $h.poc.lab bash -s > $B/$h.tar.gz <<'EOF'
+dropins=$(ls -d /etc/systemd/system/confluent-*.service.d 2> /dev/null | cut -c2-)
+sudo tar -czf - -C / --exclude=etc/confluent/service.env etc/confluent $dropins
+EOF
+
   printf '%s %s  ' $h "$(du -h $B/$h.tar.gz | cut -f1)"
 done
 echo
 
 # 2. features 狀態、操作機的套件清單
-kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties describe > $B/features.txt 2> /dev/null
+kafka-features \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  describe > $B/features.txt 2> /dev/null
 rpm -qa 'confluent-*' | sort > $B/ops02-packages.txt
 echo "$B"
 ```
@@ -15640,7 +16953,10 @@ sudo systemctl daemon-reload
 # C3 自己要寫的 4 個 generated 檔：RPM 換版本會把它們改回 root，改回 cp-control-center
 cd /etc/confluent-control-center
 
-for f in alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml; do
+generated_files="alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml"
+generated_files="$generated_files prometheus-generated-local.yml"
+
+for f in $generated_files; do
   sudo chown cp-control-center:confluent $f
   sudo chmod 0640 $f
 done
@@ -15652,7 +16968,12 @@ else
   config=CHANGED
 fi
 
-echo "$(rpm -q confluent-control-center-next-gen) config=$config exec=$(systemctl show confluent-control-center -p ExecStart --value | grep -o '/etc/[^ ]*properties' | head -1) lock=$(sudo dnf -q versionlock list | grep control-center)"
+c3_version=$(rpm -q confluent-control-center-next-gen)
+exec_start=$(systemctl show confluent-control-center -p ExecStart --value)
+exec_path=$(echo "$exec_start" | grep -o '/etc/[^ ]*properties' | head -1)
+lock_lines=$(sudo dnf -q versionlock list)
+
+echo "$c3_version config=$config exec=$exec_path lock=$(echo "$lock_lines" | grep control-center)"
 
 # 重啟 C3 內建的 Prometheus、Alertmanager 與 C3
 for u in prometheus alertmanager confluent-control-center; do
@@ -15678,7 +16999,17 @@ for i in $(seq 1 60); do
 done
 
 # 3. 畫面與 C3 內建 Prometheus 的指標種類數（歷史指標不該因換版本而消失）
-echo "UI=$(ui_code)（約 $((i * 5)) 秒）；Prometheus 指標 $(curl -s -m 10 --cert ~/pki/certs/c3-monitoring.crt --key ~/pki/keys/c3-monitoring.key https://c3-01.poc.lab:9090/api/v1/label/__name__/values | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l) 種"
+# 連不上時指標種類算 0，不讓這一行中止
+if ! all_names=$(curl -s -m 10 \
+  --cert ~/pki/certs/svc-ops.crt \
+  --key ~/pki/keys/svc-ops.key \
+  https://c3-01.poc.lab:9090/api/v1/label/__name__/values); then
+  all_names=""
+fi
+
+kinds=$(echo "$all_names" | grep -o 'confluent_kafka_server[a-z_]*' | sort -u)
+
+echo "UI=$(ui_code)（約 $((i * 5)) 秒）；Prometheus 指標 $(echo "$kinds" | grep -c .) 種"
 
 if [ "$(ui_code)" != 200 ]; then
   exit 1
@@ -15694,10 +17025,24 @@ echo "C3 現在：$(ssh c3-01.poc.lab 'rpm -q confluent-control-center-next-gen'
 bash ~/conf/c3-change.sh 2.6.1 install
 
 # 3. C3 自己寫的 4 個檔，擁有者都是 cp-control-center
-echo "C3 自己寫的 4 個檔：$(ssh c3-01.poc.lab 'cd /etc/confluent-control-center; sudo stat -c %U alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml' | sort -u | paste -sd, -)"
+files="alertmanager-generated.yml trigger_rules-generated.yml"
+files="$files recording_rules-generated.yml prometheus-generated-local.yml"
+owners=$(ssh c3-01.poc.lab "cd /etc/confluent-control-center; sudo stat -c %U $files" | sort -u | paste -sd, -)
+echo "C3 自己寫的 4 個檔：$owners"
 
-# 4. alice 經 AD 登入 MDS（C3 的登入走同一套）
-echo "alice 登入 MDS（C3 用同一套）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
+# 4. alice 真的從 C3 登入（首頁不經過 MDS，只看 200 抓不到；C3 起來後健康檢查還要一點時間，最多等 60 秒）
+alice_pass=$(cat ~/secrets/ad-test-users.pass)
+login_url=https://c3-01.poc.lab:9021/api/metadata/security/1.0/authenticate
+
+for i in $(seq 1 12); do
+  if [ "$(curl -s -u "alice:$alice_pass" -o /dev/null -m 30 -w '%{http_code}' "$login_url")" = 200 ]; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "alice 從 C3 登入：$(curl -s -u "alice:$alice_pass" -o /dev/null -m 30 -w '%{http_code}' "$login_url")"
 ```
 
 ```out
@@ -15705,7 +17050,7 @@ C3 現在：confluent-control-center-next-gen-2.5.1-1.noarch
 confluent-control-center-next-gen-2.6.1-1.noarch config=same exec=/etc/confluent/control-center/control-center.properties lock=confluent-control-center-next-gen-0:2.6.1-1.*
 UI=200（約 30–35 秒）；Prometheus 指標 125 種（歷史指標沒有因換版本而消失）
 C3 自己寫的 4 個檔：cp-control-center
-alice 登入 MDS（C3 用同一套）：200
+alice 從 C3 登入：200
 ```
 
 > 陷阱（lab 實測，2.6.0／2.6.1 之間的換版本）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。2.5.1 → 2.6.1 用的是同一段，從零重跑時再確認這個行為。
@@ -15752,44 +17097,32 @@ chmod 0700 ~/conf/pkg-swap.sh
 
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# under_replicated：under-replicated 的 partition 數
-under_replicated() {
-  kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
-
-# conf_hash <主機>：那台 server.properties 的 sha256 前 12 碼（換套件前後比，確認 RPM 沒動我們的設定）
-conf_hash() {
-  ssh $1.poc.lab 'sudo sha256sum /etc/confluent/kafka/server.properties' | cut -c1-12
-}
+admin="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
 
 for h in kb01 kb02 kb03 kb04; do
   t0=$(date +%s)
-  before=$(conf_hash $h)
 
-  # 2. 換套件
+  # 2. 換套件前後比 server.properties 的 sha256 前 12 碼（確認 RPM 沒動我們的設定）；換套件
+  before=$(ssh $h.poc.lab 'sudo sha256sum /etc/confluent/kafka/server.properties' | cut -c1-12)
   ssh $h.poc.lab bash -s -- 8.3.2 install < ~/conf/pkg-swap.sh
+  after=$(ssh $h.poc.lab 'sudo sha256sum /etc/confluent/kafka/server.properties' | cut -c1-12)
 
   # 3. 設定檔沒被動、ExecStart 還指著我們的設定
-  if [ "$before" = "$(conf_hash $h)" ]; then
+  if [ "$before" = "$after" ]; then
     config=沒變
   else
     config=被改了
   fi
 
-  echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') 設定檔$config exec=$(ssh $h.poc.lab 'systemctl show confluent-server -p ExecStart --value' | grep -o '/etc/[^ ]*properties')"
+  echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') 設定檔$config exec=$(ssh $h.poc.lab \
+    'systemctl show confluent-server -p ExecStart --value' | grep -o '/etc/[^ ]*properties')"
 
   # 4. 重啟
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
   # 5. 等 MDS 回 200、under-replicated 回到 0：各每 5 秒看一次，最多 60 次
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
+    if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
@@ -15797,14 +17130,17 @@ for h in kb01 kb02 kb03 kb04; do
   done
 
   for j in $(seq 1 60); do
-    if [ "$(under_replicated)" = 0 ]; then
+    under=$(kafka-topics $admin --describe --under-replicated-partitions 2> /dev/null \
+      | awk '/Partition:/ {c++} END {print c + 0}')
+
+    if [ "$under" = 0 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "  MDS 200（約 $((i * 5)) 秒）under-replicated=$(under_replicated)，這台 $(( $(date +%s) - t0 )) 秒"
+  echo "  MDS 200（約 $((i * 5)) 秒）under-replicated=$under，這台 $(( $(date +%s) - t0 )) 秒"
 done
 ```
 
@@ -15825,60 +17161,54 @@ kb01 confluent-server-8.3.2-1.noarch 設定檔沒變 exec=/etc/confluent/kafka/s
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-Q="kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config /root/conf/client-internal.properties"
-
-# leader_host：現在的 controller leader，例：kc02
-leader_host() {
-  echo kc0$($Q describe --status 2> /dev/null | awk '/LeaderId/ {print $2}')
-}
-
-# lag_of <node id>：那台 controller 在 quorum 裡的 Lag（describe --replication 的第 4 欄），例：lag_of 1 → 0
-lag_of() {
-  $Q describe --replication 2> /dev/null | awk -v id=$1 '$1==id {print $4}'
-}
-
-# next_controller <做完的清單> <第幾輪> <leader>：這一輪要做哪台；跳過做完的，前兩輪也跳過 leader
-#   例：next_controller "" 1 kc02 → kc01；next_controller " kc01 kc03" 3 kc01 → kc02
-next_controller() {
-  for c in kc01 kc02 kc03; do
-    if [[ " $1 " == *" $c "* ]]; then
-      continue
-    fi
-
-    if [ $c = $3 ]; then
-      if [ $2 -lt 3 ]; then
-        continue
-      fi
-    fi
-
-    echo $c
-    return
-  done
-}
+controllers=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
+Q="kafka-metadata-quorum --bootstrap-controller $controllers --command-config /root/conf/client-internal.properties"
 
 done_list=""
 
 for round in 1 2 3; do
-  # 1. 每一輪重新查 leader（做的過程中 leader 會換人）
-  leader=$(leader_host)
-  h=$(next_controller "$done_list" $round $leader)
+  # 1. 每一輪重新查 leader（做的過程中 leader 會換人），例：kc02
+  leader=kc0$($Q describe --status 2> /dev/null | awk '/LeaderId/ {print $2}')
 
-  # 2. 換套件、重啟
+  # 2. 這一輪做哪台：跳過做完的；前兩輪也跳過 leader
+  h=""
+
+  for c in kc01 kc02 kc03; do
+    if [[ " $done_list " == *" $c "* ]]; then
+      continue
+    fi
+
+    if [ $c = $leader ]; then
+      if [ $round -lt 3 ]; then
+        continue
+      fi
+    fi
+
+    h=$c
+    break
+  done
+
+  # 3. 換套件、重啟
   ssh $h.poc.lab bash -s -- 8.3.2 install < ~/conf/pkg-swap.sh
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
-  # 3. 等這台的 Lag 回到 0：每 5 秒看一次，最多 60 次
+  # 4. 等這台的 Lag 回到 0：每 5 秒看一次，最多 60 次
+  #    describe --replication 每台一行，kc01 的 NodeId 是 1：找開頭是這個 NodeId 的那一行，取第 4 欄
+  id=${h#kc0}
   sleep 10
 
   for i in $(seq 1 60); do
-    if [ "$(lag_of ${h#kc0})" = 0 ]; then
+    lag=$($Q describe --replication 2> /dev/null \
+      | grep -E "^[[:space:]]*$id[[:space:]]" | awk '{print $4}')
+
+    if [ "$lag" = 0 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') Lag=$(lag_of ${h#kc0})（這輪開始時 leader=$leader）"
+  echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') Lag=$lag（這輪開始時 leader=$leader）"
   done_list="$done_list $h"
 done
 ```
@@ -15903,7 +17233,11 @@ source ~/conf/kraft.env
 # svc-ops 登入 MDS，給 svc-rest 在 _confluent-command 的 ResourceOwner
 confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
   --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null
-confluent iam rbac role-binding create --principal User:svc-rest --role ResourceOwner --resource Topic:_confluent-command --kafka-cluster $CLUSTER_ID | grep -E 'Role|Name' | tr -s ' '
+confluent iam rbac role-binding create \
+  --principal User:svc-rest \
+  --role ResourceOwner \
+  --resource Topic:_confluent-command \
+  --kafka-cluster $CLUSTER_ID | grep -E 'Role|Name' | tr -s ' '
 ```
 
 ```out
@@ -16029,66 +17363,59 @@ chmod 0700 ~/conf/jdk-switch.sh
 
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-Q="kafka-metadata-quorum --bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config /root/conf/client-internal.properties"
+controllers=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
+Q="kafka-metadata-quorum --bootstrap-controller $controllers --command-config /root/conf/client-internal.properties"
 
 # 2. 銀行給的 JDK 25 tar（有好幾個就取最新的）
 JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1)
 echo "新 JDK：$(tar -tzf "$JDK_TAR" | head -1 | cut -d/ -f1)"
 
-# leader_host、lag_of、next_controller：同 29.5
-leader_host() {
-  echo kc0$($Q describe --status 2> /dev/null | awk '/LeaderId/ {print $2}')
-}
-
-lag_of() {
-  $Q describe --replication 2> /dev/null | awk -v id=$1 '$1==id {print $4}'
-}
-
-next_controller() {
-  for c in kc01 kc02 kc03; do
-    if [[ " $1 " == *" $c "* ]]; then
-      continue
-    fi
-
-    if [ $c = $3 ]; then
-      if [ $2 -lt 3 ]; then
-        continue
-      fi
-    fi
-
-    echo $c
-    return
-  done
-}
-
-# java_of <主機> <unit>：那個服務正在跑的 java 執行檔
-java_of() {
-  ssh $1.poc.lab "sudo readlink /proc/\$(systemctl show $2 -p MainPID --value)/exe"
-}
+# 在那台查：confluent-server 正在跑的 java 執行檔
+java_cmd='sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe'
 
 done_list=""
 
 for round in 1 2 3; do
-  leader=$(leader_host)
-  h=$(next_controller "$done_list" $round $leader)
+  # 3. 這一輪做哪台（同 29.5）：重新查 leader；跳過做完的；前兩輪也跳過 leader
+  leader=kc0$($Q describe --status 2> /dev/null | awk '/LeaderId/ {print $2}')
+  h=""
 
-  # 3. 送 tar、切 JDK、重啟
+  for c in kc01 kc02 kc03; do
+    if [[ " $done_list " == *" $c "* ]]; then
+      continue
+    fi
+
+    if [ $c = $leader ]; then
+      if [ $round -lt 3 ]; then
+        continue
+      fi
+    fi
+
+    h=$c
+    break
+  done
+
+  # 4. 送 tar、切 JDK、重啟
   scp -q "$JDK_TAR" $h.poc.lab:/tmp/
   ssh $h.poc.lab bash -s -- $(basename $JDK_TAR) < ~/conf/jdk-switch.sh
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
-  # 4. 等這台的 Lag 回到 0
+  # 5. 等這台的 Lag 回到 0（describe --replication 開頭是這個 NodeId 的那一行，第 4 欄）
+  id=${h#kc0}
   sleep 10
 
   for i in $(seq 1 60); do
-    if [ "$(lag_of ${h#kc0})" = 0 ]; then
+    lag=$($Q describe --replication 2> /dev/null \
+      | grep -E "^[[:space:]]*$id[[:space:]]" | awk '{print $4}')
+
+    if [ "$lag" = 0 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h java=$(java_of $h confluent-server) Lag=$(lag_of ${h#kc0})"
+  echo "$h java=$(ssh $h.poc.lab "$java_cmd") Lag=$lag"
   done_list="$done_list $h"
 done
 ```
@@ -16099,36 +17426,25 @@ kc01 java=/opt/java/jdk-25.0.5+8/bin/java Lag=0
 （3 台，每台約 15 秒）
 ```
 
-再 broker、操作機、C3（REST Proxy 在下面另外做；C3 重啟期間畫面不能用，broker 與應用程式不受影響）：
+再 broker（逐台重啟，應用程式不受影響；操作機、C3、REST Proxy 在下面另外做）：
 
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1)
+admin="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
 
-# http_code <網址>：HTTP 狀態碼
-http_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' $1
-}
+# 在那台查：confluent-server 正在跑的 java 執行檔
+java_cmd='sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe'
 
-# under_replicated：under-replicated 的 partition 數
-under_replicated() {
-  kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
-
-# java_of <主機> <unit>：那個服務正在跑的 java 執行檔
-java_of() {
-  ssh $1.poc.lab "sudo readlink /proc/\$(systemctl show $2 -p MainPID --value)/exe"
-}
-
-# 1. broker 逐台：送 tar、切 JDK、重啟，等 MDS 200、under-replicated 回到 0
+# broker 逐台：送 tar、切 JDK、重啟，等 MDS 200、under-replicated 回到 0
 for h in kb01 kb02 kb03 kb04; do
   scp -q "$JDK_TAR" $h.poc.lab:/tmp/
   ssh $h.poc.lab bash -s -- $(basename $JDK_TAR) < ~/conf/jdk-switch.sh
   ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
   for i in $(seq 1 60); do
-    if [ "$(http_code https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
+    if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
       break
     fi
 
@@ -16136,39 +17452,53 @@ for h in kb01 kb02 kb03 kb04; do
   done
 
   for j in $(seq 1 60); do
-    if [ "$(under_replicated)" = 0 ]; then
+    under=$(kafka-topics $admin --describe --under-replicated-partitions 2> /dev/null \
+      | awk '/Partition:/ {c++} END {print c + 0}')
+
+    if [ "$under" = 0 ]; then
       break
     fi
 
     sleep 5
   done
 
-  echo "$h java=$(java_of $h confluent-server) 200（約 $((i * 5)) 秒）under-replicated=$(under_replicated)"
+  echo "$h java=$(ssh $h.poc.lab "$java_cmd") 200（約 $((i * 5)) 秒）under-replicated=$under"
 done
+```
 
-# 2. 操作機自己（root）：tar 放到 /tmp 再用同一支小腳本
+```out
+kb01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 20 秒）under-replicated=0
+```
+
+再操作機、C3（C3 重啟期間畫面不能用）：
+
+```bash
+JDK_TAR=$(ls ~/landing/bank/OpenJDK25U-jdk_x64_linux_hotspot_*.tar.gz | sort -V | tail -1)
+
+# 1. 操作機自己（root）：tar 放到 /tmp 再用同一支小腳本
 cp "$JDK_TAR" /tmp/
 bash ~/conf/jdk-switch.sh $(basename $JDK_TAR)
 echo "ops02 $(java -version 2>&1 | head -1)"
 
-# 3. C3：送 tar、切 JDK、重啟，等畫面 200
+# 2. C3：送 tar、切 JDK、重啟，等畫面 200
 scp -q "$JDK_TAR" c3-01.poc.lab:/tmp/
 ssh c3-01.poc.lab bash -s -- $(basename $JDK_TAR) < ~/conf/jdk-switch.sh
 ssh c3-01.poc.lab 'sudo systemctl restart confluent-control-center'
 
 for i in $(seq 1 60); do
-  if [ "$(http_code https://c3-01.poc.lab:9021/)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "c3-01 java=$(java_of c3-01 confluent-control-center) 200（約 $((i * 5)) 秒）"
+# 3. C3 正在跑的 java 執行檔
+java_cmd='sudo readlink /proc/$(systemctl show confluent-control-center -p MainPID --value)/exe'
+echo "c3-01 java=$(ssh c3-01.poc.lab "$java_cmd") 200（約 $((i * 5)) 秒）"
 ```
 
 ```out
-kb01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 20 秒）under-replicated=0
 ops02 openjdk version "25.0.5" … LTS
 c3-01 java=/opt/java/jdk-25.0.5+8/bin/java 200（約 60 秒）
 ```
@@ -16258,16 +17588,6 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 h=kb04
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# java_of <主機> <unit>：那個服務正在跑的 java 執行檔
-java_of() {
-  ssh $1.poc.lab "sudo readlink /proc/\$(systemctl show $2 -p MainPID --value)/exe"
-}
-
 # 1. JDK 先切回 21（8.2 不支援 25；21 的目錄還在）
 ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-21* | sort -V | tail -1) /opt/java/current'
 
@@ -16277,14 +17597,16 @@ ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
 # 3. 等 MDS 回 200：每 5 秒看一次，最多 60 次
 for i in $(seq 1 60); do
-  if [ "$(mds_code $h)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') $(java_of $h confluent-server) MDS 200（約 $((i * 5)) 秒）"
+# 4. 版本、正在跑的 java 執行檔
+java_cmd='sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe'
+echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') $(ssh $h.poc.lab "$java_cmd") MDS 200（約 $((i * 5)) 秒）"
 ```
 
 ```out
@@ -16300,16 +17622,6 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 h=kb04
 
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# java_of <主機> <unit>：那個服務正在跑的 java 執行檔
-java_of() {
-  ssh $1.poc.lab "sudo readlink /proc/\$(systemctl show $2 -p MainPID --value)/exe"
-}
-
 # 1. JDK 切回 25（目錄還在）
 ssh $h.poc.lab 'sudo ln -sfn $(ls -d /opt/java/jdk-25* | sort -V | tail -1) /opt/java/current'
 
@@ -16319,14 +17631,16 @@ ssh $h.poc.lab 'sudo systemctl restart confluent-server'
 
 # 3. 等 MDS 回 200
 for i in $(seq 1 60); do
-  if [ "$(mds_code $h)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') $(java_of $h confluent-server) MDS 200（約 $((i * 5)) 秒）"
+# 4. 版本、正在跑的 java 執行檔
+java_cmd='sudo readlink /proc/$(systemctl show confluent-server -p MainPID --value)/exe'
+echo "$h $(ssh $h.poc.lab 'rpm -q confluent-server') $(ssh $h.poc.lab "$java_cmd") MDS 200（約 $((i * 5)) 秒）"
 ```
 
 ```out
@@ -16377,8 +17691,9 @@ F="kafka-features --bootstrap-server kb01.poc.lab:9094 --command-config /root/co
 # 1. 正式升（做完不能回頭）
 $F upgrade --release-version 4.3 2> /dev/null
 
-# 2. 現在的 metadata 版本
-$F describe 2> /dev/null | grep confluent.metadata.version | awk '{print $2, $8}'
+# 2. 現在的 metadata 版本：那一行的第 2 欄是 feature 名稱、第 8 欄是版本
+line=$($F describe 2> /dev/null | grep confluent.metadata.version | tr -s ' \t' ' ')
+echo "$line" | cut -d' ' -f2,8
 ```
 
 ```out
@@ -16491,7 +17806,8 @@ REPO
 # 1-3. 9.6 → 9.8 要的更新：只下載、不安裝
 mkdir -p /out/9.8-updates/Packages /tmp/dl
 
-if ! dnf -q -y --disablerepo="*" --enablerepo=r98-baseos,r98-appstream,r98-extras update --downloadonly --downloaddir /tmp/dl > /tmp/u.log 2>&1; then
+if ! dnf -q -y --disablerepo="*" --enablerepo=r98-baseos,r98-appstream,r98-extras \
+  update --downloadonly --downloaddir /tmp/dl > /tmp/u.log 2>&1; then
   echo "抓 9.8 的更新失敗（多半是連不到 dl.rockylinux.org，稍後重跑這一段）："
   tail -5 /tmp/u.log
   false
@@ -16507,22 +17823,36 @@ cp -a /out/9.6/Packages/. /out/9.8/Packages/
 cp -a /out/9.8-updates/Packages/. /out/9.8/Packages/
 createrepo_c -q /out/9.8
 
-echo "9.8 更新集合：$(ls /out/9.8-updates/Packages | wc -l) 個 RPM、$(du -sm /out/9.8-updates | cut -f1) MB（$(( $(date +%s) - t0 )) 秒）；合併後的套件庫 $(ls /out/9.8/Packages | wc -l) 個 RPM"
-EOF
-
-# 2. 換上 repo01 的 /os/
-podman exec lab-repo01-1 bash -c 'rm -rf /var/www/repo/os/*'
-podman cp "$(cygpath -m "$PWD/bank-os/9.8")/." lab-repo01-1:/var/www/repo/os/
-
-# 3. 擁有者改回 repodeploy，看 RPM 數與 release 套件（在 repo01 執行 EOF 之前的那一段）
-podman exec -i lab-repo01-1 bash -s <<'EOF'
-chown -R repodeploy:repodeploy /var/www/repo/os
-echo "repo01 /os/：$(ls /var/www/repo/os/Packages | wc -l) 個 RPM；rocky-release：$(ls /var/www/repo/os/Packages | grep rocky-release)"
+updates_count=$(ls /out/9.8-updates/Packages | wc -l)
+updates_mb=$(du -sm /out/9.8-updates | cut -f1)
+merged_count=$(ls /out/9.8/Packages | wc -l)
+echo "9.8 更新集合：$updates_count 個 RPM、$updates_mb MB（$(( $(date +%s) - t0 )) 秒）；合併後的套件庫 $merged_count 個 RPM"
 EOF
 ```
 
 ```out
 9.8 更新集合：156 個 RPM、79 MB（約 100–220 秒）；合併後的套件庫 227 個 RPM
+```
+
+把合併好的內容換上 repo01 的 `/os/`：
+
+```bash
+cd ~/kafka-lab
+
+# 1. 換上 repo01 的 /os/
+podman exec lab-repo01-1 bash -c 'rm -rf /var/www/repo/os/*'
+podman cp "$(cygpath -m "$PWD/bank-os/9.8")/." lab-repo01-1:/var/www/repo/os/
+
+# 2. 擁有者改回 repodeploy，看 RPM 數與 release 套件（在 repo01 執行 EOF 之前的那一段）
+podman exec -i lab-repo01-1 bash -s <<'EOF'
+chown -R repodeploy:repodeploy /var/www/repo/os
+count=$(ls /var/www/repo/os/Packages | wc -l)
+release=$(ls /var/www/repo/os/Packages | grep rocky-release)
+echo "repo01 /os/：$count 個 RPM；rocky-release：$release"
+EOF
+```
+
+```out
 repo01 /os/：227 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
 ```
 
@@ -16541,7 +17871,10 @@ export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
 
 # 1. 開始前叢集是健康的
-echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}')"
+echo "under-replicated：$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}')"
 
 # 2. 每種主機挑一台看（只看不改；每台執行 EOF 之前的那一段）
 for h in kc01 kb01 rest01 c3-01 ops02; do
@@ -16557,8 +17890,13 @@ release_pkg=$(rpm -q --whatprovides system-release --qf "%{NAME}\n" | head -1)
 available=$(sudo dnf -q repoquery --latest-limit 1 --qf %{version} $release_pkg 2> /dev/null | head -1)
 
 # 一行摘要：可更新幾個、其中平台相關的、confluent-* 幾個（要是 0）、鎖住幾個 confluent 套件
-platform=$(grep -xE "glibc|systemd|openssh-server|kernel|rocky-release|redhat-release|openssl-libs" $updates | paste -sd" ")
-echo "$(hostname)：OS $current，套件庫的 release 套件 $available；可更新 $(grep -c . $updates) 個（平台相關：$platform）；其中 confluent-* $(grep -c "^confluent-" $updates) 個；鎖住 $(sudo dnf -q versionlock list 2> /dev/null | grep -c confluent) 個 confluent 套件"
+platform_pkgs='glibc|systemd|openssh-server|kernel|rocky-release|redhat-release|openssl-libs'
+platform=$(grep -xE "$platform_pkgs" $updates | paste -sd" ")
+update_count=$(grep -c . $updates)
+confluent_updates=$(grep -c "^confluent-" $updates)
+locked=$(sudo dnf -q versionlock list 2> /dev/null | grep -c confluent)
+summary="可更新 $update_count 個（平台相關：$platform）；其中 confluent-* $confluent_updates 個"
+echo "$(hostname)：OS $current，套件庫的 release 套件 $available；$summary；鎖住 $locked 個 confluent 套件"
 rm -f $updates
 
 # 主版本不一致就停；一致才預覽交易（--assumeno：只看摘要，不執行）
@@ -16599,7 +17937,12 @@ Upgrade  124 Packages
 current=$(. /etc/os-release; echo $VERSION_ID)
 
 # 2. Rocky 10 公開倉庫裡 release 套件的版本
-available=$(timeout 120 dnf -q repoquery --repofrompath=r10,https://dl.rockylinux.org/pub/rocky/10/BaseOS/x86_64/os/ --repo=r10 --latest-limit 1 --qf "%{version}" rocky-release 2> /dev/null | head -1)
+available=$(timeout 120 dnf -q repoquery \
+  --repofrompath=r10,https://dl.rockylinux.org/pub/rocky/10/BaseOS/x86_64/os/ \
+  --repo=r10 \
+  --latest-limit 1 \
+  --qf "%{version}" \
+  rocky-release 2> /dev/null | head -1)
 echo "目前 $current；那個套件庫的 release 套件 $available"
 
 # 3. 同一個判斷：主版本不一致就停
@@ -16655,14 +17998,19 @@ else
   reboot=是
 fi
 
-services=$(sudo dnf needs-restarting -s 2> /dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u | paste -sd, -)
+# 要重啟的服務名稱（排序、去重複），再接成逗號分隔：例 confluent-server,prometheus
+matched=$(sudo dnf needs-restarting -s 2> /dev/null | grep -oE 'confluent-[a-z-]+|prometheus|alertmanager' | sort -u)
+services=$(echo "$matched" | paste -sd, -)
 
 if [ -z "$services" ]; then
   services=無
 fi
 
 # 5. 一行結果
-echo "$(hostname) 更新 $count 個；OS $os_before>$(. /etc/os-release; echo $VERSION_ID)；要重開機：$reboot；要重啟的平台服務：$services；confluent 版本：$(rpm -qa 'confluent-*' --qf '%{VERSION}\n' | sort -u | paste -sd, -)"
+os_after=$(. /etc/os-release; echo "$VERSION_ID")
+confluent_versions=$(rpm -qa 'confluent-*' --qf '%{VERSION}\n' | sort -u | paste -sd, -)
+
+echo "$(hostname) 更新 $count 個；OS $os_before>$os_after；要重開機：$reboot；要重啟的平台服務：$services；confluent 版本：$confluent_versions"
 EOF
 
 # 2. 重開機（lab 的容器改成重啟平台服務）
@@ -16711,16 +18059,7 @@ chmod 0700 ~/conf/os-patch-host.sh ~/conf/os-reboot.sh
 
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-
-# mds_code <主機>：那台 MDS（8090）的 HTTP 狀態碼
-mds_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' https://$1.poc.lab:8090/v1/metadata/id
-}
-
-# under_replicated：under-replicated 的 partition 數
-under_replicated() {
-  kafka-topics --bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}'
-}
+admin="--bootstrap-server kb01.poc.lab:9094,kb02.poc.lab:9094 --command-config $HOME/conf/client-admin.properties"
 
 for h in kb01 kb02 kb03 kb04; do
   # 3. 更新這台，印出判斷
@@ -16736,8 +18075,11 @@ for h in kb01 kb02 kb03 kb04; do
 
   # 5. 等 MDS 回 200、沒有 under-replicated：每 10 秒看一次，最多 60 次
   for i in $(seq 1 60); do
-    if [ "$(mds_code $h)" = 200 ]; then
-      if [ "$(under_replicated)" = 0 ]; then
+    if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)" = 200 ]; then
+      under=$(kafka-topics $admin --describe --under-replicated-partitions 2> /dev/null \
+        | awk '/Partition:/ {c++} END {print c + 0}')
+
+      if [ "$under" = 0 ]; then
         break
       fi
     fi
@@ -16745,7 +18087,7 @@ for h in kb01 kb02 kb03 kb04; do
     sleep 10
   done
 
-  echo "  $h MDS=$(mds_code $h)"
+  echo "  $h MDS=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://$h.poc.lab:8090/v1/metadata/id)"
 done
 ```
 
@@ -16763,16 +18105,20 @@ kb01 更新 124 個；OS 9.6>9.8；要重開機：是；要重啟的平台服務
 ```bash
 export JAVA_HOME=/opt/java/current
 export KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
-Q="--bootstrap-controller kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093 --command-config $HOME/conf/client-internal.properties"
-
-# lag_of <node id>：那台 controller 在 quorum 裡的 Lag（describe --replication 的第 4 欄）
-lag_of() {
-  kafka-metadata-quorum $Q describe --replication 2> /dev/null | awk -v id=$1 '$1==id {print $4}'
-}
+controllers=kc01.poc.lab:9093,kc02.poc.lab:9093,kc03.poc.lab:9093
+Q="--bootstrap-controller $controllers --command-config $HOME/conf/client-internal.properties"
 
 # 1. 順序：另外兩台、leader 最後
 leader=kc0$(kafka-metadata-quorum $Q describe --status 2> /dev/null | awk '/LeaderId/ {print $2}')
-order="$(echo kc01 kc02 kc03 | tr ' ' '\n' | grep -vx $leader | paste -sd' ') $leader"
+order=""
+
+for c in kc01 kc02 kc03; do
+  if [ $c != $leader ]; then
+    order="$order $c"
+  fi
+done
+
+order="$order $leader"
 
 for h in $order; do
   # 2. 更新、照判斷做
@@ -16786,10 +18132,14 @@ for h in $order; do
   fi
 
   # 3. 等這台的 Lag 回到 0：每 5 秒看一次，最多 60 次
+  #    describe --replication 每台一行，kc01 的 NodeId 是 1：找開頭是這個 NodeId 的那一行，取第 4 欄
   id=${h#kc0}
 
   for i in $(seq 1 60); do
-    if [ "$(lag_of $id)" = 0 ]; then
+    lag=$(kafka-metadata-quorum $Q describe --replication 2> /dev/null \
+      | grep -E "^[[:space:]]*$id[[:space:]]" | awk '{print $4}')
+
+    if [ "$lag" = 0 ]; then
       break
     fi
 
@@ -16802,7 +18152,7 @@ for h in $order; do
     note=""
   fi
 
-  echo "  $h Lag=$(lag_of $id)$note"
+  echo "  $h Lag=$lag$note"
 done
 ```
 
@@ -16933,21 +18283,20 @@ elif echo "$result" | grep -qE 'confluent-control-center|prometheus|alertmanager
   done
 fi
 
-# c3_code：C3 畫面的 HTTP 狀態碼
-c3_code() {
-  curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/
-}
-
 # 2. 等 C3 畫面 200：每 5 秒看一次，最多 60 次；再看 REST 經 LB 與 C3
 for i in $(seq 1 60); do
-  if [ "$(c3_code)" = 200 ]; then
+  if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)" = 200 ]; then
     break
   fi
 
   sleep 5
 done
 
-echo "  REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(c3_code)"
+echo "  REST 經 LB=$(curl -s \
+  --cert ~/pki/certs/app-legacy-billing.crt \
+  --key ~/pki/keys/app-legacy-billing.key \
+  -o /dev/null -w '%{http_code}' \
+  https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://c3-01.poc.lab:9021/)"
 
 # 3. 操作機最後、自己修自己（root 直接跑）；要重開機的話，等這一節和驗收都做完再重開
 bash ~/conf/os-patch-host.sh
@@ -16989,7 +18338,9 @@ for u in confluent-server confluent-kafka-rest confluent-control-center; do
   fi
 done
 
-echo "$(hostname) $PRETTY_NAME 鎖 $(sudo dnf -q versionlock list | grep -c confluent)／裝 $(rpm -qa "confluent-*" | wc -l)$states"
+locked=$(sudo dnf -q versionlock list | grep -c confluent)
+installed=$(rpm -qa "confluent-*" | wc -l)
+echo "$(hostname) $PRETTY_NAME 鎖 $locked／裝 $installed$states"
 EOF
 done
 
@@ -16997,7 +18348,15 @@ done
 echo "ops02 $(. /etc/os-release; echo $PRETTY_NAME)"
 
 # 3. 叢集：沒有 under-replicated；REST 經 LB 與 C3 都回 200
-echo "under-replicated：$(kafka-topics --bootstrap-server kb01.poc.lab:9094 --command-config ~/conf/client-admin.properties --describe --under-replicated-partitions 2> /dev/null | awk '/Partition:/ {c++} END {print c + 0}')；REST 經 LB=$(curl -s --cert ~/pki/certs/app-legacy-billing.crt --key ~/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
+echo "under-replicated：$(kafka-topics \
+  --bootstrap-server kb01.poc.lab:9094 \
+  --command-config ~/conf/client-admin.properties \
+  --describe --under-replicated-partitions 2> /dev/null \
+  | awk '/Partition:/ {c++} END {print c + 0}')；REST 經 LB=$(curl -s \
+  --cert ~/pki/certs/app-legacy-billing.crt \
+  --key ~/pki/keys/app-legacy-billing.key \
+  -o /dev/null -w '%{http_code}' \
+  https://rest.poc.lab:8082/v3/clusters) C3=$(curl -s -o /dev/null -w '%{http_code}' https://c3-01.poc.lab:9021/)"
 ```
 
 ```out
@@ -17047,28 +18406,19 @@ rpm=confluent-control-center-next-gen-$V-1.noarch.rpm
 mkdir -p /out/c3
 cd /out/c3
 
-# have_copy：這個版本的 RPM 已經在這裡、而且 SHA256SUMS 對得上就印 yes，否則 no
-have_copy() {
-  if [ ! -f $rpm ]; then
-    echo no
-    return
+# 1. 已經下載過、檔案沒壞就沿用（約 1 GB，不重抓）：這個版本的 RPM 在這裡、而且 SHA256SUMS 對得上
+have_copy=no
+
+if [ -f $rpm ]; then
+  if grep -q " ./$rpm\$" SHA256SUMS 2> /dev/null; then
+    if sha256sum -c --quiet SHA256SUMS > /dev/null 2>&1; then
+      have_copy=yes
+    fi
   fi
+fi
 
-  if ! grep -q " ./$rpm\$" SHA256SUMS 2> /dev/null; then
-    echo no
-    return
-  fi
-
-  if ! sha256sum -c --quiet SHA256SUMS > /dev/null 2>&1; then
-    echo no
-    return
-  fi
-
-  echo yes
-}
-
-# 1. 已經下載過、檔案沒壞就沿用（約 1 GB，不重抓）；否則清掉舊檔，dnf 只給下載網址、curl 下載
-if [ "$(have_copy)" = yes ]; then
+# 否則清掉舊檔，dnf 只給下載網址、curl 下載
+if [ $have_copy = yes ]; then
   echo "已經有 $rpm，sha256 對得上，不重新下載"
 else
   rm -f ./*.rpm SHA256SUMS
@@ -17120,7 +18470,8 @@ sha256-ok
 cd ~/landing/c3
 
 # 1. RPM 宣告的相依（不含 rpmlib 與檔案路徑）
-echo "RPM 宣告的相依：$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE '^(rpmlib|/)' | sort -u | paste -sd';' -)"
+deps=$(rpm -qpR confluent-control-center-next-gen-*.rpm | grep -vE '^(rpmlib|/)' | sort -u)
+echo "RPM 宣告的相依：$(echo "$deps" | paste -sd';' -)"
 
 # 2. c3-01 上已經裝了這兩個
 ssh c3-01.poc.lab 'rpm -q cyrus-sasl openssl-devel'
@@ -17148,7 +18499,9 @@ tar -C ~/repo -cf - confluent | ssh repodeploy@repo01.poc.lab 'tar -C /var/www/r
 
 # 3. 從 c3-01 看套件庫裡有哪些 C3 版本（--refresh：剛推上去；執行 EOF 之前的那一段）
 ssh c3-01.poc.lab bash -s <<'EOF'
-echo "套件庫裡的 C3：$(sudo dnf -q --refresh --showduplicates list confluent-control-center-next-gen 2> /dev/null | awk '/control-center/ {print $2}' | sort -u | paste -sd' ' -)"
+list=$(sudo dnf -q --refresh --showduplicates list confluent-control-center-next-gen 2> /dev/null)
+versions=$(echo "$list" | awk '/control-center/ {print $2}' | sort -u)
+echo "套件庫裡的 C3：$(echo "$versions" | paste -sd' ' -)"
 EOF
 ```
 
@@ -17186,22 +18539,549 @@ UI=200（約 30 秒）；Prometheus 指標 125 種
 bash ~/conf/c3-change.sh 2.6.1 install
 
 # 2. C3 自己寫的 4 個檔，擁有者都是 cp-control-center
-echo "C3 自己寫的 4 個檔：$(ssh c3-01.poc.lab 'cd /etc/confluent-control-center; sudo stat -c %U alertmanager-generated.yml trigger_rules-generated.yml recording_rules-generated.yml prometheus-generated-local.yml' | sort -u | paste -sd, -)"
+files="alertmanager-generated.yml trigger_rules-generated.yml"
+files="$files recording_rules-generated.yml prometheus-generated-local.yml"
+owners=$(ssh c3-01.poc.lab "cd /etc/confluent-control-center; sudo stat -c %U $files" | sort -u | paste -sd, -)
+echo "C3 自己寫的 4 個檔：$owners"
 
-# 3. alice 經 AD 登入 MDS（C3 的登入走同一套）
-echo "alice 登入 MDS（C3 用同一套）：$(curl -s -u alice:$(cat ~/secrets/ad-test-users.pass) -o /dev/null -w '%{http_code}' https://kb01.poc.lab:8090/security/1.0/authenticate)"
+# 3. alice 真的從 C3 登入（首頁不經過 MDS，只看 200 抓不到；C3 起來後健康檢查還要一點時間，最多等 60 秒）
+alice_pass=$(cat ~/secrets/ad-test-users.pass)
+login_url=https://c3-01.poc.lab:9021/api/metadata/security/1.0/authenticate
+
+for i in $(seq 1 12); do
+  if [ "$(curl -s -u "alice:$alice_pass" -o /dev/null -m 30 -w '%{http_code}' "$login_url")" = 200 ]; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "alice 從 C3 登入：$(curl -s -u "alice:$alice_pass" -o /dev/null -m 30 -w '%{http_code}' "$login_url")"
 ```
 
 ```out
 confluent-control-center-next-gen-2.6.1-1.noarch config=same exec=/etc/confluent/control-center/control-center.properties lock=confluent-control-center-next-gen-0:2.6.1-1.*
 UI=200（約 35 秒）；Prometheus 指標 125 種（歷史指標沒有因換版本而消失）
 C3 自己寫的 4 個檔：cp-control-center
-alice 登入 MDS（C3 用同一套）：200
+alice 從 C3 登入：200
 ```
 
 > 陷阱（lab 實測）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。
 
 最後用瀏覽器登入 C3 看一眼叢集總覽（lab：`https://localhost:19021`，alice）。
+
+# 32. 第三十二站：銀行沒有 Prometheus 時的 REST Proxy 告警
+
+![c3alert]
+
+**這一章在做什麼**：銀行不一定提供 Prometheus、Alertmanager（第 17 章的前提）。沒有的話，REST Proxy 的監控與告警改走 C3 內建的 Prometheus，加上一個我們自己的第二個 Alertmanager，用行內規定的 JSON 格式送給 omnibus。前提：C3 已經是 2.6.1（29.3）。完成的樣子：C3 的 Prometheus 抓得到 REST Proxy 兩台的 7071；我們寫的規則只送第二個 Alertmanager；C3 畫面建的 trigger 只送 C3 內建的 Alertmanager；omnibus 收到的每個欄位都是字串。
+
+| 來源 | 規則在哪 | 帶的 label | 送到哪 | 通知格式 |
+|---|---|---|---|---|
+| 我們寫的規則 | `custom-rules-rest.yml`（root，C3 改不動） | `target: omnibus`（規則群組層級統一加） | 第二個 Alertmanager（127.0.0.1:9193） | 行內 omnibus JSON |
+| C3 畫面的 trigger | `trigger_rules-generated.yml`（C3 自己寫） | `rule_created_by`，沒有 `target` | C3 內建 Alertmanager（9093） | C3 的 action（Alertmanager 預設格式） |
+
+**分流怎麼做**：Prometheus 的 `alerting.alertmanagers` 每一台可以有自己的 `alert_relabel_configs`。內建那台 `drop` 掉 `target=omnibus`，第二台只 `keep` `target=omnibus`。這是白名單：沒有這個 label 的告警不會送到 omnibus，所以之後有人在 C3 畫面建 trigger 也不會誤發。**忘了加 label 的規則不會有錯誤訊息，只是不會通知**，所以我們的規則都放進同一個規則群組，由群組的 `labels` 統一加上。
+
+> 版本前提（lab 實測）：第二個 Alertmanager 用 C3 2.6.1 內附的執行檔（0.34.0）。C3 2.5.1 內附的 0.32.2 會把 `payload` 算好的字串再當 YAML 解析一次：`a: b` 變物件、`123` 變數字、`true` 變布林、`007` 變 `7`，不符合行內格式，所以**基底的 2.5.1 階段不要開這個方案**，也不要在做完這一章之後把 C3 退回 2.5.x。
+
+> 原廠支援：原廠文件寫 C3 不支援客戶自管的 Prometheus、Alertmanager，也要求不要手動啟動內建的程序。這一章另外開一個程序、改 `prometheus-generated.yml`，上線前要問原廠。`origin`、`hostname`、`sub_origin` 的填法也還要銀行確認（請銀行確認事項 11.9）。
+
+## 32.1 確認前提
+
+@role 小安 | ops02 | root
+
+```bash
+ssh c3-01.poc.lab bash -s <<'EOF'
+echo "C3：$(rpm -q confluent-control-center-next-gen)"
+am=/usr/libexec/confluent-control-center/linux_amd64/alertmanager/alertmanager-amd64
+$am --version 2>&1 | head -1 | cut -d'(' -f1
+EOF
+```
+
+```out
+C3：confluent-control-center-next-gen-2.6.1-1.noarch
+alertmanager, version 0.34.0 
+```
+
+## 32.2 第二個 Alertmanager
+
+@role 小安 | ops02 | root
+
+設定檔、資料目錄、服務都是獨立的，C3 不會碰。只聽 127.0.0.1，叢集功能關掉（C3 內建的那台已經佔了 9094）。`group_by: ['...']` 讓每筆告警自成一個通知，一個 POST 一筆，符合行內的扁平格式。`toJson` 負責跳脫雙引號與換行。
+
+lab 的接收端是 `lab-mon-webhook`（17.6）；正式環境換成銀行給的 omnibus 位址。
+
+```bash
+# 在 c3-01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
+ssh c3-01.poc.lab bash -e -s <<'EOF'
+sudo install -d -o root -g confluent -m 0750 /etc/confluent/alertmanager-custom
+sudo install -d -o cp-control-center -g confluent -m 0750 /var/lib/alertmanager-custom
+
+# 1. 設定檔：只有一個 receiver，所有收到的告警都送 omnibus
+sudo tee /etc/confluent/alertmanager-custom/alertmanager.yml > /dev/null <<'AM'
+global:
+  resolve_timeout: 5m
+route:
+  receiver: omnibus
+  group_by: ['...']
+  group_wait: 5s
+  group_interval: 1m
+  repeat_interval: 4h
+receivers:
+  - name: omnibus
+    webhook_configs:
+      - url: http://lab-mon-webhook:8080/c3-omnibus
+        send_resolved: true
+        payload: >-
+          {"source": "TCB_DYNATRACE",
+          "ClassName": "TCB_DYNATRACE_STATUS",
+          "msg_catalog": {{ .CommonLabels.impact | toJson }},
+          "msg": {{ .CommonAnnotations.description | toJson }},
+          "state": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
+          "severity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
+          "sub_origin": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
+          "origin": "c3-embedded",
+          "hostname": {{ .CommonLabels.instance | toJson }},
+          "sub_source": "PIB"}
+AM
+sudo chown root:confluent /etc/confluent/alertmanager-custom/alertmanager.yml
+sudo chmod 0640 /etc/confluent/alertmanager-custom/alertmanager.yml
+
+# 2. systemd 服務：用 C3 內附的執行檔（C3 升級時跟著換版本）
+sudo tee /etc/systemd/system/alertmanager-custom.service > /dev/null <<'UNIT'
+[Unit]
+Description=Second Alertmanager (custom JSON webhook), fed by the Control Center embedded Prometheus
+After=network-online.target
+[Service]
+User=cp-control-center
+Group=confluent
+ExecStart=/usr/libexec/confluent-control-center/linux_amd64/alertmanager/alertmanager-amd64 \
+  --config.file=/etc/confluent/alertmanager-custom/alertmanager.yml \
+  --storage.path=/var/lib/alertmanager-custom \
+  --web.listen-address=127.0.0.1:9193 \
+  --cluster.listen-address=
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now alertmanager-custom > /dev/null 2>&1
+sleep 3
+
+echo "alertmanager-custom $(systemctl is-active alertmanager-custom)，版本 $(curl -s -m 5 \
+  127.0.0.1:9193/api/v2/status | grep -o '"version":"[^"]*"')"
+EOF
+```
+
+```out
+alertmanager-custom active，版本 "version":"0.34.0"
+```
+
+## 32.3 Prometheus：抓 REST Proxy、放規則、分流
+
+@role 小安 | ops02 | root
+
+`prometheus-generated.yml` 是第 13 章我們自己寫的（root，C3 只能讀，**C3 不會改它**），RPM 從 2.5.1 升到 2.6.1 也沒有動它（lab 實測雜湊不變）。這裡比第 13 章多三段：`alert_relabel_configs`、第二台 Alertmanager、`rest-proxy` 抓取，再多一個規則檔。
+
+先放我們的規則（這一塊沒有輸出）：
+
+```bash
+# 在 c3-01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
+ssh c3-01.poc.lab bash -e -s <<'EOF'
+cd /etc/confluent-control-center
+
+# 規則：群組的 labels 統一加 target: omnibus，這個群組裡的規則都送第二台
+sudo tee custom-rules-rest.yml > /dev/null <<'RULES'
+groups:
+  - name: rest-proxy
+    labels:
+      target: omnibus
+    rules:
+      - alert: C3RestProxyDown
+        expr: up{job="rest-proxy"} == 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "REST Proxy {{ $labels.instance }} is down"
+          description: 'REST Proxy {{ $labels.instance }} stopped: check the service'
+RULES
+
+sudo chown root:confluent custom-rules-rest.yml
+sudo chmod 0640 custom-rules-rest.yml
+EOF
+```
+
+再寫 Prometheus 設定、重啟：
+
+```bash
+# 在 c3-01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
+ssh c3-01.poc.lab bash -e -s <<'EOF'
+cd /etc/confluent-control-center
+
+# 1. Prometheus 設定
+sudo tee prometheus-generated.yml > /dev/null <<'PROM'
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+alerting:
+  alertmanagers:
+    - scheme: https
+      tls_config:
+        ca_file: /etc/confluent/ssl/ca.pem
+        cert_file: /etc/confluent/ssl/svc-c3.crt
+        key_file: /etc/confluent/ssl/svc-c3.key
+      static_configs:
+        - targets:
+            - c3-01.poc.lab:9093
+      alert_relabel_configs:
+        - source_labels: [target]
+          regex: omnibus
+          action: drop
+    - scheme: http
+      static_configs:
+        - targets:
+            - 127.0.0.1:9193
+      alert_relabel_configs:
+        - source_labels: [target]
+          regex: omnibus
+          action: keep
+rule_files:
+  - "recording_rules-generated.yml"
+  - "trigger_rules-generated.yml"
+  - "custom-rules-rest.yml"
+scrape_configs:
+  - job_name: rest-proxy
+    scheme: https
+    tls_config:
+      ca_file: /etc/confluent/ssl/ca.pem
+    static_configs:
+      - targets: ["rest01.poc.lab:7071", "rest02.poc.lab:7071"]
+otlp:
+  promote_resource_attributes:
+    - "host.hostname"
+    - "java.version"
+    - "kafka.broker.id"
+    - "kafka.cluster.id"
+    - "kafka.version"
+    - "type"
+storage:
+  tsdb:
+    out_of_order_time_window: 10m
+PROM
+
+sudo chown root:confluent prometheus-generated.yml
+sudo chmod 0640 prometheus-generated.yml
+
+# 2. 重啟 Prometheus（C3 會自己重連）
+sudo systemctl restart prometheus
+echo "prometheus $(systemctl is-active prometheus)"
+EOF
+```
+
+```out
+prometheus active
+```
+
+確認 Prometheus 抓到兩台 REST、連著兩台 Alertmanager（C3 內建的 Prometheus 要求 client 憑證，從操作機用 svc-ops 的）：
+
+```bash
+# 1. 等兩台 REST 都抓到（抓取間隔 60 秒，最多等 3 分鐘）
+#    回應裡有 "value":[時間,"2"]，取出引號裡的 2
+for i in $(seq 1 18); do
+  up=$(curl -s -m 10 \
+    --cert ~/pki/certs/svc-ops.crt \
+    --key ~/pki/keys/svc-ops.key \
+    -G https://c3-01.poc.lab:9090/api/v1/query \
+    --data-urlencode 'query=sum(up{job="rest-proxy"})' \
+    | grep -o '"value":\[[^]]*\]' | cut -d'"' -f4)
+
+  if [ "$up" = 2 ]; then
+    break
+  fi
+
+  sleep 10
+done
+
+echo "REST Proxy 抓到 $up 台"
+
+# 2. Prometheus 連著兩台 Alertmanager
+curl -s -m 10 \
+  --cert ~/pki/certs/svc-ops.crt \
+  --key ~/pki/keys/svc-ops.key \
+  https://c3-01.poc.lab:9090/api/v1/alertmanagers | grep -o '"url":"[^"]*"' | sed 's/"url"://'
+```
+
+```out
+REST Proxy 抓到 2 台
+"https://c3-01.poc.lab:9093/api/v2/alerts"
+"http://127.0.0.1:9193/api/v2/alerts"
+```
+
+## 32.4 測告警：真的停一台 REST Proxy
+
+先把 rest01 從負載平衡拿掉，應用程式就不受影響。
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 down
+```
+
+```out
+LB：rest01（停用） rest02
+```
+
+@role 小安 | ops02 | root
+
+```bash
+ssh rest01.poc.lab sudo systemctl stop confluent-kafka-rest
+
+# 等第二台收到（抓取 60 秒＋規則 for 1m，通常 2–3 分鐘，最多等 5 分鐘）
+# 兩台 Alertmanager 各有哪些告警（9093 只開給本機、要 client 憑證，所以到 c3-01 上問；執行 EOF 之前的那一段）
+for i in $(seq 1 30); do
+  result=$(ssh c3-01.poc.lab bash -s <<'EOF'
+# 第二台：告警名稱去重複，多個用逗號接起來
+names=$(curl -s -m 5 127.0.0.1:9193/api/v2/alerts | grep -o '"alertname":"[^"]*"' | sed 's/"alertname"://')
+second=$(echo "$names" | sort -u | paste -sd, -)
+
+# 內建那台：同樣的做法
+names=$(sudo curl -s -m 5 \
+  --cacert /etc/confluent/ssl/ca.pem \
+  --cert /etc/confluent/ssl/svc-c3.crt \
+  --key /etc/confluent/ssl/svc-c3.key \
+  https://c3-01.poc.lab:9093/api/v2/alerts | grep -o '"alertname":"[^"]*"' | sed 's/"alertname"://')
+builtin=$(echo "$names" | sort -u | paste -sd, -)
+
+echo "第二台=[$second] 內建=[$builtin]"
+EOF
+  )
+
+  if echo "$result" | grep -q 'C3RestProxyDown'; then
+    break
+  fi
+
+  sleep 10
+done
+
+echo "$result"
+```
+
+```out
+第二台=["C3RestProxyDown"] 內建=[]
+```
+
+C3 內建那台沒有收到，第二台有收到，分流正確。接收端看到的內容：
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+# Python（在 lab-node:96 裡跑）：收到的每筆 JSON 印一行：狀態、sub_origin、msg，以及是不是每個欄位都是字串
+py='
+import json, sys
+for line in sys.stdin:
+    d = json.loads(line)
+    strings = all(isinstance(v, str) for v in d.values())
+    kind = "個，全部字串" if strings else "個，有非字串"
+    print(d["state"], d["sub_origin"], d["msg"], "欄位 %d %s" % (len(d), kind), sep=" | ")
+'
+
+# 等 OPEN（最多 1 分鐘）
+for i in $(seq 1 12); do
+  # 接收端日誌裡的 C3RestProxyDown，去掉 { 之前的字，只留 JSON
+  json=$(podman logs lab-mon-webhook 2>&1 | grep '^POST /c3-omnibus.*C3RestProxyDown' | sed 's/^[^{]*//')
+
+  # 用 printf 不多加換行：還沒有資料時，Python 讀到的就是空的
+  result=$(printf '%s' "$json" | podman run --rm -i lab-node:96 python3 -c "$py")
+
+  if echo "$result" | grep -q '^OPEN'; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "$result"
+```
+
+```out
+OPEN | C3RestProxyDown: REST Proxy rest01.poc.lab:7071 is down | REST Proxy rest01.poc.lab:7071 stopped: check the service | 欄位 10 個，全部字串
+```
+
+@role 小安 | ops02 | root
+
+開回來，確認 REST 正常：
+
+```bash
+ssh rest01.poc.lab sudo systemctl start confluent-kafka-rest
+
+# 帶應用程式憑證打 rest01：每 5 秒看一次，最多 24 次
+for i in $(seq 1 24); do
+  if [ "$(curl -s -o /dev/null -m 10 -w '%{http_code}' \
+    --cert ~/pki/certs/app-legacy-billing.crt \
+    --key ~/pki/keys/app-legacy-billing.key \
+    https://rest01.poc.lab:8082/v3/clusters)" = 200 ]; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "rest01 REST $(curl -s -o /dev/null -m 10 -w '%{http_code}' \
+  --cert ~/pki/certs/app-legacy-billing.crt \
+  --key ~/pki/keys/app-legacy-billing.key \
+  https://rest01.poc.lab:8082/v3/clusters)"
+```
+
+```out
+rest01 REST 200
+```
+
+@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+bash ~/kafka-lab/lb-member.sh rest01 up
+```
+
+```out
+LB：rest01 rest02
+```
+
+@role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
+
+```bash
+# Python（在 lab-node:96 裡跑）：收到的每筆 JSON 印一行：狀態、sub_origin，以及是不是每個欄位都是字串
+py='
+import json, sys
+for line in sys.stdin:
+    d = json.loads(line)
+    strings = all(isinstance(v, str) for v in d.values())
+    kind = "個，全部字串" if strings else "個，有非字串"
+    print(d["state"], d["sub_origin"], "欄位 %d %s" % (len(d), kind), sep=" | ")
+'
+
+# 等 RESOLVED（下一次抓取加上通知間隔，最多等 3 分鐘）
+for i in $(seq 1 36); do
+  json=$(podman logs lab-mon-webhook 2>&1 | grep '^POST /c3-omnibus.*C3RestProxyDown' | sed 's/^[^{]*//')
+  result=$(printf '%s' "$json" | podman run --rm -i lab-node:96 python3 -c "$py")
+
+  if echo "$result" | grep -q '^RESOLVED'; then
+    break
+  fi
+
+  sleep 5
+done
+
+echo "$result"
+```
+
+```out
+OPEN | C3RestProxyDown: REST Proxy rest01.poc.lab:7071 is down | 欄位 10 個，全部字串
+RESOLVED | C3RestProxyDown: REST Proxy rest01.poc.lab:7071 is down | 欄位 10 個，全部字串
+```
+
+## 32.5 C3 畫面的 trigger 不會進 omnibus
+
+@role 小安 | ops02 | root
+
+用 C3 的 API 建一個一定成立的 trigger（和畫面建的相同），確認它只到內建那台，再刪掉。C3 的 API 要 MDS 的 token；token 留在變數裡，不印出來。
+
+```bash
+# 1. alice 的 token（回應裡的 "auth_token":"xxx"，取引號裡的 xxx）；之後呼叫 C3 都帶它
+alice_pass=$(cat ~/secrets/ad-test-users.pass)
+token=$(curl -s -m 10 -u "alice:$alice_pass" https://kb01.poc.lab:8090/security/1.0/authenticate \
+  | grep -o '"auth_token":"[^"]*"' | cut -d'"' -f4)
+auth="Authorization: Bearer $token"
+json_type='Content-Type: application/json'
+c3=https://c3-01.poc.lab:9021
+
+# 2. 建 trigger：有 broker 收資料就成立
+clusters=$(curl -s -m 30 -H "$auth" -H "$json_type" $c3/2.0/clusters/kafka \
+  | grep -o '"clusterId":"[^"]*"' | cut -d'"' -f4)
+cluster=$(echo "$clusters" | tail -1)
+
+body=$(cat <<JSON
+{
+  "name": "chapter32-test",
+  "clusterId": "$cluster",
+  "brokerClusters": { "brokerClusters": ["$cluster"] },
+  "brokerMetric": "BROKER_BYTES_IN",
+  "condition": "GREATER_THAN",
+  "longValue": 0
+}
+JSON
+)
+
+guids=$(curl -s -m 30 -H "$auth" -H "$json_type" -X POST $c3/2.0/alerts/triggers -d "$body" \
+  | grep -o '"guid":"[^"]*"' | cut -d'"' -f4)
+guid=$(echo "$guids" | tail -1)
+
+# 3. 看兩台 Alertmanager（每 10 秒看一次，最多 3 分鐘）；到 c3-01 上問
+for i in $(seq 1 18); do
+  result=$(ssh c3-01.poc.lab bash -s <<'EOF'
+# 第二台：告警名稱去重複，多個用逗號接起來
+names=$(curl -s -m 5 127.0.0.1:9193/api/v2/alerts | grep -o '"alertname":"chapter32-test' | sed 's/"alertname"://')
+second=$(echo "$names" | sort -u | paste -sd, -)
+
+# 內建那台：同樣的做法
+names=$(sudo curl -s -m 5 \
+  --cacert /etc/confluent/ssl/ca.pem \
+  --cert /etc/confluent/ssl/svc-c3.crt \
+  --key /etc/confluent/ssl/svc-c3.key \
+  https://c3-01.poc.lab:9093/api/v2/alerts | grep -o '"alertname":"chapter32-test' | sed 's/"alertname"://')
+builtin=$(echo "$names" | sort -u | paste -sd, -)
+
+echo "第二台=[$second] 內建=[$builtin]"
+EOF
+  )
+
+  if echo "$result" | grep -q 'chapter32-test'; then
+    break
+  fi
+
+  sleep 10
+done
+
+echo "$result"
+```
+
+```out
+第二台=[] 內建=["chapter32-test]
+```
+
+只到內建那台。把 trigger 刪掉，再確認 C3 沒有動到我們的檔：
+
+```bash
+# 1. 刪掉 trigger、丟掉 token
+trigger_url=$c3/2.0/alerts/triggers/$guid
+echo "刪除 trigger：$(curl -s -m 30 -H "$auth" -H "$json_type" -o /dev/null -w '%{http_code}' -X DELETE $trigger_url)"
+unset token auth alice_pass
+
+# 2. C3 沒有動到我們的檔
+ssh c3-01.poc.lab bash -s <<'EOF'
+cd /etc/confluent-control-center
+sudo stat -c "%n %U" prometheus-generated.yml custom-rules-rest.yml
+EOF
+```
+
+```out
+刪除 trigger：200
+prometheus-generated.yml root
+custom-rules-rest.yml root
+```
+
+> 實測（C3 2.6.1）：C3 的 trigger 帶 `rule_created_by: c3-10`、沒有 `target`；如果也建了 action，通知由內建 Alertmanager 送出，內容是 Alertmanager 預設格式，C3 不能自訂 JSON（第 17 章開頭）。要讓某個 C3 trigger 也進 omnibus，C3 自己寫的規則檔不能手改（會被蓋掉），要改用我們的規則寫一條等價的。
+
+## 32.6 之後要注意
+
+| 情況 | 要做什麼 |
+|---|---|
+| 新增要通知 omnibus 的告警 | 放進 `custom-rules-rest.yml` 的同一個群組，`sudo systemctl restart prometheus`；不用逐條加 `target` |
+| 升級 C3（29.3、31.4） | `c3-change.sh` 不會動這些檔（lab 實測雜湊不變）；第二台用內附的執行檔，換完 `sudo systemctl restart alertmanager-custom`，並用 32.4 再測一次 |
+| 換憑證（第 21 章） | 第二台只聽 127.0.0.1、走 HTTP，沒有憑證；不用處理 |
+| omnibus 位址或認證改了 | 改 `alertmanager.yml`，`sudo systemctl restart alertmanager-custom`；要認證時加 `http_config` |
+| 銀行之後提供了 Prometheus | 第 17 章的做法可以並存；同一個告警不要兩邊都送 omnibus |
 
 # B. 附錄 B：監控的覆蓋率，與 lab 監控容器的收尾
 
@@ -17290,7 +19170,10 @@ print("合計 %d 個 dashboard、%d 個 panel、%d 個有資料" % (total["dash"
 EOF
 
 # 2. 在 labnet 上的臨時容器裡跑（這個資料夾唯讀掛成 /w）
-podman run --rm --network lab_labnet -v "$(cygpath -m "$PWD"):/w:ro" lab-node:96 python3 /w/dashboard-coverage.py http://lab-mon-prometheus:9090 /w/grafana/provisioning/dashboards
+podman run --rm --network lab_labnet \
+  -v "$(cygpath -m "$PWD"):/w:ro" \
+  lab-node:96 \
+  python3 /w/dashboard-coverage.py http://lab-mon-prometheus:9090 /w/grafana/provisioning/dashboards
 ```
 
 ```out

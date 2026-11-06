@@ -98,7 +98,10 @@ run_34() {
   for account in $accounts; do
     password=$(k_gen_pw)
 
-    if ! be_kafka kafka-configs --alter --add-config "SCRAM-SHA-512=[password=$password]" --entity-type users --entity-name "$account" > /dev/null; then
+    if ! be_kafka kafka-configs --alter \
+        --add-config "SCRAM-SHA-512=[password=$password]" \
+        --entity-type users \
+        --entity-name "$account" > /dev/null; then
       return 1
     fi
 
@@ -116,13 +119,19 @@ run_34() {
 _item34_create_account() {
   local account="$1"
 
-  be_kafka kafka-configs --alter --add-config "SCRAM-SHA-512=[password=$(k_gen_pw)]" --entity-type users --entity-name "$account" > /dev/null
+  be_kafka kafka-configs --alter \
+    --add-config "SCRAM-SHA-512=[password=$(k_gen_pw)]" \
+    --entity-type users \
+    --entity-name "$account" > /dev/null
 }
 
 # _item34_bind <帳號> <prefix> <rw|ro>：綁 topic prefix 的讀（rw 再加寫），以及同 prefix 的 consumer group 讀取
 _item34_bind() {
   local account="$1" prefix="$2" mode="$3"
-  local role
+  local role topic_body group_body
+
+  topic_body=$(k_bind_body Topic "$prefix" PREFIXED)
+  group_body=$(k_bind_body Group "$prefix" PREFIXED)
 
   for role in DeveloperRead DeveloperWrite; do
     # 唯讀模式不給寫
@@ -130,13 +139,13 @@ _item34_bind() {
       continue
     fi
 
-    if ! be_mds POST "/security/1.0/principals/User:$account/roles/$role/bindings" "$(k_bind_body Topic "$prefix" PREFIXED)" | k_http_ok; then
+    if ! be_mds POST "/security/1.0/principals/User:$account/roles/$role/bindings" "$topic_body" | k_http_ok; then
       echo "$account binding $role 失敗"
       return 1
     fi
   done
 
-  if ! be_mds POST "/security/1.0/principals/User:$account/roles/DeveloperRead/bindings" "$(k_bind_body Group "$prefix" PREFIXED)" | k_http_ok; then
+  if ! be_mds POST "/security/1.0/principals/User:$account/roles/DeveloperRead/bindings" "$group_body" | k_http_ok; then
     echo "$account binding consumer group 失敗"
     return 1
   fi

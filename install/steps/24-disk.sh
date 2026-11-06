@@ -30,7 +30,14 @@ ADMIN=(--bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF")
 # 在 broker 上印一行資料盤用量（df 看掛載點 /var/lib/kafka）
 #   例：kb01: /dev/sdb1 用 149G / 1007G（16%）掛在 /var/lib/kafka
 DISK_USAGE_LINE=$(cat <<'EOF'
-df -h /var/lib/kafka | awk -v h="$HOST_SHORT_NAME" 'NR==2 {printf "%s: %s 用 %s / %s（%s）掛在 %s\n", h, $1, $3, $2, $5, $6}'
+if ! df_output=$(df -h /var/lib/kafka); then
+  exit 1
+fi
+
+# df 第二行的欄位：裝置 總量 已用 可用 百分比 掛載點
+read -r device size used available percent mount_point _ < <(tail -n +2 <<<"$df_output")
+
+printf '%s: %s 用 %s / %s（%s）掛在 %s\n' "$HOST_SHORT_NAME" "$device" "$used" "$size" "$percent" "$mount_point"
 EOF
 )
 
@@ -45,7 +52,10 @@ log_dirs_json() {
 #   輸入：{"brokers":[{"broker":101,"logDirs":[{"logDir":"/var/lib/kafka/data","error":null,"partitions":[{"partition":"orders.events-0","size":5498880,"offsetLag":0,"isFuture":false}]}]}],"version":1}
 #   輸出：101 /var/lib/kafka/data orders.events-0 5498880
 partition_records() {
-  log_dirs_json "$@" | grep -oE '[{}]|"broker":[0-9]+|"logDir":"[^"]*"|"partition":"[^"]*"|"size":[0-9]+' | awk -F'[:"]+' '
+  local token_pattern='[{}]|"broker":[0-9]+|"logDir":"[^"]*"|"partition":"[^"]*"|"size":[0-9]+'
+
+  # lint-ok: 要照大括號層數攤平 JSON（主機沒有 jq），grep／cut 做不到；函式上面有輸入輸出例子
+  log_dirs_json "$@" | grep -oE "$token_pattern" | awk -F'[:"]+' '
     /^\{/ {
       depth++
       next
@@ -165,7 +175,7 @@ usage() {
 
 alerts() {
   local rules_file=$BANK_OUT/prometheus/confluent-alerts-disk.yml
-  local rule_count
+  local rule_count message
 
   section "24.2 給銀行監控團隊：to-bank/prometheus/confluent-alerts-disk.yml"
 
@@ -179,7 +189,10 @@ alerts() {
 
   rule_count=$(awk '/alert:/ {c++} END {print c + 0}' "$rules_file")
   ok "confluent-alerts-disk.yml：$rule_count 條（KafkaLogDirOffline；KafkaDataDiskFillingUp 是給銀行 node_exporter 的範例）"
-  ask_bank "監控團隊：confluent-alerts-disk.yml 放到 /etc/prometheus/confluent/（rule_files 用 confluent-alerts*.yml 就會載入）後 reload；KafkaDataDiskFillingUp 的 mountpoint／job 改成行內 node_exporter 的寫法"
+  message="監控團隊：confluent-alerts-disk.yml 放到 /etc/prometheus/confluent/"
+  message+="（rule_files 用 confluent-alerts*.yml 就會載入）後 reload；"
+  message+="KafkaDataDiskFillingUp 的 mountpoint／job 改成行內 node_exporter 的寫法"
+  ask_bank "$message"
 }
 
 # demo_sizes：演練 topic 每個 replica 的 KB，一行
@@ -220,11 +233,13 @@ host_of_broker_id() {
 
 drill() {
   local first_id first_host other_ids round sizes before after verify_result replica_count directory_count
+  local replicas_text all_ids lowest_ids
 
   # 1. 示範 topic：1 個 partition、3 份 replica、segment 1 MB（預設 1 GB，這樣才看得到 segment 被刪）
   section "24.3 演練：$DEMO_TOPIC（segment 1 MB）寫 50000 筆 × 100 B"
 
-  if ! kafka-topics "${ADMIN[@]}" --create --if-not-exists --topic "$DEMO_TOPIC" --partitions 1 --replication-factor 3 --config segment.bytes=1048576 >/dev/null 2>&1; then
+  if ! kafka-topics "${ADMIN[@]}" --create --if-not-exists --topic "$DEMO_TOPIC" \
+       --partitions 1 --replication-factor 3 --config segment.bytes=1048576 >/dev/null 2>&1; then
     die "建 $DEMO_TOPIC 失敗"
   fi
 
@@ -245,7 +260,8 @@ drill() {
   # 2. ① 縮短 retention：每 10 秒看一次，最多 42 次（7 分鐘）
   section "24.3 ① 縮短 retention（retention.ms=60000），等 broker 的 retention 檢查（預設每 5 分鐘）刪掉關掉的 segment"
 
-  if ! kafka-configs "${ADMIN[@]}" --alter --entity-type topics --entity-name "$DEMO_TOPIC" --add-config retention.ms=60000 >/dev/null 2>&1; then
+  if ! kafka-configs "${ADMIN[@]}" --alter --entity-type topics --entity-name "$DEMO_TOPIC" \
+       --add-config retention.ms=60000 >/dev/null 2>&1; then
     die "改 retention.ms 失敗"
   fi
 
@@ -266,7 +282,8 @@ drill() {
   fi
 
   # 事後改回 broker 預設
-  kafka-configs "${ADMIN[@]}" --alter --entity-type topics --entity-name "$DEMO_TOPIC" --delete-config retention.ms >/dev/null 2>&1
+  kafka-configs "${ADMIN[@]}" --alter --entity-type topics --entity-name "$DEMO_TOPIC" \
+    --delete-config retention.ms >/dev/null 2>&1
   log "retention.ms 已改回 broker 預設"
 
   # 3. ② 再寫一次，讓它有東西可搬；新的 replica 名單不含第一台
@@ -278,16 +295,24 @@ drill() {
 
   sleep 3
   log "搬之前：$(demo_sizes)"
-  first_id=$(kafka-topics "${ADMIN[@]}" --describe --topic "$DEMO_TOPIC" 2>/dev/null | grep -o 'Replicas: [0-9,]*' | cut -d' ' -f2 | cut -d, -f1)
+
+  # 第一份 replica 在哪台。例：Replicas: 101,102,103 → 101
+  replicas_text=$(kafka-topics "${ADMIN[@]}" --describe --topic "$DEMO_TOPIC" 2>/dev/null | grep -o 'Replicas: [0-9,]*')
+  first_id=$(cut -d' ' -f2 <<<"$replicas_text" | cut -d, -f1)
   first_host=$(host_of_broker_id "$first_id")
-  other_ids=$(kafka-broker-api-versions "${ADMIN[@]}" 2>/dev/null | grep -o 'id: [0-9]*' | awk -v f="$first_id" '$2 != f {print $2}' | sort -n | head -3 | paste -sd,)
+
+  # 其他 broker 取編號最小的三台，逗號分隔。例：102,103,104
+  all_ids=$(kafka-broker-api-versions "${ADMIN[@]}" 2>/dev/null | grep -o 'id: [0-9]*' | cut -d' ' -f2)
+  lowest_ids=$(grep -vx "$first_id" <<<"$all_ids" | sort -n | head -3)
+  other_ids=$(paste -sd, <<<"$lowest_ids")
   replica_count=$(tr ',' '\n' <<<"$other_ids" | wc -l)
 
   if [ "$replica_count" != 3 ]; then
     die "找不到三台其他 broker（有：$other_ids）"
   fi
 
-  printf '{"version":1,"partitions":[{"topic":"%s","partition":0,"replicas":[%s]}]}\n' "$DEMO_TOPIC" "$other_ids" > "$REASSIGN_JSON"
+  printf '{"version":1,"partitions":[{"topic":"%s","partition":0,"replicas":[%s]}]}\n' \
+    "$DEMO_TOPIC" "$other_ids" > "$REASSIGN_JSON"
 
   # 4. 開始搬，等 --verify 說 completed：每 5 秒看一次，最多 30 次
   if ! kafka-reassign-partitions "${ADMIN[@]}" --reassignment-json-file "$REASSIGN_JSON" --execute >/dev/null 2>&1; then
@@ -295,7 +320,8 @@ drill() {
   fi
 
   for round in $(seq 1 30); do
-    verify_result=$(kafka-reassign-partitions "${ADMIN[@]}" --reassignment-json-file "$REASSIGN_JSON" --verify 2>/dev/null)
+    verify_result=$(kafka-reassign-partitions "${ADMIN[@]}" \
+      --reassignment-json-file "$REASSIGN_JSON" --verify 2>/dev/null)
 
     if grep -q 'is completed' <<<"$verify_result"; then
       break
@@ -314,7 +340,8 @@ drill() {
 
   # 5. 第一台上那個 partition 的目錄要消失（資料目錄是 0750，萬用字元由 cpuser 展開時讀不到，所以用 sudo find；名稱完全相同才算）
   sleep 5
-  directory_count=$(ssh_run "$first_host" "sudo find /var/lib/kafka/data -maxdepth 1 -name $DEMO_TOPIC-0" | awk 'END {print NR}')
+  directory_count=$(ssh_run "$first_host" "sudo find /var/lib/kafka/data -maxdepth 1 -name $DEMO_TOPIC-0" \
+    | wc -l)
 
   if [ "$directory_count" = 0 ]; then
     ok "$first_host 上的目錄：不存在"

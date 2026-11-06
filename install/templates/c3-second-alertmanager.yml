@@ -1,0 +1,26 @@
+# Second Alertmanager on the Control Center host (guide chapter 32): every alert it receives goes to omnibus.
+# Runs C3's bundled binary, which must be 0.34 or later: 0.32.x re-parses rendered string values as YAML ("a: b" becomes an object, "007" becomes 7).
+global:
+  resolve_timeout: 5m
+route:
+  receiver: omnibus
+  group_by: ['...']
+  group_wait: 5s
+  group_interval: 1m
+  repeat_interval: 4h
+receivers:
+  - name: omnibus
+    webhook_configs:
+      - url: ${C3_OMNIBUS_WEBHOOK_URL}
+        send_resolved: true
+        payload: >-
+          {"source": "TCB_DYNATRACE",
+          "ClassName": "TCB_DYNATRACE_STATUS",
+          "msg_catalog": {{ .CommonLabels.impact | toJson }},
+          "msg": {{ .CommonAnnotations.description | toJson }},
+          "state": "{{ if eq .Status "firing" }}OPEN{{ else }}RESOLVED{{ end }}",
+          "severity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
+          "sub_origin": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
+          "origin": "c3-embedded",
+          "hostname": {{ .CommonLabels.instance | toJson }},
+          "sub_source": "PIB"}

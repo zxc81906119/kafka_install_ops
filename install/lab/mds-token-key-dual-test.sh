@@ -20,16 +20,23 @@ STORE_PASSWORD=$(cat "$PKI_DIR/store.pass")
 #   MDS 回應的例子：{"auth_token":"eyJ...","token_type":"Bearer",...} → eyJ...
 fetch_token() {
   local mds_host=$1 output_file=$2
+  local url="https://$mds_host.$DOMAIN:8090/security/1.0/authenticate"
 
-  curl -s --cacert "$BANK_ROOT_CA" -u "alice:$TEST_PASSWORD" "https://$mds_host.$DOMAIN:8090/security/1.0/authenticate" \
-    | sed -n 's/.*"auth_token":"\([^"]*\)".*/\1/p' > "$output_file"
+  curl -s --cacert "$BANK_ROOT_CA" -u "alice:$TEST_PASSWORD" "$url" \
+    | grep -o '"auth_token":"[^"]*"' \
+    | cut -d'"' -f4 > "$output_file"
 
   [ -s "$output_file" ]
 }
 
 # refusal_reason：err.txt 裡第一個看得出原因的片段
 refusal_reason() {
-  grep -o 'SaslAuthenticationException.\{0,80\}\|Authentication failed.\{0,40\}\|ConfigException.\{0,120\}' "$WORK/err.txt" | head -1
+  grep -o \
+    -e 'SaslAuthenticationException.\{0,80\}' \
+    -e 'Authentication failed.\{0,40\}' \
+    -e 'ConfigException.\{0,120\}' \
+    "$WORK/err.txt" \
+    | head -1
 }
 
 # try_listener <MDS 主機> <broker 主機>：用 MDS 主機簽的 token，連 broker 主機的 TOKEN listener（DescribeConfigs 指定那台）
@@ -56,7 +63,10 @@ ssl.truststore.password=$STORE_PASSWORD
 EOF
 
   # 3. 連線、判斷
-  if KAFKA_OPTS="-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml -Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=file:$token_file" \
+  local log4j_option=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml
+  local allowed_urls_option=-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=file:$token_file
+
+  if KAFKA_OPTS="$log4j_option $allowed_urls_option" \
      timeout 60 kafka-configs --bootstrap-server "$broker.$DOMAIN:9094" --command-config "$conf" \
        --describe --entity-type brokers --entity-name "$(node_id_of "$broker")" > /dev/null 2> "$WORK/err.txt"; then
     echo "  $issuer 簽的 token → $broker 的 TOKEN listener：接受"

@@ -40,18 +40,22 @@ for host in $BROKERS; do
   ENDPOINTS+=" $(fqdn "$host"):9092=kafka-internal $(fqdn "$host"):9095=cp-server $(fqdn "$host"):8090=cp-server"
 done
 for host in $RESTS; do
-  ENDPOINTS+=" $(fqdn "$host"):8082=cp-server"
+  ENDPOINTS+=" $(fqdn "$host"):8082=svc-rest"
 done
-ENDPOINTS+=" $C3_FQDN:9021=cp-server $C3_FQDN:9090=cp-server"
+ENDPOINTS+=" $C3_FQDN:9021=svc-c3 $C3_FQDN:9090=svc-c3"
 
 # 每台的 7071（JMX exporter）是服務裡的 javaagent，讀同一個 keystore：controller 用 kafka-internal，其他用 cp-server（手把手 21.1、21.2.4）
 if [ "$JMX_EXPORTER" = 1 ]; then
   for host in $CONTROLLERS; do
     ENDPOINTS+=" $(fqdn "$host"):7071=kafka-internal"
   done
-  for host in $BROKERS $RESTS $C3_HOST; do
+  for host in $BROKERS; do
     ENDPOINTS+=" $(fqdn "$host"):7071=cp-server"
   done
+  for host in $RESTS; do
+    ENDPOINTS+=" $(fqdn "$host"):7071=svc-rest"
+  done
+  ENDPOINTS+=" $C3_FQDN:7071=svc-c3"
 fi
 
 # files_for_host <主機>：每台要換的憑證檔（來源檔名 → 目的地都在 /etc/confluent/ssl/）
@@ -64,10 +68,10 @@ files_for_host() {
       echo "certs/kafka-internal.p12 certs/cp-server.p12"
       ;;
     rest*)
-      echo "certs/cp-server.p12 certs/svc-rest.p12"
+      echo "certs/svc-rest.p12"
       ;;
     c3*)
-      echo "certs/cp-server.p12 certs/cp-server.crt keys/cp-server.key certs/c3-monitoring.crt keys/c3-monitoring.key certs/svc-c3.p12"
+      echo "certs/svc-c3.p12 certs/svc-c3.crt keys/svc-c3.key"
       ;;
   esac
 }
@@ -84,12 +88,20 @@ serial_of_file() {
 
 # serial_of_endpoint <主機:埠>：那個端點實際出示的憑證序號（還沒開始聽時是空的）
 serial_of_endpoint() {
-  openssl s_client -connect "$1" -servername "${1%:*}" </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2
+  openssl s_client -connect "$1" -servername "${1%:*}" </dev/null 2>/dev/null \
+    | openssl x509 -noout -serial 2>/dev/null \
+    | cut -d= -f2
+}
+
+# nth_pem <第幾張>：stdin 的 PEM 只留第幾張。例：憑證鏈檔是 leaf＋中繼，nth_pem 2 印出中繼那一張
+nth_pem() {
+  # lint-ok: 要數到第幾個 BEGIN CERT，grep／cut 做不到
+  awk -v want="$1" '/BEGIN CERT/{n++} n==want'
 }
 
 # second_serial：stdin 的 PEM 裡第二張（中繼）的序號
 second_serial() {
-  awk '/BEGIN CERT/{n++} n==2' | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2
+  nth_pem 2 | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2
 }
 
 # chain_of_file <憑證鏈檔>：「leaf 序號:中繼序號」
@@ -111,12 +123,16 @@ chain_of_endpoint() {
 
 # common_name_of_subject <憑證檔>：subject 的 CN
 common_name_of_subject() {
-  openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
+  local subject_line
+  subject_line=$(openssl x509 -in "$1" -noout -subject -nameopt sep_comma_plus,sname)
+  grep -o 'CN=[^,]*' <<<"$subject_line" | tail -1 | cut -d= -f2-
 }
 
 # common_name_of_issuer <憑證檔>：簽發者的 CN，例 PoC Bank Issuing CA 01
 common_name_of_issuer() {
-  openssl x509 -in "$1" -noout -issuer -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/'
+  local issuer_line
+  issuer_line=$(openssl x509 -in "$1" -noout -issuer -nameopt sep_comma_plus,sname)
+  grep -o 'CN=[^,]*' <<<"$issuer_line" | tail -1 | cut -d= -f2-
 }
 
 # days_left <憑證檔>：還有幾天到期
@@ -129,7 +145,16 @@ days_left() {
 # san_of_cert <憑證檔>：SAN 排好順序，逗號分隔（沒有就是空的）
 #   例：DNS:kc01, DNS:kc01.poc.lab → kc01,kc01.poc.lab
 san_of_cert() {
-  openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ' | sed 's/DNS://g' | tr ',' '\n' | sort | paste -sd,
+  local san_line san_names
+
+  # 1. 取出 SAN 那一行（第一行是標題）
+  san_line=$(openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tail -n +2)
+
+  # 2. 拿掉空白與 DNS:
+  san_names=$(tr -d ' ' <<<"$san_line" | sed 's/DNS://g')
+
+  # 3. 排好順序，逗號分隔
+  tr ',' '\n' <<<"$san_names" | sort | paste -sd,
 }
 
 # sorted_list <逗號分隔的清單>：排好順序（- 表示沒有，印空的）
@@ -163,6 +188,7 @@ split_reply() {
   local part_prefix=$NEXT_DIR/incoming/$1.part
 
   # 每遇到一行 BEGIN CERTIFICATE 就換寫下一個檔：.part1、.part2…
+  # lint-ok: 依 BEGIN CERT 切成多個檔，grep／cut 做不到。例：兩張憑證的檔 → x.part1、x.part2
   awk -v out="$part_prefix" 'BEGIN{n=0} /BEGIN CERT/{n++} {print > (out n)}' "$NEXT_DIR/incoming/$1.crt"
 
   mv "${part_prefix}1" "$NEXT_DIR/incoming/$1.leaf.pem"
@@ -205,13 +231,22 @@ EOF
 
 # verify_code_of_endpoint <主機:埠>：用 $BANK_ROOT_CA 驗那個端點的憑證，印 Verify return code（0 = 驗得過；沒有回應是空的）
 verify_code_of_endpoint() {
-  openssl s_client -connect "$1" -servername "${1%%:*}" -CAfile "$BANK_ROOT_CA" </dev/null 2>/dev/null \
-    | sed -n 's/.*Verify return code: \([0-9]*\).*/\1/p' | tail -1
+  local handshake
+
+  handshake=$(openssl s_client -connect "$1" -servername "${1%%:*}" -CAfile "$BANK_ROOT_CA" </dev/null 2>/dev/null)
+
+  # 例：Verify return code: 0 (ok) → 0
+  grep -o 'Verify return code: [0-9]*' <<<"$handshake" | tail -1 | cut -d' ' -f4
 }
 
 # truststore_aliases：truststore.p12 裡有哪些 alias（空白分隔）
 truststore_aliases() {
-  keytool -list -keystore "$CERTS_DIR/truststore.p12" -storetype PKCS12 -storepass:file "$STORE_PASSWORD_FILE" 2>/dev/null | grep trustedCertEntry | cut -d, -f1 | paste -sd' '
+  local listing
+
+  listing=$(keytool -list -keystore "$CERTS_DIR/truststore.p12" -storetype PKCS12 \
+    -storepass:file "$STORE_PASSWORD_FILE" 2>/dev/null)
+
+  grep trustedCertEntry <<<"$listing" | cut -d, -f1 | paste -sd' '
 }
 
 # show_status：每張憑證與每個端點
@@ -260,13 +295,20 @@ create_requests() {
     openssl genrsa -out "$NEXT_DIR/keys/$cert_name.key" 2048 2>/dev/null
 
     # 2. CSR 的 extension；有 SAN 的多加一行 subjectAltName
-    extensions=(-addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=$eku")
+    extensions=(
+      -addext "basicConstraints=critical,CA:FALSE"
+      -addext "keyUsage=critical,digitalSignature,keyEncipherment"
+      -addext "extendedKeyUsage=$eku"
+    )
     if [ "$san_names" != - ]; then
       extensions+=(-addext "subjectAltName=$(san_addext "$san_names")")
     fi
 
     # 3. CSR
-    if openssl req -new -key "$NEXT_DIR/keys/$cert_name.key" -sha256 -subj "/CN=$cert_name/O=PoC Bank/C=TW" "${extensions[@]}" -out "$NEXT_DIR/requests/$cert_name.csr"; then
+    if openssl req -new -key "$NEXT_DIR/keys/$cert_name.key" -sha256 \
+         -subj "/CN=$cert_name/O=PoC Bank/C=TW" \
+         "${extensions[@]}" \
+         -out "$NEXT_DIR/requests/$cert_name.csr"; then
       ok "$cert_name: csr"
     else
       fail "$cert_name: openssl req"
@@ -276,7 +318,7 @@ create_requests() {
 
 # ---- chain 第一段：現在的私鑰與 leaf ＋ 銀行給的新中繼，放進 next/（之後和 leaf 共用檢查、派送、換成正本） ----
 prepare_chain() {
-  local new_chain_file=$1 cert_name
+  local new_chain_file=$1 cert_name new_chain_cn new_chain_issuer
 
   if [ ! -s "$new_chain_file" ]; then
     die "找不到新中繼的 PEM：$new_chain_file（銀行給的中繼憑證；若有多層中繼依序放在同一個檔）"
@@ -286,7 +328,9 @@ prepare_chain() {
     die "$NEXT_DIR 已經存在（上一輪還沒做完？）：確認後刪掉再跑"
   fi
 
-  section "21.4 換鏈：leaf 不動，配上新中繼 $(common_name_of_subject "$new_chain_file")（簽發者 $(common_name_of_issuer "$new_chain_file")）"
+  new_chain_cn=$(common_name_of_subject "$new_chain_file")
+  new_chain_issuer=$(common_name_of_issuer "$new_chain_file")
+  section "21.4 換鏈：leaf 不動，配上新中繼 $new_chain_cn（簽發者 $new_chain_issuer）"
   install -d -m 0700 "$NEXT_DIR" "$NEXT_DIR/keys" "$NEXT_DIR/requests" "$NEXT_DIR/incoming" "$NEXT_DIR/certs"
 
   for cert_name in $(request_names); do
@@ -294,7 +338,7 @@ prepare_chain() {
     install -m 0644 "$PKI_DIR/requests/$cert_name.csr" "$NEXT_DIR/requests/"
 
     # 現在的 leaf（憑證鏈檔的第一張）＋ 新中繼
-    awk '/BEGIN CERT/{n++} n==1' "$CERTS_DIR/$cert_name.crt" > "$NEXT_DIR/incoming/$cert_name.crt"
+    nth_pem 1 < "$CERTS_DIR/$cert_name.crt" > "$NEXT_DIR/incoming/$cert_name.crt"
     cat "$new_chain_file" >> "$NEXT_DIR/incoming/$cert_name.crt"
 
     ok "$cert_name：leaf 序號 $(serial_of_file "$CERTS_DIR/$cert_name.crt" | tail -c 9) 不變，換上新中繼"
@@ -340,7 +384,9 @@ check_and_build() {
       problems+=" 只剩 $days 天"
     fi
 
-    if ! openssl verify -CAfile "$BANK_ROOT_CA" -untrusted "$NEXT_DIR/incoming/$cert_name.issuers.pem" "$leaf" >/dev/null 2>&1; then
+    if ! openssl verify -CAfile "$BANK_ROOT_CA" \
+         -untrusted "$NEXT_DIR/incoming/$cert_name.issuers.pem" \
+         "$leaf" >/dev/null 2>&1; then
       problems+=" 憑證鏈驗不過"
     fi
 
@@ -357,10 +403,14 @@ check_and_build() {
 
   section "做 keystore（同一個 keystore 密碼）"
   for cert_name in $(request_names); do
-    cat "$NEXT_DIR/incoming/$cert_name.leaf.pem" "$NEXT_DIR/incoming/$cert_name.issuers.pem" > "$NEXT_DIR/certs/$cert_name.crt"
+    cat "$NEXT_DIR/incoming/$cert_name.leaf.pem" "$NEXT_DIR/incoming/$cert_name.issuers.pem" \
+      > "$NEXT_DIR/certs/$cert_name.crt"
 
-    if openssl pkcs12 -export -name "$cert_name" -inkey "$NEXT_DIR/keys/$cert_name.key" -in "$NEXT_DIR/certs/$cert_name.crt" \
-         -out "$NEXT_DIR/certs/$cert_name.p12" -passout file:"$STORE_PASSWORD_FILE"; then
+    if openssl pkcs12 -export -name "$cert_name" \
+         -inkey "$NEXT_DIR/keys/$cert_name.key" \
+         -in "$NEXT_DIR/certs/$cert_name.crt" \
+         -out "$NEXT_DIR/certs/$cert_name.p12" \
+         -passout file:"$STORE_PASSWORD_FILE"; then
       chmod 0600 "$NEXT_DIR/certs/$cert_name.p12"
     else
       fail "$cert_name: pkcs12"
@@ -482,31 +532,35 @@ promote() {
   ok "正本已換新"
 
   # 2. 操作機自己用的兩張：管理 client（svc-ops）、查 quorum（kafka-internal）
-  topic_count=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --list 2>/dev/null | wc -l)
+  topic_count=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" \
+      --command-config "$ADMIN_CLIENT_CONF" --list 2>/dev/null \
+    | wc -l)
   if [ "$topic_count" -gt 0 ]; then
     ok "svc-ops 管理 client 可用（$topic_count 個 topic）"
   else
     fail "svc-ops 管理 client 失敗"
   fi
 
-  leader_line=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null | grep -o 'LeaderId: *[0-9]*')
+  leader_line=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" \
+      --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null \
+    | grep -o 'LeaderId: *[0-9]*')
   if [ -n "$leader_line" ]; then
     ok "kafka-internal 查 quorum 可用（$leader_line）"
   else
     fail "kafka-internal 查 quorum 失敗"
   fi
 
-  # 3. 緊急身分：選單 91 讀的 ~/secrets/opmenu-breakglass.pem 換成新憑證（舊的另存 .prev.pem，到期前都還有效）
-  if [ "$OPMENU" = 1 ] && [ -f "$KEYS_DIR/opmenu-breakglass.key" ]; then
-    breakglass_pem=$SECRETS_DIR/opmenu-breakglass.pem
+  # 3. 緊急身分：選單 91 讀的 ~/secrets/svc-ops.pem 換成新憑證（舊的另存 .prev.pem，到期前都還有效）
+  if [ "$OPMENU" = 1 ] && [ -f "$KEYS_DIR/svc-ops.key" ]; then
+    breakglass_pem=$SECRETS_DIR/svc-ops.pem
 
     if [ -f "$breakglass_pem" ]; then
-      install -m 0600 "$breakglass_pem" "$SECRETS_DIR/opmenu-breakglass.prev.pem"
+      install -m 0600 "$breakglass_pem" "$SECRETS_DIR/svc-ops.prev.pem"
     fi
 
     install -m 0600 /dev/null "$breakglass_pem"
-    cat "$KEYS_DIR/opmenu-breakglass.key" "$CERTS_DIR/opmenu-breakglass.crt" > "$breakglass_pem"
-    ok "新憑證已放到 $breakglass_pem（0600；舊的另存 $SECRETS_DIR/opmenu-breakglass.prev.pem）"
+    cat "$KEYS_DIR/svc-ops.key" "$CERTS_DIR/svc-ops.crt" > "$breakglass_pem"
+    ok "新憑證已放到 $breakglass_pem（0600；舊的另存 $SECRETS_DIR/svc-ops.prev.pem）"
   fi
 
   # 4. 應用程式的憑證：新的（交給應用程式團隊）要能用；舊的在效期內也還能用（只提醒，換發時舊的可能已過期）
@@ -517,7 +571,11 @@ promote() {
     fail "新的 $FIRST_REST_APP 憑證：$rest_app_code"
   fi
 
-  old_rest_app_code=$(curl -s --cert "$old_dir/certs/$FIRST_REST_APP.crt" --key "$old_dir/keys/$FIRST_REST_APP.key" -o /dev/null -m 30 -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters")
+  old_rest_app_code=$(curl -s \
+    --cert "$old_dir/certs/$FIRST_REST_APP.crt" \
+    --key "$old_dir/keys/$FIRST_REST_APP.key" \
+    -o /dev/null -m 30 -w '%{http_code}' \
+    "https://$REST_VIP:8082/v3/clusters")
   if [ "$old_rest_app_code" = 200 ]; then
     ok "舊的 $FIRST_REST_APP 憑證（還在效期內）經負載平衡 200"
   else
@@ -530,6 +588,7 @@ promote() {
 # ---- trust-sync：我方信任清單跟著 OS 的 bank-root.pem ----
 trust_sync() {
   local root_count endpoint address verify_code unverified=0 work_dir root_file alias_name host alice_login
+  local alice_password
 
   section "信任清單同步：以 $BANK_ROOT_CA 為準（銀行 OS 團隊先換好；換 CA 階段一是新舊兩張、階段三只剩新的）"
 
@@ -558,6 +617,7 @@ trust_sync() {
 
   # 2. 把 bundle 拆成一張一張，以 CN 當 alias 重建 truststore（舊的留 .old）
   work_dir=$(mktemp -d)
+  # lint-ok: 依 BEGIN CERT 切成多個檔，grep／cut 做不到。例：兩張根 → root-1.pem、root-2.pem
   awk -v out="$work_dir/root-" 'BEGIN{n=0} /BEGIN CERT/{n++} n>0 {print > (out n ".pem")}' "$BANK_ROOT_CA"
   cp -p "$CERTS_DIR/truststore.p12" "$CERTS_DIR/truststore.p12.old"
   rm -f "$work_dir/truststore.p12"
@@ -565,7 +625,8 @@ trust_sync() {
   for root_file in "$work_dir"/root-*.pem; do
     alias_name=$(common_name_of_subject "$root_file" | tr 'A-Z ' 'a-z-')
 
-    if ! keytool -importcert -noprompt -alias "$alias_name" -file "$root_file" -keystore "$work_dir/truststore.p12" -storetype PKCS12 \
+    if ! keytool -importcert -noprompt -alias "$alias_name" -file "$root_file" \
+         -keystore "$work_dir/truststore.p12" -storetype PKCS12 \
          -storepass:file "$STORE_PASSWORD_FILE" >/dev/null 2>&1; then
       die "匯入 $alias_name 失敗"
     fi
@@ -631,7 +692,9 @@ trust_sync() {
   fi
 
   # 8. MDS 還連得上 AD
-  alice_login=$(curl -s --cacert "$BANK_ROOT_CA" -u "alice:$(cat "$SECRETS_DIR/ad-test-users.pass")" -o /dev/null -w '%{http_code}' "$MDS_URL/security/1.0/authenticate")
+  alice_password=$(cat "$SECRETS_DIR/ad-test-users.pass")
+  alice_login=$(curl -s --cacert "$BANK_ROOT_CA" -u "alice:$alice_password" \
+    -o /dev/null -w '%{http_code}' "$MDS_URL/security/1.0/authenticate")
   if [ "$alice_login" = 200 ]; then
     ok "alice 登入 MDS（MDS 經 LDAPS 連 AD）：200"
   else
@@ -686,7 +749,8 @@ case $ACTION in
     trust_sync
     ;;
   *)
-    die "用法：bash $0 status|leaf|chain <新中繼.pem>|trust-sync"
+    usage='status|leaf|chain <新中繼.pem>|trust-sync'
+    die "用法：bash $0 $usage"
     ;;
 esac
 

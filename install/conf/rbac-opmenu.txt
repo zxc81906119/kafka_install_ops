@@ -4,5 +4,3 @@
 Group:kafka-operators   DeveloperManage Topic:*        LITERAL
 Group:kafka-operators   DeveloperRead   Group:*        LITERAL
 Group:kafka-devs        DeveloperManage Topic:orders.  PREFIXED
-# 91 緊急模式用的身分（第 9 站簽的 opmenu-breakglass 憑證）
-User:opmenu-breakglass  SystemAdmin     -              -

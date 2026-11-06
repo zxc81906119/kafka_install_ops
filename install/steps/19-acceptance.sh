@@ -31,7 +31,17 @@ CHECK_COUNT=0
 # first_topic_with_prefix <prefix>：conf/topics.txt 裡第一個以它開頭的 topic
 #   例：first_topic_with_prefix orders. → orders.events
 first_topic_with_prefix() {
-  grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk -v prefix="$1" 'index($1, prefix) == 1 {print $1; exit}'
+  local prefix=$1 topic_names topic_name
+
+  # 第一欄是 topic 名稱
+  topic_names=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}')
+
+  for topic_name in $topic_names; do
+    if [[ $topic_name == "$prefix"* ]]; then
+      echo "$topic_name"
+      return 0
+    fi
+  done
 }
 
 SENSITIVE_TOPIC=$(first_topic_with_prefix "$AUDIT_SENSITIVE_PREFIX")
@@ -67,28 +77,32 @@ mds_login_is() {
 # quorum_has_leader：controller quorum 有 leader
 quorum_has_leader() {
   local output
-  output=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" --command-config "$INTERNAL_CLIENT_CONF" describe --status)
+  output=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" \
+    --command-config "$INTERNAL_CLIENT_CONF" describe --status)
   grep -q 'LeaderId: *[0-9]' <<<"$output"
 }
 
 # no_partitions <describe 的選項>：kafka-topics --describe 加這個選項時，列不出任何 partition
 no_partitions() {
   local count
-  count=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe "$1" | awk '/Partition:/ {c++} END {print c + 0}')
+  count=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --describe "$1" \
+    | awk '/Partition:/ {c++} END {print c + 0}')
   [ "$count" = 0 ]
 }
 
 # balancer_enabled：Self-Balancing 是啟用的
 balancer_enabled() {
   local output
-  output=$(kafka-rebalance-cluster --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --status 2>/dev/null)
+  output=$(kafka-rebalance-cluster --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" \
+    --status 2>/dev/null)
   grep -q 'Balancer status: ENABLED' <<<"$output"
 }
 
 # c3_prometheus_has_broker_metrics：C3 內建的 Prometheus 有 broker 的指標
 c3_prometheus_has_broker_metrics() {
   local names
-  names=$(curl -s --cacert "$BANK_ROOT_CA" --cert "$CERTS_DIR/c3-monitoring.crt" --key "$KEYS_DIR/c3-monitoring.key" "https://$C3_FQDN:9090/api/v1/label/__name__/values")
+  names=$(curl -s --cacert "$BANK_ROOT_CA" --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key" \
+    "https://$C3_FQDN:9090/api/v1/label/__name__/values")
   grep -q confluent_kafka_server <<<"$names"
 }
 
@@ -111,7 +125,8 @@ carol_create_denied() {
   carol_conf=$(mktemp)
   sed 's/username="alice"/username="carol"/' "$ALICE_CLIENT_CONF" > "$carol_conf"
 
-  output=$(kafka-topics --bootstrap-server "$FIRST_BROKER:9096" --command-config "$carol_conf" --create --topic "${AUDIT_SENSITIVE_PREFIX}carol-test" --partitions 1 --replication-factor 3 2>&1)
+  output=$(kafka-topics --bootstrap-server "$FIRST_BROKER:9096" --command-config "$carol_conf" \
+    --create --topic "${AUDIT_SENSITIVE_PREFIX}carol-test" --partitions 1 --replication-factor 3 2>&1)
 
   rm -f "$carol_conf"
   grep -q TopicAuthorizationException <<<"$output"
@@ -120,7 +135,8 @@ carol_create_denied() {
 # app_cannot_read_sensitive：SCRAM app 讀敏感 topic，要被拒絕
 app_cannot_read_sensitive() {
   local output
-  output=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$APP_CLIENT_CONF" --topic "$SENSITIVE_TOPIC" --max-messages 1 --timeout-ms 8000 2>&1)
+  output=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$APP_CLIENT_CONF" \
+    --topic "$SENSITIVE_TOPIC" --max-messages 1 --timeout-ms 8000 2>&1)
   grep -q TopicAuthorizationException <<<"$output"
 }
 
@@ -157,7 +173,8 @@ client_listener_without_sasl_fails() {
 wrong_ca_rejected() {
   local junk_ca result
   junk_ca=$(mktemp)
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=junk -out "$junk_ca" 2>/dev/null
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null \
+    -subj /CN=junk -out "$junk_ca" 2>/dev/null
 
   if curl -s --max-time 10 --cacert "$junk_ca" "$MDS_URL/v1/metadata/id" -o /dev/null; then
     result=1
@@ -193,7 +210,7 @@ count=$(sudo grep -rl CONFLUENT_SECURITY_MASTER_KEY= /etc/confluent /etc/systemd
 EOF
 }
 
-# cp_server_is_not_a_client：cp-server 只有 serverAuth；拿它當 client 憑證連 C3 的 Prometheus 要被拒，c3-monitoring 則連得上
+# cp_server_is_not_a_client：cp-server 只有 serverAuth；拿它當 client 憑證連 C3 的 Prometheus 要被拒，svc-ops 則連得上
 cp_server_is_not_a_client() {
   local eku
   eku=$(openssl x509 -in "$CERTS_DIR/cp-server.crt" -noout -ext extendedKeyUsage | tail -n +2 | tr -d ' ')
@@ -202,11 +219,13 @@ cp_server_is_not_a_client() {
     return 1
   fi
 
-  if ! curl -sf -m 15 --cacert "$BANK_ROOT_CA" --cert "$CERTS_DIR/c3-monitoring.crt" --key "$KEYS_DIR/c3-monitoring.key" "https://$C3_FQDN:9090/-/ready"; then
+  if ! curl -sf -m 15 --cacert "$BANK_ROOT_CA" --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key" \
+       "https://$C3_FQDN:9090/-/ready"; then
     return 1
   fi
 
-  if curl -sf -m 15 --cacert "$BANK_ROOT_CA" --cert "$CERTS_DIR/cp-server.crt" --key "$KEYS_DIR/cp-server.key" "https://$C3_FQDN:9090/-/ready"; then
+  if curl -sf -m 15 --cacert "$BANK_ROOT_CA" --cert "$CERTS_DIR/cp-server.crt" --key "$KEYS_DIR/cp-server.key" \
+       "https://$C3_FQDN:9090/-/ready"; then
     return 1
   fi
 
@@ -215,19 +234,23 @@ cp_server_is_not_a_client() {
 
 # app_can_produce <topic> <訊息>：SCRAM app 直連 9095 寫一筆
 app_can_produce() {
-  echo "$2" | kafka-console-producer --bootstrap-server "$FIRST_BROKER:9095" --producer.config "$APP_CLIENT_CONF" --topic "$1"
+  echo "$2" | kafka-console-producer --bootstrap-server "$FIRST_BROKER:9095" \
+    --producer.config "$APP_CLIENT_CONF" --topic "$1"
 }
 
 # account_can_login <帳號> <topic> <group>：這個 SCRAM 帳號連得上（輸出裡有 SaslAuthenticationException 以外的行）
 #   連線設定借 app 那一份，帳號密碼換掉（暫存檔 0600，用完即刪）
 account_can_login() {
-  local account=$1 topic=$2 group=$3 account_conf account_password output
+  local account=$1 topic=$2 group=$3 account_conf account_password output old_login new_login
   account_conf=$(mktemp)
   account_password=$(cat "$SECRETS_DIR/$account.pass")
-  sed "s/username=\"[^\"]*\" password=\"[^\"]*\"/username=\"$account\" password=\"$account_password\"/" "$APP_CLIENT_CONF" > "$account_conf"
-  unset account_password
+  old_login='username="[^"]*" password="[^"]*"'
+  new_login="username=\"$account\" password=\"$account_password\""
+  sed "s/$old_login/$new_login/" "$APP_CLIENT_CONF" > "$account_conf"
+  unset account_password new_login
 
-  output=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$account_conf" --topic "$topic" --group "$group" --max-messages 1 --timeout-ms 8000 2>&1)
+  output=$(kafka-console-consumer --bootstrap-server "$FIRST_BROKER:9095" --consumer.config "$account_conf" \
+    --topic "$topic" --group "$group" --max-messages 1 --timeout-ms 8000 2>&1)
 
   rm -f "$account_conf"
 
@@ -248,7 +271,9 @@ consumer_finds() {
 
   (
     set +o pipefail
-    kafka-console-consumer --bootstrap-server "$FIRST_BROKER:$port" --consumer.config "$client_conf" --topic "$topic" --group "$group" --from-beginning --timeout-ms 45000 2>/dev/null | grep -m 1 "$message" > /dev/null
+    kafka-console-consumer --bootstrap-server "$FIRST_BROKER:$port" --consumer.config "$client_conf" \
+      --topic "$topic" --group "$group" --from-beginning --timeout-ms 45000 2>/dev/null \
+      | grep -m 1 "$message" > /dev/null
   )
 }
 
@@ -329,7 +354,8 @@ check "$FIRST_SCRAM_APP 讀 $SENSITIVE_TOPIC 被拒" app_cannot_read_sensitive
 
 # 3. 連線方式
 check "REST Proxy 不帶憑證 → TLS 就拒絕" rest_without_cert_refused
-check "REST Proxy 帶非 app 憑證（svc-ops）→ 401" http_is 401 "https://$REST_VIP:8082/v3/clusters" --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key"
+check "REST Proxy 帶非 app 憑證（svc-ops）→ 401" http_is 401 "https://$REST_VIP:8082/v3/clusters" \
+  --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key"
 check "CLIENT 9095 不帶 SASL → 失敗" client_listener_without_sasl_fails
 if [ "$JMX_EXPORTER" = 1 ]; then
   check "JMX exporter 不加密的 HTTP → 連不上" http_is 000 "http://$FIRST_BROKER:7071/metrics"
@@ -350,6 +376,7 @@ fi
 
 check "/etc/confluent/ssl 是 0750" ssh_run "$FIRST_BROKER_HOST" '[ "$(sudo stat -c %a /etc/confluent/ssl)" = 750 ]'
 check "cp-server 只有 serverAuth，拿來當 client 憑證連 C3 的 Prometheus 被拒" cp_server_is_not_a_client
+check "alice 能從 C3 登入（C3 連得到 MDS）" wait_c3_login
 
 security_failures=$((FAIL_COUNT - health_failures))
 
@@ -369,15 +396,19 @@ rest_body="{\"value\":{\"type\":\"JSON\",\"data\":\"$test_message-rest\"}}"
 check "$FIRST_SCRAM_APP（SCRAM 直連）寫入 $scram_app_topic" app_can_produce "$scram_app_topic" "$test_message"
 
 for suffix in $SCRAM_SUFFIXES; do
-  check "$FIRST_SCRAM_APP$suffix（A／B 兩個帳號）能用 SCRAM 登入" account_can_login "$FIRST_SCRAM_APP$suffix" "$scram_app_topic" "$scram_app_group-$suffix"
+  check "$FIRST_SCRAM_APP$suffix（A／B 兩個帳號）能用 SCRAM 登入" account_can_login \
+    "$FIRST_SCRAM_APP$suffix" "$scram_app_topic" "$scram_app_group-$suffix"
 done
 
-check "$FIRST_SCRAM_APP 讀回自己寫的" consumer_finds "$APP_CLIENT_CONF" 9095 "$scram_app_topic" "$scram_app_group" "$test_message"
+check "$FIRST_SCRAM_APP 讀回自己寫的" consumer_finds \
+  "$APP_CLIENT_CONF" 9095 "$scram_app_topic" "$scram_app_group" "$test_message"
 
 # 2. REST app 經負載平衡 + REST Proxy 寫一筆；alice 讀得到
-check "$FIRST_REST_APP 經負載平衡 + REST Proxy（mTLS）寫入 $rest_app_topic" http_is 200 "https://$REST_VIP:8082/v3/clusters/$cluster_id/topics/$rest_app_topic/records" \
+rest_records_url="https://$REST_VIP:8082/v3/clusters/$cluster_id/topics/$rest_app_topic/records"
+check "$FIRST_REST_APP 經負載平衡 + REST Proxy（mTLS）寫入 $rest_app_topic" http_is 200 "$rest_records_url" \
   "${REST_APP_CERT_OPTIONS[@]}" -X POST -H 'Content-Type: application/json' -d "$rest_body"
-check "alice 在 $rest_app_topic 讀到那筆" consumer_finds "$ALICE_CLIENT_CONF" 9096 "$rest_app_topic" "$rest_app_group" "$test_message-rest"
+check "alice 在 $rest_app_topic 讀到那筆" consumer_finds \
+  "$ALICE_CLIENT_CONF" 9096 "$rest_app_topic" "$rest_app_group" "$test_message-rest"
 
 application_failures=$((FAIL_COUNT - health_failures - security_failures))
 
@@ -399,7 +430,8 @@ section "19.5 收尾：留什麼、收什麼"
 rm -rf /tmp/jmx-* /tmp/*.properties 2>/dev/null
 
 # 2. 家目錄底下的金鑰與密碼檔都要是 0600
-wrong_permissions=$(find ~ -maxdepth 3 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) ! -perm 600 2>/dev/null)
+wrong_permissions=$(find ~ -maxdepth 3 -type f \( -name '*.key' -o -name '*.pass' -o -name 'master.key' \) \
+  ! -perm 600 2>/dev/null)
 if [ -z "$wrong_permissions" ]; then
   ok "家目錄下的私鑰與密碼檔都是 0600"
 else
@@ -410,7 +442,9 @@ fi
 for host in $SAMPLE_HOSTS; do
   leftovers=$(ssh_script "$host" <<'EOF'
 # JVM 自己的暫存檔（hsperfdata、lib*.so、com_*）不算殘留
-tmp_leftovers=$(find /tmp -mindepth 1 -maxdepth 1 ! -name '.*' ! -name 'hsperfdata*' ! -name 'systemd-private*' ! -name 'lib*.so*' ! -name 'com_*' | wc -l)
+tmp_leftovers=$(find /tmp -mindepth 1 -maxdepth 1 \
+  ! -name '.*' ! -name 'hsperfdata*' ! -name 'systemd-private*' ! -name 'lib*.so*' ! -name 'com_*' \
+  | wc -l)
 echo "/tmp 殘留 $tmp_leftovers 個；sudoers $(sudo ls /etc/sudoers.d | paste -sd,)"
 EOF
 )
@@ -429,8 +463,12 @@ done
 landing_sizes=$(du -sh "$LANDING" "$REPO_DIR" 2>/dev/null | cut -f1 | paste -sd' ')
 log "留在操作機：$CONF_DIR（範本產出的設定）、$PKI_DIR、$SECRETS_DIR（0600）、$MONITORING_DIR、~/install-logs"
 log "可以刪：$LANDING、$REPO_DIR（$landing_sizes；套件庫才是正本）"
-ask_bank "交付時：OS 團隊移除各主機 /etc/sudoers.d/$SSH_USER（全權），只留 $SSH_USER-ops；$KEYS_DIR/svc-ops.key（SystemAdmin）和其他金鑰一樣留在操作機（0600）；" \
+handover_request="交付時：OS 團隊移除各主機 /etc/sudoers.d/$SSH_USER（全權），只留 $SSH_USER-ops；"
+handover_request+="$KEYS_DIR/svc-ops.key（SystemAdmin）和其他金鑰一樣留在操作機（0600）；"
+
+ask_bank "$handover_request" \
          "    $SSH_KEY 留在操作機的獨立 file system（root、0400；不放 CyberArk、不備份，操作機重建就重新產生並重新佈署公鑰）。"
 
-log "驗收：$((CHECK_COUNT - FAIL_COUNT)) / $CHECK_COUNT 項通過（健康失敗 $health_failures、安全失敗 $security_failures、應用程式失敗 $application_failures）"
+failure_summary="健康失敗 $health_failures、安全失敗 $security_failures、應用程式失敗 $application_failures"
+log "驗收：$((CHECK_COUNT - FAIL_COUNT)) / $CHECK_COUNT 項通過（$failure_summary）"
 finish_step

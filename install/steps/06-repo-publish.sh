@@ -16,8 +16,9 @@ source "$INSTALL_DIR/lib/ssh.sh"
 # count_published_packages：套件庫（HTTPS）上看得到幾個 confluent 套件
 #   用 repoquery：不管本機裝了沒都會列；手把手的 dnf list available 會漏掉已裝的，重跑時數字就不對了
 count_published_packages() {
-  dnf -q repoquery --repofrompath=cp-test,"$REPO_URL/confluent/" --repo=cp-test --setopt=cp-test.gpgcheck=0 --qf '%{name}' 2>/dev/null \
-    | awk '/confluent/ {count++} END {print count + 0}'
+  dnf -q repoquery --repofrompath=cp-test,"$REPO_URL/confluent/" --repo=cp-test --setopt=cp-test.gpgcheck=0 \
+    --qf '%{name}' 2>/dev/null \
+    | awk '/confluent/ {c++} END {print c + 0}'
 }
 
 section "工具：createrepo_c、gettext（envsubst）從銀行套件庫安裝（--refresh：dnf 的套件清單快取 48 小時，剛上架的會找不到）"
@@ -25,7 +26,9 @@ if ! dnf -q -y --refresh install createrepo_c gettext >/dev/null; then
   die "裝不到 createrepo_c／gettext：確認銀行套件庫有 os-packages.txt 列的套件"
 fi
 
-ok "createrepo_c $(createrepo_c --version | head -1)、envsubst $(envsubst --version | head -1 | awk '{print $NF}')"
+createrepo_version=$(createrepo_c --version | head -1)
+envsubst_version=$(envsubst --version | head -1 | awk '{print $NF}')
+ok "createrepo_c $createrepo_version、envsubst $envsubst_version"
 
 section "組目錄、建索引"
 # 1. 要上架的東西：安裝基底的 RPM、原廠公鑰、jar、雜湊清單
@@ -54,7 +57,8 @@ if ! tar -C "$REPO_DIR" -cf - . | ssh_run_as "$REPO_DEPLOY_USER" "$REPO_HOST" 't
 fi
 
 # 2. 確認：上面有哪些目錄、confluent/ 底下有幾項
-published=$(ssh_run_as "$REPO_DEPLOY_USER" "$REPO_HOST" 'echo "$(ls /var/www/repo | paste -sd" ")；confluent/ 有 $(ls /var/www/repo/confluent | wc -l) 個檔"')
+summary_command='echo "$(ls /var/www/repo | paste -sd" ")；confluent/ 有 $(ls /var/www/repo/confluent | wc -l) 個檔"'
+published=$(ssh_run_as "$REPO_DEPLOY_USER" "$REPO_HOST" "$summary_command")
 ok "$REPO_HOST:/var/www/repo：$published"
 
 section "從操作機用 HTTPS 讀回來（repoquery 不管本機裝了沒都會列；dnf list available 會漏掉已裝的）"

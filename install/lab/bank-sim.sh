@@ -37,7 +37,14 @@ if ! command -v podman > /dev/null 2>&1; then
 fi
 
 LAB=${LAB:-$HOME/kafka-lab}
-INSTALL=$(cd "$(dirname "$0")/.." && pwd)
+script_dir=$(dirname "$0")
+INSTALL=$(
+  if ! cd "$script_dir/.."; then
+    exit 1
+  fi
+
+  pwd
+)
 source "$INSTALL/conf/site.env"
 
 NODE_IMAGE=${NODE_IMAGE:-lab-node:96}   # 主機映像（手把手 0.1）；9.6 的 tag 和舊的 9.8 映像分開，才不會誤用舊映像
@@ -84,7 +91,9 @@ landing_layout() {
   mkdir -p "$landing/rpm" "$landing/rpm-target" "$landing/bank"
 
   # 1. 目標版本的檔案如果還在 rpm/（舊版面）：搬到 rpm-target/
-  for file in "$landing"/rpm/*-"$CP_TARGET_VERSION"-1.* "$landing"/rpm/confluent-control-center-next-gen-"$C3_TARGET_VERSION"-1.*; do
+  for file in \
+    "$landing"/rpm/*-"$CP_TARGET_VERSION"-1.* \
+    "$landing"/rpm/confluent-control-center-next-gen-"$C3_TARGET_VERSION"-1.*; do
     if [ -f "$file" ]; then
       mv "$file" "$landing/rpm-target/"
       echo "rpm/ → rpm-target/：$(basename "$file")"
@@ -166,8 +175,10 @@ os_content() {
   mkdir -p "$OS_DIR"
   podman rm -f --ignore lab-mig-oscontent > /dev/null 2>&1
 
-  podman run --rm -i --name lab-mig-oscontent -e BASE="$base" -e TARGET="$target" -v "$(windows_path "$OS_DIR"):/out" "$NODE_IMAGE" bash -e -s <<'EOF'
+  podman run --rm -i --name lab-mig-oscontent -e BASE="$base" -e TARGET="$target" \
+    -v "$(windows_path "$OS_DIR"):/out" "$NODE_IMAGE" bash -e -s <<'EOF'
 base_repos="--disablerepo=* --enablerepo=vault${BASE//./}-baseos,vault${BASE//./}-appstream,vault${BASE//./}-extras"
+# lint-ok: 套件清單（jq 是 OS 套件庫要提供的套件名稱，不是這裡在用 jq）
 packages="chrony firewalld cyrus-sasl openssl-devel httpd mod_ssl python3-dnf-plugin-versionlock nmap-ncat jq gettext openldap-clients createrepo_c tar gzip openssl sudo openssh-server diffutils less vim-minimal bind-utils lsof procps-ng rsync bash-completion"
 started_at=$(date +%s)
 
@@ -225,7 +236,8 @@ REPO
 # 4. 基底 → 目標要的更新：只下載、不安裝
 mkdir -p /out/$TARGET-updates/Packages /tmp/dl
 
-if ! dnf -q -y --disablerepo="*" --enablerepo=r-target-baseos,r-target-appstream,r-target-extras update --downloadonly --downloaddir /tmp/dl > /tmp/u.log 2>&1; then
+if ! dnf -q -y --disablerepo="*" --enablerepo=r-target-baseos,r-target-appstream,r-target-extras \
+    update --downloadonly --downloaddir /tmp/dl > /tmp/u.log 2>&1; then
   echo "抓 $TARGET 的更新失敗（多半是連不到 dl.rockylinux.org，稍後重跑）："
   tail -5 /tmp/u.log
   false
@@ -234,7 +246,9 @@ fi
 # 5. 先複製到銀行的目錄、再建索引（下載目錄直接當套件庫時，dnf 可能把用過的 RPM 刪掉）
 cp -a /tmp/dl/. /out/$TARGET-updates/Packages/
 createrepo_c -q /out/$TARGET-updates
-echo "$TARGET-updates：$(ls /out/$TARGET-updates/Packages | wc -l) 個 RPM，$(du -sm /out/$TARGET-updates | cut -f1) MB，$(( $(date +%s) - started_at )) 秒"
+updates_rpm_count=$(ls /out/$TARGET-updates/Packages | wc -l)
+updates_size_mb=$(du -sm /out/$TARGET-updates | cut -f1)
+echo "$TARGET-updates：$updates_rpm_count 個 RPM，$updates_size_mb MB，$(( $(date +%s) - started_at )) 秒"
 
 # 6. 基底的內容加上更新集合，合併成目標小版本的套件庫
 mkdir -p /out/$TARGET/Packages
@@ -286,7 +300,8 @@ if ! id "$CPUSER" > /dev/null 2>&1; then
 fi
 
 # 2. sshd：不收密碼，只收金鑰
-printf 'Match User %s\n    PasswordAuthentication no\n    AuthenticationMethods publickey\n' "$CPUSER" > /etc/ssh/sshd_config.d/50-cpuser.conf
+printf 'Match User %s\n    PasswordAuthentication no\n    AuthenticationMethods publickey\n' "$CPUSER" \
+  > /etc/ssh/sshd_config.d/50-cpuser.conf
 sshd -t
 systemctl reload sshd
 
@@ -306,15 +321,17 @@ BANK
 # 第 4 章：操作機（root）已在 /secure/ssh 產生金鑰對（第 4 站）。公鑰行 = from="<操作機 IP>,127.0.0.1,::1" + 公鑰；
 # OS 團隊在每台主機（含操作機自己）建 cpuser 並放這一行；repo01 的 repodeploy 放同一行
 prepare_host_access() {
-  local ops_ip public_key from_addrs line host
+  local ops_container ops_ip public_key from_addrs line host
+
+  ops_container=$(container_of "$OPS_HOST")
 
   # 1. 要放的那一行：公鑰前面加 from=（只有操作機的位址能用）
-  if ! public_key=$(podman exec "$(container_of "$OPS_HOST")" cat "$SSH_KEY.pub" 2> /dev/null); then
+  if ! public_key=$(podman exec "$ops_container" cat "$SSH_KEY.pub" 2> /dev/null); then
     echo "操作機上沒有 $SSH_KEY.pub：先跑第 4 站（bash install/install.sh --to 03）讓它產生金鑰"
     return 1
   fi
 
-  ops_ip=$(podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$OPS_HOST")")
+  ops_ip=$(podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$ops_container")
   from_addrs=${SSH_FROM_ADDRS:-$ops_ip,127.0.0.1,::1}
   line="from=\"$from_addrs\" $public_key"
 
@@ -343,7 +360,10 @@ BANK
 prepare_repo_certificate() {
   local repo_tls=$LAB/images/web/tls
 
-  if openssl verify -CAfile "$(windows_path "$LAB/ca/root.crt")" -untrusted "$(windows_path "$repo_tls/repo.crt")" "$(windows_path "$repo_tls/repo.crt")" > /dev/null 2>&1; then
+  if openssl verify \
+      -CAfile "$(windows_path "$LAB/ca/root.crt")" \
+      -untrusted "$(windows_path "$repo_tls/repo.crt")" \
+      "$(windows_path "$repo_tls/repo.crt")" > /dev/null 2>&1; then
     return 0
   fi
 
@@ -397,7 +417,8 @@ prepare_os_repo() {
   announce "5.1 根憑證進每台主機的信任清單 + bank-os.repo"
 
   for host in $ALL_HOSTS; do
-    podman cp "$(windows_path "$LAB/ca/root.crt")" "$(container_of "$host"):/etc/pki/ca-trust/source/anchors/bank-root.pem"
+    podman cp "$(windows_path "$LAB/ca/root.crt")" \
+      "$(container_of "$host"):/etc/pki/ca-trust/source/anchors/bank-root.pem"
 
     if trust_root_and_add_repo "$host"; then
       printf '%s ' "$host"
@@ -453,7 +474,9 @@ for ou in Users Groups Service; do
 done
 
 # 3. MDS 查詢用的唯讀帳號
-samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" --userou="OU=Service,OU=Confluent" --description="read-only LDAP bind for Confluent MDS"
+samba-tool user create svc-mds-bind "$(cat /root/secrets/bind.pass)" \
+  --userou="OU=Service,OU=Confluent" \
+  --description="read-only LDAP bind for Confluent MDS"
 
 # 4. 三個群組
 for g in kafka-admins kafka-operators kafka-devs; do
@@ -552,7 +575,8 @@ prepare_ad() {
   for pair in bind:ldap-bind users:ad-test-users; do
     source_name=${pair%%:*}
     target_name=${pair#*:}
-    podman exec "$(container_of "$AD_HOST")" cat "/root/secrets/$source_name.pass" | podman exec -i "$(container_of "$OPS_HOST")" install -m 0600 /dev/stdin "/root/secrets/$target_name.pass"
+    podman exec "$(container_of "$AD_HOST")" cat "/root/secrets/$source_name.pass" \
+      | podman exec -i "$(container_of "$OPS_HOST")" install -m 0600 /dev/stdin "/root/secrets/$target_name.pass"
   done
 
   as_root_on "$OPS_HOST" 'ls -la /root/secrets | tail -n +4'
@@ -699,12 +723,15 @@ sign_app() {
 
   # 1. 平台現在信任的根（操作機的 bank-root.pem）
   mkdir -p "$LAB/ca/exchange"
-  podman exec "$(container_of "$OPS_HOST")" cat /etc/pki/ca-trust/source/anchors/bank-root.pem > "$LAB/ca/exchange/anchor.pem"
+  podman exec "$(container_of "$OPS_HOST")" cat /etc/pki/ca-trust/source/anchors/bank-root.pem \
+    > "$LAB/ca/exchange/anchor.pem"
 
   # 2. 現行的 CA＝中繼憑證能被這個根驗證通過的那個目錄（21.3 換過 CA 之後是 ca/g2）；不能只看目錄存不存在
   for candidate in "$LAB/ca" "$LAB/ca/g2"; do
     if [ -f "$candidate/issuing.crt" ]; then
-      if openssl verify -CAfile "$(windows_path "$LAB/ca/exchange/anchor.pem")" "$(windows_path "$candidate/issuing.crt")" > /dev/null 2>&1; then
+      if openssl verify \
+          -CAfile "$(windows_path "$LAB/ca/exchange/anchor.pem")" \
+          "$(windows_path "$candidate/issuing.crt")" > /dev/null 2>&1; then
         current_ca=$candidate
       fi
     fi
@@ -719,7 +746,8 @@ sign_app() {
   announce "27.3 CA 窗口：用 $(basename "$current_ca") 簽 ~/pki/requests/$cert_name.csr → ~/pki/incoming/$cert_name.crt"
   mkdir -p "$LAB/ca/exchange/requests" "$LAB/ca/exchange/signed"
   rm -f "$LAB/ca/exchange/requests/$cert_name.csr" "$LAB/ca/exchange/signed/$cert_name.crt"
-  podman cp "$(container_of "$OPS_HOST"):/root/pki/requests/$cert_name.csr" "$(windows_path "$LAB/ca/exchange/requests/$cert_name.csr")"
+  podman cp "$(container_of "$OPS_HOST"):/root/pki/requests/$cert_name.csr" \
+    "$(windows_path "$LAB/ca/exchange/requests/$cert_name.csr")"
   bash "$current_ca/sign.sh" "$LAB/ca/exchange/requests/$cert_name.csr" "$LAB/ca/exchange/signed/$cert_name.crt"
   podman cp "$(windows_path "$LAB/ca/exchange/signed/$cert_name.crt")" "$(container_of "$OPS_HOST"):/root/pki/incoming/"
 }
@@ -767,7 +795,8 @@ reset() {
 
 # 17.6、B.2（lab）：收掉銀行端的監控容器（Prometheus、Alertmanager、Grafana、webhook 接收端、blackbox）；設定目錄留著
 monitoring_stop() {
-  podman rm -f --ignore lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook lab-mon-blackbox 2> /dev/null | tr '\n' ' '
+  podman rm -f --ignore lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook lab-mon-blackbox \
+    2> /dev/null | tr '\n' ' '
   echo "（已收掉）"
 }
 
@@ -828,8 +857,10 @@ monitoring() {
 
   # 3. 放成各容器要的樣子：webhook 網址換成接收端容器、datasource 指向 lab 的 Prometheus
   cp "$to_bank"/prometheus/* "$dir/prometheus/confluent/"
-  sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' "$to_bank/alertmanager/alertmanager.yml" > "$dir/alertmanager/alertmanager.yml"
-  sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' "$to_bank/grafana/datasource-prometheus.yml" > "$dir/grafana/provisioning/datasources/prometheus.yml"
+  sed 's/WEBHOOK-RECEIVER/lab-mon-webhook/' "$to_bank/alertmanager/alertmanager.yml" \
+    > "$dir/alertmanager/alertmanager.yml"
+  sed 's#http://PROMETHEUS:9090#http://lab-mon-prometheus:9090#' "$to_bank/grafana/datasource-prometheus.yml" \
+    > "$dir/grafana/provisioning/datasources/prometheus.yml"
   cp "$to_bank"/grafana/dashboards/* "$dir/grafana/provisioning/dashboards/"
 
   # 4. 行內 Prometheus 自己的 prometheus.yml：引用 scrape 設定、載入告警規則、指向 Alertmanager
@@ -853,8 +884,11 @@ http.server.HTTPServer(('0.0.0.0', 8080), H).serve_forever()
 PY
 
   # 6. Prometheus 要認得各主機的名稱（監控容器不在 compose 裡，沒有 extra_hosts）：每台一個 --add-host
+  local host_container
+
   for host in $KAFKA_HOSTS $RESTS $C3_HOST; do
-    host_ip=$(podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_of "$host")")
+    host_container=$(container_of "$host")
+    host_ip=$(podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$host_container")
     add_hosts="$add_hosts --add-host $(fqdn "$host"):$host_ip"
   done
 
@@ -865,14 +899,16 @@ PY
   # 8. Alertmanager（--cluster.listen-address= 留空：lab 的 172.35.x.x 不是私有位址，gossip 起不來）
   podman run -d --restart unless-stopped --name lab-mon-alertmanager --network lab_labnet --memory 128m \
     -v "$(windows_path "$dir/alertmanager/alertmanager.yml"):/etc/alertmanager/alertmanager.yml:ro" \
-    prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address= > /dev/null
+    prom/alertmanager:v0.34.1 --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager \
+    --cluster.listen-address= > /dev/null
 
   # 9. Prometheus（--web.enable-lifecycle：17.8 要叫它重新載入規則）
   # shellcheck disable=SC2086  # add_hosts 是好幾個參數
   podman run -d --restart unless-stopped --name lab-mon-prometheus --network lab_labnet --memory 600m $add_hosts \
     -v "$(windows_path "$dir/prometheus/prometheus.yml"):/etc/prometheus/prometheus.yml:ro" \
     -v "$(windows_path "$dir/prometheus/confluent"):/etc/prometheus/confluent:ro" \
-    prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle --storage.tsdb.retention.time=1d > /dev/null
+    prom/prometheus:v3.5.0 --config.file=/etc/prometheus/prometheus.yml --web.enable-lifecycle \
+    --storage.tsdb.retention.time=1d > /dev/null
 
   # 10. Grafana（匿名 Admin 只為了 lab 好操作；發佈到 Windows 的 13000）
   podman run -d --restart unless-stopped --name lab-mon-grafana --network lab_labnet --memory 400m -p 13000:3000 \
@@ -898,7 +934,8 @@ monitoring_reload() {
   fi
 
   # 1. 規則檔從 ops02 複製到 Prometheus 掛著的資料夾（只拿這一個：別的檔 lab 已改過，例如 scrape-blackbox.yml 的 exporter 位址）
-  podman cp "$(container_of "$OPS_HOST"):/root/monitoring/to-bank/prometheus/confluent-alerts-disk.yml" "$(windows_path "$dir/prometheus/confluent/confluent-alerts-disk.yml")"
+  podman cp "$(container_of "$OPS_HOST"):/root/monitoring/to-bank/prometheus/confluent-alerts-disk.yml" \
+    "$(windows_path "$dir/prometheus/confluent/confluent-alerts-disk.yml")"
 
   # 2. rule_files 還是單一檔名的話，改成 confluent-alerts*.yml
   if ! grep -q 'confluent-alerts\*\.yml' "$dir/prometheus/prometheus.yml"; then
@@ -953,7 +990,10 @@ monitoring_blackbox() {
   # 2. 放成 lab 容器要的樣子（lab 的 scrape-blackbox.yml 指到容器名稱；正式環境是銀行自己的 exporter 位址）
   mkdir -p "$dir/blackbox"
   cp "$from_ops/prometheus/blackbox.yml" "$dir/blackbox/blackbox.yml"
-  cp "$from_ops/prometheus/scrape-blackbox.yml" "$from_ops/prometheus/confluent-alerts-cert.yml" "$from_ops/prometheus/cert-expiry-rules-test.yml" "$dir/prometheus/confluent/"
+  cp "$from_ops/prometheus/scrape-blackbox.yml" \
+    "$from_ops/prometheus/confluent-alerts-cert.yml" \
+    "$from_ops/prometheus/cert-expiry-rules-test.yml" \
+    "$dir/prometheus/confluent/"
   rm -rf "$from_ops"
   sed -i 's/BLACKBOX-EXPORTER:9115/lab-mon-blackbox:9115/' "$dir/prometheus/confluent/scrape-blackbox.yml"
 
@@ -972,12 +1012,20 @@ monitoring_blackbox() {
     prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml > /dev/null
 
   # 5. Prometheus 改讀 scrape-*.yml 與 confluent-alerts*.yml（單檔 bind mount，改了要 restart），等它就緒
-  sed -i 's#scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]#scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]#; s#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' "$dir/prometheus/prometheus.yml"
+  local old_scrape new_scrape
+  old_scrape='scrape_config_files: \[ /etc/prometheus/confluent/scrape-confluent.yml \]'
+  new_scrape='scrape_config_files: [ /etc/prometheus/confluent/scrape-*.yml ]'
+  sed -i \
+    -e "s#$old_scrape#$new_scrape#" \
+    -e 's#confluent/confluent-alerts\.yml#confluent/confluent-alerts*.yml#' \
+    "$dir/prometheus/prometheus.yml"
   podman restart lab-mon-prometheus > /dev/null
   prometheus_ready_wait
 
   # 6. promtool test rules（在 Prometheus 容器裡跑，它自帶 promtool；-w 指定目錄，規則檔用相對路徑）
-  promtool_result=$(podman exec -w /etc/prometheus/confluent lab-mon-prometheus sh -c 'promtool test rules cert-expiry-rules-test.yml 2>&1 | grep -oE "SUCCESS|FAIL" | head -1')
+  local promtool_command
+  promtool_command='promtool test rules cert-expiry-rules-test.yml 2>&1 | grep -oE "SUCCESS|FAIL" | head -1'
+  promtool_result=$(podman exec -w /etc/prometheus/confluent lab-mon-prometheus sh -c "$promtool_command")
   echo "$promtool_result"
 
   if [ "$promtool_result" != SUCCESS ]; then
@@ -1009,7 +1057,10 @@ prometheus_alerts() {
 curl -s http://lab-mon-prometheus:9090/api/v1/alerts | python3 -c '
 import json, sys
 a = json.load(sys.stdin)["data"]["alerts"]
-firing = sorted(set(x["labels"]["alertname"] + "(" + x["labels"].get("hostname", x["labels"].get("env", "")) + ")" for x in a if x["state"] == "firing"))
+firing = sorted(set(
+    x["labels"]["alertname"] + "(" + x["labels"].get("hostname", x["labels"].get("env", "")) + ")"
+    for x in a if x["state"] == "firing"
+))
 pending = sorted(set(x["labels"]["alertname"] for x in a if x["state"] == "pending"))
 print("firing：" + (", ".join(firing) or "無") + "；pending：" + (", ".join(pending) or "無"))'
 EOF
@@ -1071,13 +1122,16 @@ probe() {
 
 # rest_via_lb：從操作機經 LB 打 REST Proxy（mTLS，驗銀行根憑證），印 HTTP 狀態碼
 rest_via_lb() {
-  podman exec "$(container_of "$OPS_HOST")" curl -s --cacert "$BANK_ROOT_CA" --cert /root/pki/certs/app-legacy-billing.crt \
-    --key /root/pki/keys/app-legacy-billing.key -o /dev/null -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters"
+  podman exec "$(container_of "$OPS_HOST")" curl -s --cacert "$BANK_ROOT_CA" \
+    --cert /root/pki/certs/app-legacy-billing.crt \
+    --key /root/pki/keys/app-legacy-billing.key \
+    -o /dev/null -w '%{http_code}' "https://$REST_VIP:8082/v3/clusters"
 }
 
 # 19.4：機房停電：全部主機同時關、同時開
 coldboot() {
-  local started_at attempt ready host broker_count first_broker
+  local started_at attempt ready host host_fqdn broker_count first_broker
+  local first_broker_container journal_command count_command retry_count
 
   announce "19.4 冷開機：全部 stop → start，量 broker MDS 與 C3 回來的時間"
   cd "$LAB"
@@ -1094,7 +1148,9 @@ coldboot() {
     ready=0
 
     for host in $BROKERS; do
-      if [ "$(probe "https://$(fqdn "$host"):8090/v1/metadata/id")" = 200 ]; then
+      host_fqdn=$(fqdn "$host")
+
+      if [ "$(probe "https://$host_fqdn:8090/v1/metadata/id")" = 200 ]; then
         ready=$((ready + 1))
       fi
     done
@@ -1124,7 +1180,11 @@ coldboot() {
 
   # 5. 第一台 broker 的 confluent-server 這 10 分鐘內被 systemd 重試了幾次（要是 0）
   first_broker=${BROKERS%% *}
-  podman exec "$(container_of "$first_broker")" bash -c 'echo "kb01 confluent-server 重試次數：$(journalctl -u confluent-server --since "-10min" --no-pager | awk "/Scheduled restart job/ {c++} END {print c + 0}")"'
+  first_broker_container=$(container_of "$first_broker")
+  journal_command='journalctl -u confluent-server --since "-10min" --no-pager'
+  count_command='awk "/Scheduled restart job/ {c++} END {print c + 0}"'
+  retry_count=$(podman exec "$first_broker_container" bash -c "$journal_command | $count_command")
+  echo "kb01 confluent-server 重試次數：$retry_count"
 }
 
 # AD 不通時，在操作機上看兩件事：alice 登不進 MDS（不是 200）、kafka-admin 用 SCRAM 從 9095 還列得到 topic。
@@ -1136,7 +1196,8 @@ ca=/etc/pki/ca-trust/source/anchors/bank-root.pem
 
 # 1. alice 用 AD 帳密向 MDS 要 token：AD 不通，不應該是 200
 password=$(cat ~/secrets/ad-test-users.pass)
-code=$(curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w "%{http_code}" https://kb01.poc.lab:8090/security/1.0/authenticate)
+code=$(curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w "%{http_code}" \
+  https://kb01.poc.lab:8090/security/1.0/authenticate)
 unset password
 echo "alice 登入 MDS：HTTP $code（不是 200 才對）"
 
@@ -1144,18 +1205,20 @@ echo "alice 登入 MDS：HTTP $code（不是 200 才對）"
 tmp=$(mktemp -d)
 admin_password=$(cat ~/secrets/kafka-admin.pass)
 store_password=$(cat ~/pki/store.pass)
+scram_module=org.apache.kafka.common.security.scram.ScramLoginModule
 install -m 0600 /dev/null "$tmp/c.properties"
 cat > "$tmp/c.properties" <<CONF
 security.protocol=SASL_SSL
 sasl.mechanism=SCRAM-SHA-512
-sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-admin" password="$admin_password";
+sasl.jaas.config=$scram_module required username="kafka-admin" password="$admin_password";
 ssl.truststore.type=PKCS12
 ssl.truststore.location=/root/pki/certs/truststore.p12
 ssl.truststore.password=$store_password
 CONF
 unset admin_password store_password
 
-count=$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config "$tmp/c.properties" --list 2> /dev/null | awk '!/^Error/ && !/^$/ {c++} END {print c + 0}')
+count=$(kafka-topics --bootstrap-server kb01.poc.lab:9095 --command-config "$tmp/c.properties" --list 2> /dev/null \
+  | awk '!/^Error/ && !/^$/ {c++} END {print c + 0}')
 echo "kafka-admin 從 9095 列 topic：$count 個"
 rm -rf "$tmp"
 
@@ -1176,7 +1239,8 @@ ca=/etc/pki/ca-trust/source/anchors/bank-root.pem
 password=$(cat ~/secrets/ad-test-users.pass)
 
 for attempt in $(seq 1 12); do
-  code=$(curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w "%{http_code}" https://kb01.poc.lab:8090/security/1.0/authenticate)
+  code=$(curl -s -m 20 --cacert $ca -u "alice:$password" -o /dev/null -w "%{http_code}" \
+    https://kb01.poc.lab:8090/security/1.0/authenticate)
 
   if [ "$code" = 200 ]; then
     break
@@ -1213,8 +1277,12 @@ ad_drill() {
   podman start "$(container_of "$AD_HOST")" > /dev/null
   echo "ad01 已開回"
 
+  local ldaps_check
+  ldaps_check="timeout 5 openssl s_client -connect $(fqdn "$AD_HOST"):636 < /dev/null 2> /dev/null"
+  ldaps_check="$ldaps_check | grep -q 'Verify return code: 0'"
+
   for attempt in $(seq 1 30); do
-    if as_root_on "$OPS_HOST" "timeout 5 openssl s_client -connect $(fqdn "$AD_HOST"):636 < /dev/null 2> /dev/null | grep -q 'Verify return code: 0'"; then
+    if as_root_on "$OPS_HOST" "$ldaps_check"; then
       break
     fi
 
@@ -1248,12 +1316,15 @@ mds_block() {
       ;;
   esac
 
-  ops_ip=$(podman exec "$(container_of "$OPS_HOST")" hostname -I | awk '{print $1}')
+  local ops_container host_container
+  ops_container=$(container_of "$OPS_HOST")
+  ops_ip=$(podman exec "$ops_container" hostname -I | awk '{print $1}')
   rule="rule family=\"ipv4\" source address=\"$ops_ip\" port port=\"8090\" protocol=\"tcp\" reject"
   announce "28.6 網路團隊：$action_word $OPS_HOST（$ops_ip）連 broker 的 8090"
 
   for host in $BROKERS; do
-    echo "$host: $(podman exec "$(container_of "$host")" firewall-cmd "$firewall_option=$rule")"
+    host_container=$(container_of "$host")
+    echo "$host: $(podman exec "$host_container" firewall-cmd "$firewall_option=$rule")"
   done
 }
 
@@ -1269,7 +1340,9 @@ broker_stop() {
   announce "28.3 $broker 的 confluent-server 停掉（模擬主機或服務掛了）"
   podman exec "$(container_of "$broker")" systemctl stop confluent-server
   sleep 15
-  echo "$broker confluent-server：$(podman exec "$(container_of "$broker")" systemctl is-active confluent-server)"
+  local broker_container
+  broker_container=$(container_of "$broker")
+  echo "$broker confluent-server：$(podman exec "$broker_container" systemctl is-active confluent-server)"
 }
 
 # ---------------------------------------------------------------- LB 團隊（12.1）
@@ -1314,6 +1387,7 @@ lb_watch() {
 # ---------------------------------------------------------------- 子命令
 
 case ${1:-} in
+  # lint-ok: case 的選項清單，不是管線
   push|intake|prepare|sign|reset|monitoring|monitoring_stop|coldboot)
     "$1"
     ;;

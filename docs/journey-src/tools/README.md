@@ -10,6 +10,16 @@ bash /tmp/ch15.sh > /tmp/ch15.log 2>&1
 - 含 `-it` 的區塊、`@role … | — | —` 的區塊會略過；任一區塊 rc≠0 就停。
 - 用途：改了章節後重跑，把實際輸出對回 ```out 區塊。
 
+## lint-commands.js：指令寫法檢查
+
+```bash
+node tools/lint-commands.js                  # 手冊、install、opmenu 全部
+node tools/lint-commands.js --summary        # 只看各規則的筆數
+node tools/lint-commands.js journey.md 21    # 只看手冊第 21 章
+```
+
+規則在 `COMMAND-STYLE.md`（2026-11-05 使用者定案）：一行一個指令、完整的 `if`、不用 `&&`／`||` 串接、一行不超過 120 字、管線最多 3 段、不巢狀 `$( )`、不用 jq；手冊人照打的指令不定義函式，一塊最多 60 行。例外要在那一行或上一行寫 `# lint-ok: 原因`。手冊寫到磁碟的腳本（`cat > x.sh <<'EOF'`）也照 shell 規則檢查，只是可以有函式。
+
 ## run-full.sh：整條主線
 
 ```bash

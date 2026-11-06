@@ -36,7 +36,15 @@ admin_tool() {
 #   輸入：Topic: orders.events  Partition: 0  Leader: 101  Replicas: 101,104,102  Isr: 101,104,102
 #   replicas_on 104 → 這種行有幾行含 104，例：80
 replicas_on() {
-  admin_tool kafka-topics --describe | awk -v id="$1" '/Replicas:/ {for (i = 1; i <= NF; i++) if ($i == "Replicas:") {n = split($(i + 1), r, ","); for (j = 1; j <= n; j++) if (r[j] == id) c++}} END {print c + 0}'
+  local replica_lists
+
+  # 1. 每行的 Replicas: 欄位，例：101,104,102（前面要是空白，不算 AddingReplicas: 這種）
+  replica_lists=$(admin_tool kafka-topics --describe \
+    | grep -oE '(^|[[:space:]])Replicas: [0-9,]*' \
+    | awk '{print $2}')
+
+  # 2. 拆成一行一個 id，數等於這個 id 的有幾個
+  tr ',' '\n' <<<"$replica_lists" | awk -v id="$1" '$0 == id {c++} END {print c + 0}'
 }
 
 # under_replicated_count：under-replicated 的 partition 數，例：0
@@ -50,7 +58,10 @@ balancer_enabled() {
 }
 
 # removal_block <node id>：kafka-remove-brokers --describe 裡這個 broker 那一段（從「Broker 104 removal status」到下一個 broker 之前）
+#   輸入：Broker 104 removal status - SUCCESS／…／Broker 105 removal status - …
+#   removal_block 104 → Broker 104 removal status - SUCCESS／…
 removal_block() {
+  # lint-ok: 要找出「某一台那一段」到下一段之前，grep／cut 做不到；上面有輸入輸出例子
   admin_tool kafka-remove-brokers --describe | awk -v id="$1" '/^Broker [0-9]+ removal status/ {on = ($2 == id)} on'
 }
 
@@ -70,7 +81,12 @@ brokers_except() {
 RUN_WITH_MASTER_KEY=$(cat <<'EOF'
 run() {
   if sudo test -e /etc/confluent/service.env; then
-    sudo bash -c 'set -a; . /etc/confluent/service.env; set +a; exec runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"' run "$@"
+    sudo bash -c '
+      set -a
+      . /etc/confluent/service.env
+      set +a
+      exec runuser -u cp-kafka -- env CONFLUENT_SECURITY_MASTER_KEY="$CONFLUENT_SECURITY_MASTER_KEY" "$@"
+    ' run "$@"
   else
     sudo runuser -u cp-kafka -- "$@"
   fi
@@ -85,7 +101,13 @@ sudo systemctl stop confluent-server
 sudo find /var/lib/kafka/data -mindepth 1 -delete
 
 # 2. 以觀察者格式化
-run env JAVA_HOME=/opt/java/current KAFKA_HEAP_OPTS=-Xmx256m KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml kafka-storage format --cluster-id "$CLUSTER_ID" --config /etc/confluent/kafka/server.properties --no-initial-controllers 2>&1 | tail -1
+run env \
+  JAVA_HOME=/opt/java/current \
+  KAFKA_HEAP_OPTS=-Xmx256m \
+  KAFKA_OPTS=-Dlog4j2.configurationFile=/etc/kafka/tools-log4j2.yaml \
+  kafka-storage format --cluster-id "$CLUSTER_ID" \
+  --config /etc/confluent/kafka/server.properties \
+  --no-initial-controllers 2>&1 | tail -1
 
 # 3. 啟用並啟動
 if sudo systemctl enable --now confluent-server >/dev/null 2>&1; then
@@ -115,7 +137,7 @@ show_status() {
 
 remove_broker() {
   local host=$1
-  local node_id remaining block attempt service_state cluster_brokers
+  local node_id remaining block attempt service_state cluster_brokers state_command id_lines
 
   # 1. 前置檢查
   node_id=$(node_id_of "$host")
@@ -163,7 +185,8 @@ remove_broker() {
 
   # 4. broker 自己關掉了；停用服務，免得主機重開又加回來
   ssh_run "$host" 'sudo systemctl disable --now confluent-server >/dev/null 2>&1'
-  service_state=$(ssh_run "$host" 'echo $(systemctl is-active confluent-server) / $(systemctl is-enabled confluent-server)')
+  state_command='echo $(systemctl is-active confluent-server) / $(systemctl is-enabled confluent-server)'
+  service_state=$(ssh_run "$host" "$state_command")
   ok "$host confluent-server：$service_state"
 
   # 5. 確認：這台上沒有 replica、沒有 under-replicated、叢集裡已經沒有它
@@ -179,14 +202,15 @@ remove_broker() {
     fail "有 under-replicated"
   fi
 
-  cluster_brokers=$(admin_tool kafka-broker-api-versions | grep -o '(id: [0-9]*' | grep -o '[0-9]*' | sort | paste -sd' ')
+  id_lines=$(admin_tool kafka-broker-api-versions | grep -o '(id: [0-9]*' | grep -o '[0-9]*')
+  cluster_brokers=$(sort <<<"$id_lines" | paste -sd' ')
   log "叢集裡的 broker：$cluster_brokers"
   warn "永久縮減：把 $host 從 site.env 的 BROKERS 拿掉，重跑第 12、13、16、17 站（bootstrap 名單），應用程式的設定也要改"
 }
 
 add_broker() {
   local host=$1
-  local node_id attempt replicas under_replicated format_script
+  local node_id attempt replicas under_replicated format_script rebalance_lines
   local moved=no
 
   node_id=$(node_id_of "$host")
@@ -237,9 +261,13 @@ $FORMAT_EMPTY_BROKER"
   fi
 
   # 4. Self-Balancing 為什麼在搬（EMPTY_BROKER = 發現空的 broker）
-  admin_tool kafka-rebalance-cluster --describe | grep -iE 'status|broker' | head -5 | while read -r line; do
-    log "$line"
-  done
+  rebalance_lines=$(admin_tool kafka-rebalance-cluster --describe | grep -iE 'status|broker' | head -5)
+
+  if [ -n "$rebalance_lines" ]; then
+    while read -r line; do
+      log "$line"
+    done <<<"$rebalance_lines"
+  fi
 }
 
 # 管理工具的 bootstrap：有指定主機時不含那一台
@@ -248,8 +276,9 @@ if [ -n "$TARGET_HOST" ]; then
     die "$TARGET_HOST 不是 broker（site.env 的 BROKERS）"
   fi
 
-  # shellcheck disable=SC2046  # 主機名單要拆開
-  ADMIN_BOOTSTRAP=$(host_port_list 9094 $(brokers_except "$TARGET_HOST"))
+  OTHER_BROKERS=$(brokers_except "$TARGET_HOST")
+  # shellcheck disable=SC2086  # 主機名單要拆開
+  ADMIN_BOOTSTRAP=$(host_port_list 9094 $OTHER_BROKERS)
 else
   ADMIN_BOOTSTRAP=$BROKER_TOKEN
 fi

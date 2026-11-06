@@ -44,7 +44,8 @@ esac
 section "叢集"
 
 # 1. quorum 有 leader
-quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
+quorum_status=$(kafka-metadata-quorum --bootstrap-controller "$FIRST_CONTROLLER:9093" \
+  --command-config "$INTERNAL_CLIENT_CONF" describe --status 2>/dev/null)
 leader_line=$(grep LeaderId <<<"$quorum_status" | tr -s ' ')
 
 if grep -q '[1-9]' <<<"$leader_line"; then
@@ -55,7 +56,8 @@ fi
 
 # 2. 每台 MDS 回 200
 for host in $BROKERS; do
-  http_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$(fqdn "$host"):8090/v1/metadata/id")
+  host_fqdn=$(fqdn "$host")
+  http_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "https://$host_fqdn:8090/v1/metadata/id")
 
   if [ "$http_code" = 200 ]; then
     ok "$host MDS=200"
@@ -65,7 +67,8 @@ for host in $BROKERS; do
 done
 
 # 3. conf/topics.txt 的範例 topic 都在（第一欄是 topic 名稱）
-existing_topics=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" --list 2>/dev/null)
+existing_topics=$(kafka-topics --bootstrap-server "$BROKER_TOKEN" --command-config "$ADMIN_CLIENT_CONF" \
+  --list 2>/dev/null)
 expected_topics=$(grep -v '^#' "$INSTALL_DIR/conf/topics.txt" | awk '{print $1}')
 
 for topic in $expected_topics; do
@@ -96,9 +99,16 @@ else
   fail "C3 UI: $c3_ui"
 fi
 
+if wait_c3_login; then
+  ok "alice 能從 C3 登入"
+else
+  fail "alice 不能從 C3 登入：$(c3_login_code)"
+fi
+
 # 3. 內建 Prometheus 收到幾種 Confluent 的指標
-metric_kinds=$(curl -s -m 10 --cert "$CERTS_DIR/c3-monitoring.crt" --key "$KEYS_DIR/c3-monitoring.key" "https://$C3_FQDN:9090/api/v1/label/__name__/values" \
-  | grep -o 'confluent_kafka_server[a-z_]*' | sort -u | wc -l)
+metric_names=$(curl -s -m 10 --cert "$CERTS_DIR/svc-ops.crt" --key "$KEYS_DIR/svc-ops.key" \
+  "https://$C3_FQDN:9090/api/v1/label/__name__/values")
+metric_kinds=$(grep -o 'confluent_kafka_server[a-z_]*' <<<"$metric_names" | sort -u | wc -l)
 
 if [ "$metric_kinds" -gt 50 ]; then
   ok "C3 的 Prometheus 有 $metric_kinds 種 broker 指標"

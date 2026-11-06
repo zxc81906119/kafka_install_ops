@@ -81,7 +81,8 @@ for uid, group in seen.items():
             d['title'] = d['title'] + ' [' + stem + ']'
             renamed += 1
         json.dump(d, open(f, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
-print('dashboards: %d, placeholder datasource fixed, uid shared with another file (renamed): %d' % (len(files), renamed))
+print('dashboards: %d, placeholder datasource fixed, uid shared with another file (renamed): %d'
+      % (len(files), renamed))
 EOF
 }
 
@@ -91,11 +92,11 @@ install -d -m 0700 "$MONITORING_DIR"
 # 舊版（10-30 以前）7071 用 basic auth：抓取密碼與鹽已經不用了，留著只會讓人以為還要交給銀行
 rm -f "$SECRETS_DIR/jmx-scrape.pass" "$SECRETS_DIR/jmx-scrape.salt" "$BANK_OUT/prometheus/scrape.pass"
 
-# 1. 兩種標頭：controller 沒有 cp-server.p12，用 kafka-internal.p12；broker、REST、C3 用 cp-server.p12
+# 1. 四種標頭：controller 用 kafka-internal.p12、broker 用 cp-server.p12、REST 用 svc-rest.p12、C3 用 svc-c3.p12
 #    keystore 密碼不寫進 YAML：寫 ${JMX_KEYSTORE_PASSWORD}（exporter 1.4 起支援），值在每台 /etc/confluent/jmx-exporter.env（root 0600），drop-in 用 EnvironmentFile 帶進去。
 #    範本裡用佔位字串，渲染後才換成 ${…}（render_template 會把沒換掉的 ${…} 當錯誤）
 export KS
-for KS in cp-server kafka-internal; do
+for KS in cp-server kafka-internal svc-c3 svc-rest; do
   if ! render_template "$TEMPLATE_DIR/jmx-header.yml" "$MONITORING_DIR/jmx-header-$KS.yml" KS; then
     die "render jmx-header"
   fi
@@ -110,7 +111,8 @@ printf 'JMX_KEYSTORE_PASSWORD=%s\n' "$(cat "$PKI_DIR/store.pass")" > "$MONITORIN
 # 3. 確認：YAML 裡的密碼是變數、環境檔 0600
 password_line=$(grep -h 'password:' "$MONITORING_DIR"/jmx-header-*.yml | sort -u | sed 's/^ *//')
 env_mode=$(stat -c %a "$MONITORING_DIR/jmx-exporter.env")
-ok "標頭 jmx-header-cp-server.yml、jmx-header-kafka-internal.yml（keystore 密碼：$password_line）；jmx-exporter.env $env_mode"
+header_files="jmx-header-cp-server.yml、jmx-header-kafka-internal.yml、jmx-header-svc-c3.yml、jmx-header-svc-rest.yml"
+ok "標頭 $header_files（keystore 密碼：$password_line）；jmx-exporter.env $env_mode"
 
 # 4. 確認：沒有 authentication: 設定（要是 0；註解裡的字不算）
 auth_count=$(awk '/^ *authentication:/ {c++} END {print c + 0}' "$MONITORING_DIR"/jmx-header-*.yml)
@@ -123,13 +125,16 @@ fi
 section "17.2 每台的 exporter 設定 = 標頭 + Confluent 官方規則（commit $(cut -c1-12 "$OFFICIAL/COMMIT")）"
 
 # 舊版（basic auth 時代）留下的檔，有的話刪掉
-for old_file in alert-rules.yml ca.pem prometheus-scrape.yml rules-kafka.yml rules-rest.yml rules-jvm.yml scrape.pass; do
+for old_file in alert-rules.yml ca.pem prometheus-scrape.yml \
+                rules-kafka.yml rules-rest.yml rules-jvm.yml scrape.pass; do
   rm -f "$MONITORING_DIR/$old_file"
 done
 
 # 1. controller、broker、REST Proxy：標頭＋官方規則（檔案 0600）
 #    寫法：角色:用哪份標頭:官方規則檔名
-for role_spec in controller:kafka-internal:kafka_controller broker:cp-server:kafka_broker rest:cp-server:confluent_rest; do
+for role_spec in controller:kafka-internal:kafka_controller \
+                 broker:cp-server:kafka_broker \
+                 rest:svc-rest:confluent_rest; do
   role=$(cut -d: -f1 <<<"$role_spec")
   keystore=$(cut -d: -f2 <<<"$role_spec")
   official_rules=$(cut -d: -f3 <<<"$role_spec")
@@ -155,9 +160,9 @@ fi
 cp "$TEMPLATE_DIR/jmx-rules-c3.yml" "$MONITORING_DIR/rules-c3.yml"
 C3_CONFIG=$MONITORING_DIR/jmx-c3.yml
 install -m 0600 /dev/null "$C3_CONFIG"
-cat "$MONITORING_DIR/jmx-header-cp-server.yml" "$MONITORING_DIR/rules-c3.yml" > "$C3_CONFIG"
+cat "$MONITORING_DIR/jmx-header-svc-c3.yml" "$MONITORING_DIR/rules-c3.yml" > "$C3_CONFIG"
 sed -n '/^rules:/,$p' "$OFFICIAL_RULES/kafka_streams.yml" | tail -n +2 >> "$C3_CONFIG"
-log "c3：標頭 cp-server + 我們的 rules-c3.yml + 官方 kafka_streams.yml 的 rules → $(wc -l < "$C3_CONFIG") 行"
+log "c3：標頭 svc-c3 + 我們的 rules-c3.yml + 官方 kafka_streams.yml 的 rules → $(wc -l < "$C3_CONFIG") 行"
 
 # 3. 每個角色：httpServer 與 lowercaseOutputName 都是 1 行 = 標頭和規則都接上了
 for role in controller broker rest c3; do
@@ -213,7 +218,9 @@ for host in $KAFKA_HOSTS $RESTS $C3_HOST; do
   rm -f "/tmp/jmx-$host.yml" "/tmp/jmx-$host.env"
 
   # 4. 在那台放好檔案、寫 drop-in；印 javaagent 的 jar 路徑、設定檔行數、環境檔權限
-  result=$(ssh_script "$host" HOST="$host" JAR="$EXPORTER_JAR_NAME" CONFIG="$config_path" UNIT="$(unit_of "$host")" OPTS_VAR="$opts_var" <<'EOF'
+  host_unit=$(unit_of "$host")
+  result=$(ssh_script "$host" HOST="$host" JAR="$EXPORTER_JAR_NAME" CONFIG="$config_path" \
+             UNIT="$host_unit" OPTS_VAR="$opts_var" <<'EOF'
 sudo install -d -m 0755 /opt/jmx-exporter
 sudo rm -f /opt/jmx-exporter/jmx_prometheus_javaagent-*.jar
 sudo install -m 0644 /tmp/$JAR /opt/jmx-exporter/$JAR
@@ -229,7 +236,8 @@ Environment="$OPTS_VAR=-javaagent:/opt/jmx-exporter/$JAR=7071:$CONFIG"
 DROPIN
 sudo systemctl daemon-reload
 
-agent=$(systemctl show $UNIT -p Environment --value | tr ' ' '\n' | grep -o 'javaagent:[^ =]*' | head -1)
+environment_words=$(systemctl show $UNIT -p Environment --value | tr ' ' '\n')
+agent=$(grep -o 'javaagent:[^ =]*' <<<"$environment_words" | head -1)
 lines=$(sudo wc -l "$CONFIG" | cut -d' ' -f1)
 echo "$agent $lines lines env=$(sudo stat -c %a /etc/confluent/jmx-exporter.env)"
 EOF
@@ -273,7 +281,8 @@ for host in $KAFKA_HOSTS $RESTS $C3_HOST; do
 
   # 2. https 用銀行根憑證驗要是 200；不加密的 http 要連不上（000）
   https_code=$(http_code "$metrics_url" --cacert "$BANK_ROOT_CA")
-  http_code_plain=$(http_code "http://$(fqdn "$host"):7071/metrics")
+  host_fqdn=$(fqdn "$host")
+  http_code_plain=$(http_code "http://$host_fqdn:7071/metrics")
 
   # 3. 判斷結果
   if [ "$https_code" = 200 ] && [ "$http_code_plain" = 000 ] && [ "$count_of_metrics" -gt 20 ]; then
@@ -296,7 +305,8 @@ BROKER_TARGETS=$(quoted_targets $BROKERS)
 REST_TARGETS=$(quoted_targets $RESTS)
 C3_TARGETS=$(quoted_targets $C3_HOST)
 ENV_LABEL=$MONITOR_ENV_LABEL
-if ! render_template "$TEMPLATE_DIR/prometheus-scrape.yml" "$BANK_OUT/prometheus/scrape-confluent.yml" CONTROLLER_TARGETS BROKER_TARGETS REST_TARGETS C3_TARGETS ENV_LABEL; then
+if ! render_template "$TEMPLATE_DIR/prometheus-scrape.yml" "$BANK_OUT/prometheus/scrape-confluent.yml" \
+     CONTROLLER_TARGETS BROKER_TARGETS REST_TARGETS C3_TARGETS ENV_LABEL; then
   die "render scrape"
 fi
 
@@ -316,11 +326,23 @@ fi
 # 5. 結果
 alert_count=$(awk '/alert:/ {c++} END {print c + 0}' "$BANK_OUT/prometheus/confluent-alerts.yml")
 dashboard_count=$(ls "$BANK_OUT"/grafana/dashboards/*.json | wc -l)
-ok "給銀行：to-bank/prometheus（scrape-confluent.yml、confluent-alerts.yml $alert_count 條、ca.pem）、to-bank/alertmanager、to-bank/grafana（datasource、$dashboard_count 個 dashboard）"
+prometheus_files="to-bank/prometheus（scrape-confluent.yml、confluent-alerts.yml $alert_count 條、ca.pem）"
+grafana_files="to-bank/grafana（datasource、$dashboard_count 個 dashboard）"
+ok "給銀行：$prometheus_files、to-bank/alertmanager、$grafana_files"
 
 target_count=$(wc -w <<<"$KAFKA_HOSTS $RESTS $C3_HOST")
-ask_bank "監控團隊：prometheus/ 放進行內 Prometheus（scrape-confluent.yml 用 scrape_config_files 引用，confluent-alerts.yml 放進 rule_files，ca.pem 放 /etc/prometheus/confluent/；7071 沒有帳密，防火牆只放行行內 Prometheus 的來源位址）；" \
-         "    alertmanager/alertmanager.yml 併入行內 Alertmanager（webhook 網址換成行內的，兩種格式留一種）；grafana/ 的 datasource 與 dashboards/ 放進 Grafana 的 provisioning；" \
-         "    確認 $target_count 個 target 都是 up、告警規則載入、dashboard 都在。C3 內建的 Prometheus／Alertmanager 不動，不在 C3 建 alert trigger／action。" \
+prometheus_request="監控團隊：prometheus/ 放進行內 Prometheus（scrape-confluent.yml 用 scrape_config_files 引用，"
+prometheus_request+="confluent-alerts.yml 放進 rule_files，ca.pem 放 /etc/prometheus/confluent/；"
+prometheus_request+="7071 沒有帳密，防火牆只放行行內 Prometheus 的來源位址）；"
+
+alertmanager_request="    alertmanager/alertmanager.yml 併入行內 Alertmanager（webhook 網址換成行內的，兩種格式留一種）；"
+alertmanager_request+="grafana/ 的 datasource 與 dashboards/ 放進 Grafana 的 provisioning；"
+
+confirm_request="    確認 $target_count 個 target 都是 up、告警規則載入、dashboard 都在。"
+confirm_request+="C3 內建的 Prometheus／Alertmanager 不動，不在 C3 建 alert trigger／action。"
+
+ask_bank "$prometheus_request" \
+         "$alertmanager_request" \
+         "$confirm_request" \
          "    consumer lag 不是 broker 的 JMX 指標，要看 C3 或另接 lag exporter。"
 finish_step

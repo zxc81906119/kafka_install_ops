@@ -9,7 +9,7 @@ const L = require("react-icons/lu");
 
 const out = process.argv[2] || "install.pptx";
 const NUM = (() => { try { return require("./numbers.json"); } catch { return {}; } })();
-const VERIFY_TOTAL = NUM.verifyTotal || "55";
+const VERIFY_TOTAL = NUM.verifyTotal || "45";
 
 // ---- design tokens (same family as build.js)
 const C = {
@@ -122,7 +122,7 @@ async function main() {
   // ================================================================ 1 cover
   {
     const s = pptx.addSlide({ masterName: "DARK" });
-    txt(s, "Confluent Platform 8.3 企業版", { x: 0.9, y: 2.0, w: 11.5, h: 0.6, fontSize: 24, color: "C9CFDB" });
+    txt(s, "Confluent Platform 企業版（先裝 8.2.4，再遷移到 8.3.2）", { x: 0.9, y: 2.0, w: 11.5, h: 0.6, fontSize: 24, color: "C9CFDB" });
     txt(s, "離線安裝流程（RPM）", { x: 0.9, y: 2.7, w: 11.5, h: 1.1, fontSize: 48, bold: true, color: C.white });
     txt(s, "從套件引進到驗收上線，九個步驟", { x: 0.9, y: 3.9, w: 11.5, h: 0.5, fontSize: 20, color: "C9CFDB" });
     const icons = STEPS.map((x) => x[1]);
@@ -155,7 +155,7 @@ async function main() {
 
   // ================================================================ 3 architecture
   {
-    const s = plainSlide("安裝範圍：一套高可用的 Kafka 平台", "畫面上每個方塊都是一台或一組主機。核心是 Kafka 叢集：3 台 controller 管理叢集、4 台 broker 存放資料，壞一台不影響服務。應用程式直連 Kafka（用專屬帳號密碼），或經負載平衡使用兩台 REST 介面。維運人員經 VDI 進來，有兩條路：用瀏覽器直接連 Control Center（不經負載平衡：它只有一台，放在負載平衡後面並不會更可靠），或登入操作機使用 OP 選單做日常維運。OP 選單和 C3 一樣用自己的 AD 帳號登入，權限依 AD 群組決定，紀錄寫的是本人而不是共用帳號；AD 或權限服務故障時，另有緊急模式可用，使用時會特別標記並記下操作人員。操作機同時是安裝作業的起點與維運人員執行 OP 選單的主機。周邊還有兩項行內既有的服務：套件庫（Satellite、Artifactory、Nexus，沒有才用 web server）與 AD。人員的權限綁在 AD 群組上，不綁個人：人員異動只要調整 AD 群組成員，平台的權限設定不用改。使用者不會直接登入 AD：帳密是輸入在 C3 或 OP 選單，由 Kafka 叢集上的權限服務向 AD 驗證、查詢所屬群組。");
+    const s = plainSlide("安裝範圍：一套高可用的 Kafka 平台", "畫面上每個方塊都是一台或一組主機。核心是 Kafka 叢集：3 台 controller 管理叢集、4 台 broker 存放資料，壞一台不影響服務。應用程式直連 Kafka（用專屬帳號密碼），或經負載平衡使用兩台 REST 介面。維運人員有兩條路：從 VDI 用瀏覽器直接連 Control Center（不經負載平衡：它只有一台，放在負載平衡後面並不會更可靠），或經 CyberArk（PVWA 網頁登入、PSMP 代登）進操作機，使用 OP 選單做日常維運。OP 選單和 C3 一樣用自己的 AD 帳號登入，權限依 AD 群組決定，紀錄寫的是本人而不是共用帳號；AD 或權限服務故障時，另有緊急模式可用，使用時會特別標記並記下操作人員。操作機同時是安裝作業的起點與維運人員執行 OP 選單的主機。周邊還有兩項行內既有的服務：套件庫（Satellite、Artifactory、Nexus，沒有才用 web server）與 AD。人員的權限綁在 AD 群組上，不綁個人：人員異動只要調整 AD 群組成員，平台的權限設定不用改。使用者不會直接登入 AD：帳密是輸入在 C3 或 OP 選單，由 Kafka 叢集上的權限服務向 AD 驗證、查詢所屬群組。");
     // applications -> load balancer -> REST; applications -> Kafka directly
     await badge(s, 1.25, 2.8, 0.85, "LuBot", C.ink);
     under(s, 1.25, 3.3, 1.8, "應用程式", null, { headSize: 16 });
@@ -163,10 +163,11 @@ async function main() {
     txt(s, "負載平衡", { x: 2.6, y: 2.3, w: 1.7, h: 1.0, fontSize: 16, bold: true, align: "center", valign: "middle" });
     arrow(s, 1.75, 2.8, 2.6, 2.8);
     arrow(s, 4.3, 2.8, 4.9, 2.8);
-    // operators (via bastion / VDI) -> Control Center (browser) and the OP menu on the bastion (AD login)
+    // operators: browser from VDI -> Control Center; CyberArk PVWA + PSMP -> the ops host and its OP menu (AD login)
     await badge(s, 1.25, 4.85, 0.85, "LuUsers", C.ink);
     under(s, 1.25, 5.35, 1.8, "維運人員", null, { headSize: 16 });
-    txt(s, "經 VDI", { x: 1.9, y: 4.6, w: 2.4, h: 0.38, fontSize: 14, color: C.body, align: "center" });
+    txt(s, "VDI，瀏覽器", { x: 1.9, y: 4.02, w: 2.4, h: 0.38, fontSize: 14, color: C.body, align: "center" });
+    txt(s, "PVWA ＋ PSMP", { x: 1.9, y: 5.32, w: 2.4, h: 0.38, fontSize: 14, color: C.body, align: "center" });
     arrow(s, 1.75, 4.65, 4.9, 4.25);
     arrow(s, 1.75, 5.05, 4.9, 5.45);
     // edge services
@@ -205,21 +206,23 @@ async function main() {
 
   // ================================================================ 4 prerequisites
   {
-    const s = plainSlide("開始前，銀行需備妥六件事", "這六項是銀行端要先準備的。最常卡關的是第二項：主機要能從行內的 RHEL 套件來源安裝作業系統套件，Satellite、內部鏡像或安裝光碟都可以；Java 21 由行內直接提供壓縮檔（tar）即可，我方安裝到各主機的統一路徑。AD 只需要人員群組，加上一個沒有任何管理權限的唯讀查詢帳號；平台內部的服務一律用憑證識別，不在 AD 建帳號。Confluent 套件要放進行內的內部套件庫：優先沿用行內既有的 Red Hat Satellite、JFrog Artifactory 或 Nexus 的 yum repo；行內沒有這類平台時，才另外準備一台 web server 提供。");
+    const s = plainSlide("開始前，銀行需備妥這些", "這些是銀行端要先準備的。最常卡關的是 OS 套件來源：主機要能從行內的 RHEL 套件來源安裝作業系統套件，Satellite、內部鏡像或安裝光碟都可以。Java 由行內直接提供壓縮檔（tar）即可：21 先裝，25 在遷移時才用；我方安裝到各主機的統一路徑。AD 只需要人員群組，加上一個沒有任何管理權限的唯讀查詢帳號；平台內部的服務一律用憑證識別，不在 AD 建帳號。Confluent 套件要放進行內的內部套件庫：優先沿用行內既有的 Red Hat Satellite、JFrog Artifactory 或 Nexus 的 yum repo；行內沒有這類平台時，才另外準備一台 web server 提供。另外要有所有主機共用的 NTP 時間來源，以及兩台 REST 介面前面的負載平衡。");
     const items = [
       ["LuServer", "RHEL 9 主機", "依元件準備\n規格與數量"],
-      ["LuDatabase", "OS 套件來源", "Satellite、鏡像\n或安裝光碟\n＋ Java 21 壓縮檔"],
+      ["LuDatabase", "OS 套件來源", "Satellite、鏡像\n或安裝光碟"],
+      ["LuPackage", "Java 21 與 25", "行內提供壓縮檔\n21 先裝、25 遷移時用"],
       ["LuIdCard", "AD", "人員群組\n＋唯讀查詢帳號"],
-      ["LuServer", "內部套件庫", "Satellite、\nArtifactory、Nexus\n無則用 web server"],
+      ["LuServer", "內部套件庫", "Satellite、Artifactory、\nNexus，無則用 web server"],
       ["LuStamp", "憑證窗口", "由銀行 CA\n簽發憑證"],
+      ["LuClock", "NTP 與負載平衡", "所有主機的時間來源\nREST 介面前的負載平衡"],
       ["LuFileText", "授權檔", "Confluent\n企業版授權"],
     ];
-    const gap = 0.25, cw = (W - 2 * M - gap * 5) / 6, cy = 2.2, ch = 3.9;
+    const gap = 0.25, cols = 4, cw = (W - 2 * M - gap * (cols - 1)) / cols, ch = 2.15, cy = 2.05;
     for (let i = 0; i < items.length; i++) {
-      const x = M + i * (cw + gap), [ic, h, b] = items[i];
-      panel(s, x, cy, cw, ch, C.soft);
-      await badge(s, x + cw / 2, cy + 1.0, 1.0, ic, i === 1 ? C.accent : C.teal);
-      under(s, x + cw / 2, cy + 1.9, cw - 0.1, h, b, { subH: 1.0, subSize: 14, headSize: 16 });
+      const x = M + (i % cols) * (cw + gap), y = cy + Math.floor(i / cols) * (ch + gap), [ic, h, b] = items[i];
+      panel(s, x, y, cw, ch, C.soft);
+      await badge(s, x + cw / 2, y + 0.55, 0.72, ic, i === 1 ? C.accent : C.teal);
+      under(s, x + cw / 2, y + 1.0, cw - 0.1, h, b, { subH: 0.7, subSize: 14, headSize: 16 });
     }
   }
 

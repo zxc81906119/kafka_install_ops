@@ -83,6 +83,7 @@ run_13() {
 _item13_table() {
   awk '
     # L 行：第 2 欄 group、第 3 欄 topic、第 4 欄 partition、第 7 欄 lag（數字，或沒有 commit 時是 -）
+    # lint-ok: awk 的條件語法，不是 shell 串接
     $1 == "L" && $2 != "GROUP" && NF >= 7 && $7 ~ /^[0-9-]+$/ {
       printf "1\t%-30s %-30s %4s  lag %s\n", $2, $3, $4, $7
       seen[$2] = 1
@@ -90,12 +91,14 @@ _item13_table() {
     }
 
     # M 行：第 4 欄是 /IP 的才是一個在線成員
+    # lint-ok: awk 的條件語法，不是 shell 串接
     $1 == "M" && $2 != "GROUP" && NF >= 6 && $4 ~ /^\// {
       seen[$2] = 1
       members[$2]++
     }
 
     # 沒有成員的 group：名稱在單引號裡
+    # lint-ok: awk 的條件語法，不是 shell 串接
     $1 == "M" && /has no active members/ {
       if (match($0, /'"'"'[^'"'"']+'"'"'/)) seen[substr($0, RSTART + 1, RLENGTH - 2)] = 1
     }

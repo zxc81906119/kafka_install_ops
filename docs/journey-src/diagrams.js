@@ -84,8 +84,8 @@ D.map = () => svg(760, 400, [
   region(20, 20, 720, 110, '外網', 'gray'),
   box(40, 55, 170, 56, '下載機 dl01', ['Rocky 9，可連 Internet', '/out = 落地區'], 'teal'),
   box(260, 55, 220, 56, 'packages.confluent.io', ['Confluent 原廠 RPM 倉庫'], 'gray'),
-  box(520, 55, 200, 56, 'repo1.maven.org、GitHub', ['JMX jar、官方監控檔'], 'gray'),
-  arrow(210, 83, 258, 83), arrow(480, 83, 518, 83),
+  box(520, 55, 200, 56, 'github.com', ['JMX jar、官方監控檔'], 'gray'),
+  arrow(210, 83, 258, 83), arrow(125, 111, 620, 113, null, { via: [[125, 122], [620, 122]] }),
   region(20, 150, 720, 230, '行內（離線）', 'amber'),
   box(40, 190, 150, 56, '操作機 ops02', ['root（PSMP 登入）', '安裝起點'], 'teal'),
   box(40, 300, 150, 56, 'repo01', ['套件庫 web server', 'NTP'], 'amber'),
@@ -96,8 +96,7 @@ D.map = () => svg(760, 400, [
   box(590, 190, 130, 56, 'AD ad01', ['LDAPS 636'], 'amber'),
   box(590, 300, 130, 56, 'LB lb01', ['rest.poc.lab'], 'amber'),
   arrow(190, 218, 218, 218), arrow(190, 236, 218, 318, null, { via: [[205, 236], [205, 318]] }),
-  arrow(380, 218, 408, 218), arrow(380, 328, 408, 328),
-  note(40, 372, '落地區從下載機搬進來（檔案交換平台）→ 操作機 → 上架 repo01 → 各主機從 repo01 安裝'),
+  note(40, 372, '落地區從下載機搬進來（檔案交換平台）→ 操作機 → 上架 repo01 → 各主機從 repo01 安裝；操作機 ssh 到每台'),
 ].join(''));
 
 // 0. build the practice lab (chapter 0): what each section creates on the Windows laptop
@@ -110,7 +109,7 @@ D.labbuild = () => svg(800, 496, [
   box(584, 100, 190, 74, "0.4 nginx L4／0.5 CA", ["銀行的 LB lb01", "根 CA、簽發 CA、sign.sh"], "amber"),
   region(10, 206, 780, 150, "0.6 compose.yml：專案 lab，一次起 14 台（兩個網段 172.35、172.36）", "blue"),
   box(26, 240, 180, 100, "操作機 ops02", ["人員以 root 進來", "/secure/ssh：獨立 volume", "（模擬加密 file system）"], "teal"),
-  box(222, 240, 180, 100, "Kafka 主機 ×10", ["kc01–03、kb01–04", "rest01–02、c3-01", "裸機：沒有 JDK、沒有 Confluent"], "blue"),
+  box(222, 240, 180, 100, "Kafka 主機 ×10", ["kc01–03、kb01–04", "rest01–02、c3-01", "裸機：沒有 JDK、Confluent"], "blue"),
   box(418, 240, 170, 100, "銀行的 3 台", ["repo01、ad01、lb01", "（0.2–0.4 的映像）"], "amber"),
   box(604, 240, 170, 100, "secrets.env", ["AD 管理員等 lab 密碼", "0600，不進 git"], "coral"),
   box(10, 374, 380, 60, "0.7 下載機 dl01", ["唯一能連外網，第 2 章用；/out = 落地區 ~/kafka-lab/landing"], "teal"),
@@ -131,7 +130,7 @@ D.journey = () => svg(760, 310, [
   box(510, 140, 230, 56, '10–14 啟動與驗證', ['controller → broker → REST → C3'], 'blue'),
   arrow(250, 168, 263, 168), arrow(495, 168, 508, 168),
   box(20, 222, 400, 56, '15–19 延伸與交付', ['加密設定檔密碼、維運選單、監控、稽核日誌、驗收'], 'purple'),
-  box(440, 222, 300, 56, '20–31 上線之後', ['輪替、憑證、備份、換機、license、遷移、修補'], 'gray'),
+  box(440, 222, 300, 56, '20–32 上線之後', ['輪替、憑證、備份、換機、license、遷移、修補'], 'gray'),
   arrow(625, 196, 215, 220, null, { via: [[625, 208], [215, 208]] }), arrow(420, 250, 438, 250),
   legend(20, 298, [['teal', '我方'], ['amber', '銀行'], ['blue', '我方，在行內主機上'], ['purple', '延伸'], ['gray', '上線後']]),
 ].join(''));
@@ -142,16 +141,16 @@ D.download = () => svg(760, 250, [
   box(260, 30, 220, 60, 'dnf download --resolve', ['指定精確版本', '相依自動帶入'], 'teal'),
   box(520, 30, 220, 60, '兩套各 11 個 RPM', ['基底 8.2.4／目標 8.3.2', '全部 confluent-*，各約 3 GB'], 'teal'),
   arrow(220, 60, 258, 60), arrow(480, 60, 518, 60),
-  box(20, 130, 200, 60, 'rpm -K 驗簽章', ['每個都要 OK', '非 Confluent 相依只有 bash'], 'teal'),
-  box(260, 130, 220, 60, 'jar、OS 套件清單', ['Maven sha1、官方監控檔', 'os-packages.txt'], 'teal'),
-  box(520, 130, 220, 60, 'SHA256SUMS', ['72 個檔案的雜湊', '之後每一關都用它'], 'teal'),
+  box(20, 130, 200, 60, 'rpm -K 驗簽章', ['每個都要 OK', '非 Confluent 相依只有 bash、glibc'], 'teal'),
+  box(260, 130, 220, 60, 'jar、OS 套件清單', ['jar 驗 sha256、GPG；官方監控檔', 'os-packages.txt'], 'teal'),
+  box(520, 130, 220, 60, 'SHA256SUMS', ['73 個檔案的雜湊', '之後每一關都用它'], 'teal'),
   arrow(630, 90, 120, 128, null, { via: [[630, 110], [120, 110]] }), arrow(220, 160, 258, 160), arrow(480, 160, 518, 160),
   note(20, 225, '只帶 Confluent 的東西（RPM、監控檔）；JDK、OS 套件不下載，列清單交給銀行'),
 ].join(''));
 
 // 5. into the bank + publish
 D.intake = () => svg(760, 220, [
-  box(20, 40, 170, 60, '落地區', ['下載機 /out', '72 個檔案'], 'teal'),
+  box(20, 40, 170, 60, '落地區', ['下載機 /out', '79 個檔案'], 'teal'),
   box(230, 40, 170, 60, '掃描平台、開單', ['附 SHA256SUMS', '與驗證報告'], 'amber'),
   box(440, 40, 150, 60, '檔案交換', ['搬到操作機', '~/landing 唯讀'], 'amber'),
   box(630, 40, 110, 60, '再驗一次', ['sha256sum -c', 'rpm -K'], 'teal'),
@@ -171,7 +170,7 @@ D.bankprep = () => svg(760, 300, [
   box(40, 140, 220, 60, 'AD', ['群組 kafka-admins/operators/devs', '唯讀帳號 svc-mds-bind'], 'amber'),
   box(280, 140, 220, 60, '憑證', ['根憑證放進每台信任清單', 'CSR 來就簽'], 'amber'),
   box(520, 140, 200, 60, 'NTP、負載平衡', ['repo01 兼 NTP', 'lb01 → rest01/rest02'], 'amber'),
-  box(40, 220, 680, 44, '安裝前檢查（第 5a 段）會逐項確認這些都到位；沒到位就先回頭找對應的銀行團隊', [], 'gray'),
+  box(40, 220, 680, 44, '安裝前檢查（7.2 節）會逐項確認這些都到位；沒到位就先回頭找對應的銀行團隊', [], 'gray'),
 ].join(''));
 
 // 7. certificate flow
@@ -181,8 +180,8 @@ D.certs = () => svg(760, 240, [
   box(420, 40, 160, 60, '匯入前檢查', ['私鑰相符、CN、SAN', 'EKU、效期、鏈'], 'teal'),
   box(620, 40, 120, 60, 'PKCS12', ['.p12 keystore', 'truststore'], 'teal'),
   arrow(190, 70, 228, 70), arrow(380, 70, 418, 70), arrow(580, 70, 618, 70),
-  box(20, 140, 340, 60, '9 張：kafka-internal、cp-server', ['svc-rest、svc-c3、c3-monitoring、svc-ops、svc-backup', 'app-legacy-billing、opmenu-breakglass'], 'gray'),
-  box(400, 140, 340, 60, '另外一組 MDS token 金鑰對', ['RSA 2048，不經銀行', '私鑰給 broker，公鑰給驗 token 的人'], 'gray'),
+  box(20, 140, 340, 60, '7 張：kafka-internal、cp-server（broker）', ['svc-rest、svc-c3、svc-ops、svc-backup', 'app-legacy-billing'], 'gray'),
+  box(400, 140, 340, 60, '另外一組 MDS token 金鑰對', ['RSA 2048，不經銀行', '私鑰給 kc、kb，公鑰給驗 token 的主機'], 'gray'),
   note(20, 225, '任何一項檢查不過就退回銀行重簽，不往下做'),
 ].join(''));
 
@@ -211,18 +210,28 @@ D.startup = () => svg(760, 200, [
 ].join(''));
 
 // 10. identities
-D.identity = () => svg(760, 260, [
-  box(20, 30, 200, 60, '人員', ['AD 帳密', '權限綁 AD 群組'], 'gray'),
-  box(20, 110, 200, 60, '應用程式（直連）', ['SCRAM 帳密', 'app-orders、app-payments'], 'gray'),
-  box(20, 190, 200, 60, '應用程式（經 REST）', ['client 憑證', 'app-legacy-billing'], 'gray'),
-  box(300, 30, 180, 60, 'MDS（在 broker 上）', ['向 AD 查人員與群組', '發 token'], 'blue'),
-  box(300, 110, 180, 60, 'broker CLIENT 9095', ['SCRAM-SHA-512'], 'blue'),
-  box(300, 190, 180, 60, 'REST Proxy 8082', ['只收憑證，對應 principal'], 'blue'),
-  box(560, 30, 180, 60, 'C3 / 操作機工具', ['帶 token 進 TOKEN 9094'], 'blue'),
-  box(560, 110, 180, 60, '平台服務', ['svc-rest、svc-c3、svc-ops', '憑證換 token，不在 AD'], 'blue'),
-  box(560, 190, 180, 60, 'kafka-admin', ['SCRAM，緊急備用', 'MDS 壞了才用'], 'coral'),
-  arrow(220, 60, 298, 60), arrow(220, 140, 298, 140), arrow(220, 220, 298, 220),
-  arrow(480, 60, 558, 60), arrow(480, 140, 558, 140, null, { dash: true }),
+D.identity = () => svg(760, 430, [
+  ctext(120, 16, '身分', { bold: true }), ctext(390, 16, '先經過', { bold: true }), ctext(650, 16, '到哪裡', { bold: true }),
+  box(20, 34, 200, 122, '人員', ['AD 帳密', '權限綁 AD 群組'], 'gray'),
+  box(300, 34, 180, 56, 'MDS（在 broker 上）', ['向 AD 驗證、查群組，發 token'], 'blue'),
+  box(560, 34, 180, 56, 'C3 畫面、confluent CLI', ['帶本人的 token'], 'blue'),
+  arrow(220, 62, 298, 62), arrow(480, 62, 558, 62),
+  box(560, 100, 180, 56, 'broker LDAP 9096', ['OP menu 用'], 'blue'),
+  arrow(220, 128, 558, 128, '本人 AD 帳密'),
+  box(20, 166, 200, 56, '應用程式（直連）', ['SCRAM：app-orders 等'], 'gray'),
+  box(560, 166, 180, 56, 'broker CLIENT 9095', ['SCRAM-SHA-512'], 'blue'),
+  arrow(220, 194, 558, 194, 'broker 自己驗，不經 MDS'),
+  box(20, 232, 200, 56, '應用程式（經 REST）', ['client 憑證：app-legacy-billing'], 'gray'),
+  box(300, 232, 180, 56, 'REST Proxy 8082', ['只收憑證，對應 principal'], 'blue'),
+  box(560, 232, 180, 56, 'broker TOKEN 9094', ['以 app 身分執行'], 'blue'),
+  arrow(220, 260, 298, 260), arrow(480, 260, 558, 260),
+  box(20, 298, 200, 56, '平台服務', ['svc-rest、svc-c3、svc-ops：憑證'], 'gray'),
+  box(300, 298, 180, 56, 'MDS', ['憑證換 token（不在 AD）'], 'blue'),
+  box(560, 298, 180, 56, 'broker TOKEN 9094', ['帶 token 連線'], 'blue'),
+  arrow(220, 326, 298, 326), arrow(480, 326, 558, 326),
+  box(20, 364, 200, 56, 'kafka-admin', ['SCRAM，緊急備用'], 'coral'),
+  box(560, 364, 180, 56, 'broker CLIENT 9095', ['AD、MDS 不通時仍可用'], 'coral'),
+  arrow(220, 392, 558, 392, 'broker 自己驗，不經 MDS、AD'),
 ].join(''));
 
 // 11. REST and C3 paths
@@ -235,7 +244,7 @@ D.edge = () => svg(760, 210, [
   box(20, 130, 150, 60, '維運人員', ['瀏覽器，AD 帳密'], 'gray'),
   box(400, 130, 150, 60, 'Control Center', ['直連 9021', 'svc-c3 憑證連 MDS'], 'blue'),
   arrow(170, 160, 398, 160, '不經負載平衡'),
-  box(590, 130, 150, 60, 'Prometheus 9090', ['mTLS，收 broker 指標'], 'blue'),
+  box(590, 130, 150, 60, 'C3 內建 Prometheus', ['9090，mTLS', '收 OTLP 指標'], 'blue'),
   arrow(550, 160, 588, 160),
 ].join(''));
 
@@ -244,16 +253,17 @@ D.secretprotection = () => svg(800, 300, [
   region(20, 28, 250, 262, "操作機 ~/secrets（root、0600）", "amber"),
   box(36, 60, 218, 62, "passphrase", ["工程師在操作機產生", "sp-passphrase.txt；輪替時要舊的"], "amber"),
   box(36, 150, 218, 62, "master key", ["CLI 由 passphrase 產生", "master.key；也在每台 service.env"], "amber"),
-  arrow(145, 150, 145, 122, null, { dash: true }),
+  arrow(145, 122, 145, 148, null, { dash: true }),
   box(320, 40, 210, 62, "操作機（變更時段）", ["passphrase → master key", "encrypt / rotate"], "blue"),
   arrow(256, 91, 318, 71, null, { via: [[290, 91], [290, 71]] }),   // passphrase：Vault → 操作機
   box(320, 130, 210, 62, "security.properties", ["所有主機同一份密文", "0640 root:confluent"], "blue"),
   box(320, 215, 210, 62, "service.env", ["MASTER_KEY=… 只有一行", "0600 root"], "coral"),
   arrow(425, 102, 425, 128), arrow(425, 192, 425, 213, null, { dash: true }),
+  region(566, 12, 224, 278, "每台主機", "gray"),
   box(580, 40, 200, 62, "properties", ["ssl.keystore.password=", "${securepass:…}"], "gray"),
   box(580, 130, 200, 62, "systemd drop-in", ["EnvironmentFile=service.env", "不用 Environment="], "gray"),
   box(580, 215, 200, 62, "服務啟動", ["環境變數 → 解 data key → 解密碼", "不連任何外部系統"], "gray"),
-  arrow(532, 71, 578, 71, "派送"), arrow(532, 161, 578, 161, "派送"), arrow(532, 246, 578, 246, "派送"),
+  arrow(532, 71, 564, 71, "派送"), arrow(532, 161, 564, 161, "派送"), arrow(532, 246, 564, 246, "派送"),
 ].join(""));
 
 // 14. OP menu: who runs what, where the secrets come from
@@ -286,7 +296,7 @@ D.jmx = () => svg(820, 330, [
   box(36, 230, 238, 50, "Control Center", ["我方的小規則（JVM、Streams、Jetty）"], "blue"),
   note(36, 298, ":7071 只用 HTTPS，憑證用這台的 keystore"),
   region(330, 28, 470, 282, "銀行提供，我方交付設定", "amber"),
-  box(350, 60, 190, 62, "Prometheus", ["4 個 job、env 標籤", "21 條告警規則"], "amber"),
+  box(350, 60, 190, 62, "Prometheus", ["4 個 job、env 標籤", "22 條告警規則"], "amber"),
   box(580, 60, 200, 62, "Alertmanager", ["兩種 webhook 格式", "default JSON／自訂 JSON"], "amber"),
   arrow(540, 91, 578, 91, "告警"),
   box(350, 170, 190, 62, "Grafana", ["datasource + 32 個官方", "dashboard（佈建）"], "amber"),
@@ -337,7 +347,7 @@ D.certrotate = () => svg(800, 300, [
 D.upgrade = () => svg(800, 300, [
   box(20, 30, 240, 120, "一：套件 8.2.4 → 8.3.2", ["JDK 維持 21", "C3 2.5.1 → 2.6.1 先，再 broker →", "controller 逐台（leader 最後）", "→ REST → 操作機"], "blue"),
   arrow(260, 90, 288, 90),
-  box(290, 30, 220, 120, "二：JDK 21 → 25", ["切 /opt/java/current", "controller、broker、REST、", "操作機逐台重啟", "C3 留在 21"], "teal"),
+  box(290, 30, 220, 120, "二：JDK 21 → 25", ["切 /opt/java/current", "controller、broker、REST、", "C3、操作機逐台重啟"], "teal"),
   arrow(510, 90, 538, 90),
   box(540, 30, 240, 120, "三：finalize", ["kafka-features upgrade", "--release-version 4.3", "metadata 版本升到 8.3", "之後不能退回 8.2"], "coral"),
   box(20, 190, 490, 80, "finalize 之前都能退", ["先把 JDK 切回 21（8.2 不支援 25）→ dnf downgrade 回 8.2.4", "順序和升級相反；每段結束跑第 19 章驗收"], "amber"),
@@ -392,12 +402,12 @@ D.landing = () => svg(800, 436, [
   box(36, 202, 298, 44, 'tools/', ['JMX exporter jar；之後 opmenu/ 也放這裡'], 'teal'),
   box(36, 254, 298, 44, 'monitoring/', ['Confluent 官方規則與 32 個 dashboard'], 'teal'),
   box(36, 306, 298, 44, 'bank/', ['JDK 21、JDK 25 的 tar + sha256'], 'amber'),
-  box(36, 358, 298, 36, 'SHA256SUMS（72 個檔）', [], 'gray'),
+  box(36, 358, 298, 36, 'SHA256SUMS（73 個檔）', [], 'gray'),
   box(440, 46, 340, 96, '套件庫 repo01 /confluent/', ['操作機 createrepo_c 建索引後 ssh + tar 上架', '（第 6 章；遷移用的 rpm-target 在 29.1 才上架）'], 'amber'),
   box(440, 150, 340, 44, 'rpm --import', ['進內網後再驗一次簽章（3.3）'], 'gray'),
   box(440, 202, 340, 44, '各主機的 javaagent；操作機 /opt/opmenu', ['jar 派送到各 Java 主機（17.3）；選單在 16.3'], 'blue'),
   box(440, 254, 340, 44, '操作機 ~/monitoring/to-bank/', ['整理後交銀行監控團隊（17.5）'], 'teal'),
-  box(440, 306, 340, 44, '各主機 /opt/java/<目錄>', ['解開後切 /opt/java/current（第 5、29.7）'], 'blue'),
+  box(440, 306, 340, 44, '各主機 /opt/java/<目錄>', ['解開後切 /opt/java/current（7.1、29.7）'], 'blue'),
   box(440, 358, 340, 36, 'sha256sum -c：進內網後驗一次（3.3）', [], 'gray'),
   arrow(334, 68, 438, 68), arrow(334, 120, 438, 120), arrow(334, 172, 438, 172), arrow(334, 224, 438, 224),
   arrow(334, 276, 438, 276), arrow(334, 328, 438, 328), arrow(334, 376, 438, 376),
@@ -417,9 +427,9 @@ D.versionpath = () => svg(800, 330, [
   note(626, 132, '逐台；controller', 11), note(626, 150, 'leader 最後', 11),
   box(20, 182, 150, 54, 'JDK', ['銀行交付的 tar'], 'gray'),
   box(180, 182, 120, 54, '21', [], 'blue'), arrow(300, 209, 510, 209), ctext(405, 196, '③ 29.7 節　CP 升完才換', { size: 12 }), box(510, 182, 100, 54, '25', [], 'teal'),
-  note(626, 202, '8.2 不支援 25', 11), note(626, 220, 'C3 留在 21', 11),
+  note(626, 202, '8.2 不支援 25', 11), note(626, 220, 'C3 也一起換', 11),
   box(20, 252, 150, 54, 'OS（RHEL 9）', ['銀行的套件庫'], 'gray'),
-  box(180, 252, 120, 54, '9.6', [], 'blue'), arrow(300, 279, 510, 279), ctext(405, 266, '⑤ 30.5 節　小版本更新', { size: 12 }), box(510, 252, 100, 54, '9.8', [], 'teal'),
+  box(180, 252, 120, 54, '9.6', [], 'blue'), arrow(300, 279, 510, 279), ctext(405, 266, '⑤ 第 30 章　小版本更新', { size: 12 }), box(510, 252, 100, 54, '9.8', [], 'teal'),
   note(626, 272, 'versionlock 鎖住 Confluent', 11), note(626, 290, 'JDK 是 tar，不受影響', 11),
   ctext(400, 322, '④ 29.9 節 finalize 排在 ③ 之後、⑤ 之前：metadata 版本升到 8.3，之後不能退回 8.2', { size: 12, fill: '#712B13' }),
 ].join(''));
@@ -481,7 +491,7 @@ D.kraft = () => svg(800, 360, [
 
 // 11 how a certificate becomes a token (and why the MDS key pair is handed out the way it is)
 D.tokenflow = () => svg(800, 346, [
-  box(315, 12, 170, 58, 'mds-token-keypair.pem', ['私鑰，簽 token；kc、kb 各一份'], 'coral'),
+  box(315, 12, 170, 58, 'mds-token-keypair.pem', ['私鑰，簽 token', 'kc、kb 各一份'], 'coral'),
   box(610, 12, 170, 58, 'mds-token-public.pem', ['公鑰，驗簽章；每台都放'], 'teal'),
   arrow(400, 70, 400, 100, '簽', { lx: 412, ly: 86, dash: true }), arrow(695, 70, 695, 100, '驗', { lx: 707, ly: 86, dash: true }),
   box(20, 100, 170, 96, '操作機／C3／REST', ['svc-ops、svc-c3、svc-rest', '手上是 client 憑證 .p12'], 'gray'),
@@ -506,10 +516,10 @@ D.rbac = () => svg(800, 470, [
   box(410, 104, 180, 62, 'Operator', ['＋DeveloperManage Topic:*', 'Group:kafka-operators'], 'blue'), box(630, 108, 150, 54, '整個叢集；Topic *', ['建、刪 topic，讀不到訊息'], 'gray'),
   arrow(170, 135, 213, 135), arrow(355, 135, 408, 135), arrow(590, 135, 628, 135),
   box(20, 178, 150, 54, 'carol', ['AD 帳密'], 'gray'), box(215, 178, 140, 54, 'kafka-devs', [], 'amber'),
-  box(410, 178, 180, 54, 'DeveloperRead', ['Group:kafka-devs'], 'blue'), box(630, 178, 150, 54, 'Topic orders.*', ['Group dev-*（前綴）'], 'gray'),
+  box(410, 174, 180, 62, 'DeveloperRead', ['＋DeveloperManage orders.*', 'Group:kafka-devs'], 'blue'), box(630, 178, 150, 54, 'Topic orders.*', ['Group dev-*（前綴）'], 'gray'),
   arrow(170, 205, 213, 205), arrow(355, 205, 408, 205), arrow(590, 205, 628, 205),
-  box(20, 248, 150, 54, 'app-orders', ['SCRAM 帳密'], 'gray'),
-  box(410, 248, 180, 54, 'DeveloperWrite／Read', ['User:app-orders'], 'blue'), box(630, 248, 150, 54, 'Topic orders.*', ['Group orders-*（前綴）'], 'gray'),
+  box(20, 248, 150, 54, 'app-orders-a／-b', ['SCRAM 帳密'], 'gray'),
+  box(410, 244, 180, 62, 'DeveloperWrite／Read', ['＋DeveloperManage orders.*', 'User:app-orders-a／-b'], 'blue'), box(630, 248, 150, 54, 'Topic orders.*', ['Group orders-*（前綴）'], 'gray'),
   arrow(170, 275, 408, 275, '應用程式不用群組，直接綁自己', { lx: 290, ly: 266 }), arrow(590, 275, 628, 275),
   box(20, 318, 150, 54, 'svc-c3', ['憑證 CN=svc-c3'], 'gray'),
   box(410, 318, 180, 54, 'SystemAdmin', ['User:svc-c3'], 'blue'), box(630, 318, 150, 54, '整個叢集', [], 'gray'),
@@ -553,8 +563,8 @@ D.c3roles = () => svg(800, 392, [
   box(310, 46, 180, 74, 'TelemetryReporter', ['controller、broker', '指標以 OTLP 送給 C3'], 'blue'),
   box(310, 186, 180, 94, 'JMX exporter :7071', ['controller、broker、', 'REST Proxy、C3', '只用 HTTPS'], 'teal'),
   region(530, 14, 250, 300, '銀行的監控（行內）', 'amber'),
-  box(546, 46, 218, 58, '行內 Prometheus', ['每 30 秒抓 :7071，4 個 job'], 'amber'),
-  box(546, 128, 218, 58, '行內 Alertmanager', ['21 條規則 → webhook'], 'amber'),
+  box(546, 46, 218, 58, '行內 Prometheus', ['每 30 秒抓 :7071，4 個 job', '22 條告警規則'], 'amber'),
+  box(546, 128, 218, 58, '行內 Alertmanager', ['收到告警 → webhook'], 'amber'),
   box(546, 214, 218, 66, 'Grafana', ['datasource + 32 個官方 dashboard'], 'amber'),
   arrow(310, 83, 256, 75),
   arrow(490, 233, 546, 75, null, { via: [[518, 233], [518, 75]] }),
@@ -587,7 +597,7 @@ D.opmenuflow = () => svg(800, 440, [
   arrow(250, 51, 283, 51), arrow(515, 51, 548, 51),
   box(20, 160, 230, 96, 'Kafka 類', ['topic、權限、lag、稽核', '以本人身分走 LDAP 9096', 'RBAC 由 Kafka 強制，繞不過'], 'blue'),
   box(285, 160, 230, 96, '主機類（要 Operator）', ['先問 MDS：本人有權限嗎', '用 /secure/ssh 的金鑰 ssh cpuser', '這一關是流程控管，不是硬性隔離'], 'blue'),
-  box(550, 160, 230, 96, '91 緊急模式', ['先問 MDS：本人是不是管理員', '以備用憑證的身分執行一個指令', '必填原因，記為 EMERGENCY'], 'coral'),
+  box(550, 160, 230, 96, '91 緊急模式', ['先問 MDS：本人是不是管理員', '以 svc-ops 憑證執行一個指令', '必填原因，記為 EMERGENCY'], 'coral'),
   arrow(665, 82, 135, 158, null, { via: [[665, 120], [135, 120]] }), arrow(665, 82, 400, 158, null, { via: [[665, 120], [400, 120]] }), arrow(665, 82, 665, 158),
   box(20, 290, 230, 62, 'broker', ['每個動作 Kafka 端記的是本人'], 'gray'),
   arrow(135, 256, 135, 288),
@@ -649,7 +659,7 @@ D.migrationflow = () => svg(800, 460, [
   arrow(160, 73, 170, 73), arrow(312, 73, 322, 73), arrow(464, 73, 474, 73), arrow(616, 73, 626, 73),
   box(20, 164, 140, 58, '29.6 REST＋操作機', ['REST 照 12.1 五步', '先補 svc-rest 權限'], 'blue'),
   box(172, 164, 140, 58, '驗收 第 19 章', ['第一段結束'], 'gray'),
-  box(324, 164, 140, 58, '29.7 JDK 21 → 25', ['其餘逐台切換', 'C3 留在 21'], 'teal'),
+  box(324, 164, 140, 58, '29.7 JDK 21 → 25', ['所有 Java 主機逐台', 'C3 也換 25'], 'teal'),
   box(476, 164, 140, 58, '驗收 第 19 章', ['第二段結束'], 'gray'),
   box(628, 164, 152, 58, '29.8 回滾演練', ['kb04 退回 8.2.4', '再升回去'], 'amber'),
   arrow(704, 102, 90, 162, null, { via: [[704, 134], [90, 134]] }),
@@ -660,7 +670,7 @@ D.migrationflow = () => svg(800, 460, [
   box(570, 326, 210, 100, '29.10 記下新基準', ['確認每台版本', '之後新增主機裝現行版本', '（8.3.2、2.6.1、JDK 25）'], 'gray'),
   arrow(240, 376, 288, 376), arrow(520, 376, 568, 376),
   arrow(704, 222, 130, 324, null, { via: [[704, 250], [130, 250], [130, 280]] }),
-  ctext(250, 303, '之後不能退回 8.2（要退得用 29.2 的備份）', { size: 12, fill: '#712B13', anchor: 'start' }),
+  ctext(250, 303, '之後不能退回 8.2（要退得靠 29.2 的備份與原廠還原程序）', { size: 12, fill: '#712B13', anchor: 'start' }),
 ].join(''));
 
 // 23 replacing a controller: the quorum membership at each step
@@ -744,7 +754,7 @@ D.ospatch = () => svg(800, 400, [
 
 // 21 restore drill (23.6): which backup file rebuilds what, and what a backup cannot give back
 D.restore = () => svg(800, 420, [
-  region(10, 14, 200, 300, '最近一份備份 ~/backup/metadata/<時間>/', 'gray'),
+  region(10, 14, 200, 300, '最近一份備份', 'gray'),
   box(24, 48, 172, 44, 'topics.txt', ['partition 數、RF'], 'teal'),
   box(24, 100, 172, 44, 'topic-configs.txt', ['retention 等動態設定'], 'teal'),
   box(24, 152, 172, 44, 'rbac.txt', ['每個 principal 的 binding'], 'purple'),
@@ -816,7 +826,7 @@ D.onboard = () => svg(800, 470, [
   box(285, 20, 230, 86, "② 建 topic（選單 31／32）", ["<系統>.<名稱>，RF 3、min.insync 2", "retention 照申請單", "kafka-topics --create"], "teal"), num(285, 20, "2"),
   box(550, 20, 230, 86, "③ 身分", ["SCRAM：A／B 兩個帳號（選單 34）", "REST：憑證 CSR → 銀行 CA 簽", "principal = 帳號名 或 憑證 CN"], "purple"), num(550, 20, "3"),
   arrow(250, 63, 283, 63), arrow(515, 63, 548, 63),
-  box(20, 140, 230, 86, "④ 權限與配額", ["role binding：Topic:<系統>. 前綴", "Group:<系統>- 前綴（讀）", "kafka-configs 配額（選單 34 一起做）"], "purple"), num(20, 140, "4"),
+  box(20, 140, 230, 86, "④ 權限與配額", ["role binding：Topic:<系統>. 前綴", "Group:<系統>- 前綴（讀）", "kafka-configs 配額（選單 38）"], "purple"), num(20, 140, "4"),
   box(285, 140, 230, 86, "⑤ 交付", ["SCRAM：密碼寫交接檔，交完刪", "REST：.p12＋它自己的密碼、CA 憑證", "連線資訊：9095 或 rest:8082"], "amber"), num(285, 140, "5"),
   box(550, 140, 230, 86, "⑥ 驗證", ["用該身分寫一筆、讀一筆", "稽核日誌看得到（第 18 章）", "C3 看得到 topic 與流量"], "blue"), num(550, 140, "6"),
   arrow(650, 106, 135, 138, null, { via: [[650, 122], [135, 122]] }), arrow(250, 183, 283, 183), arrow(515, 183, 548, 183),
@@ -835,7 +845,7 @@ D.certexpiry = () => svg(800, 430, [
   arrow(256, 94, 284, 94), arrow(516, 94, 544, 94),
   region(10, 178, 780, 108, "② 操作機每天一次：cert-expiry.sh 讀 ~/pki/certs/*.crt（我方持有的每一張，含不對外的 client 憑證）", "purple"),
   box(26, 210, 360, 60, "systemd timer 08:10（或行內排程呼叫）", ["結束碼 0／2 快到期／1 過期或讀不到", "syslog tag confluent-cert → 銀行 SIEM 收"], "purple"),
-  box(416, 210, 360, 60, "涵蓋 blackbox 看不到的", ["svc-ops、svc-backup、svc-c3、c3-monitoring、app 憑證", "truststore 裡的銀行根／中繼（也會到期）"], "purple"),
+  box(416, 210, 360, 60, "涵蓋 blackbox 看不到的", ["svc-ops、svc-backup、app 憑證", "truststore 裡的銀行根／中繼（也會到期）"], "purple"),
   box(10, 302, 240, 60, "③ 隨時看：OP menu 17", ["各端點實際出示的憑證與剩餘天數", "換發後確認每一台都換到了"], "blue"),
   box(270, 302, 510, 60, "告警響了做什麼", ["< 60 天：排變更單，照第 21 章換發（leaf 21.2／CA 21.3／鏈 21.4）；< 14 天：立刻", "過期的後果：broker 之間、REST、C3、應用程式全部連不上"], "coral"),
   box(10, 378, 770, 40, "客戶沒有 blackbox_exporter 時：只做 ②（操作機腳本）＋ ③（選單）；①是建議，lab 兩層都建、都驗", [], "gray"),
@@ -901,7 +911,7 @@ D.clusterreset = () => svg(800, 470, [
   arrow(188, 123, 226, 123), arrow(368, 123, 406, 123), arrow(568, 123, 606, 123),
   num(32, 194, '5'), box(48, 178, 320, 62, '從備份全部還原', ['應用程式 topic、全部 role binding、SCRAM（原密碼）', '配額、ACL、broker 動態設定'], 'teal'),
   num(392, 194, '6'), box(408, 178, 372, 62, '啟動 REST Proxy、C3，照第 19 章驗收', ['應用程式不用換密碼、不用改設定', 'license 變成新的 trial'], 'teal'),
-  arrow(694, 154, 694, 172, null), arrow(694, 172, 208, 172, null, { via: [] }), arrow(208, 172, 208, 176),
+  arrow(694, 154, 208, 176, null, { via: [[694, 166], [208, 166]] }),
   arrow(368, 209, 406, 209),
   region(20, 262, 370, 194, '清空（要重建或接受遺失）', 'coral'),
   note(36, 296, '・訊息內容、consumer 讀到的位置（從頭或從尾開始）'),
@@ -917,6 +927,30 @@ D.clusterreset = () => svg(800, 470, [
   note(426, 368, '・各台設定檔、systemd drop-in、監控設定'),
   note(426, 392, '・操作機 ~/secrets 的密碼、ssh 金鑰'),
   note(426, 424, '第 10 章之後的設定都在：只是資料歸零', 11),
+].join(''));
+
+// 32 the C3 alerting path: REST exporters -> C3 Prometheus -> split by target label -> two Alertmanagers
+D.c3alert = () => svg(1010, 420, [
+  region(16, 14, 164, 300, 'REST Proxy', 'blue'),
+  box(30, 56, 136, 72, 'rest01:7071', ['JMX exporter', 'HTTPS（svc-rest）'], 'blue'),
+  box(30, 150, 136, 72, 'rest02:7071', ['JMX exporter', 'HTTPS（svc-rest）'], 'blue'),
+  region(200, 14, 620, 390, 'c3-01', 'teal'),
+  box(216, 50, 290, 90, 'C3 內建 Prometheus', ['job: rest-proxy；prometheus-generated.yml', '（root，C3 改不動）'], 'teal'),
+  box(216, 196, 142, 110, '我們的規則', ['custom-rules-rest.yml', '群組 labels：', 'target: omnibus'], 'amber'),
+  box(366, 196, 140, 110, 'C3 畫面的 trigger', ['trigger_rules-', 'generated.yml', '沒有 target'], 'gray'),
+  arrow(287, 196, 287, 142), arrow(436, 196, 436, 142),
+  arrow(166, 92, 214, 92), note(30, 262, '由 Prometheus 抓取', 12), arrow(166, 186, 214, 120, null, { via: [[190, 186], [190, 120]] }),
+  box(548, 50, 256, 90, 'alert_relabel_configs', ['第二台：keep target=omnibus', '內建：drop target=omnibus'], 'purple'),
+  arrow(506, 92, 546, 92),
+  box(548, 190, 256, 84, '第二個 Alertmanager', ['127.0.0.1:9193，C3 內附 0.34.0', '我們的設定檔'], 'coral'),
+  box(548, 304, 256, 84, 'C3 內建 Alertmanager', ['9093（mTLS）', 'C3 自己寫設定'], 'gray'),
+  arrow(676, 140, 676, 188, '有 target', { lx: 716, ly: 168 }),
+  arrow(548, 128, 546, 346, null, { via: [[528, 128], [528, 346]] }),
+  ctext(466, 338, '沒有 target', { size: 11 }),
+  box(848, 190, 148, 84, '行內 omnibus', ['扁平 JSON', '10 個欄位都是字串'], 'coral'),
+  box(848, 304, 148, 84, 'C3 action', ['有設才送；預設格式', '不能自訂 JSON'], 'gray'),
+  arrow(804, 232, 846, 232),
+  arrow(804, 346, 846, 346),
 ].join(''));
 
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)

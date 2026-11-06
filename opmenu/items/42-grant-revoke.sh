@@ -44,25 +44,23 @@ run_42() {
   fi
 
   # 2. 綁在資源上的 role：再問資源類型與名稱 prefix
-  case "$role" in
-    DeveloperRead|DeveloperWrite|DeveloperManage|ResourceOwner)
-      if [ -z "$resource_type" ]; then
-        read -r -p "資源類型(Topic | Group): " resource_type
-      fi
+  if _in_words "$role" "DeveloperRead DeveloperWrite DeveloperManage ResourceOwner"; then
+    if [ -z "$resource_type" ]; then
+      read -r -p "資源類型(Topic | Group): " resource_type
+    fi
 
-      if [ -z "$resource_prefix" ]; then
-        read -r -p "名稱 prefix(例 orders.): " resource_prefix
-      fi
+    if [ -z "$resource_prefix" ]; then
+      read -r -p "名稱 prefix(例 orders.): " resource_prefix
+    fi
 
-      if ! v_rtype "$resource_type"; then
-        return 1
-      fi
+    if ! v_rtype "$resource_type"; then
+      return 1
+    fi
 
-      if ! v_prefix "$resource_prefix"; then
-        return 1
-      fi
-      ;;
-  esac
+    if ! v_prefix "$resource_prefix"; then
+      return 1
+    fi
+  fi
 
   # 3. 確認
   local target=""
@@ -82,7 +80,10 @@ run_42() {
 
   local ok=yes
   if [ -n "$resource_type" ]; then
-    if ! be_mds "$method" "/security/1.0/principals/Group:$group/roles/$role/bindings" "$(k_bind_body "$resource_type" "$resource_prefix" PREFIXED)" | k_http_ok; then
+    local body
+    body=$(k_bind_body "$resource_type" "$resource_prefix" PREFIXED)
+
+    if ! be_mds "$method" "/security/1.0/principals/Group:$group/roles/$role/bindings" "$body" | k_http_ok; then
       ok=no
     fi
   else

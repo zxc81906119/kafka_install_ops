@@ -39,7 +39,7 @@ for f in $(cert_files); do
   # 2. 剩幾天、CN
   count=$((count + 1))
   days=$(( ($(date -d "$end" +%s) - now) / 86400 ))
-  cn=$(openssl x509 -in "$f" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=\([^,]*\).*/\1/')
+  cn=$(openssl x509 -in "$f" -noout -subject -nameopt sep_comma_plus,sname | sed 's/.*CN=//; s/,.*//')
   msg="$(basename "$f")（CN=$cn）到期 $(date -d "$end" +%F)，剩 $days 天"
 
   # 3. 過期 → err；快到期 → warning（結束碼還是 0 的話改成 2）；其他照印
