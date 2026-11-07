@@ -4588,7 +4588,7 @@ echo "經 LB 打了 $total 次，非 200：$failed"
 
 @role 小安 | ops02 | root
 
-C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。內建的 Prometheus、Alertmanager 是給 C3 自己的畫面用的；**監控與告警不走它們**（第 17 章用行內的 Prometheus、Alertmanager、Grafana），所以這一章只把它們設到 C3 畫面能用，不要在 C3 畫面建 alert trigger 或 action。
+C3 套件有三個服務：內建 Prometheus、Alertmanager（Go 程式，吃 PEM 檔）和 C3 本身。內建的 Prometheus、Alertmanager 是給 C3 自己的畫面用的；**監控與告警不走它們**（第 17 章用行內的 Prometheus、Alertmanager、Grafana），所以這一章只把它們設到 C3 畫面能用，不要在 C3 畫面建 alert trigger 或 action。銀行沒有 Prometheus 時，第 32 章讓內建的 Prometheus 多抓 10 台的 7071、套第 17 章同一份規則，再由另一個 Alertmanager 送 omnibus（C3 畫面的部分不變）。
 
 ```bash
 scp -q ~/pki/certs/truststore.p12 ~/pki/certs/svc-c3.p12 ~/pki/certs/svc-c3.crt ~/pki/keys/svc-c3.key \
@@ -16203,9 +16203,9 @@ echo "舊密碼登入：$login；binding：$binding_total 條；topic：$topics_
 
 每一列都是「先看哪個告警或指令，再做哪一章／哪個選單」。選單編號是第 16 章的 OP menu。
 
-| 症狀（告警名稱，第 17 章） | 先看 | 處理 | 詳細 |
+| 症狀（告警名稱，第 17 章；沒有行內 Prometheus 時第 32 章送的是同一份） | 先看 | 處理 | 詳細 |
 |---|---|---|---|
-| 一台 broker 掉了（`ConfluentTargetDown` + `KafkaUnderReplicatedPartitions`） | 28.2 快照：broker 在線 3／4、under-replicated > 0；那台 `systemctl is-active`、日誌最後 20 行 | 選單 21 重啟那一台（或 `ssh <host> sudo systemctl restart confluent-server`）；主機或資料碟壞了 → 25.2 remove、換、add | 28.3 演練 |
+| 一台 broker 掉了（`ConfluentTargetDown` + `KafkaUnderReplicatedPartitions` + `KafkaFencedBrokers`） | 28.2 快照：broker 在線 3／4、under-replicated > 0；那台 `systemctl is-active`、日誌最後 20 行 | 選單 21 重啟那一台（或 `ssh <host> sudo systemctl restart confluent-server`）；主機或資料碟壞了 → 25.2 remove、換、add | 28.3 演練 |
 | 沒有 leader、寫入失敗（`KafkaActiveControllerCountNotOne`、`KafkaOfflinePartitions`、`KafkaUnderMinIsrPartitions`） | `kafka-metadata-quorum describe --status` 的 LeaderId；offline partition 清單 | controller 少於兩台活著就先救 controller（重啟；起不來 → 25.1 換）；offline 是 broker 問題（上一列） | 25.1 |
 | ISR 一直縮、延遲高（`KafkaIsrShrinkingWithoutExpand`、`KafkaProduceLatencyHigh`、`KafkaRequestHandlerBusy`） | 哪台 broker 慢：`kafka-topics --under-replicated-partitions` 看缺的是哪個 broker id；那台的磁碟延遲、GC（`JvmHeapHigh`）、網路 | 磁碟或網路由銀行主機團隊；heap 不夠改 drop-in 的 `-Xmx` 滾動重啟（選單 27） | 第 24 章（磁碟） |
 | 人員登不進 MDS／選單（HTTP 401；AD 636 不通） | `openssl s_client -connect ad01.poc.lab:636`；broker 日誌 `LdapException`；`svc-mds-bind` 密碼是否被 AD 換了 | AD 不通：應用程式（SCRAM／憑證）不受影響，等 AD；非得動平台用 `kafka-admin` 緊急帳號（11.2）；密碼換了：更新密文、派送、滾動重啟（20.4） | 11.2、20.4 |

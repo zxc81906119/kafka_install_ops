@@ -293,7 +293,7 @@ D.jmx = () => svg(820, 330, [
   box(36, 56, 238, 50, "controller ×3", ["官方 kafka_controller.yml"], "blue"),
   box(36, 114, 238, 50, "broker ×4", ["官方 kafka_broker.yml"], "blue"),
   box(36, 172, 238, 50, "REST Proxy ×2", ["官方 confluent_rest.yml"], "blue"),
-  box(36, 230, 238, 50, "Control Center", ["我方的小規則（JVM、Streams、Jetty）"], "blue"),
+  box(36, 230, 238, 50, "Control Center", ["我方的小規則（Streams、JVM）"], "blue"),
   note(36, 298, ":7071 只用 HTTPS，憑證用這台的 keystore"),
   region(330, 28, 470, 282, "銀行提供，我方交付設定", "amber"),
   box(350, 60, 190, 62, "Prometheus", ["4 個 job、env 標籤", "26 條告警規則"], "amber"),
@@ -304,7 +304,7 @@ D.jmx = () => svg(820, 330, [
   arrow(680, 122, 680, 168, "POST"),
   arrow(445, 122, 445, 168, "查詢"),
   arrow(290, 140, 348, 100, "每 30 秒抓", { lx: 316, ly: 162 }),
-  box(350, 250, 430, 44, "C3 內建 Prometheus／Alertmanager：不動，只給 C3 畫面用", [], "gray", { dash: true }),
+  box(350, 250, 430, 44, "C3 內建的：只給 C3 畫面用", ["銀行沒有 Prometheus 時改走第 32 章"], "gray", { dash: true }),
 ].join(""));
 
 // 16. Audit log routing
@@ -569,7 +569,7 @@ D.c3roles = () => svg(800, 392, [
   arrow(310, 83, 256, 75),
   arrow(490, 233, 546, 75, null, { via: [[518, 233], [518, 75]] }),
   arrow(655, 104, 655, 126),
-  box(20, 330, 760, 50, '告警與 dashboard 為什麼不走 C3 內建的', ['C3 重啟會把 Alertmanager 設定重寫、webhook 內容不能自訂、而且只看得到 telemetry（沒有主機標籤）'], 'coral'),
+  box(20, 330, 760, 50, '告警與 dashboard 為什麼不走 C3 內建的', ['C3 會重寫 Alertmanager 設定、webhook 內容不能自訂、只看得到 telemetry；銀行沒有 Prometheus 時見第 32 章'], 'coral'),
 ].join(''));
 
 // 15 the key hierarchy of Secret Protection
@@ -789,7 +789,7 @@ D.disk = () => svg(800, 440, [
   box(286, 44, 230, 72, "df -h /var/lib/kafka", ["每台 broker 的資料盤還剩多少", "cpuser 不用 sudo（看的是掛載點）"], "teal"),
   box(536, 44, 240, 72, "銀行 Prometheus", ["kafka_log_log_size：每個 topic 占多少", "logmanager_logdirectoryoffline"], "teal"),
   region(10, 146, 780, 96, "24.2 告警：資料盤的三種訊號", "amber"),
-  box(26, 178, 240, 50, "KafkaLogDirOffline（我方規則）", ["broker 報 log dir 離線 → 立刻 critical"], "amber"),
+  box(26, 178, 240, 50, "KafkaLogDirOffline（第 17 章規則）", ["broker 報 log dir 離線 → 立刻 critical"], "amber"),
   box(286, 178, 230, 50, "資料盤用量 > 80%（銀行主機監控）", ["node_exporter 指標；給範例規則"], "amber"),
   box(536, 178, 240, 50, "停掉的 broker（第 17 章既有）", ["TargetDown、UnderReplicated 一起響"], "gray"),
   region(10, 258, 780, 170, "24.3 快滿時的順序：先爭取空間，再處理根因", "coral"),
@@ -803,12 +803,12 @@ D.disk = () => svg(800, 440, [
 
 // 24 troubleshooting triage (chapter 28): the first three checks, the platform snapshot, then branch by symptom
 D.triage = () => svg(800, 470, [
-  box(20, 20, 230, 74, "① 告警或有人回報", ["Alertmanager 的告警名稱（第 17 章）", "或應用程式／C3 畫面看到的症狀"], "coral"), num(20, 20, "1"),
+  box(20, 20, 230, 74, "① 告警或有人回報", ["告警名稱（第 17、32 章）", "或應用程式／C3 畫面看到的症狀"], "coral"), num(20, 20, "1"),
   box(285, 20, 230, 74, "② 一分鐘快照（28.2）", ["quorum leader、broker 在線數", "under-rep／offline、MDS、REST、C3"], "teal"), num(285, 20, "2"),
   box(550, 20, 230, 74, "③ 那一台的三件事", ["systemctl is-active", "ExecStart 指向我們的設定？", "journalctl 最後 20 行的 ERROR"], "teal"), num(550, 20, "3"),
   arrow(250, 57, 283, 57), arrow(515, 57, 548, 57),
   region(20, 118, 760, 236, "④ 依症狀分支（28.1 速查表）", "blue"),
-  box(36, 150, 170, 90, "一台 broker 掉了", ["TargetDown、UnderRep", "restart（選單 21）", "起不來 → 25.2 換"], "blue"),
+  box(36, 150, 170, 90, "一台 broker 掉了", ["TargetDown、URP、Fenced", "restart（選單 21）", "起不來 → 25.2 換"], "blue"),
   box(222, 150, 170, 90, "沒有 leader／寫入失敗", ["ActiveControllerCount≠1", "Offline、UnderMinIsr", "controller quorum（25.1）"], "blue"),
   box(408, 150, 170, 90, "人員登不進", ["MDS 401、AD 636 不通", "11.2：應用程式不受影響", "kafka-admin 緊急帳號"], "purple"),
   box(594, 150, 170, 90, "憑證過期", ["TLS handshake 失敗", "21 章換發；22 章提前告警", "truststore 也要看"], "purple"),
@@ -939,7 +939,7 @@ D.c3alert = () => svg(1010, 420, [
   note(30, 372, 'HTTPS，每 30 秒抓一次', 12),
   region(200, 14, 620, 390, 'c3-01', 'teal'),
   box(216, 50, 290, 90, 'C3 內建 Prometheus', ['4 個 job，只留規則用的指標', 'prometheus-generated.yml（root）'], 'teal'),
-  box(216, 196, 142, 110, '我們的規則', ['第 17 章的規則', '＋4 條；群組 labels：', 'target: omnibus'], 'amber'),
+  box(216, 196, 142, 110, '我們的規則', ['第 17 章同一份 26 條', '每個群組 labels：', 'target: omnibus'], 'amber'),
   box(366, 196, 140, 110, 'C3 畫面的 trigger', ['trigger_rules-', 'generated.yml', '沒有 target'], 'gray'),
   arrow(287, 196, 287, 142), arrow(436, 196, 436, 142),
   arrow(166, 75, 214, 75),

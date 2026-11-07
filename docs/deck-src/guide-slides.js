@@ -148,7 +148,7 @@ const INSTALL = [
   { ch: "第 17 章", title: "監控交給銀行的系統，我方交付設定", diagram: "jmx", blocks: [
     ["在做什麼", "每個 Java 程序掛 JMX exporter，由銀行的 Prometheus 抓指標。"],
     ["交付", "exporter 規則、告警規則、Alertmanager 與 Grafana 設定、官方 dashboard。"],
-    ["完成的樣子", "10 個 target 都 up、規則載入、32 個 dashboard。"],
+    ["完成的樣子", "10 個 target 都 up、26 條規則載入、32 個 dashboard；沒有行內 Prometheus 時第 32 章用同一份規則。"],
   ], notes: "指標端點只用 HTTPS，存取控制靠網路，要銀行限制來源位址。" },
   { ch: "第 17 章", title: "告警從指標一路走到銀行的通知", diagram: "alertpath", blocks: [
     ["為什麼不用 C3 的告警", "C3 會重寫設定、webhook 內容不能自訂，看到的指標也有限；這些在 lab 實測過。"],

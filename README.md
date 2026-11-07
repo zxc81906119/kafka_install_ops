@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Confluent Platform（Confluent Server，KRaft） | 8.2.4 | 8.3.2 | controller ×3、broker ×4 |
 | REST Proxy | 8.2.4 | 8.3.2 | ×2，前置 L4 負載平衡 |
-| Control Center（內建 Prometheus／Alertmanager，只供 C3 畫面用） | 2.5.1 | 2.6.1 | ×1 |
+| Control Center（內建 Prometheus／Alertmanager，供 C3 畫面用；銀行沒有 Prometheus 時兼做告警，第 32 章） | 2.5.1 | 2.6.1 | ×1 |
 | 監控：JMX exporter（4 種程序）＋ 銀行的 Prometheus、Alertmanager、Grafana | exporter 1.7.0（GitHub release，sha256＋GPG 核對）；Confluent 官方 jmx-monitoring-stacks 固定 commit | 同左 | 我方交付設定，銀行提供三套系統 |
 | JDK（銀行以 tar 提供，裝到 `/opt/java/<dir>` + `/opt/java/current`） | 21 | 25（8.2.x 不支援 Java 25，所以基底只能是 21；8.3.x 支援 25，原廠建議版本仍是 21） | 所有 Java 節點（含 C3） |
 | 作業系統（RHEL 9） | 9.6 | 9.8（小版本更新） | 所有主機 |
@@ -84,6 +84,6 @@ redesign/           設計討論紀錄
 
 ## 已知限制
 
-- 監控（手把手第 17 章）：告警與 dashboard 只走銀行的 Prometheus／Alertmanager／Grafana；C3 內建的 Prometheus／Alertmanager 不動，也不在 C3 建 alert trigger／action。Confluent Server 的 raft 指標（`kafka_server_raft_metrics_*`）只有單台 controller 的環境抓得到；三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）一條都沒有，所以不能用來告警，quorum 健康改用 `ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount`；官方 `kraft.json` dashboard 在三台 controller 叢集只有 10／18 個 panel 有值（靠 raft 指標的是空的）。另外官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 B.1 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章已在完整 lab 從零跑過（2026-10-30，手冊第 0 章到附錄 B 全部照打實跑）。
+- 監控（手把手第 17 章）：告警與 dashboard 走銀行的 Prometheus／Alertmanager／Grafana（26 條告警規則：Confluent 官方修正後＋我方建議）；C3 內建的 Prometheus／Alertmanager 只給 C3 畫面用，不在 C3 建 alert trigger／action。銀行沒有 Prometheus 時走手把手第 32 章：C3 內建 Prometheus 抓同樣 10 台的 7071、套同一份規則，另一個 Alertmanager 送 omnibus（C3 2.6.1 之後、c3-01 是單點、原廠支援待確認）。Confluent Server 的 raft 指標（`kafka_server_raft_metrics_*`）只有單台 controller 的環境抓得到；三台 controller 的叢集（8.2.4 與遷移後的 8.3.2 都實測）一條都沒有，所以不能用來告警，quorum 健康改用 `ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount`；官方 `kraft.json` dashboard 在三台 controller 叢集只有 10／18 個 panel 有值（靠 raft 指標的是空的）。另外官方 dashboard 有幾個 panel 在專用 controller 的 KRaft 叢集是空的（見手把手 B.1 與 redesign/README.md）。consumer lag 由 C3 畫面顯示，不是 broker 的 JMX 指標。第 17 章已在完整 lab 從零跑過（2026-10-30，手冊第 0 章到附錄 B 全部照打實跑）。
 - CyberArk PAM 本身（PVWA 登入、PSMP 代登與錄影）與放私鑰的加密 file system（LUKS）無法在 lab 模擬：lab 直接以 root 進操作機，`/secure/ssh` 用獨立的 podman volume 代替（獨立掛載點，沒有加密）；只驗證我方拿到值之後的程序。
 - MDS token 金鑰不排輪替（公鑰檔放兩把沒有用，無法零中斷切換）；只在私鑰外洩時用 `install/lab/mds-token-key-rotate.sh` 驗過的程序換。
