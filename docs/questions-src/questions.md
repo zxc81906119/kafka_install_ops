@@ -117,7 +117,7 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 11.1 | 監控採「JMX exporter＋行內 Prometheus＋行內 Alertmanager＋行內 Grafana」，行內 Prometheus、Alertmanager、Grafana 的版本與位置？ | 我們交付設定，不安裝這三套；版本影響設定寫法（自訂 webhook 內容要較新的 Alertmanager，我們在 0.34.1 實測；Prometheus 2.43 以上才有 scrape_config_files，我們用 3.5.0） | 銀行提供；我方交付 scrape 設定、22 條告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方 32 個 dashboard、根憑證、抓取密碼 |
+| 11.1 | 監控採「JMX exporter＋行內 Prometheus＋行內 Alertmanager＋行內 Grafana」，行內 Prometheus、Alertmanager、Grafana 的版本與位置？ | 我們交付設定，不安裝這三套；版本影響設定寫法（自訂 webhook 內容要較新的 Alertmanager，我們在 0.34.1 實測；Prometheus 2.43 以上才有 scrape_config_files，我們用 3.5.0） | 銀行提供；我方交付 scrape 設定、26 條告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方 32 個 dashboard、根憑證、抓取密碼 |
 | 11.2 | 機房斷電演練時的開機順序可否配合（controller → broker → REST Proxy／Control Center）？ | 全部同時開機時 Control Center 要等權限服務起來 | 已加上等待機制；仍建議依順序開機 |
 | 11.3 | 7071（監控指標）我方只做 HTTPS、不設帳密（2026-10-31 定案）：資安是否接受「HTTPS＋來源限制」，還是要求每個 HTTP 端點都要認證？ | 指標只能讀、沒有訊息內容與密碼；不設帳密就不用交付、輪替一組共用的抓取密碼 | 只用 HTTPS（銀行根憑證驗鏈）＋11.4 的來源限制；資安要求認證時可改回 HTTPS＋帳密，或另發 Prometheus 的 client 憑證做 mTLS |
 | 11.4 | 每台的 7071 可否只放行行內 Prometheus 的來源位址？請提供位址（或網段） | 7071 沒有帳密，**來源限制是唯一的存取控制**：沒做的話，內網連得到的人都讀得到平台的結構資訊（topic、consumer group、client id） | 主機防火牆目前對所有來源開放 7071；拿到位址後改成只放行它（必要） |
@@ -125,9 +125,9 @@
 | 11.6 | Grafana 怎麼放 dashboard 與 datasource：檔案佈建（provisioning）還是手動匯入？登入用 AD（LDAP／SSO）嗎？誰能改 dashboard？ | 32 個官方 dashboard 以檔案佈建最容易維護與重建；Grafana 的權限要和平台的 RBAC 分開想 | 檔案佈建、唯讀；datasource 名稱與 uid 固定為 Prometheus |
 | 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |
 | 11.8 | 確認：告警與 dashboard 只用行內這一套，不在 Control Center 建 alert trigger／action（C3 內建的 Prometheus、Alertmanager 只給 C3 畫面用） | C3 內建 Alertmanager 的設定會被 C3 重寫、webhook 內容不能自訂 | 如此設計；請銀行確認沒有別的流程依賴 C3 的告警功能 |
-| 11.9 | 銀行沒有提供 Prometheus 時：REST Proxy 告警走 C3 內建 Prometheus 加第二個 Alertmanager（手冊第 32 章），可以接受嗎？omnibus 的欄位：`sub_origin` 用「規則名稱: 摘要」、`state` 用 OPEN／RESOLVED、`severity` 用 ERROR／PERFORMANCE、`origin` 與 `hostname` 要填什麼？收到物件或數字會怎麼處理？ | 行內給的格式是 Dynatrace 的變數，這些對應是我們定的；第二個 Alertmanager 用 C3 內附的執行檔，原廠文件寫不支援客戶自管的 Alertmanager，我們同時向原廠確認 | 所有欄位都送字串；`origin` 暫填 c3-embedded、`hostname` 填 instance；只有帶 `target: omnibus` 的規則才送 omnibus，C3 畫面的 trigger 不送 |
 | 11.9 | broker 主機有沒有 node_exporter（或其他主機監控）？資料盤用量超過 80% 的告警由誰設？ | Kafka 的 JMX 沒有「磁碟剩多少」的指標，用量告警只能靠主機層；我們給一條範例規則（`KafkaDataDiskFillingUp`，手把手 24.2），mountpoint、job 要照行內 node_exporter 改 | 銀行主機監控負責；log dir 離線（`KafkaLogDirOffline`）由我方規則負責 |
 | 11.10 | 行內 Prometheus 有沒有 blackbox_exporter（或同類的 TLS 探測）？能不能用它探平台的每個 TLS 端點看憑證到期日？ | 憑證到期會讓整個平台連不上；我們給 blackbox 的模組設定、每個端點一個 target 的 scrape 檔、三條規則與 promtool 測試（手把手 22.2）；沒有的話只靠操作機每天的檢查腳本（22.3）與選單 17 | 建議有；沒有也能上線，到期提醒靠操作機 syslog（tag `confluent-cert`） |
+| 11.11 | 銀行沒有提供 Prometheus 時：告警走 C3 內建 Prometheus（抓 10 台的 JMX exporter，套第 17 章同一份 26 條規則）加第二個 Alertmanager（手冊第 32 章），可以接受嗎？c3-01 到 10 台 7071 的防火牆能開嗎？omnibus 的欄位：`sub_origin` 用「規則名稱: 摘要」、`state` 用 OPEN／RESOLVED、`severity` 用 ERROR／PERFORMANCE、`origin` 與 `hostname` 要填什麼？收到物件或數字會怎麼處理？ | 行內給的格式是 Dynatrace 的變數，這些對應是我們定的；第二個 Alertmanager 用 C3 內附的執行檔，原廠文件寫不支援客戶自管的 Alertmanager，我們同時向原廠確認 | 所有欄位都送字串；`origin` 暫填 c3-embedded、`hostname` 填主機名（整個叢集的告警填環境名稱）；只有帶 `target: omnibus` 的規則才送 omnibus，C3 畫面的 trigger 不送；c3-01 整台掛掉時發不出告警，請行內主機監控偵測 c3-01 |
 
 # 12. 範圍確認（專案窗口）
 

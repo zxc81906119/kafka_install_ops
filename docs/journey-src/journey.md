@@ -6201,7 +6201,7 @@ kb04: full sudo back (change window)
 | controller（kc01–03） | Confluent 官方 `kafka_controller.yml` | KRaft：controller 指標（`ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount` …）、JVM（raft 指標在三台 controller 的叢集裡沒有，見 B.2）|
 | broker（kb01–04） | Confluent 官方 `kafka_broker.yml` | topic／partition／replica、request 延遲、ISR、網路與 request handler 執行緒、quota、JVM（序列數隨 topic 與 partition 數成長，3 個 partition 的 lab 約 2.2 萬條） |
 | REST Proxy（rest01–02） | Confluent 官方 `confluent_rest.yml` | Jetty 與每個 REST endpoint 的請求率、錯誤率、延遲，JVM |
-| Control Center（c3-01） | **我方的開頭幾條＋官方 `kafka_streams.yml` 的規則**（官方沒有給 C3 本身的 exporter 設定） | JVM、Kafka Streams（client、thread、task、處理節點）、RocksDB state store（`AlertHistoryStore`、`commander`）、Jetty 請求率，約 2,100 條，名稱和官方 Streams／RocksDB dashboard 對得上。不收 C3 自己的 consumer／producer 與每個 REST endpoint（上萬條） |
+| Control Center（c3-01） | **我方的開頭幾條＋官方 `kafka_streams.yml` 的規則**（官方沒有給 C3 本身的 exporter 設定） | JVM、Kafka Streams（client、thread、task、處理節點）、RocksDB state store（`AlertHistoryStore`、`commander`），約 2,100 條，名稱和官方 Streams／RocksDB dashboard 對得上。不收 C3 自己的 consumer／producer 與每個 REST endpoint（上萬條），也不收 Jetty（C3 2.6.1 上全是 0、沒有錯誤率） |
 
 ## 17.1 設定檔的標頭：HTTPS
 
@@ -6261,7 +6261,7 @@ Dashboard 是照 Confluent 官方 exporter 規則產生的指標名稱寫的，�
 
 兩個細節：官方檔第一行是 YAML 文件分隔線 `---`，接在標頭後面會變成第二份文件，所以拿掉；官方檔自己帶 `startDelaySeconds: 120`（controller、broker 重啟後前兩分鐘 7071 回 200 但沒有指標）。
 
-C3 本身沒有官方規則，但它是一個 Kafka Streams 應用程式：只收 `kafka.streams:*`，規則用官方的 `kafka_streams.yml`（2.4 節帶進來的），前面放我們自己的幾條（`rules-c3.yml`）。原因：C3 的 `stream-metrics`、`stream-thread-metrics` MBean 多帶一個 `process-id`，官方規則會把那個 UUID 拼進指標名稱（每次重啟名稱就變，告警寫不了），所以 `client-state`、`thread-state` 由我們先命名；`stream-topic-metrics` 有四個 key，官方規則會把 `processor-node-id` 塞進 `task_id`。exporter 用第一條比對到的規則，所以順序要對。整段貼到 EOF；最後每個角色一行，`httpServer=1`、`lowercaseOutputName=1` 代表標頭和規則都接上了：
+C3 本身沒有官方規則，但它是一個 Kafka Streams 應用程式：只收 `kafka.streams:*`，規則用官方的 `kafka_streams.yml`（2.4 節帶進來的），前面放我們自己的幾條（`rules-c3.yml`）。原因：C3 的 `stream-metrics`、`stream-thread-metrics` MBean 多帶一個 `process-id`，官方規則會把那個 UUID 拼進指標名稱（每次重啟名稱就變，告警寫不了），所以 `client-state`、`alive-stream-threads`、`failed-stream-threads`、`thread-state` 由我們先命名（官方規則還會把執行緒數放進標籤，數字一變就多一條序列）；`stream-topic-metrics` 有四個 key，官方規則會把 `processor-node-id` 塞進 `task_id`。exporter 用第一條比對到的規則，所以順序要對。整段貼到 EOF；最後每個角色一行，`httpServer=1`、`lowercaseOutputName=1` 代表標頭和規則都接上了：
 
 ```bash
 cd ~/monitoring
@@ -6289,24 +6289,25 @@ done
 cat > ~/monitoring/rules-c3.yml <<'EOF'
 # Control Center: a Kafka Streams application (Confluent has no exporter rules for C3 itself).
 # Kafka Streams and RocksDB: Confluent's official kafka_streams.yml rules are appended below this head (same metric names as the
-# official kafka-stream.json / kafka-streams-rocksdb.json dashboards); only kafka.streams:* is collected, not C3's own consumers/producers.
+# official kafka-stream.json / kafka-streams-rocksdb.json dashboards); only kafka.streams:* is collected, not C3's own consumers/producers
+# (their lag would show screen delay, but costs many series) and not C3's Jetty beans (all 0 on C3 2.6.1, no error rate).
 # About 2,000 series in the lab (C3 2.6.1: 13 stream threads, 12 tasks, state stores AlertHistoryStore and commander).
 # Our rules come first (the exporter uses the first rule that matches):
-#   client-state, recording-level, thread-state: C3's stream-metrics and stream-thread-metrics beans also carry process-id; the official rules would put that UUID into the
+#   client-state, recording-level, alive-stream-threads, failed-stream-threads, thread-state: C3's stream-metrics and stream-thread-metrics beans also carry process-id;
+#     the official rules would put that UUID into the
 #     metric name (a new name after every restart), so they are named here: client-state 0 CREATED, 1 REBALANCING, 2 RUNNING,
 #     3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR; thread-state 4 RUNNING, 6 DEAD
+#     (and turn alive-/failed-stream-threads into a label, a new series whenever the number changes)
 #   stream-topic-metrics has four keys; the official rules would put processor-node-id into task_id
-#   Jetty: request rate and error rate in front of C3's UI and API
 lowercaseOutputName: true
 lowercaseOutputLabelNames: true
 startDelaySeconds: 0
 includeObjectNames:
   - "kafka.streams:*"
-  - "kafka.rest:type=jetty-metrics"
 excludeObjectNames:
   - "kafka.streams:type=kafka-metrics-count"
 rules:
-  - pattern: 'kafka.streams<type=stream-metrics.*client-id=([^,>]+).*><>(client-state|recording-level): (.+)'
+  - pattern: 'kafka.streams<type=stream-metrics.*client-id=([^,>]+).*><>(client-state|recording-level|alive-stream-threads|failed-stream-threads): (.+)'
     name: kafka_streams_stream_metrics_$2
     type: GAUGE
     labels: { client_id: "$1" }
@@ -6318,9 +6319,6 @@ rules:
     name: kafka_streams_stream_topic_metrics_$5
     type: GAUGE
     labels: { thread_id: "$1", task_id: "$2", processor_node_id: "$3", topic: "$4" }
-  - pattern: 'kafka.rest<type=jetty-metrics><>(request-rate|request-error-rate): (.+)'
-    name: kafka_rest_jetty_metrics_$1
-    type: GAUGE
 EOF
 
 # 4. C3 的設定：標頭＋我們的開頭＋官方 kafka_streams.yml 的規則（只取 rules: 底下那些；檔案 0600）
@@ -6344,7 +6342,7 @@ done
 controller   153 行  httpServer=1 lowercaseOutputName=1
 broker       431 行  httpServer=1 lowercaseOutputName=1
 rest          49 行  httpServer=1 lowercaseOutputName=1
-c3           128 行  httpServer=1 lowercaseOutputName=1
+c3           127 行  httpServer=1 lowercaseOutputName=1
 ```
 
 官方規則版本記在 `COMMIT`，換版本（重新下載官方檔）要重做這一步並重新驗證 dashboard。
@@ -6708,11 +6706,12 @@ echo "scrape-confluent.yml: $(grep -c job_name ~/monitoring/to-bank/prometheus/s
 scrape-confluent.yml: 4 個 job
 ```
 
-**告警規則**：22 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，對應 omnibus 規格裡的 ProblemImpact 欄位）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
+**告警規則**：26 條，每條都有 `severity`（critical／warning）、`impact`（APPLICATION／SERVICE／INFRASTRUCTURE，對應 omnibus 規格裡的 ProblemImpact 欄位）、`summary` 與 `description`。規則的出處寫在每一條上方的註解，三類：`official`（Confluent jmx-monitoring-stacks 的 `prometheus-alerts/`，保留，必要時修正表達式）、`confluent`（Confluent 的監控指引：Monitor Kafka、KRaft metrics）、`ours`（我方新增，一定有 lab 上真的存在的指標撐著）。和官方檔的差別：
 
 - 官方 `broker-alerts.yml` 有兩條「Broker IO Activity」用的是一個永遠小於 1 的 control-plane 指標，等於測試規則，不收；改用 request handler 的一分鐘平均閒置率。
 - 官方的 `UncleanLeaderElectionsPerSec` 在 exporter 裡是累計次數，`> 0` 一旦發生過就永遠成立，改成看 10 分鐘內的增量。
-- 官方的 `high_load` 要 node exporter，我們沒有；主機層的 CPU、磁碟請用銀行既有的主機監控。
+- 官方的 `high_load` 要 node exporter，我們沒有；改用 Confluent Server 自己的主機 CPU 指標（`KafkaHostCpuHigh`，`host` 群組）。磁碟剩餘空間 JMX 沒有，請用銀行既有的主機監控（第 24 章給範例）。
+- 另外加：KRaft 的 fenced broker（Confluent KRaft 指標文件的 `FencedBrokerCount`）、log dir 離線（原本在第 24 章，Strimzi 也有同樣的規則）、JVM 執行緒死結。第 32 章（銀行沒有 Prometheus）用同一份規則，所以這裡的規則兩條路徑共用。
 - controller 的規則（`ActiveControllerCount`、offline partitions）限定 `job="kafka-controller"`；`for` 從 10 秒放寬到 1 分鐘，不然 controller 重啟會叫人。
 - KRaft 另加：metadata 落後、metadata 錯誤、leader 頻繁更換（「沒有 leader」由 `KafkaActiveControllerCountNotOne` 涵蓋）。REST Proxy 加兩條，C3 加五條（Streams 停了、thread 掛了、thread 不再 poll、RocksDB 背景錯誤、丟棄紀錄），都只用 lab 驗過存在的指標。
 - 照 `max by (instance)` 聚合的規則都多帶 `hostname`（`by (instance, hostname)`），不然 summary 裡的 `{{ $labels.hostname }}` 會是空的。
@@ -6816,6 +6815,15 @@ groups:
         annotations:
           summary: "{{ $labels.hostname }}: Produce p99 {{ $value }} ms"
           description: "99th percentile Produce request time on {{ $labels.instance }} has been above 500 ms for 10 minutes. Look at disk latency and replication delay (acks=all waits for followers)."
+      # source: ours (Strimzi has the same check as OfflineLogDirectoryCount): one series per log dir on Confluent Server 8.2.4 / 8.3.2.
+      # With a single log.dirs the broker shuts itself down when the directory fails, so ConfluentTargetDown fires too; this rule names the directory.
+      - alert: KafkaLogDirOffline
+        expr: max by (hostname, logdirectory) (kafka_log_logmanager_logdirectoryoffline{job="kafka-broker"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: log directory {{ $labels.logdirectory }} offline"
+          description: "Broker {{ $labels.hostname }} reports its log directory {{ $labels.logdirectory }} offline (disk error or full file system). Its partitions moved to other leaders; check dmesg, df -h and the broker log, then repair or replace the disk (guide 24.4)."
 
   - name: kraft
     rules:
@@ -6840,6 +6848,14 @@ groups:
         annotations:
           summary: "{{ $labels.env }}: KRaft leader changed {{ $value }} times in 15 minutes"
           description: "The active controller of {{ $labels.env }} changed more than twice in 15 minutes: unstable network, GC pauses or an overloaded controller."
+      # source: confluent (KRaft metrics: FencedBrokerCount): a fenced broker runs but may not lead or follow partitions
+      - alert: KafkaFencedBrokers
+        expr: max by (env) (kafka_controller_kafkacontroller_fencedbrokercount{job="kafka-controller"}) > 0
+        for: 5m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} fenced brokers"
+          description: "The KRaft controller reports {{ $value }} fenced brokers in {{ $labels.env }} for 5 minutes: they are stopped, or run but cannot serve partitions (no heartbeat to the controller, or still catching up the metadata log). Check the broker logs and kafka-metadata-quorum describe --status."
 
   - name: rest-proxy
     rules:
@@ -6862,20 +6878,22 @@ groups:
   - name: control-center
     rules:
       # source: ours: C3 is a Kafka Streams application; client-state 0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR
+      # Not RUNNING for 15 minutes (stuck in REBALANCING or CREATED stalls the screens as much as ERROR does); short rebalances after a restart are normal
       - alert: ControlCenterStreamsNotRunning
-        expr: max by (instance, hostname) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
-        for: 5m
+        expr: max by (instance, hostname, client_id) (kafka_streams_stream_metrics_client_state{job="control-center"}) != 2
+        for: 15m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stopped processing"
-          description: "A Kafka Streams client inside Control Center {{ $labels.instance }} is in state {{ $value }} (4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR) for 5 minutes: the C3 screens show stale data. Read journalctl -u confluent-control-center."
+          description: "A Kafka Streams client inside Control Center {{ $labels.instance }} has not been RUNNING for 15 minutes (state {{ $value }}: 1 REBALANCING, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR): the C3 screens show stale data. Read journalctl -u confluent-control-center."
+      # failed-stream-threads counts failures since start (it stays above 0 even when a thread is replaced), so test the increase
       - alert: ControlCenterStreamThreadsFailed
-        expr: max by (instance, hostname) (kafka_streams_stream_metrics{job="control-center", failed_stream_threads!=""}) > 0
-        for: 1m
+        expr: max by (instance, hostname) (delta(kafka_streams_stream_metrics_failed_stream_threads{job="control-center"}[15m])) > 0
+        for: 0m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stream thread failed"
-          description: "Control Center {{ $labels.instance }} lost {{ $value }} stream threads. Restart it after reading the log."
+          description: "{{ $value }} Kafka Streams threads of Control Center {{ $labels.instance }} failed in the last 15 minutes (uncaught exception). Read journalctl -u confluent-control-center; restart it if alive threads stay below normal."
       # source: ours: an idle stream thread still polls about 10 times a second (lab), so a poll rate of 0 means the thread is stuck
       - alert: ControlCenterStreamsStalled
         expr: min by (instance, hostname) (kafka_streams_stream_thread_metrics_poll_rate{job="control-center"}) == 0
@@ -6918,13 +6936,33 @@ groups:
         annotations:
           summary: "{{ $labels.hostname }} ({{ $labels.job }}): file descriptors above 80%"
           description: "{{ $labels.instance }} uses {{ $value | humanizePercentage }} of its file descriptor limit. Check LimitNOFILE in the systemd drop-in and the number of partitions or connections."
+      # source: ours (standard JVM practice): deadlocked threads never recover by themselves
+      - alert: JvmThreadsDeadlocked
+        expr: max by (hostname, job) (jvm_threads_deadlocked{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"}) > 0
+        for: 5m
+        labels: { severity: critical, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}): JVM threads deadlocked"
+          description: "{{ $value }} threads of {{ $labels.hostname }} ({{ $labels.job }}) are deadlocked for 5 minutes. Take a thread dump (jcmd <pid> Thread.print) and restart the service."
+
+  - name: host
+    rules:
+      # source: ours, replaces the official high_load (node_load1, needs node_exporter): Confluent Server's own host CPU gauge
+      # (kafka.server:type=KafkaServer,name=linux-system-cpu-utilization-1m, percent 0-100). Duplicates the bank's host monitoring if it has one.
+      - alert: KafkaHostCpuHigh
+        expr: max by (hostname, job) (kafka_server_kafkaserver_linux_system_cpu_utilization_1m{job=~"kafka-controller|kafka-broker"}) > 80
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }}: host CPU above 80%"
+          description: "The host {{ $labels.hostname }} ({{ $labels.job }}) has used more than 80% CPU for 10 minutes ({{ $value }}%). Look for other processes on the host, request rate and GC time."
 EOF
 
 echo "confluent-alerts.yml: $(grep -c '^      - alert:' ~/monitoring/to-bank/prometheus/confluent-alerts.yml) 條規則"
 ```
 
 ```out
-confluent-alerts.yml: 22 條規則
+confluent-alerts.yml: 26 條規則
 ```
 
 **Alertmanager 設定**：兩個 webhook receiver 示範兩種格式，銀行留一種、刪另一種。
@@ -7248,7 +7286,7 @@ kafka-broker      up 4 / 4
 kafka-controller  up 3 / 3
 rest-proxy        up 2 / 2
 合計 up 10 / 10
-告警規則 22 條，載入有錯 0 條
+告警規則 26 條，載入有錯 0 條
 Prometheus 看到的 Alertmanager: ['http://lab-mon-alertmanager:9093/api/v2/alerts']
 Grafana dashboard: 32 個
 {"details":{"application":"Prometheus","features":{"rulerApiEnabled":false}},"message":"Successfully queried the Prometheus API.","status":"OK"}
@@ -12271,7 +12309,7 @@ alice 登入 MDS（MDS 要用 LDAPS 連 AD）：200
 
 ![certexpiry]
 
-**這一章在做什麼**：第 9 章的憑證一年到期（9.3 看到 `days=364`），到期那一刻 broker 之間、REST Proxy、C3、應用程式全部連不上；第 21 章是怎麼換，這一章是**怎麼提前知道**。做兩層：22.2 銀行 Prometheus 的 blackbox_exporter 探平台的每個 TLS 端點，剩 60 天 warning、14 天 critical；22.3 操作機每天一次讀 `~/pki/certs` 全部憑證（含 blackbox 看不到、不對外的 client 憑證與信任的根），寫 syslog。客戶目前沒有 blackbox_exporter，22.2 列為建議（問題清單 11.10）；22.3 與選單 17 沒有前提。lab 兩層都建、都驗。前提：第 17 章接上了、第 9 章的憑證在 `~/pki/certs`。完成的樣子：Prometheus 的 `cert-expiry` job 24 個 target 全 up、規則 25 條（第 17 章 22 條加這一章 3 條）、`promtool test rules` 通過；操作機腳本列出每張憑證剩幾天、timer 裝好。
+**這一章在做什麼**：第 9 章的憑證一年到期（9.3 看到 `days=364`），到期那一刻 broker 之間、REST Proxy、C3、應用程式全部連不上；第 21 章是怎麼換，這一章是**怎麼提前知道**。做兩層：22.2 銀行 Prometheus 的 blackbox_exporter 探平台的每個 TLS 端點，剩 60 天 warning、14 天 critical；22.3 操作機每天一次讀 `~/pki/certs` 全部憑證（含 blackbox 看不到、不對外的 client 憑證與信任的根），寫 syslog。客戶目前沒有 blackbox_exporter，22.2 列為建議（問題清單 11.10）；22.3 與選單 17 沒有前提。lab 兩層都建、都驗。前提：第 17 章接上了、第 9 章的憑證在 `~/pki/certs`。完成的樣子：Prometheus 的 `cert-expiry` job 24 個 target 全 up、規則 29 條（第 17 章 26 條加這一章 3 條）、`promtool test rules` 通過；操作機腳本列出每張憑證剩幾天、timer 裝好。
 
 ## 22.1 要看哪些憑證
 
@@ -12545,7 +12583,7 @@ echo "$status"
 ```out
 SUCCESS
 cert-expiry target up 24 / 24
-告警規則 25 條（cert-expiry、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+告警規則 29 條（cert-expiry、confluent-availability、control-center、host、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
 ```
 
 每個端點真的探到了什麼：剩幾天、哪一張（Grafana 做一張表就是同一個查詢）：
@@ -13796,11 +13834,11 @@ log dir 正常的 broker：4 / 4
 
 | 訊號 | 誰的指標 | 規則 | 意思 |
 |---|---|---|---|
-| log dir 離線 | 我方 JMX exporter：`kafka_log_logmanager_logdirectoryoffline` | `KafkaLogDirOffline`（這一節加） | 磁碟壞了或滿到寫不進去；只有一個 `log.dirs` 時 broker 會自己停掉，`ConfluentTargetDown` 也會響 |
+| log dir 離線 | 我方 JMX exporter：`kafka_log_logmanager_logdirectoryoffline` | `KafkaLogDirOffline`（第 17 章既有） | 磁碟壞了或滿到寫不進去；只有一個 `log.dirs` 時 broker 會自己停掉，`ConfluentTargetDown` 也會響 |
 | 資料盤用量超過 80% | 銀行主機監控（node_exporter 的 `node_filesystem_*`） | `KafkaDataDiskFillingUp`（這一節給**範例**，mountpoint、job 由銀行改） | 滿之前就通知，照 24.3 處理；滿了 broker 就停 |
 | broker 停了 | 第 17 章既有 | `ConfluentTargetDown`、`KafkaUnderReplicatedPartitions` | 磁碟事件的後果，不是原因 |
 
-Kafka 的 JMX 沒有「磁碟剩多少」這種指標（它只知道自己寫了多少），所以用量告警一定靠主機層：銀行既有的 node_exporter（或其他主機監控）。我們給的是第二個規則檔，和 17.5 的 `confluent-alerts.yml` 放在一起；17.6 的 `rule_files` 用的是 `confluent-alerts*.yml`，新檔放進去 reload 就會載入。整段貼到 EOF：
+Kafka 的 JMX 沒有「磁碟剩多少」這種指標（它只知道自己寫了多少），所以用量告警一定靠主機層：銀行既有的 node_exporter（或其他主機監控）。log dir 離線的規則已在第 17 章的 `confluent-alerts.yml`；這裡給的是用量的範例規則，放在第二個規則檔，和 17.5 的 `confluent-alerts.yml` 放在一起；17.6 的 `rule_files` 用的是 `confluent-alerts*.yml`，新檔放進去 reload 就會載入。整段貼到 EOF：
 
 ```bash
 cat > ~/monitoring/to-bank/prometheus/confluent-alerts-disk.yml <<'EOF'
@@ -13809,15 +13847,6 @@ cat > ~/monitoring/to-bank/prometheus/confluent-alerts-disk.yml <<'EOF'
 groups:
   - name: kafka-disk
     rules:
-      # source: ours. kafka.log:type=LogManager,name=LogDirectoryOffline (one series per log dir) really exists on Confluent Server 8.2.4 / 8.3.2.
-      # With a single log.dirs the broker shuts itself down when the directory fails, so ConfluentTargetDown fires too; this rule names the directory.
-      - alert: KafkaLogDirOffline
-        expr: max by (hostname, logdirectory) (kafka_log_logmanager_logdirectoryoffline{job="kafka-broker"}) > 0
-        for: 1m
-        labels: { severity: critical, impact: SERVICE }
-        annotations:
-          summary: "{{ $labels.hostname }}: log directory {{ $labels.logdirectory }} offline"
-          description: "Broker {{ $labels.hostname }} reports its log directory {{ $labels.logdirectory }} offline (disk error or full file system). Its partitions moved to other leaders; check dmesg, df -h and the broker log, then repair or replace the disk (guide 24.4)."
       # source: ours, EXAMPLE for the bank's host monitoring: needs node_exporter on the brokers (the bank's, not ours; the lab has none, so this rule never fires there).
       # Adjust mountpoint, job and threshold to the bank's node_exporter setup; the point is to page before the disk is full, not after.
       - alert: KafkaDataDiskFillingUp
@@ -13834,7 +13863,7 @@ echo "confluent-alerts-disk.yml: $(grep -c '^      - alert:' $rules_file) 條規
 ```
 
 ```out
-confluent-alerts-disk.yml: 2 條規則
+confluent-alerts-disk.yml: 1 條規則
 ```
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
@@ -13887,7 +13916,7 @@ echo "$status"
 ```
 
 ```out
-告警規則 27 條（cert-expiry、kafka-disk、confluent-availability、control-center、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
+告警規則 30 條（cert-expiry、kafka-disk、confluent-availability、control-center、host、jvm、kafka-broker、kraft、rest-proxy），載入有錯 0 條
 ```
 
 > lab 沒有 node_exporter，`KafkaDataDiskFillingUp` 的查詢永遠是空的，規則載入正常但不會響；`KafkaLogDirOffline` 的指標四台 broker 都有（24.1 查過是 0）。磁碟真的壞掉沒辦法在 lab 演，這一條靠規則載入與指標存在來確認。
@@ -18570,22 +18599,28 @@ alice 從 C3 登入：200
 
 最後用瀏覽器登入 C3 看一眼叢集總覽（lab：`https://localhost:19021`，alice）。
 
-# 32. 第三十二站：銀行沒有 Prometheus 時的 REST Proxy 告警
+# 32. 第三十二站：銀行沒有 Prometheus 時的告警
 
 ![c3alert]
 
-**這一章在做什麼**：銀行不一定提供 Prometheus、Alertmanager（第 17 章的前提）。沒有的話，REST Proxy 的監控與告警改走 C3 內建的 Prometheus，加上一個我們自己的第二個 Alertmanager，用行內規定的 JSON 格式送給 omnibus。前提：C3 已經是 2.6.1（29.3）。完成的樣子：C3 的 Prometheus 抓得到 REST Proxy 兩台的 7071；我們寫的規則只送第二個 Alertmanager；C3 畫面建的 trigger 只送 C3 內建的 Alertmanager；omnibus 收到的每個欄位都是字串。
+**這一章在做什麼**：銀行不一定提供 Prometheus、Alertmanager（第 17 章的前提）。沒有的話，告警改走 C3 內建的 Prometheus：它照第 17 章的方式抓 10 台的 7071（JMX exporter），套用**第 17 章同一份規則**（26 條），再由我們自己的第二個 Alertmanager 用行內規定的 JSON 格式送給 omnibus。前提：C3 已經是 2.6.1（29.3），第 17 章的 JMX exporter 與 17.5 的規則檔已經做好。完成的樣子：C3 的 Prometheus 抓得到 10 台；我們的規則只送第二個 Alertmanager；C3 畫面建的 trigger 只送 C3 內建的 Alertmanager；停一台 broker、一台 controller，omnibus 收到 OPEN 與 RESOLVED，每個欄位都是字串。
 
 | 來源 | 規則在哪 | 帶的 label | 送到哪 | 通知格式 |
 |---|---|---|---|---|
-| 我們寫的規則 | `custom-rules-rest.yml`（root，C3 改不動） | `target: omnibus`（規則群組層級統一加） | 第二個 Alertmanager（127.0.0.1:9193） | 行內 omnibus JSON |
+| 我們的規則（第 17 章那份） | `custom-rules-confluent.yml`（root，C3 改不動） | `target: omnibus`（規則群組層級統一加） | 第二個 Alertmanager（127.0.0.1:9193） | 行內 omnibus JSON |
 | C3 畫面的 trigger | `trigger_rules-generated.yml`（C3 自己寫） | `rule_created_by`，沒有 `target` | C3 內建 Alertmanager（9093） | C3 的 action（Alertmanager 預設格式） |
 
-**分流怎麼做**：Prometheus 的 `alerting.alertmanagers` 每一台可以有自己的 `alert_relabel_configs`。內建那台 `drop` 掉 `target=omnibus`，第二台只 `keep` `target=omnibus`。這是白名單：沒有這個 label 的告警不會送到 omnibus，所以之後有人在 C3 畫面建 trigger 也不會誤發。**忘了加 label 的規則不會有錯誤訊息，只是不會通知**，所以我們的規則都放進同一個規則群組，由群組的 `labels` 統一加上。
+**為什麼抓 JMX exporter，不用 C3 已經收到的 telemetry**（lab 實測）：telemetry 只帶 node id、沒有主機名稱；controller 幾乎沒有指標（raft 指標沒帶 node id，多台互撞被拒收）；REST Proxy 不送 telemetry；指標名稱（`io_confluent_…`）和官方規則（`kafka_…`）不同；C3 2.6.1 的 trigger 查詢裡也沒有 CPU 與磁碟。JMX exporter 第 17 章已經裝在 10 台上，job 名稱與 `env`、`hostname` 標籤照第 17 章，規則就能原封不動套用；兩邊的指標名稱不同，不會互相干擾 C3 畫面。telemetry 照舊給 C3 畫面用。
+
+**只留需要的指標**：一台 broker 的 exporter 約 1.4 萬條序列，全收會壓到 C3 自己的 Prometheus。每個 job 用 `metric_relabel_configs` 只保留規則用得到的指標（lab：10 台合計約 1,000 條；C3 本身約 12 萬條）。以後規則用到新的指標，要把名稱加進對應 job 的清單，不然那條規則永遠沒有資料（不會有錯誤訊息）。
+
+**分流怎麼做**：Prometheus 的 `alerting.alertmanagers` 每一台可以有自己的 `alert_relabel_configs`。內建那台 `drop` 掉 `target=omnibus`，第二台只 `keep` `target=omnibus`。這是白名單：沒有這個 label 的告警不會送到 omnibus，所以之後有人在 C3 畫面建 trigger 也不會誤發。**忘了加 label 的規則不會有錯誤訊息，只是不會通知**，所以由每個規則群組的 `labels` 統一加上。
 
 > 版本前提（lab 實測）：第二個 Alertmanager 用 C3 2.6.1 內附的執行檔（0.34.0）。C3 2.5.1 內附的 0.32.2 會把 `payload` 算好的字串再當 YAML 解析一次：`a: b` 變物件、`123` 變數字、`true` 變布林、`007` 變 `7`，不符合行內格式，所以**基底的 2.5.1 階段不要開這個方案**，也不要在做完這一章之後把 C3 退回 2.5.x。
 
-> 原廠支援：原廠文件寫 C3 不支援客戶自管的 Prometheus、Alertmanager，也要求不要手動啟動內建的程序。這一章另外開一個程序、改 `prometheus-generated.yml`，上線前要問原廠。`origin`、`hostname`、`sub_origin` 的填法也還要銀行確認（請銀行確認事項 11.9）。
+> 原廠支援：原廠文件寫 C3 不支援客戶自管的 Prometheus、Alertmanager，也要求不要手動啟動內建的程序。這一章另外開一個程序、讓內建 Prometheus 多抓 10 台，上線前要問原廠。`origin`、`hostname` 的填法也還要銀行確認（請銀行確認事項 11.11）。防火牆：第 17 章 7071 只開給銀行的 Prometheus，這一章要請銀行網路團隊改開給 c3-01。
+
+> 單點：發告警的 Prometheus 和第二個 Alertmanager 都在 c3-01，c3-01 整台掛掉時所有告警都發不出來。請銀行的主機監控或 omnibus 端偵測 c3-01 是否還活著。
 
 ## 32.1 確認前提
 
@@ -18608,7 +18643,7 @@ alertmanager, version 0.34.0
 
 @role 小安 | ops02 | root
 
-設定檔、資料目錄、服務都是獨立的，C3 不會碰。只聽 127.0.0.1，叢集功能關掉（C3 內建的那台已經佔了 9094）。`group_by: ['...']` 讓每筆告警自成一個通知，一個 POST 一筆，符合行內的扁平格式。`toJson` 負責跳脫雙引號與換行。
+設定檔、資料目錄、服務都是獨立的，C3 不會碰。只聽 127.0.0.1，叢集功能關掉（C3 內建的那台已經佔了 9094）。`group_by: ['...']` 讓每筆告警自成一個通知，一個 POST 一筆，符合行內的扁平格式。`toJson` 負責跳脫雙引號與換行。`hostname`：主機層的告警（帶 `hostname` 標籤）填主機名；整個叢集的告警（例如 under-replicated、fenced broker，只有 `env`）填環境名稱。
 
 lab 的接收端是 `lab-mon-webhook`（17.6）；正式環境換成銀行給的 omnibus 位址。
 
@@ -18642,7 +18677,8 @@ receivers:
           "severity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
           "sub_origin": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
           "origin": "c3-embedded",
-          "hostname": {{ .CommonLabels.instance | toJson }},
+          "hostname": {{ if .CommonLabels.hostname }}{{ .CommonLabels.hostname | toJson }}
+          {{ else }}{{ .CommonLabels.env | toJson }}{{ end }},
           "sub_source": "PIB"}
 AM
 sudo chown root:confluent /etc/confluent/alertmanager-custom/alertmanager.yml
@@ -18679,41 +18715,37 @@ EOF
 alertmanager-custom active，版本 "version":"0.34.0"
 ```
 
-## 32.3 Prometheus：抓 REST Proxy、放規則、分流
+## 32.3 Prometheus：抓 10 台、放規則、分流
 
 @role 小安 | ops02 | root
 
-`prometheus-generated.yml` 是第 13 章我們自己寫的（root，C3 只能讀，**C3 不會改它**），RPM 從 2.5.1 升到 2.6.1 也沒有動它（lab 實測雜湊不變）。這裡比第 13 章多三段：`alert_relabel_configs`、第二台 Alertmanager、`rest-proxy` 抓取，再多一個規則檔。
-
-先放我們的規則（這一塊沒有輸出）：
+先把第 17 章的規則檔（17.5 產生的 `confluent-alerts.yml`）複製一份，每個規則群組加上 `target: omnibus`，放到 c3-01。規則只在第 17 章維護；改了規則就重做這一塊：
 
 ```bash
-# 在 c3-01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
-ssh c3-01.poc.lab bash -e -s <<'EOF'
-cd /etc/confluent-control-center
+# 1. 每個群組的 name 那一行後面加兩行（sed 的 a：在那一行之後加一行）：labels: 和 target: omnibus
+install -d ~/monitoring/c3-path
+rules_17=~/monitoring/to-bank/prometheus/confluent-alerts.yml
+rules_c3=~/monitoring/c3-path/custom-rules-confluent.yml
+sed -e '/^  - name: /a\    labels:' -e '/^  - name: /a\      target: omnibus' $rules_17 > $rules_c3
 
-# 規則：群組的 labels 統一加 target: omnibus，這個群組裡的規則都送第二台
-sudo tee custom-rules-rest.yml > /dev/null <<'RULES'
-groups:
-  - name: rest-proxy
-    labels:
-      target: omnibus
-    rules:
-      - alert: C3RestProxyDown
-        expr: up{job="rest-proxy"} == 0
-        for: 1m
-        labels: { severity: critical, impact: SERVICE }
-        annotations:
-          summary: "REST Proxy {{ $labels.instance }} is down"
-          description: 'REST Proxy {{ $labels.instance }} stopped: check the service'
-RULES
+# 2. 三個數字要對得上：群組數、帶 target 的群組數，以及規則數（和 17.5 一樣）
+groups=$(grep -c '^  - name:' $rules_c3)
+targets=$(grep -c 'target: omnibus' $rules_c3)
+rules=$(grep -c '^      - alert:' $rules_c3)
+echo "群組 $groups，帶 target $targets，規則 $rules"
 
-sudo chown root:confluent custom-rules-rest.yml
-sudo chmod 0640 custom-rules-rest.yml
-EOF
+# 3. 放到 c3-01（root 擁有，C3 只能讀）
+dest=/etc/confluent-control-center/custom-rules-confluent.yml
+scp -q $rules_c3 c3-01.poc.lab:/tmp/custom-rules-confluent.yml
+ssh c3-01.poc.lab sudo install -o root -g confluent -m 0640 /tmp/custom-rules-confluent.yml $dest
+ssh c3-01.poc.lab rm /tmp/custom-rules-confluent.yml
 ```
 
-再寫 Prometheus 設定、重啟：
+```out
+群組 7，帶 target 7，規則 26
+```
+
+再寫 Prometheus 設定。`prometheus-generated.yml` 是第 13 章我們自己寫的（root，C3 只能讀，**C3 不會改它**），RPM 從 2.5.1 升到 2.6.1 也沒有動它（lab 實測雜湊不變）。這裡比第 13 章多：兩台 Alertmanager 的分流、4 個抓取 job（名稱、`env`、`hostname` 照 17.5 的 `scrape-confluent.yml`；`env` 用同一個環境名）、我們的規則檔。每個 job 的 `metric_relabel_configs`：一類指標一段，符合的打上暫時的標記 `__tmp_keep`，最後只留有標記的，再把標記拿掉：
 
 ```bash
 # 在 c3-01 執行 EOF 之前的那一段（bash -e：任何一行失敗就停）
@@ -18750,14 +18782,165 @@ alerting:
 rule_files:
   - "recording_rules-generated.yml"
   - "trigger_rules-generated.yml"
-  - "custom-rules-rest.yml"
+  - "custom-rules-confluent.yml"
 scrape_configs:
+  - job_name: kafka-controller
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config:
+      ca_file: /etc/confluent/ssl/ca.pem
+    static_configs:
+      - targets: ["kc01.poc.lab:7071", "kc02.poc.lab:7071", "kc03.poc.lab:7071"]
+        labels: { env: lab }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_controller_kafkacontroller_(activecontrollercount|offlinepartitionscount|fencedbrokercount)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_controller_kafkacontroller_(lastappliedrecordlagms|metadataerrorcount|newactivecontrollerscount)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_controller_controllerstats_uncleanleaderelectionspersec'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_server_kafkaserver_linux_system_cpu_utilization_1m'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
+  - job_name: kafka-broker
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config:
+      ca_file: /etc/confluent/ssl/ca.pem
+    static_configs:
+      - targets: ["kb01.poc.lab:7071", "kb02.poc.lab:7071", "kb03.poc.lab:7071", "kb04.poc.lab:7071"]
+        labels: { env: lab }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_server_replicamanager_(underreplicatedpartitions|isrshrinkspersec|isrexpandspersec)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_cluster_partition_underminisr|kafka_log_logmanager_logdirectoryoffline'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_network_socketserver_networkprocessoravgidlepercent'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      # Produce 的延遲與請求數：只留 request="Produce"（其他請求種類丟掉）
+      - source_labels: [__name__, request]
+        regex: 'kafka_network_requestmetrics_(totaltimems|requestspersec);Produce'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_server_kafkaserver_linux_system_cpu_utilization_1m'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
   - job_name: rest-proxy
     scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config:
       ca_file: /etc/confluent/ssl/ca.pem
     static_configs:
       - targets: ["rest01.poc.lab:7071", "rest02.poc.lab:7071"]
+        labels: { env: lab }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_rest_jersey_metrics_.*_request_error_rate|kafka_rest_jetty_metrics_thread_pool_usage'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
+  - job_name: control-center
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config:
+      ca_file: /etc/confluent/ssl/ca.pem
+    static_configs:
+      - targets: ["c3-01.poc.lab:7071"]
+        labels: { env: lab }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_metrics_(client_state|failed_stream_threads)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_thread_metrics_poll_rate'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_state_metrics_background_errors'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_task_metrics_dropped_records_rate'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
 otlp:
   promote_resource_attributes:
     - "host.hostname"
@@ -18784,202 +18967,170 @@ EOF
 prometheus active
 ```
 
-確認 Prometheus 抓到兩台 REST、連著兩台 Alertmanager（C3 內建的 Prometheus 要求 client 憑證，從操作機用 svc-ops 的）：
+確認 10 台都抓到、每個 job 留下的序列數、規則全部載入、連著兩台 Alertmanager（C3 內建的 Prometheus 要求 client 憑證，從操作機用 svc-ops 的）。剛載入的規則 health 是 unknown，要等過一次 evaluation（60 秒）才變 ok：
 
 ```bash
-# 1. 等兩台 REST 都抓到（抓取間隔 60 秒，最多等 3 分鐘）
-#    回應裡有 "value":[時間,"2"]，取出引號裡的 2
+prom=https://c3-01.poc.lab:9090/api/v1
+jobs='job=~"kafka-controller|kafka-broker|rest-proxy|control-center"'
+
+# 1. 等 10 台都抓到（抓取間隔 30 秒，最多等 3 分鐘）：回應裡有 "value":[時間,"10"]，取出引號裡的數字
 for i in $(seq 1 18); do
-  up=$(curl -s -m 10 \
-    --cert ~/pki/certs/svc-ops.crt \
-    --key ~/pki/keys/svc-ops.key \
-    -G https://c3-01.poc.lab:9090/api/v1/query \
-    --data-urlencode 'query=sum(up{job="rest-proxy"})' \
+  up=$(curl -s -m 10 --cert ~/pki/certs/svc-ops.crt --key ~/pki/keys/svc-ops.key \
+    -G $prom/query --data-urlencode "query=count(up{$jobs} == 1)" \
     | grep -o '"value":\[[^]]*\]' | cut -d'"' -f4)
 
-  if [ "$up" = 2 ]; then
+  if [ "$up" = 10 ]; then
     break
   fi
 
   sleep 10
 done
 
-echo "REST Proxy 抓到 $up 台"
+echo "抓到 $up / 10 台"
 
-# 2. Prometheus 連著兩台 Alertmanager
-curl -s -m 10 \
-  --cert ~/pki/certs/svc-ops.crt \
-  --key ~/pki/keys/svc-ops.key \
-  https://c3-01.poc.lab:9090/api/v1/alertmanagers | grep -o '"url":"[^"]*"' | sed 's/"url"://'
+# 2. 每個 job 留下幾條序列：回應裡的 "job":"x"},"value":[時間,"n"] 印成「x n」
+series=$(curl -s -m 10 --cert ~/pki/certs/svc-ops.crt --key ~/pki/keys/svc-ops.key \
+  -G $prom/query --data-urlencode "query=count by (job) ({$jobs})" \
+  | grep -o '"job":"[^"]*"},"value":\[[^]]*\]' | sed 's/"job":"//; s/"},"value":\[[0-9.]*,"/ /; s/"\]//')
+echo "$series" | sort
+
+# 3. 規則：等全部 health 都是 ok（最多等 2 分鐘），印告警規則數與不是 ok 的數目
+for i in $(seq 1 12); do
+  rules=$(curl -s -m 10 --cert ~/pki/certs/svc-ops.crt --key ~/pki/keys/svc-ops.key $prom/rules)
+  alerting=$(echo "$rules" | grep -o '"type":"alerting"' | wc -l)
+  # health 的總數減掉 ok 的數目（grep -c 數到 0 時結束碼是 1，不用它）
+  health_all=$(echo "$rules" | grep -o '"health":"[a-z]*"' | wc -l)
+  health_ok=$(echo "$rules" | grep -o '"health":"ok"' | wc -l)
+  not_ok=$((health_all - health_ok))
+
+  if [ "$not_ok" = 0 ]; then
+    break
+  fi
+
+  sleep 10
+done
+
+echo "告警規則 $alerting 條，health 不是 ok 的 $not_ok 條"
+
+# 4. Prometheus 連著兩台 Alertmanager（排序後印，順序才固定）
+urls=$(curl -s -m 10 --cert ~/pki/certs/svc-ops.crt --key ~/pki/keys/svc-ops.key \
+  $prom/alertmanagers | grep -o '"url":"[^"]*"' | sed 's/"url"://')
+echo "$urls" | sort
 ```
 
 ```out
-REST Proxy 抓到 2 台
-"https://c3-01.poc.lab:9093/api/v2/alerts"
+抓到 10 / 10 台
+control-center 61
+kafka-broker 712
+kafka-controller 60
+rest-proxy 188
+告警規則 26 條，health 不是 ok 的 0 條
 "http://127.0.0.1:9193/api/v2/alerts"
+"https://c3-01.poc.lab:9093/api/v2/alerts"
 ```
 
-## 32.4 測告警：真的停一台 REST Proxy
+序列數隨 topic、partition 數與 REST endpoint 數變化（broker 的 `kafka_cluster_partition_underminisr` 每個 partition 一條）；重點是合計在千條左右，不是一台上萬條。
 
-先把 rest01 從負載平衡拿掉，應用程式就不受影響。
+## 32.4 測告警：停一台 broker、一台 controller
 
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest01 down
-```
-
-```out
-LB：rest01（停用） rest02
-```
+同時停 kb04 與 kc03：其他 3 台 broker、2 台 controller 撐著，應用程式不受影響（replication factor 3、`min.insync.replicas` 2）。預期 4 筆告警：`ConfluentTargetDown` 兩台各一筆（2 分鐘），`KafkaUnderReplicatedPartitions` 與 `KafkaFencedBrokers`（5 分鐘）。
 
 @role 小安 | ops02 | root
 
 ```bash
-ssh rest01.poc.lab sudo systemctl stop confluent-kafka-rest
-
-# 等第二台收到（抓取 60 秒＋規則 for 1m，通常 2–3 分鐘，最多等 5 分鐘）
-# 兩台 Alertmanager 各有哪些告警（9093 只開給本機、要 client 憑證，所以到 c3-01 上問；執行 EOF 之前的那一段）
-for i in $(seq 1 30); do
-  result=$(ssh c3-01.poc.lab bash -s <<'EOF'
-# 第二台：告警名稱去重複，多個用逗號接起來
-names=$(curl -s -m 5 127.0.0.1:9193/api/v2/alerts | grep -o '"alertname":"[^"]*"' | sed 's/"alertname"://')
-second=$(echo "$names" | sort -u | paste -sd, -)
-
-# 內建那台：同樣的做法
-names=$(sudo curl -s -m 5 \
-  --cacert /etc/confluent/ssl/ca.pem \
-  --cert /etc/confluent/ssl/svc-c3.crt \
-  --key /etc/confluent/ssl/svc-c3.key \
-  https://c3-01.poc.lab:9093/api/v2/alerts | grep -o '"alertname":"[^"]*"' | sed 's/"alertname"://')
-builtin=$(echo "$names" | sort -u | paste -sd, -)
-
-echo "第二台=[$second] 內建=[$builtin]"
-EOF
-  )
-
-  if echo "$result" | grep -q 'C3RestProxyDown'; then
-    break
-  fi
-
-  sleep 10
-done
-
-echo "$result"
+ssh kb04.poc.lab sudo systemctl stop confluent-server
+ssh kc03.poc.lab sudo systemctl stop confluent-server
 ```
-
-```out
-第二台=["C3RestProxyDown"] 內建=[]
-```
-
-C3 內建那台沒有收到，第二台有收到，分流正確。接收端看到的內容：
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
+接收端看到的內容（抓取＋規則 `for`，最多等 10 分鐘）：
+
 ```bash
-# Python（在 lab-node:96 裡跑）：收到的每筆 JSON 印一行：狀態、sub_origin、msg，以及是不是每個欄位都是字串
+# Python（在 lab-node:96 裡跑）：收到的每筆 JSON 印一行（排序過）：狀態、sub_origin、hostname，以及是不是每個欄位都是字串
 py='
 import json, sys
+lines = []
 for line in sys.stdin:
     d = json.loads(line)
     strings = all(isinstance(v, str) for v in d.values())
-    kind = "個，全部字串" if strings else "個，有非字串"
-    print(d["state"], d["sub_origin"], d["msg"], "欄位 %d %s" % (len(d), kind), sep=" | ")
+    kind = "全部字串" if strings else "有非字串"
+    lines.append("%s | %s | %s | 欄位 %d 個，%s" % (d["state"], d["sub_origin"], d["hostname"], len(d), kind))  # lint-ok: Python 字串裡的 |
+print("\n".join(sorted(lines)))
 '
+names='ConfluentTargetDown|KafkaUnderReplicatedPartitions|KafkaFencedBrokers'
 
-# 等 OPEN（最多 1 分鐘）
-for i in $(seq 1 12); do
-  # 接收端日誌裡的 C3RestProxyDown，去掉 { 之前的字，只留 JSON
-  json=$(podman logs lab-mon-webhook 2>&1 | grep '^POST /c3-omnibus.*C3RestProxyDown' | sed 's/^[^{]*//')
+# 等 4 筆 OPEN：每 15 秒看一次，最多 40 次
+for i in $(seq 1 40); do
+  # 接收端日誌裡這三種告警，去掉 { 之前的字，只留 JSON
+  json=$(podman logs lab-mon-webhook 2>&1 | grep -E "^POST /c3-omnibus.*($names)" | sed 's/^[^{]*//')
 
   # 用 printf 不多加換行：還沒有資料時，Python 讀到的就是空的
   result=$(printf '%s' "$json" | podman run --rm -i lab-node:96 python3 -c "$py")
 
-  if echo "$result" | grep -q '^OPEN'; then
+  if [ "$(echo "$result" | grep -c '^OPEN')" -ge 4 ]; then
     break
   fi
 
-  sleep 5
+  sleep 15
 done
 
 echo "$result"
 ```
 
 ```out
-OPEN | C3RestProxyDown: REST Proxy rest01.poc.lab:7071 is down | REST Proxy rest01.poc.lab:7071 stopped: check the service | 欄位 10 個，全部字串
+OPEN | ConfluentTargetDown: kb04.poc.lab (kafka-broker) cannot be scraped | kb04.poc.lab | 欄位 10 個，全部字串
+OPEN | ConfluentTargetDown: kc03.poc.lab (kafka-controller) cannot be scraped | kc03.poc.lab | 欄位 10 個，全部字串
+OPEN | KafkaFencedBrokers: lab: 1 fenced brokers | lab | 欄位 10 個，全部字串
+OPEN | KafkaUnderReplicatedPartitions: lab: 43 under-replicated partitions | lab | 欄位 10 個，全部字串
 ```
+
+主機層的告警 `hostname` 是主機名；叢集層級的填環境名稱 `lab`。
 
 @role 小安 | ops02 | root
 
-開回來，確認 REST 正常：
+開回來：
 
 ```bash
-ssh rest01.poc.lab sudo systemctl start confluent-kafka-rest
-
-# 帶應用程式憑證打 rest01：每 5 秒看一次，最多 24 次
-for i in $(seq 1 24); do
-  if [ "$(curl -s -o /dev/null -m 10 -w '%{http_code}' \
-    --cert ~/pki/certs/app-legacy-billing.crt \
-    --key ~/pki/keys/app-legacy-billing.key \
-    https://rest01.poc.lab:8082/v3/clusters)" = 200 ]; then
-    break
-  fi
-
-  sleep 5
-done
-
-echo "rest01 REST $(curl -s -o /dev/null -m 10 -w '%{http_code}' \
-  --cert ~/pki/certs/app-legacy-billing.crt \
-  --key ~/pki/keys/app-legacy-billing.key \
-  https://rest01.poc.lab:8082/v3/clusters)"
+ssh kc03.poc.lab sudo systemctl start confluent-server
+ssh kb04.poc.lab sudo systemctl start confluent-server
+kc03_state=$(ssh kc03.poc.lab systemctl is-active confluent-server)
+kb04_state=$(ssh kb04.poc.lab systemctl is-active confluent-server)
+echo "kc03 $kc03_state，kb04 $kb04_state"
 ```
 
 ```out
-rest01 REST 200
-```
-
-@role 銀行 網路團隊（LB；lab 由 Lab 管理員扮演） | Windows 終端 | 本機
-
-```bash
-bash ~/kafka-lab/lb-member.sh rest01 up
-```
-
-```out
-LB：rest01 rest02
+kc03 active，kb04 active
 ```
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-```bash
-# Python（在 lab-node:96 裡跑）：收到的每筆 JSON 印一行：狀態、sub_origin，以及是不是每個欄位都是字串
-py='
-import json, sys
-for line in sys.stdin:
-    d = json.loads(line)
-    strings = all(isinstance(v, str) for v in d.values())
-    kind = "個，全部字串" if strings else "個，有非字串"
-    print(d["state"], d["sub_origin"], "欄位 %d %s" % (len(d), kind), sep=" | ")
-'
+等 4 筆 RESOLVED（exporter 在服務啟動後約 2 分鐘才回應，加上規則與通知間隔，最多等 10 分鐘）。`py`、`names` 沿用上一塊：
 
-# 等 RESOLVED（下一次抓取加上通知間隔，最多等 3 分鐘）
-for i in $(seq 1 36); do
-  json=$(podman logs lab-mon-webhook 2>&1 | grep '^POST /c3-omnibus.*C3RestProxyDown' | sed 's/^[^{]*//')
+```bash
+# 每 15 秒看一次，最多 40 次
+for i in $(seq 1 40); do
+  json=$(podman logs lab-mon-webhook 2>&1 | grep -E "^POST /c3-omnibus.*($names)" | sed 's/^[^{]*//')
   result=$(printf '%s' "$json" | podman run --rm -i lab-node:96 python3 -c "$py")
 
-  if echo "$result" | grep -q '^RESOLVED'; then
+  if [ "$(echo "$result" | grep -c '^RESOLVED')" -ge 4 ]; then
     break
   fi
 
-  sleep 5
+  sleep 15
 done
 
-echo "$result"
+echo "$result" | grep '^RESOLVED'
 ```
 
 ```out
-OPEN | C3RestProxyDown: REST Proxy rest01.poc.lab:7071 is down | 欄位 10 個，全部字串
-RESOLVED | C3RestProxyDown: REST Proxy rest01.poc.lab:7071 is down | 欄位 10 個，全部字串
+RESOLVED | ConfluentTargetDown: kb04.poc.lab (kafka-broker) cannot be scraped | kb04.poc.lab | 欄位 10 個，全部字串
+RESOLVED | ConfluentTargetDown: kc03.poc.lab (kafka-controller) cannot be scraped | kc03.poc.lab | 欄位 10 個，全部字串
+RESOLVED | KafkaFencedBrokers: lab: 1 fenced brokers | lab | 欄位 10 個，全部字串
+RESOLVED | KafkaUnderReplicatedPartitions: lab: 43 under-replicated partitions | lab | 欄位 10 個，全部字串
 ```
+
+REST Proxy 停掉一樣由 `ConfluentTargetDown` 通知（job `rest-proxy`）；要測的話先把那台從負載平衡拿掉（`lb-member.sh rest01 down`）。
 
 ## 32.5 C3 畫面的 trigger 不會進 omnibus
 
@@ -19021,7 +19172,7 @@ guid=$(echo "$guids" | tail -1)
 for i in $(seq 1 18); do
   result=$(ssh c3-01.poc.lab bash -s <<'EOF'
 # 第二台：告警名稱去重複，多個用逗號接起來
-names=$(curl -s -m 5 127.0.0.1:9193/api/v2/alerts | grep -o '"alertname":"chapter32-test' | sed 's/"alertname"://')
+names=$(curl -s -m 5 127.0.0.1:9193/api/v2/alerts | grep -o '"alertname":"chapter32-test"' | sed 's/"alertname"://')
 second=$(echo "$names" | sort -u | paste -sd, -)
 
 # 內建那台：同樣的做法
@@ -19029,7 +19180,7 @@ names=$(sudo curl -s -m 5 \
   --cacert /etc/confluent/ssl/ca.pem \
   --cert /etc/confluent/ssl/svc-c3.crt \
   --key /etc/confluent/ssl/svc-c3.key \
-  https://c3-01.poc.lab:9093/api/v2/alerts | grep -o '"alertname":"chapter32-test' | sed 's/"alertname"://')
+  https://c3-01.poc.lab:9093/api/v2/alerts | grep -o '"alertname":"chapter32-test"' | sed 's/"alertname"://')
 builtin=$(echo "$names" | sort -u | paste -sd, -)
 
 echo "第二台=[$second] 內建=[$builtin]"
@@ -19047,7 +19198,7 @@ echo "$result"
 ```
 
 ```out
-第二台=[] 內建=["chapter32-test]
+第二台=[] 內建=["chapter32-test"]
 ```
 
 只到內建那台。把 trigger 刪掉，再確認 C3 沒有動到我們的檔：
@@ -19061,14 +19212,14 @@ unset token auth alice_pass
 # 2. C3 沒有動到我們的檔
 ssh c3-01.poc.lab bash -s <<'EOF'
 cd /etc/confluent-control-center
-sudo stat -c "%n %U" prometheus-generated.yml custom-rules-rest.yml
+sudo stat -c "%n %U" prometheus-generated.yml custom-rules-confluent.yml
 EOF
 ```
 
 ```out
 刪除 trigger：200
 prometheus-generated.yml root
-custom-rules-rest.yml root
+custom-rules-confluent.yml root
 ```
 
 > 實測（C3 2.6.1）：C3 的 trigger 帶 `rule_created_by: c3-10`、沒有 `target`；如果也建了 action，通知由內建 Alertmanager 送出，內容是 Alertmanager 預設格式，C3 不能自訂 JSON（第 17 章開頭）。要讓某個 C3 trigger 也進 omnibus，C3 自己寫的規則檔不能手改（會被蓋掉），要改用我們的規則寫一條等價的。
@@ -19077,11 +19228,12 @@ custom-rules-rest.yml root
 
 | 情況 | 要做什麼 |
 |---|---|
-| 新增要通知 omnibus 的告警 | 放進 `custom-rules-rest.yml` 的同一個群組，`sudo systemctl restart prometheus`；不用逐條加 `target` |
+| 新增或調整告警 | 改第 17 章的規則檔（17.5），重做 32.3 第一塊，`sudo systemctl restart prometheus`；規則用到新的指標時，把名稱加進 `prometheus-generated.yml` 對應 job 的保留清單 |
+| 新增、移除主機（第 25、31 章） | 改 `prometheus-generated.yml` 的 targets，`sudo systemctl restart prometheus` |
 | 升級 C3（29.3、31.4） | `c3-change.sh` 不會動這些檔（lab 實測雜湊不變）；第二台用內附的執行檔，換完 `sudo systemctl restart alertmanager-custom`，並用 32.4 再測一次 |
-| 換憑證（第 21 章） | 第二台只聽 127.0.0.1、走 HTTP，沒有憑證；不用處理 |
+| 換憑證（第 21 章） | 第二台只聽 127.0.0.1、走 HTTP，沒有憑證；抓 7071 只驗伺服器憑證（銀行根憑證不變就不用處理） |
 | omnibus 位址或認證改了 | 改 `alertmanager.yml`，`sudo systemctl restart alertmanager-custom`；要認證時加 `http_config` |
-| 銀行之後提供了 Prometheus | 第 17 章的做法可以並存；同一個告警不要兩邊都送 omnibus |
+| 銀行之後提供了 Prometheus | 改走第 17 章；同一個告警不要兩邊都送 omnibus（把 `rule_files` 的 `custom-rules-confluent.yml` 拿掉） |
 
 # B. 附錄 B：監控的覆蓋率，與 lab 監控容器的收尾
 

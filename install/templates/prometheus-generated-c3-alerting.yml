@@ -1,3 +1,6 @@
+# C3 embedded Prometheus for the path without a bank Prometheus (guide, chapter 32.3), rendered by steps/32-c3-alerting.sh.
+# Scrapes the same four JMX exporter jobs as the bank Prometheus (chapter 17, same job names and env/hostname labels),
+# keeps only the metrics the rules use (metric_relabel_configs), loads custom-rules-confluent.yml and splits alerts by the target label.
 global:
   scrape_interval: 60s
   evaluation_interval: 60s
@@ -26,16 +29,173 @@ alerting:
 rule_files:
   - "recording_rules-generated.yml"
   - "trigger_rules-generated.yml"
-  - "custom-rules-rest.yml"
+  - "custom-rules-confluent.yml"
 scrape_configs:
-  - job_name: rest-proxy
+  - job_name: kafka-controller
     scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
     tls_config:
       ca_file: /etc/confluent/ssl/ca.pem
     static_configs:
-      - targets: [${REST_SCRAPE_TARGETS}]
+      - targets: [${CONTROLLER_TARGETS}]
+        labels: { env: ${ENV_LABEL} }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_controller_kafkacontroller_(activecontrollercount|offlinepartitionscount|fencedbrokercount)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_controller_kafkacontroller_(lastappliedrecordlagms|metadataerrorcount|newactivecontrollerscount)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_controller_controllerstats_uncleanleaderelectionspersec'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_server_kafkaserver_linux_system_cpu_utilization_1m'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
+  - job_name: kafka-broker
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config:
+      ca_file: /etc/confluent/ssl/ca.pem
+    static_configs:
+      - targets: [${BROKER_TARGETS}]
+        labels: { env: ${ENV_LABEL} }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_server_replicamanager_(underreplicatedpartitions|isrshrinkspersec|isrexpandspersec)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_cluster_partition_underminisr|kafka_log_logmanager_logdirectoryoffline'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_network_socketserver_networkprocessoravgidlepercent'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      # Produce 的延遲與請求數：只留 request="Produce"（其他請求種類丟掉）
+      - source_labels: [__name__, request]
+        regex: 'kafka_network_requestmetrics_(totaltimems|requestspersec);Produce'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_server_kafkaserver_linux_system_cpu_utilization_1m'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
+  - job_name: rest-proxy
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config:
+      ca_file: /etc/confluent/ssl/ca.pem
+    static_configs:
+      - targets: [${REST_TARGETS}]
+        labels: { env: ${ENV_LABEL} }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_rest_jersey_metrics_.*_request_error_rate|kafka_rest_jetty_metrics_thread_pool_usage'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
+  - job_name: control-center
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    tls_config:
+      ca_file: /etc/confluent/ssl/ca.pem
+    static_configs:
+      - targets: [${C3_TARGETS}]
+        labels: { env: ${ENV_LABEL} }
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(:[0-9]+)?'
+        target_label: hostname
+        replacement: '$1'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_metrics_(client_state|failed_stream_threads)'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_thread_metrics_poll_rate'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_state_metrics_background_errors'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'kafka_streams_stream_task_metrics_dropped_records_rate'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__name__]
+        regex: 'jvm_memory_(used|max)_bytes|jvm_threads_deadlocked|process_(open|max)_fds'
+        target_label: __tmp_keep
+        replacement: 'yes'
+      - source_labels: [__tmp_keep]
+        regex: 'yes'
+        action: keep
+      - regex: __tmp_keep
+        action: labeldrop
 otlp:
-  promote_resource_attributes: ["host.hostname", "java.version", "kafka.broker.id", "kafka.cluster.id", "kafka.version", "type"]
+  promote_resource_attributes:
+    - "host.hostname"
+    - "java.version"
+    - "kafka.broker.id"
+    - "kafka.cluster.id"
+    - "kafka.version"
+    - "type"
 storage:
   tsdb:
     out_of_order_time_window: 10m

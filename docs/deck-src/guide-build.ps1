@@ -258,6 +258,40 @@ function FillTable($slide, $item, [int]$color, [int]$number) {
   }
 }
 
+# Configuration excerpt: file name and a dark monospace box on the left, cards on the right
+function FillCode($slide, $item, [int]$color, [int]$number) {
+  $codeWidth = 560
+  $caption = NewText $slide $LEFT $TOP $codeWidth 18 $item.codeFile 12 $BODY $true "File"
+  $boxTop = $TOP + 24
+  $box = $slide.Shapes.AddShape(5, $LEFT, $boxTop, $codeWidth, ($BOTTOM - $boxTop))
+  $box.Name = "Code"
+  $box.Adjustments.Item(1) = 0.02
+  $box.Fill.ForeColor.RGB = $INK
+  $box.Line.Visible = 0
+  $box.Shadow.Visible = 0
+  $frame = $box.TextFrame
+  $frame.WordWrap = 0
+  $frame.AutoSize = 0
+  $frame.MarginLeft = 14; $frame.MarginRight = 10; $frame.MarginTop = 10; $frame.MarginBottom = 10
+  $frame.VerticalAnchor = 1
+  $frame.TextRange.Text = ($item.code -replace "`n", "`r")
+  $frame.TextRange.ParagraphFormat.Alignment = 1
+  $frame.TextRange.ParagraphFormat.SpaceWithin = 1.0
+  $frame.TextRange.Font.Name = "Consolas"
+  $frame.TextRange.Font.NameFarEast = $FONT
+  $frame.TextRange.Font.Size = 11
+  $frame.TextRange.Font.Bold = 0
+  $frame.TextRange.Font.Color.RGB = (Rgb "E5E7EB")
+  if (([double]$frame.TextRange.BoundHeight + 20) -gt ($BOTTOM - $boxTop)) {
+    Warn $number ("code needs " + [int]([double]$frame.TextRange.BoundHeight + 20) + " of " + [int]($BOTTOM - $boxTop))
+  }
+  if (([double]$frame.TextRange.BoundWidth + 24) -gt $codeWidth) {
+    Warn $number ("code is " + [int]([double]$frame.TextRange.BoundWidth + 24) + " wide of " + $codeWidth)
+  }
+  $x = $LEFT + $codeWidth + $GAP
+  [void](StackCards $slide $x $TOP ($WIDTH - $codeWidth - $GAP) @($item.blocks) $color $number)
+}
+
 function FillContents($slide, $item) {
   $rows = @($item.rows)
   $heights = @(178, 108, 72)
@@ -365,6 +399,8 @@ try {
           FillContents $slide $item
         } elseif ($item.file) {
           FillDiagram $slide $item $color $number
+        } elseif ($item.code) {
+          FillCode $slide $item $color $number
         } elseif ($item.table) {
           FillTable $slide $item $color $number
         } elseif ($item.flow) {

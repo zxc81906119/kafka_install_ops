@@ -264,11 +264,11 @@ const MIGRATE = [
     ["什麼時候用", "C3 的版號獨立，改版比平台頻繁；出修補版或原廠要求時單獨處理。"],
     ["正式環境", "把版號換成新版，跳過回滾演練。"],
   ], notes: "手冊第 31 章。" },
-  { ch: "第 32 章", title: "沒有行內 Prometheus 時的 REST Proxy 告警", diagram: "c3alert", blocks: [
-    ["在做什麼", "C3 內建的 Prometheus 多抓 REST Proxy 的指標，我們的規則加上標籤，只送到另一台 Alertmanager，再發行內 omnibus 的 JSON。"],
+  { ch: "第 32 章", title: "沒有行內 Prometheus 時的告警", diagram: "c3alert", blocks: [
+    ["在做什麼", "C3 內建的 Prometheus 抓 10 台的 JMX exporter，套第 17 章同一份規則（加上標籤），只送到另一台 Alertmanager，再發行內 omnibus 的 JSON。"],
     ["不會誤發", "C3 畫面建的 trigger 沒有這個標籤，只會到內建那台，不會進 omnibus。"],
     ["前提", "C3 升到 2.6.1 之後才做；2.5.1 附的 Alertmanager 會把字串欄位改成物件或數字。"],
-  ], notes: "銀行有 Prometheus 時走第 17 章；兩章可以並存。lab 實測停一台 REST Proxy 有 OPEN 與 RESOLVED，10 個欄位都是字串。" },
+  ], notes: "銀行有 Prometheus 時走第 17 章，兩條路徑用同一份 26 條規則。只留規則用得到的指標（約 1,000 條），不壓到 C3。lab 實測停一台 broker、一台 controller，4 筆告警都有 OPEN 與 RESOLVED，10 個欄位都是字串。" },
 ];
 
 const CLOSING = { ch: "手冊現況", title: "手冊的驗證狀態與 lab 驗不到的部分", tiles: [
@@ -284,7 +284,7 @@ const CLOSING = { ch: "手冊現況", title: "手冊的驗證狀態與 lab 驗�
 const CONTENTS = [
   { part: "install", range: "第 2–19 章", desc: "從下載套件到交付驗收", items: "2 外網下載、3 送進銀行、4 主機存取、5 銀行準備、6 上架套件庫、7 主機準備、8 安裝套件、9 憑證、10 controller 與 broker、11 帳號與權限、12 REST Proxy、13 Control Center、14 基本驗收、15 Secret Protection、16 OP menu、17 監控、18 稽核日誌、19 驗收與收尾" },
   { part: "ops", range: "第 20–28 章", desc: "上線後的例行與異常處理", items: "20 密碼與金鑰輪替、21 憑證輪替、22 憑證到期監控、23 備份與還原、24 磁碟與容量、25 節點更換與增減、26 license、27 新應用上線、28 故障排查" },
-  { part: "migrate", range: "第 29–32 章", desc: "基底升到目標版本；C3 2.6.1 之後的告警", items: "29 遷移 Confluent 與 JDK、30 OS 修補與小版本更新、31 單獨更換 C3、32 銀行沒有 Prometheus 時的 REST Proxy 告警" },
+  { part: "migrate", range: "第 29–32 章", desc: "基底升到目標版本；C3 2.6.1 之後的告警", items: "29 遷移 Confluent 與 JDK、30 OS 修補與小版本更新、31 單獨更換 C3、32 銀行沒有 Prometheus 時的告警" },
 ];
 
 // Commands inside the manual's diagrams, reworded for this deck (the manual's own diagrams stay as they are).
@@ -299,7 +299,7 @@ const REWORD = {
   opmenuflow: [["執行 /opt/opmenu/opmenu.sh", "啟動選單"], ["用 /secure/ssh 的金鑰 ssh cpuser", "用同一把金鑰以 cpuser 連主機"], ["restart、status、journalctl -n 200", "重啟、看狀態、看日誌"]],
   migrationflow: [["dnf downgrade 回 8.2.4", "套件退回 8.2.4"], ["kafka-features upgrade", "升級 metadata 版本"], ["--release-version 4.3", "（目標 4.3）"]],
   controllerswap: [["--no-initial-", "以觀察者"], [">controllers<", ">格式化<"]],
-  c3alert: [["job: rest-proxy；prometheus-generated.yml", "多抓 REST Proxy 的指標"], ["custom-rules-rest.yml", "我方的告警規則"], ["trigger_rules-", "C3 畫面建的"], [">generated.yml<", "><"], ["alert_relabel_configs", "依標籤分流"], ["127.0.0.1:9193，C3 內附 0.34.0", "C3 內附的另一份"]],
+  c3alert: [["prometheus-generated.yml（root）", "設定檔由我們擁有"], ["trigger_rules-", "C3 畫面建的"], [">generated.yml<", "><"], ["alert_relabel_configs", "依標籤分流"], ["127.0.0.1:9193，C3 內附 0.34.0", "C3 內附的另一份"]],
   brokerscale: [["kafka-remove-brokers", "由 Self-Balancing 搬走"], ["--delete --broker-id 104", "（以 kb04 為例）"], ["--no-initial-controllers", "以觀察者格式化"]],
   backup: [["metadata-backup.sh", "每日匯出"]],
   ospatch: [["不要靠 dnf history undo", "不要靠套件回退"], ["dnf update 只動", "更新只動"], ["dnf update", "更新 OS 套件"], ["--refresh", "（重讀索引）"], ["正式：systemctl reboot", "正式：重開機"], [">needs-restarting<", ">判斷影響範圍<"], ["-r：要不要重開機", "要不要重開機"], ["-s：哪些服務要重啟", "哪些服務要重啟"]],

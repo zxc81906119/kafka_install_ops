@@ -1,23 +1,24 @@
 # Control Center: a Kafka Streams application (Confluent has no exporter rules for C3 itself).
 # Kafka Streams and RocksDB: Confluent's official kafka_streams.yml rules are appended below this head (same metric names as the
-# official kafka-stream.json / kafka-streams-rocksdb.json dashboards); only kafka.streams:* is collected, not C3's own consumers/producers.
+# official kafka-stream.json / kafka-streams-rocksdb.json dashboards); only kafka.streams:* is collected, not C3's own consumers/producers
+# (their lag would show screen delay, but costs many series) and not C3's Jetty beans (all 0 on C3 2.6.1, no error rate).
 # About 2,000 series in the lab (C3 2.6.1: 13 stream threads, 12 tasks, state stores AlertHistoryStore and commander).
 # Our rules come first (the exporter uses the first rule that matches):
-#   client-state, recording-level, thread-state: C3's stream-metrics and stream-thread-metrics beans also carry process-id; the official rules would put that UUID into the
+#   client-state, recording-level, alive-stream-threads, failed-stream-threads, thread-state: C3's stream-metrics and stream-thread-metrics beans also carry process-id;
+#     the official rules would put that UUID into the
 #     metric name (a new name after every restart), so they are named here: client-state 0 CREATED, 1 REBALANCING, 2 RUNNING,
 #     3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR; thread-state 4 RUNNING, 6 DEAD
+#     (and turn alive-/failed-stream-threads into a label, a new series whenever the number changes)
 #   stream-topic-metrics has four keys; the official rules would put processor-node-id into task_id
-#   Jetty: request rate and error rate in front of C3's UI and API
 lowercaseOutputName: true
 lowercaseOutputLabelNames: true
 startDelaySeconds: 0
 includeObjectNames:
   - "kafka.streams:*"
-  - "kafka.rest:type=jetty-metrics"
 excludeObjectNames:
   - "kafka.streams:type=kafka-metrics-count"
 rules:
-  - pattern: 'kafka.streams<type=stream-metrics.*client-id=([^,>]+).*><>(client-state|recording-level): (.+)'
+  - pattern: 'kafka.streams<type=stream-metrics.*client-id=([^,>]+).*><>(client-state|recording-level|alive-stream-threads|failed-stream-threads): (.+)'
     name: kafka_streams_stream_metrics_$2
     type: GAUGE
     labels: { client_id: "$1" }
@@ -29,6 +30,3 @@ rules:
     name: kafka_streams_stream_topic_metrics_$5
     type: GAUGE
     labels: { thread_id: "$1", task_id: "$2", processor_node_id: "$3", topic: "$4" }
-  - pattern: 'kafka.rest<type=jetty-metrics><>(request-rate|request-error-rate): (.+)'
-    name: kafka_rest_jetty_metrics_$1
-    type: GAUGE

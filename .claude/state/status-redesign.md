@@ -3,6 +3,8 @@
 Updated: 2026-11-06（指令可讀性整理完成並驗證：手冊從零全跑 0 失敗；腳本版第 1–35 段全部通過（中途兩次因記憶體不足的 WSL 狀況續跑）；文件與簡報已更新重建；全部未 commit）
 
 ## 現在在做什麼
+**第 32 章擴大完成（2026-11-07）**：告警規則統一成第 17 章一份 26 條，第 32 章 C3 Prometheus 抓 10 台 7071 套用同一份；C3 exporter 依 Kafka Streams 建議調整。手冊 17／24／32 章局部重跑、腳本 32／24 通過（log/2026-11-07-ch32-scope.md）。簡報 docs/Confluent-第32章-告警方案.pptx（24 張）、手冊導覽與兩份 docx 已重建。全部未 commit。之後交付前可整本從零再跑一次。
+
 腳本版（install/）照手冊寫法改寫完成並實跑通過（log/2026-11-02-scripts-readable.md）；手冊導覽簡報完成（docs/Confluent-手冊導覽.pptx）。全部未 commit，等使用者決定。待決定：30.4 順序腳本與手冊不同。
 
 手冊狀態：手冊版在 Podman 上逐章實跑＋逐章自檢（是否符合最終設計，不只指令對）**全部完成**：第 0–31 章與附錄 B（log/2026-10-31-podman-walkthrough.md 逐章紀錄）。沒有進行中的工作。
@@ -26,6 +28,7 @@ Updated: 2026-11-06（指令可讀性整理完成並驗證：手冊從零全跑 
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。
 
 ## 環境狀態
+- 2026-11-07 晚：lab 開著（8.3.2／C3 2.6.1，第 32 章新版已裝）；lab-mon-grafana／prometheus／alertmanager／blackbox 已停（需要時 17.6、22.2 會重建），webhook 開著；cbomlab 與 amazing_panini 在 wsl --shutdown 後沒有起來（不是我們的，沒動）。
 - 2026-11-06 14:00：lab 閒置（腳本版跑完，平台在 8.3.2／C3 2.6.1／JDK 25／OS 9.8，第 32 章告警已裝）；machine 開著。
 - lab：**使用者同意 Claude 實測（可破壞）**：8.2.4，第 12、13、17 章已跑、14–16 未做；kc／kb 已套 cn＋mapping＋filter；c3-01 留著 C3 Prometheus 測試設定（見 log/2026-11-03-lab-wiped.md 最後一段）。OP menu 交付物在 ~/opmenu-delivery。
 - machine 不自動開（使用者 11-01）：要用時自己 `podman machine start kafka-lab`，關機前 `podman machine stop kafka-lab`。Podman Desktop 的 engine autostart 已關（Start on login 還開著）。`~/kafka-lab/start-lab.ps1` 只當修復工具（compose 因孤兒 kafka-lab-api.sock 壞掉時手動跑），啟動捷徑已刪。WSL2 11 GB（.wslconfig）。絕不 `podman machine rm/reset kafka-lab`（volume `ops-secure`）。

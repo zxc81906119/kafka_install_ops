@@ -22,5 +22,6 @@ receivers:
           "severity": "{{ if eq .CommonLabels.severity "critical" }}ERROR{{ else }}PERFORMANCE{{ end }}",
           "sub_origin": {{ printf "%s: %s" .CommonLabels.alertname .CommonAnnotations.summary | toJson }},
           "origin": "c3-embedded",
-          "hostname": {{ .CommonLabels.instance | toJson }},
+          "hostname": {{ if .CommonLabels.hostname }}{{ .CommonLabels.hostname | toJson }}
+          {{ else }}{{ .CommonLabels.env | toJson }}{{ end }},
           "sub_source": "PIB"}

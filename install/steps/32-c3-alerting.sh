@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# 第 32 站：銀行沒有 Prometheus 時的 REST Proxy 告警 —— C3 內建 Prometheus 抓 REST Proxy，依 target label 分流，第二個 Alertmanager 送 omnibus
+# 第 32 站：銀行沒有 Prometheus 時的告警 —— C3 內建 Prometheus 抓 10 台的 7071、套第 17 站同一份規則，依 target label 分流，第二個 Alertmanager 送 omnibus
 # where: ops02 （root）
 # run: on-demand（不在安裝順序裡；C3 升到 2.6.1 之後才做，銀行有 Prometheus 時走第 17 站）
 #
 # 做什麼：
-#   bash steps/32-c3-alerting.sh install   32.2 第二個 Alertmanager；32.3 規則、Prometheus 設定（抓取、分流）
+#   bash steps/32-c3-alerting.sh install   32.2 第二個 Alertmanager；32.3 規則（第 17 站的檔加 target）、Prometheus 設定（抓 4 個 job、分流）
 #   bash steps/32-c3-alerting.sh test      暫時放兩條一定成立的規則：有 target 的只到第二台、沒有的只到內建，測完拿掉
-#   bash steps/32-c3-alerting.sh status    版本、服務、抓取、Alertmanager 清單
+#   bash steps/32-c3-alerting.sh status    版本、服務、抓取、規則數、Alertmanager 清單
 # 結束碼：0 成功；1 失敗
 #
-# 需要什麼：C3 2.6.1（內附 Alertmanager 0.34.0；2.5.1 內附的 0.32.2 會把字串欄位改成物件、數字）、第 17 站的 7071
+# 需要什麼：C3 2.6.1（內附 Alertmanager 0.34.0；2.5.1 內附的 0.32.2 會把字串欄位改成物件、數字）、第 17 站的 7071；c3-01 → 10 台 7071 的防火牆
 # 產出什麼：c3-01 的 /etc/confluent/alertmanager-custom/alertmanager.yml、alertmanager-custom.service、
-#           /etc/confluent-control-center/custom-rules-rest.yml、prometheus-generated.yml（多抓取與分流）
+#           /etc/confluent-control-center/custom-rules-confluent.yml（templates/confluent-alerts.yml 每個群組加 target: omnibus）、
+#           prometheus-generated.yml（4 個抓取 job，只留規則用得到的指標；分流）
 # 能不能重跑：可以。
 set -uo pipefail
 source "$(dirname "$0")/../conf/site.env"
@@ -59,14 +60,40 @@ prom_query() {
     --data-urlencode "query=$1"
 }
 
-# rest_targets_up：REST Proxy 抓到幾台
-rest_targets_up() {
+# JOBS：第 17 站的四個 job（PromQL 的 label 篩選）
+JOBS='job=~"kafka-controller|kafka-broker|rest-proxy|control-center"'
+
+# quoted_targets <主機…>："kc01.poc.lab:7071", "kc02.poc.lab:7071"（和第 17 站相同）
+quoted_targets() {
+  local host
+  for host in "$@"; do
+    printf '"%s:7071", ' "$(fqdn "$host")"
+  done | sed 's/, $//'
+}
+
+# targets_up：四個 job 裡 up == 1 的台數
+targets_up() {
   local reply
 
-  reply=$(prom_query 'sum(up{job="rest-proxy"})')
+  reply=$(prom_query "count(up{$JOBS} == 1)")
 
-  # 例：…"value":[1730000000.1,"2"]… → 2（以雙引號切開的第 4 欄）
+  # 例：…"value":[1730000000.1,"10"]… → 10（以雙引號切開的第 4 欄）
   echo "$reply" | grep -oE '"value":\[[^,]*,"[0-9]*"' | cut -d'"' -f4
+}
+
+# rules_summary：告警規則數與 health 不是 ok 的數目，以空白分隔
+#   health 的總數減掉 ok 的數目（grep -c 數到 0 時結束碼是 1，不用它）
+rules_summary() {
+  local reply alerting health_all health_ok
+
+  reply=$(curl -s -m 10 \
+    --cert "$CERTS_DIR/svc-ops.crt" \
+    --key "$KEYS_DIR/svc-ops.key" \
+    "https://$C3_FQDN:9090/api/v1/rules")
+  alerting=$(echo "$reply" | grep -o '"type":"alerting"' | wc -l)
+  health_all=$(echo "$reply" | grep -o '"health":"[a-z]*"' | wc -l)
+  health_ok=$(echo "$reply" | grep -o '"health":"ok"' | wc -l)
+  echo "$alerting $((health_all - health_ok))"
 }
 
 # alert_names <second|builtin>：那一台 Alertmanager 目前的告警名稱，逗號分隔
@@ -91,11 +118,14 @@ alert_names() {
 # has_alert <告警清單> <名稱>：清單裡有這個告警就回 0
 #   例：has_alert "A,B" B → 回 0
 has_alert() {
-  echo "$1" | tr ',' '\n' | grep -qx "$2"
+  local names
+
+  names=$(echo "$1" | tr ',' '\n')
+  grep -qx "$2" <<<"$names"
 }
 
 do_install() {
-  local targets host up attempt
+  local rules_file groups labelled rules expected up attempt alerting not_ok
 
   require_c3_target_version
 
@@ -136,37 +166,49 @@ EOF
     die "alertmanager-custom 沒有就緒"
   fi
 
-  section "32.3 規則、Prometheus 設定（抓取、分流）"
-  targets=""
+  section "32.3 規則（第 17 站的檔加 target）、Prometheus 設定（抓 4 個 job、分流）"
+  rules_file=$CONF_DIR/custom-rules-confluent.yml
 
-  for host in $RESTS; do
-    # 第二台之後，前面先加逗號
-    if [ -n "$targets" ]; then
-      targets="$targets, "
-    fi
+  # 每個群組的 name 那一行後面加兩行（sed 的 a：在那一行之後加一行）：labels: 和 target: omnibus
+  sed -e '/^  - name: /a\    labels:' -e '/^  - name: /a\      target: omnibus' \
+    "$TEMPLATE_DIR/confluent-alerts.yml" > "$rules_file"
 
-    targets="$targets\"$(fqdn "$host"):7071\""
-  done
+  groups=$(grep -c '^  - name:' "$rules_file")
+  labelled=$(grep -c 'target: omnibus' "$rules_file")
+  rules=$(grep -c '^      - alert:' "$rules_file")
 
-  export C3_FQDN REST_SCRAPE_TARGETS=$targets
+  if [ "$groups" = "$labelled" ]; then
+    ok "custom-rules-confluent.yml：$groups 個群組都帶 target，$rules 條規則"
+  else
+    die "custom-rules-confluent.yml：$groups 個群組，只有 $labelled 個帶 target"
+  fi
+
+  export C3_FQDN CONTROLLER_TARGETS BROKER_TARGETS REST_TARGETS C3_TARGETS ENV_LABEL
+  CONTROLLER_TARGETS=$(quoted_targets $CONTROLLERS)
+  BROKER_TARGETS=$(quoted_targets $BROKERS)
+  REST_TARGETS=$(quoted_targets $RESTS)
+  C3_TARGETS=$(quoted_targets $C3_HOST)
+  ENV_LABEL=$MONITOR_ENV_LABEL
 
   if ! render_template \
     "$TEMPLATE_DIR/prometheus-generated-c3-alerting.yml" \
     "$CONF_DIR/prometheus-generated.yml" \
-    C3_FQDN REST_SCRAPE_TARGETS; then
+    C3_FQDN CONTROLLER_TARGETS BROKER_TARGETS REST_TARGETS C3_TARGETS ENV_LABEL; then
     die "render prometheus-generated-c3-alerting.yml"
   fi
 
-  if ! copy_to_tmp "$C3_HOST" "$CONF_DIR/prometheus-generated.yml" "$TEMPLATE_DIR/c3-custom-rules-rest.yml"; then
+  if ! copy_to_tmp "$C3_HOST" "$CONF_DIR/prometheus-generated.yml" "$rules_file"; then
     die "scp"
   fi
 
+  # 舊版第 32 站的 custom-rules-rest.yml 一併拿掉（新的規則檔已包含 REST Proxy）
   if ! ssh_script "$C3_HOST" <<'EOF'
 set -e
 cd /etc/confluent-control-center
 sudo install -o root -g confluent -m 0640 /tmp/prometheus-generated.yml prometheus-generated.yml
-sudo install -o root -g confluent -m 0640 /tmp/c3-custom-rules-rest.yml custom-rules-rest.yml
-rm -f /tmp/prometheus-generated.yml /tmp/c3-custom-rules-rest.yml
+sudo install -o root -g confluent -m 0640 /tmp/custom-rules-confluent.yml custom-rules-confluent.yml
+sudo rm -f custom-rules-rest.yml
+rm -f /tmp/prometheus-generated.yml /tmp/custom-rules-confluent.yml
 EOF
   then
     die "放設定失敗"
@@ -176,21 +218,42 @@ EOF
     die "Prometheus 重啟後沒有就緒"
   fi
 
-  # 抓取間隔 60 秒：最多等 3 分鐘
-  for attempt in $(seq 1 18); do
-    up=$(rest_targets_up)
+  expected=$(wc -w <<<"$CONTROLLERS $BROKERS $RESTS $C3_HOST" | tr -d ' ')
 
-    if [ "$up" = "$(wc -w <<<"$RESTS" | tr -d ' ')" ]; then
+  # 抓取間隔 30 秒：最多等 3 分鐘
+  for attempt in $(seq 1 18); do
+    up=$(targets_up)
+
+    if [ "$up" = "$expected" ]; then
       break
     fi
 
     sleep 10
   done
 
-  if [ "$up" = "$(wc -w <<<"$RESTS" | tr -d ' ')" ]; then
-    ok "REST Proxy 抓到 $up 台"
+  if [ "$up" = "$expected" ]; then
+    ok "抓到 $up / $expected 台"
   else
-    fail "REST Proxy 只抓到 ${up:-0} 台"
+    fail "只抓到 ${up:-0} / $expected 台"
+  fi
+
+  # 規則每 60 秒算一次：health 全部 ok 最多等 2 分鐘
+  for attempt in $(seq 1 12); do
+    read -r alerting not_ok <<<"$(rules_summary)"
+
+    if [ "$not_ok" = 0 ]; then
+      break
+    fi
+
+    sleep 10
+  done
+
+  if [ "$alerting" != "$rules" ]; then
+    fail "告警規則 $alerting 條（應該是 $rules 條）"
+  elif [ "$not_ok" != 0 ]; then
+    fail "告警規則 $alerting 條，health 不是 ok 的 $not_ok 條"
+  else
+    ok "告警規則 $alerting 條，health 都是 ok"
   fi
 }
 
@@ -202,8 +265,8 @@ do_test() {
   if ! ssh_script "$C3_HOST" <<'EOF'
 set -e
 cd /etc/confluent-control-center
-sudo cp -p custom-rules-rest.yml /tmp/custom-rules-rest.yml.keep
-sudo tee -a custom-rules-rest.yml > /dev/null <<'RULES'
+sudo cp -p custom-rules-confluent.yml /tmp/custom-rules-confluent.yml.keep
+sudo tee -a custom-rules-confluent.yml > /dev/null <<'RULES'
       - alert: Chapter32WithTarget
         expr: vector(1)
         labels: { severity: warning, impact: SERVICE, instance: chapter32 }
@@ -266,8 +329,8 @@ EOF
 
   if ! ssh_script "$C3_HOST" <<'EOF'
 cd /etc/confluent-control-center
-sudo cp -p /tmp/custom-rules-rest.yml.keep custom-rules-rest.yml
-sudo rm -f /tmp/custom-rules-rest.yml.keep
+sudo cp -p /tmp/custom-rules-confluent.yml.keep custom-rules-confluent.yml
+sudo rm -f /tmp/custom-rules-confluent.yml.keep
 EOF
   then
     fail "還原規則失敗"
@@ -283,7 +346,7 @@ EOF
 do_status() {
   log "C3：$(ssh_run "$C3_HOST" 'rpm -q confluent-control-center-next-gen')"
   log "alertmanager-custom：$(ssh_run "$C3_HOST" 'systemctl is-active alertmanager-custom')"
-  log "REST Proxy 抓到：$(rest_targets_up) 台"
+  log "抓到：$(targets_up) 台；告警規則數、health 不是 ok 的數目：$(rules_summary)"
   log "第二台告警：[$(alert_names second)]；內建告警：[$(alert_names builtin)]"
 }
 

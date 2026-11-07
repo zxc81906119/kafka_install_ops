@@ -93,6 +93,15 @@ groups:
         annotations:
           summary: "{{ $labels.hostname }}: Produce p99 {{ $value }} ms"
           description: "99th percentile Produce request time on {{ $labels.instance }} has been above 500 ms for 10 minutes. Look at disk latency and replication delay (acks=all waits for followers)."
+      # source: ours (Strimzi has the same check as OfflineLogDirectoryCount): one series per log dir on Confluent Server 8.2.4 / 8.3.2.
+      # With a single log.dirs the broker shuts itself down when the directory fails, so ConfluentTargetDown fires too; this rule names the directory.
+      - alert: KafkaLogDirOffline
+        expr: max by (hostname, logdirectory) (kafka_log_logmanager_logdirectoryoffline{job="kafka-broker"}) > 0
+        for: 1m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.hostname }}: log directory {{ $labels.logdirectory }} offline"
+          description: "Broker {{ $labels.hostname }} reports its log directory {{ $labels.logdirectory }} offline (disk error or full file system). Its partitions moved to other leaders; check dmesg, df -h and the broker log, then repair or replace the disk (guide 24.4)."
 
   - name: kraft
     rules:
@@ -117,6 +126,14 @@ groups:
         annotations:
           summary: "{{ $labels.env }}: KRaft leader changed {{ $value }} times in 15 minutes"
           description: "The active controller of {{ $labels.env }} changed more than twice in 15 minutes: unstable network, GC pauses or an overloaded controller."
+      # source: confluent (KRaft metrics: FencedBrokerCount): a fenced broker runs but may not lead or follow partitions
+      - alert: KafkaFencedBrokers
+        expr: max by (env) (kafka_controller_kafkacontroller_fencedbrokercount{job="kafka-controller"}) > 0
+        for: 5m
+        labels: { severity: critical, impact: SERVICE }
+        annotations:
+          summary: "{{ $labels.env }}: {{ $value }} fenced brokers"
+          description: "The KRaft controller reports {{ $value }} fenced brokers in {{ $labels.env }} for 5 minutes: they are stopped, or run but cannot serve partitions (no heartbeat to the controller, or still catching up the metadata log). Check the broker logs and kafka-metadata-quorum describe --status."
 
   - name: rest-proxy
     rules:
@@ -139,20 +156,22 @@ groups:
   - name: control-center
     rules:
       # source: ours: C3 is a Kafka Streams application; client-state 0 CREATED, 1 REBALANCING, 2 RUNNING, 3 PENDING_SHUTDOWN, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR
+      # Not RUNNING for 15 minutes (stuck in REBALANCING or CREATED stalls the screens as much as ERROR does); short rebalances after a restart are normal
       - alert: ControlCenterStreamsNotRunning
-        expr: max by (instance, hostname) (kafka_streams_stream_metrics_client_state{job="control-center"}) >= 4
-        for: 5m
+        expr: max by (instance, hostname, client_id) (kafka_streams_stream_metrics_client_state{job="control-center"}) != 2
+        for: 15m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stopped processing"
-          description: "A Kafka Streams client inside Control Center {{ $labels.instance }} is in state {{ $value }} (4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR) for 5 minutes: the C3 screens show stale data. Read journalctl -u confluent-control-center."
+          description: "A Kafka Streams client inside Control Center {{ $labels.instance }} has not been RUNNING for 15 minutes (state {{ $value }}: 1 REBALANCING, 4 NOT_RUNNING, 5 PENDING_ERROR, 6 ERROR): the C3 screens show stale data. Read journalctl -u confluent-control-center."
+      # failed-stream-threads counts failures since start (it stays above 0 even when a thread is replaced), so test the increase
       - alert: ControlCenterStreamThreadsFailed
-        expr: max by (instance, hostname) (kafka_streams_stream_metrics{job="control-center", failed_stream_threads!=""}) > 0
-        for: 1m
+        expr: max by (instance, hostname) (delta(kafka_streams_stream_metrics_failed_stream_threads{job="control-center"}[15m])) > 0
+        for: 0m
         labels: { severity: warning, impact: APPLICATION }
         annotations:
           summary: "{{ $labels.hostname }}: Control Center stream thread failed"
-          description: "Control Center {{ $labels.instance }} lost {{ $value }} stream threads. Restart it after reading the log."
+          description: "{{ $value }} Kafka Streams threads of Control Center {{ $labels.instance }} failed in the last 15 minutes (uncaught exception). Read journalctl -u confluent-control-center; restart it if alive threads stay below normal."
       # source: ours: an idle stream thread still polls about 10 times a second (lab), so a poll rate of 0 means the thread is stuck
       - alert: ControlCenterStreamsStalled
         expr: min by (instance, hostname) (kafka_streams_stream_thread_metrics_poll_rate{job="control-center"}) == 0
@@ -195,3 +214,23 @@ groups:
         annotations:
           summary: "{{ $labels.hostname }} ({{ $labels.job }}): file descriptors above 80%"
           description: "{{ $labels.instance }} uses {{ $value | humanizePercentage }} of its file descriptor limit. Check LimitNOFILE in the systemd drop-in and the number of partitions or connections."
+      # source: ours (standard JVM practice): deadlocked threads never recover by themselves
+      - alert: JvmThreadsDeadlocked
+        expr: max by (hostname, job) (jvm_threads_deadlocked{job=~"kafka-controller|kafka-broker|rest-proxy|control-center"}) > 0
+        for: 5m
+        labels: { severity: critical, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }} ({{ $labels.job }}): JVM threads deadlocked"
+          description: "{{ $value }} threads of {{ $labels.hostname }} ({{ $labels.job }}) are deadlocked for 5 minutes. Take a thread dump (jcmd <pid> Thread.print) and restart the service."
+
+  - name: host
+    rules:
+      # source: ours, replaces the official high_load (node_load1, needs node_exporter): Confluent Server's own host CPU gauge
+      # (kafka.server:type=KafkaServer,name=linux-system-cpu-utilization-1m, percent 0-100). Duplicates the bank's host monitoring if it has one.
+      - alert: KafkaHostCpuHigh
+        expr: max by (hostname, job) (kafka_server_kafkaserver_linux_system_cpu_utilization_1m{job=~"kafka-controller|kafka-broker"}) > 80
+        for: 10m
+        labels: { severity: warning, impact: INFRASTRUCTURE }
+        annotations:
+          summary: "{{ $labels.hostname }}: host CPU above 80%"
+          description: "The host {{ $labels.hostname }} ({{ $labels.job }}) has used more than 80% CPU for 10 minutes ({{ $value }}%). Look for other processes on the host, request rate and GC time."

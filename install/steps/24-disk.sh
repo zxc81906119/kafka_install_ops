@@ -5,7 +5,7 @@
 #
 # 做什麼：
 #   bash steps/24-disk.sh usage    24.1 每個 broker 的資料盤：log dir 合計、partition 數、最大的三個 topic；每台 df
-#   bash steps/24-disk.sh alerts   24.2 給銀行監控團隊第二個規則檔 to-bank/prometheus/confluent-alerts-disk.yml（KafkaLogDirOffline、資料盤用量範例）
+#   bash steps/24-disk.sh alerts   24.2 給銀行監控團隊第二個規則檔 to-bank/prometheus/confluent-alerts-disk.yml（資料盤用量範例；log dir 離線已在第 17 章的規則）
 #   bash steps/24-disk.sh drill    24.3 演練：建 orders.disk-demo 寫 5 MB → 縮短 retention 等 segment 被刪 → 再寫一次、把 partition 搬離第一台 broker → 清掉
 #
 # 擴容（24.4）是銀行 OS 團隊放大資料盤；換碟同 25.2（remove → 換 → add），不在這支。
@@ -188,7 +188,7 @@ alerts() {
   fi
 
   rule_count=$(awk '/alert:/ {c++} END {print c + 0}' "$rules_file")
-  ok "confluent-alerts-disk.yml：$rule_count 條（KafkaLogDirOffline；KafkaDataDiskFillingUp 是給銀行 node_exporter 的範例）"
+  ok "confluent-alerts-disk.yml：$rule_count 條（KafkaDataDiskFillingUp，給銀行 node_exporter 的範例）"
   message="監控團隊：confluent-alerts-disk.yml 放到 /etc/prometheus/confluent/"
   message+="（rule_files 用 confluent-alerts*.yml 就會載入）後 reload；"
   message+="KafkaDataDiskFillingUp 的 mountpoint／job 改成行內 node_exporter 的寫法"
