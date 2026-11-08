@@ -24,7 +24,7 @@ powershell -ExecutionPolicy Bypass -File guide-build.ps1 -Template <模板.pptx>
 
 # 第 32 章方案簡報
 
-`docs/Confluent-第32章-告警方案.pptx`（給技術主管）：銀行沒有 Prometheus 時，告警走 C3 內建 Prometheus（抓 10 台的 JMX exporter、套第 17 章同一份規則）加第二個 Alertmanager。先講結論，再放指標來源的選擇、架構圖、分流、三個設定檔的節選、26 條規則逐條說明（在監控什麼、出處）、官方規則的修正、未採用的規則、omnibus 欄位、安全、lab 驗證、風險與待確認事項。內容在 `c3alert-slides.js`，設定檔節選要和手冊 32.2、32.3 一致。版型同手冊導覽（公司模板），`guide-build.ps1` 多一種 code 版面（左邊設定檔、右邊說明）。
+`docs/Confluent-第32章-告警方案.pptx`（給技術主管）：銀行沒有 Prometheus 時，告警走 C3 內建 Prometheus（抓 10 台的 JMX exporter、套第 17 章同一份規則）加第二個 Alertmanager。每一頁的優先序是圖 → 表 → 文字（2026-11-08 使用者定案）：能畫就畫（`c3alert-diagrams.js` 的 12 張簡報專用圖，加上手冊的 c3alert 架構圖），列清單才用表，文字卡片最多 3 張、細節放講者備忘稿；每張圖後面緊接它的實際設定或表。不靠參照手冊：每台的 JMX exporter 設定、每個 job 保留的指標都直接寫進投影片，附錄的 26 條規則全文由 `c3alert.js` 建置時讀 `install/templates/confluent-alerts.yml` 產生（規則一改，重建就同步）。內容在 `c3alert-slides.js`，設定檔節選要和手冊 17.1、17.3、32.2、32.3 一致。版型同手冊導覽（公司模板），`guide-build.ps1` 多一種 code 版面（左邊設定檔、右邊說明）。
 
 ```bash
 cd docs/deck-src

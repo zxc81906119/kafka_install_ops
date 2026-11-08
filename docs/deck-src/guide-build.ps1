@@ -156,10 +156,15 @@ function FillDiagram($slide, $item, [int]$color, [int]$number) {
     # Wide picture on top, cards below
     $cardHeight = 112
     $maxHeight = $height - $cardHeight - $GAP
+    if ($blocks.Count -eq 0) {
+      $maxHeight = $height
+    }
     $pictureWidth = [Math]::Min($WIDTH, $maxHeight * $item.ratio)
     $pictureHeight = $pictureWidth / $item.ratio
     [void](AddPicture $slide $item.file ($LEFT + ($WIDTH - $pictureWidth) / 2) ($TOP + ($maxHeight - $pictureHeight) / 2) $pictureWidth $pictureHeight $item.title)
-    RowCards $slide ($BOTTOM - $cardHeight) $cardHeight $blocks $color $number
+    if ($blocks.Count -gt 0) {
+      RowCards $slide ($BOTTOM - $cardHeight) $cardHeight $blocks $color $number
+    }
   } else {
     # Cards on the left, picture on the right
     $cardWidth = 262
@@ -258,9 +263,13 @@ function FillTable($slide, $item, [int]$color, [int]$number) {
   }
 }
 
-# Configuration excerpt: file name and a dark monospace box on the left, cards on the right
+# Configuration excerpt: file name and a dark monospace box on the left, cards on the right (full width when there are no cards)
 function FillCode($slide, $item, [int]$color, [int]$number) {
+  $blocks = @($item.blocks)
   $codeWidth = 560
+  if ($blocks.Count -eq 0) {
+    $codeWidth = $WIDTH
+  }
   $caption = NewText $slide $LEFT $TOP $codeWidth 18 $item.codeFile 12 $BODY $true "File"
   $boxTop = $TOP + 24
   $box = $slide.Shapes.AddShape(5, $LEFT, $boxTop, $codeWidth, ($BOTTOM - $boxTop))
@@ -279,7 +288,7 @@ function FillCode($slide, $item, [int]$color, [int]$number) {
   $frame.TextRange.ParagraphFormat.SpaceWithin = 1.0
   $frame.TextRange.Font.Name = "Consolas"
   $frame.TextRange.Font.NameFarEast = $FONT
-  $frame.TextRange.Font.Size = 11
+  $frame.TextRange.Font.Size = $(if ($blocks.Count -eq 0) { 10 } else { 11 })
   $frame.TextRange.Font.Bold = 0
   $frame.TextRange.Font.Color.RGB = (Rgb "E5E7EB")
   if (([double]$frame.TextRange.BoundHeight + 20) -gt ($BOTTOM - $boxTop)) {
@@ -288,8 +297,10 @@ function FillCode($slide, $item, [int]$color, [int]$number) {
   if (([double]$frame.TextRange.BoundWidth + 24) -gt $codeWidth) {
     Warn $number ("code is " + [int]([double]$frame.TextRange.BoundWidth + 24) + " wide of " + $codeWidth)
   }
-  $x = $LEFT + $codeWidth + $GAP
-  [void](StackCards $slide $x $TOP ($WIDTH - $codeWidth - $GAP) @($item.blocks) $color $number)
+  if ($blocks.Count -gt 0) {
+    $x = $LEFT + $codeWidth + $GAP
+    [void](StackCards $slide $x $TOP ($WIDTH - $codeWidth - $GAP) $blocks $color $number)
+  }
 }
 
 function FillContents($slide, $item) {

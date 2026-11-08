@@ -37,7 +37,7 @@ Details of the architecture and every component: @README.md
 - `docs/questions-src/questions.md` → `docs/Confluent-請銀行確認的事項.docx` (`node build.js`).
 - `docs/deck-src/install.js` + `install-steps.js` → `docs/Confluent-RPM安裝流程.pptx` (14-page deck for bank managers).
 - `docs/deck-src/guide-slides.js` + `guide.js` + `guide-build.ps1` → `docs/Confluent-手冊導覽.pptx` (manual overview for the technical supervisor, company template, no commands; needs PowerPoint, see `docs/deck-src/README.md`).
-- `docs/deck-src/c3alert.js` + `c3alert-slides.js` + `guide-build.ps1` → `docs/Confluent-第32章-告警方案.pptx` (chapter 32 proposal for the technical manager, company template, with config excerpts and every alert rule explained; keep them in step with guide 17.5 and 32.2/32.3).
+- `docs/deck-src/c3alert.js` + `c3alert-slides.js` + `c3alert-diagrams.js` + `guide-build.ps1` → `docs/Confluent-第32章-告警方案.pptx` (chapter 32 proposal for the technical manager, company template; every slide diagram → table → text, each diagram followed by its real config; the rule appendix is read from `install/templates/confluent-alerts.yml` at build time; keep them in step with guide 17.5 and 32.2/32.3).
 - `install/` — installer that follows the guide one script per chapter (`install.sh`, `steps/02–32` named by chapter incl. the on-demand ones 21/22/23/24/26/27/28/29/30/32; chapters 7 and 25 are `07-1/2/3-*.sh` and `25-1/2-*.sh`, `conf/site.env`);
   `install/lab/` = lab-only (`bank-sim.sh` plays the bank, `run-customer.sh` = the whole path from zero: baseline → acceptance → migration → OS 9.8 → C3; no separate upgrade drill).
 - `opmenu/` — OP menu source (the **only** copy; never edit a sibling project such as `untitled6`).

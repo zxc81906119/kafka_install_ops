@@ -960,5 +960,5 @@ D.c3alert = () => svg(1010, 420, [
 ].join(''));
 
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
-Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc } });
+Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc, ctext, num, outline } });
 module.exports = D;
