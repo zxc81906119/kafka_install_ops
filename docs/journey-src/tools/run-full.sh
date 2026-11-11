@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-full.sh <customer> [起始章] [結束章]  ——（兩端都含；章是 0–32、B（A 是 0 的舊名）；順序 0 → 1 … 32 → B） 照手把手的指令塊在 lab 上實跑（Windows Git Bash）
+# run-full.sh <customer> [起始章] [結束章]  ——（兩端都含；章是 0–33、B（A 是 0 的舊名）；順序 0 → 1 … 33 → B） 照手把手的指令塊在 lab 上實跑（Windows Git Bash）
 #
 #   bash run-full.sh customer          從第 0 章（建 lab）跑到附錄 B（= 整條遷移主線：基底 CP 8.2.4／JDK 21／OS 9.6 → 第 29、30、31 章遷移到 8.3.2／JDK 25／OS 9.8）：
 #                                      先把 lab 整個拆掉（只保留落地區 ~/kafka-lab/landing 和銀行 OS 內容的下載快取 ~/kafka-lab/bank-os；舊的 landing-extra 會整理進 landing）
@@ -74,12 +74,26 @@ fi
 
 sed -i "s#<交付物的目錄>#$DELIVERY#" "$runner"
 
+# 33.2 CBOM 工具也是交付物：dist/ 是 cbom/build.sh 建出來的（要 dl01 在跑，所以不在這裡建）
+if grep -q "<CBOM 交付物的目錄>" "$runner"; then
+  CBOM_DELIVERY=$OUT_DIR/delivery-cbom
+
+  if ! bash "$REPO_DIR/cbom/package.sh" "$CBOM_DELIVERY" >/dev/null; then
+    echo "第 33 章需要 CBOM 的交付物：先跑 bash cbom/build.sh" >&2
+    exit 1
+  fi
+
+  sed -i "s#<CBOM 交付物的目錄>#$CBOM_DELIVERY#" "$runner"
+fi
+
 # 從第 0 章開始：拆掉整個 lab（容器、volume、下載機、第 17 章的 lab-mon-* 監控容器），只留落地區
 if [ "$FROM" = 0 ]; then
   echo "拆掉 lab（保留 $LAB/landing 與 $LAB/bank-os；舊版面的 landing-extra 併進 landing）"
   if [ -f "$LAB/compose.yml" ]; then
     # 這些容器接在 lab_labnet 上，不先收掉 down -v 刪不掉網路
     podman rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook >/dev/null 2>&1
+    # 第 33 章的 lab Jenkins 也接在 lab 的網路上
+    podman rm -f lab-jenkins >/dev/null 2>&1
 
     (
       if cd "$LAB"; then

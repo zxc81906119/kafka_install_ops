@@ -1,9 +1,13 @@
 # Status — branch `redesign`
 
-Updated: 2026-11-06（指令可讀性整理完成並驗證：手冊從零全跑 0 失敗；腳本版第 1–35 段全部通過（中途兩次因記憶體不足的 WSL 狀況續跑）；文件與簡報已更新重建；全部未 commit）
+Updated: 2026-11-11 22:3x（手冊第 33 章〔CBOM＋OPA＋Jenkins〕完成並照手冊實跑通過；cbomlab 容器環境已刪；下一步搬 untitled9 的 web app；全部未 commit）
 
 ## 現在在做什麼
-**第 32 章擴大完成（2026-11-07）**：告警規則統一成第 17 章一份 26 條，第 32 章 C3 Prometheus 抓 10 台 7071 套用同一份；C3 exporter 依 Kafka Streams 建議調整。手冊 17／24／32 章局部重跑、腳本 32／24 通過（log/2026-11-07-ch32-scope.md）。簡報 docs/Confluent-第32章-告警方案.pptx（24 張）、手冊導覽與兩份 docx 已重建。全部未 commit。之後交付前可整本從零再跑一次。
+**CBOM（2026-11-11 起，log/2026-11-11-cbom-opa.md；設計在 redesign/README.md 最後一節）**：手冊第 33 章完成（33.1–33.11，整章照手冊在 lab 實跑通過；圖 `cbom`；問題清單第 13 節）。程式在 `cbom/`（`tools/` Maven 專案 56 個測試、`policy/` 22 個規則測試、`cbom-collect.sh`、`Jenkinsfile`、`build.sh`／`package.sh`；`dist/`、`out/` 不進 git）。lab：ops02 `/opt/cbom`、帳號 `cbomsvc`；容器 `lab-jenkins`（http://localhost:18088，檔案在 ~/kafka-lab/jenkins）；dl01 `~/cbom` 是建置環境。**下一步**：把 IdeaProjects/untitled9 的 web app（src、pom.xml、deploy、scripts）、demo/cbomkit、「Cbom 探討（公司模板）.pptx」與產生它的程式搬到 `cbom/` 底下（untitled9 本身不動） → 三個優化方向（web app 的 CBOM 與 CP 流程整合、CBOMkit 平台的定位〔順便驗它收不收 1.7〕、簡報內容） → web app 測完再談抽象化（先不重構）。還沒做：腳本版 `install/steps/33-*`、run-customer.sh 與手冊導覽簡報加第 33 章、含第 33 章的整本從零全跑。
+
+**最終驗證（2026-11-08～09，log/2026-11-09-final-verify.md）**：手冊全跑完成並修正 → 重跑 17.8／32.4 兩次驗 since（通過）→ 32.5 新比對再驗（通過）→ 腳本從零全跑（完成：45／45 通過；中途 WSL 卡死與 Self-Balancing 後遺症都已處理，見 log），使用者同意 wsl --shutdown，已恢復，FROM=14 接著跑中）→ 填 29、30 章持續流量（完成）→ 重建全部 docx／pptx（完成 11-09 12:21）。使用者 11-09 會來看進度；commit 等使用者決定。
+
+**第 32 章擴大完成（2026-11-07）**：告警規則統一成第 17 章一份 26 條，第 32 章 C3 Prometheus 抓 10 台 7071 套用同一份；C3 exporter 依 Kafka Streams 建議調整。手冊 17／24／32 章局部重跑、腳本 32／24 通過（log/2026-11-07-ch32-scope.md）。簡報 docs/Confluent-告警方案.pptx（24 張）、手冊導覽與兩份 docx 已重建。全部未 commit。之後交付前可整本從零再跑一次。
 
 腳本版（install/）照手冊寫法改寫完成並實跑通過（log/2026-11-02-scripts-readable.md）；手冊導覽簡報完成（docs/Confluent-手冊導覽.pptx）。全部未 commit，等使用者決定。待決定：30.4 順序腳本與手冊不同。
 
@@ -28,6 +32,8 @@ Updated: 2026-11-06（指令可讀性整理完成並驗證：手冊從零全跑 
 - 待銀行回覆：換金鑰週期（4.6）、master key 週期（8.6）、omnibus、9.5、11.3／11.4、12.4。
 
 ## 環境狀態
+- **2026-11-11 lab 使用中（redesign，本 session）**：CBOM 章節手動驗證（dl01 下載工具與建置；ops02 收集、掃描）。
+- 2026-11-09 12:2x：lab 閒置（腳本從零全跑完成：8.3.2／C3 2.6.1／JDK 25／OS 9.8、第 32 章已裝）；cbomlab 8 台已提醒使用者開回。
 - 2026-11-07 晚：lab 開著（8.3.2／C3 2.6.1，第 32 章新版已裝）；lab-mon-grafana／prometheus／alertmanager／blackbox 已停（需要時 17.6、22.2 會重建），webhook 開著；cbomlab 與 amazing_panini 在 wsl --shutdown 後沒有起來（不是我們的，沒動）。
 - 2026-11-06 14:00：lab 閒置（腳本版跑完，平台在 8.3.2／C3 2.6.1／JDK 25／OS 9.8，第 32 章告警已裝）；machine 開著。
 - lab：**使用者同意 Claude 實測（可破壞）**：8.2.4，第 12、13、17 章已跑、14–16 未做；kc／kb 已套 cn＋mapping＋filter；c3-01 留著 C3 Prometheus 測試設定（見 log/2026-11-03-lab-wiped.md 最後一段）。OP menu 交付物在 ~/opmenu-delivery。

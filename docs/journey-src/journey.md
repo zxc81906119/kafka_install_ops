@@ -872,7 +872,7 @@ podman exec -it lab-repo01-1 bash
 | kc01、kc02、kc03 | KRaft controller | 我方安裝，銀行提供主機 |
 | kb01–kb04 | Kafka broker | 同上 |
 | rest01、rest02 | REST Proxy | 同上 |
-| c3-01 | Control Center（含內建 Prometheus、Alertmanager，只供 C3 自己的畫面用） | 同上 |
+| c3-01 | Control Center（含內建 Prometheus、Alertmanager，供 C3 自己的畫面用；銀行沒有 Prometheus 時兼做告警，見第 32 章） | 同上 |
 | repo01 | 行內套件庫 web server，lab 裡兼 NTP | 銀行 |
 | ad01 | 行內 AD（lab 用 Samba 模擬） | 銀行 |
 | lb01 | 負載平衡（lab 用 nginx 模擬） | 銀行 |
@@ -894,7 +894,7 @@ podman exec -it lab-repo01-1 bash
 - 一行一個指令，整塊貼上即可；`#` 開頭的是步驟說明，貼上也不會執行。寫檔用的 `heredoc`（`<<'EOF' … EOF`）要連同最後的 `EOF` 一起貼。
 - 「先檢查、再動手」的地方拆成兩塊：前一塊看到預期輸出，才做下一塊。檢查不過時，指令會印出原因並停在那裡：最後一行的 `false` 只是讓這一塊以失敗結束，不會關掉你的終端機。
 - 密碼一律放在檔案裡（權限 0600）再讀進指令，不直接打在畫面上，也不要貼到任何對話裡。平台的密碼與金鑰只放在操作機 root 才讀得到的位置（`~/secrets`、`~/pki`、`/secure/ssh`），不放 CyberArk。需要人手動輸入時一律用**不顯示的寫法**（`read -rs`），PSMP 的錄影才不會錄到。
-- **主線是「先裝基底、再遷移」**：第 2–19 章裝的是安裝基底，第 29、30、31 章把它遷移到目標版本，每一段之後都跑第 19 章的驗收。兩組版本的來由與限制在下面「版本路徑」。
+- **主線是「先裝基底、再遷移」**：第 2–19 章裝的是安裝基底，第 29、30 章把它遷移到目標版本（C3 在 29.3 一起升；第 31 章是之後單獨換 C3 版本的程序），每一段之後都跑第 19 章的驗收。兩組版本的來由與限制在下面「版本路徑」。
 - 主線是本案客戶的情境：Kafka 平台和銀行的 CyberArk 已經脫鉤，只剩「人員在 PVWA 登入、由 PSMP 代登進操作機（root）」這一件事。平台的密碼、金鑰、憑證都在操作機上由 root 保管（0600／0400），操作機到各主機的 ssh 金鑰也是操作機自己的（第 4 章）。
 
 - 看不懂沒關係，先照做；每一塊用註解編了步驟（`# 1.`、`# 2.`），每一章開頭說這章要做什麼，結尾說看到什麼代表成功。
@@ -907,7 +907,7 @@ podman exec -it lab-repo01-1 bash
 
 ![versionpath]
 
-| 層 | 安裝基底（第 2–19 章裝的） | 遷移目標（第 29、30、31 章） | 為什麼 |
+| 層 | 安裝基底（第 2–19 章裝的） | 遷移目標（第 29、30 章） | 為什麼 |
 |---|---|---|---|
 | Confluent Platform | 8.2.4 | 8.3.2 | 第 29 章：套件滾動升級、finalize |
 | Control Center | 2.5.1 | 2.6.1 | 原廠相容表：2.5.x 支援到 CP 8.2.x，2.6.x 才支援到 8.3.x，所以 CP 升 8.3 之前 C3 先升（29.3；單獨換 C3 是第 31 章） |
@@ -4341,7 +4341,7 @@ via LB: 200
 
 ![restdrain]
 
-**這一節在做什麼**：定出之後每次重啟 REST Proxy 的標準做法（先請 LB 團隊把那一台停用，等連線排空再重啟），避免應用程式在重啟那幾秒收到錯誤。原因：nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（遷移實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26 章）都照這個順序：
+**這一節在做什麼**：定出之後每次重啟 REST Proxy 的標準做法（先請 LB 團隊把那一台停用，等連線排空再重啟），避免應用程式在重啟那幾秒收到錯誤。原因：nginx 社群版只有被動健康檢查（`max_fails`）：REST 重啟的那幾秒，要先有請求失敗，LB 才把它標成故障、改送另一台（遷移實測：換 JDK 時重啟 REST，經 LB 失敗 4 次）。行內的 LB 就算有主動健康檢查，也是「停了之後才發現」。所以之後**每次重啟 REST**（15、17、20、21、26、29、30 章）都照這個順序：
 
 1. LB 團隊停用 rest01 → 2. 小安等連線排空、重啟 rest01、確認 200 → 3. LB 團隊恢復 rest01、停用 rest02 → 4. 小安重啟 rest02 → 5. LB 團隊恢復 rest02
 
@@ -4937,10 +4937,10 @@ REMOTE
 ```
 
 ```out
-指標帶 kafka_broker_id 標籤的節點數：5（等了約 10 秒）
+指標帶 kafka_broker_id 標籤的節點數：7（等了約 10 秒）
 ```
 
-只要大於 0 就代表標籤有帶上來。數字會隨 telemetry 陸續送進來而增加，穩定後是 7（4 台 broker 加 3 台 controller，各自的 node id；實測剛啟動 10 秒時是 5）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 畫面上的圖會是空的。
+只要大於 0 就代表標籤有帶上來。數字會隨 telemetry 陸續送進來而增加，穩定後是 7（4 台 broker 加 3 台 controller，各自的 node id；telemetry 還沒全部送到時會小於 7，實測看過 5）。**0 代表缺 `otlp` 設定，或 broker 的 telemetry 沒送進來**，C3 畫面上的圖會是空的。
 
 lab 裡：Windows 瀏覽器開 `https://localhost:19021`（正式環境是維運人員直連 C3 的 9021），用 alice 登入（密碼在 `~/secrets/ad-test-users.pass`）。憑證是銀行 CA 簽的，瀏覽器沒裝銀行根憑證會有警告，lab 先略過。Alertmanager 的 9093 只開給同一台的 C3，從操作機連不到是正常的。
 
@@ -5034,7 +5034,7 @@ metrics in prometheus: 111 kinds
 |---|---|---|---|---|
 | controller、broker | kc*、kb* | `confluent-server` | `sudo journalctl -u confluent-server -n 100 --no-pager`；MDS 與授權器另在 `/var/log/kafka/metadata-service.log`、`kafka-authorizer.log`（不在 journal） | quorum 有 leader；broker 的 `https://<host>:8090/v1/metadata/id` 回 200 |
 | REST Proxy | rest* | `confluent-kafka-rest` | `sudo journalctl -u confluent-kafka-rest -n 100 --no-pager` | 帶 legacy 憑證 `curl …:8082/v3/clusters` 回 200 |
-| Control Center | c3-01 | `confluent-control-center`、`prometheus`、`alertmanager` | `sudo journalctl -u confluent-control-center -n 100 --no-pager` | `https://c3-01.poc.lab:9021/` 回 200 |
+| Control Center | c3-01 | `confluent-control-center`、`prometheus`、`alertmanager` | `sudo journalctl -u confluent-control-center -n 100 --no-pager` | `https://c3-01.poc.lab:9021/` 回 200，且 alice 從 C3 登入回 200（首頁不經過 MDS，見第 13 章） |
 | AD | ad01 | samba（entrypoint 常駐） | lab 裡：`podman logs lab-ad01-1` | `openssl s_client -connect ad01.poc.lab:636` 驗證通過 |
 | 套件庫 | repo01 | `httpd` | lab 裡：`podman exec lab-repo01-1 journalctl -u httpd -n 50` | `https://repo01.poc.lab/confluent/repodata/repomd.xml` 回 200 |
 
@@ -6185,9 +6185,9 @@ kb04: full sudo back (change window)
 
 監控與告警的做法已定案：**每個 Java 程序掛 Prometheus 的 JMX exporter（javaagent），由銀行的 Prometheus 抓、銀行的 Alertmanager 發告警、銀行的 Grafana 看圖**。Prometheus、Alertmanager、Grafana 是銀行提供的；我方交付的是設定：exporter 規則、scrape 設定、告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方的 32 個 dashboard。
 
-> **這一章是銀行有提供 Prometheus、Alertmanager、Grafana 時的做法**；銀行沒有提供時，REST Proxy 的告警改走 C3 內建的 Prometheus 加我們的第二個 Alertmanager（第 32 章），兩者可以並存。
+> **這一章是銀行有提供 Prometheus、Alertmanager、Grafana 時的做法**；銀行沒有提供時，告警改走 C3 內建的 Prometheus 加我們的第二個 Alertmanager（第 32 章），抓同樣 10 台、用同一份 26 條規則；兩條路徑擇一，同一個告警不要兩邊都送 omnibus。
 
-> **C3 內建的 Prometheus、Alertmanager 不動**：它們是 C3 自己的畫面（第 13 章）要用的，`otlp` 等設定照舊。但**告警與 dashboard 不走它們**，也不要在 C3 畫面建 alert trigger 或 action（Webhook、Email、PagerDuty）。原因：C3 會把那份 Alertmanager 設定重寫（C3 重啟後手改的內容被蓋掉）、webhook 內容不能自訂、而且只看得到 C3 自己收到的 telemetry（沒有主機標籤、看不到 controller 的 raft 以外的 JMX）。這幾點 2026-10-26 在 lab 逐項實測過。
+> **C3 內建的 Prometheus、Alertmanager 不動**：它們是 C3 自己的畫面（第 13 章）要用的，`otlp` 等設定照舊。但**告警與 dashboard 不走它們**，也不要在 C3 畫面建 alert trigger 或 action（Webhook、Email、PagerDuty）。原因：C3 會把那份 Alertmanager 設定重寫（C3 重啟後手改的內容被蓋掉）、webhook 內容不能自訂、而且只看得到 C3 自己收到的 telemetry（沒有主機標籤、controller 幾乎沒有指標）。這幾點 2026-10-26 在 lab 逐項實測過。
 
 | 誰 | 做什麼 |
 |---|---|
@@ -6199,7 +6199,7 @@ kb04: full sudo back (change window)
 | 程序 | exporter 規則 | 抓得到什麼 |
 |---|---|---|
 | controller（kc01–03） | Confluent 官方 `kafka_controller.yml` | KRaft：controller 指標（`ActiveControllerCount`、`LastAppliedRecordLagMs`、`MetadataErrorCount` …）、JVM（raft 指標在三台 controller 的叢集裡沒有，見 B.2）|
-| broker（kb01–04） | Confluent 官方 `kafka_broker.yml` | topic／partition／replica、request 延遲、ISR、網路與 request handler 執行緒、quota、JVM（序列數隨 topic 與 partition 數成長，3 個 partition 的 lab 約 2.2 萬條） |
+| broker（kb01–04） | Confluent 官方 `kafka_broker.yml` | topic／partition／replica、request 延遲、ISR、網路與 request handler 執行緒、quota、JVM（序列數隨 topic 與 partition 數成長，3 個 partition 的 lab 約 1.2–1.4 萬條） |
 | REST Proxy（rest01–02） | Confluent 官方 `confluent_rest.yml` | Jetty 與每個 REST endpoint 的請求率、錯誤率、延遲，JVM |
 | Control Center（c3-01） | **我方的開頭幾條＋官方 `kafka_streams.yml` 的規則**（官方沒有給 C3 本身的 exporter 設定） | JVM、Kafka Streams（client、thread、task、處理節點）、RocksDB state store（`AlertHistoryStore`、`commander`），約 2,100 條，名稱和官方 Streams／RocksDB dashboard 對得上。不收 C3 自己的 consumer／producer 與每個 REST endpoint（上萬條），也不收 Jetty（C3 2.6.1 上全是 0、沒有錯誤率） |
 
@@ -6251,7 +6251,7 @@ echo "headers: $headers；jmx-exporter.env $env_mode；YAML 裡的 keystore 密�
 headers: jmx-header-cp-server.yml jmx-header-kafka-internal.yml jmx-header-svc-c3.yml jmx-header-svc-rest.yml ；jmx-exporter.env 600；YAML 裡的 keystore 密碼：password: ${JMX_KEYSTORE_PASSWORD}；authentication：0
 ```
 
-> 舊版（10-30 以前）的 7071 用 basic auth，操作機有 `~/secrets/jmx-scrape.pass`、`jmx-scrape.salt`；上面的 `rm -f` 把它們清掉（不存在也不會出錯）。
+> 從零安裝的環境沒有 `~/secrets/jmx-scrape.pass`、`jmx-scrape.salt` 是正常的；上面的 `rm -f` 只是清掉 10-30 以前（7071 還用 basic auth 時）裝過的環境留下的檔，不存在也不會出錯。
 
 ## 17.2 接上 Confluent 官方的規則
 
@@ -6342,12 +6342,12 @@ done
 controller   153 行  httpServer=1 lowercaseOutputName=1
 broker       431 行  httpServer=1 lowercaseOutputName=1
 rest          49 行  httpServer=1 lowercaseOutputName=1
-c3           127 行  httpServer=1 lowercaseOutputName=1
+c3           126 行  httpServer=1 lowercaseOutputName=1
 ```
 
 官方規則版本記在 `COMMIT`，換版本（重新下載官方檔）要重做這一步並重新驗證 dashboard。
 
-> **官方規則的一個副作用**：序列數會隨 topic 與 partition 數成長（`kafka.log`、`kafka.cluster` 的每個 partition 一條）。lab 3 個 partition 的 broker 就有 2.2 萬條；正式環境 partition 多時要請銀行監控團隊評估 Prometheus 的容量與保留天數。
+> **官方規則的一個副作用**：序列數會隨 topic 與 partition 數成長（`kafka.log`、`kafka.cluster` 的每個 partition 一條）。lab 3 個 partition 的 broker 就有約 1.2–1.4 萬條；正式環境 partition 多時要請銀行監控團隊評估 Prometheus 的容量與保留天數。
 
 ## 17.3 派送 jar 與設定、掛上 javaagent
 
@@ -6459,7 +6459,7 @@ kb03: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 431 lines e
 kb04: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 431 lines env=600
 rest01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 49 lines env=600
 rest02: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 49 lines env=600
-c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 128 lines env=600
+c3-01: javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-1.7.0.jar 126 lines env=600
 ```
 
 > 陷阱：落地區的檔案是唯讀的（第 3 章 `chmod a-w`），這裡先 `cp` 到 `/tmp` 再 `scp`，是因為直接 `scp` 落地區的檔會連唯讀一起帶過去。流程正常跑完會 `rm -f`；若中途失敗留下唯讀檔，下一次 `scp` 會 `Permission denied`，先到那台 `rm -f /tmp/jmx*` 再重跑。
@@ -7290,7 +7290,6 @@ rest-proxy        up 2 / 2
 Prometheus 看到的 Alertmanager: ['http://lab-mon-alertmanager:9093/api/v2/alerts']
 Grafana dashboard: 32 個
 {"details":{"application":"Prometheus","features":{"rulerApiEnabled":false}},"message":"Successfully queried the Prometheus API.","status":"OK"}
-（上面是這次實測環境的數字：叢集沒有起來，只有補起來的 controller、broker、REST、C3 各一個程序在回應。叢集健康時 up 10 / 10）
 ```
 
 Grafana 的 dashboard 真的查得到資料：用 Grafana 自己的查詢介面（`/api/ds/query`，和畫面上 panel 走同一條路）跑一個 controller 指標的查詢（active controller 數，叢集健康時是 1），`$env` 換成 `lab`：
@@ -7339,6 +7338,9 @@ lab 裡：Windows 瀏覽器開 `http://localhost:13000` 就是 Grafana，左邊 
 ```bash
 cd ~/kafka-lab/bank-monitoring
 
+# 0. 記下開始的時間（UTC）：之後只讀這個時間以後的接收端日誌，重測時才不會讀到上一次的通知
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
 # 1. 測試規則：永遠成立
 cat > prometheus/confluent/confluent-alerts-test.yml <<'EOF'
 groups:
@@ -7357,7 +7359,7 @@ podman exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/
 sleep 70
 
 # 3. 接收端收到幾次（兩個 receiver 各一次）
-podman logs lab-mon-webhook 2>&1 | grep -c ConfluentTestAlert
+podman logs --since "$since" lab-mon-webhook 2>&1 | grep -c ConfluentTestAlert
 ```
 
 ```out
@@ -7369,7 +7371,7 @@ podman logs lab-mon-webhook 2>&1 | grep -c ConfluentTestAlert
 ```bash
 # 1. 接收端日誌裡第一筆送到 /default 的測試告警
 #    日誌一行長這樣：POST /default | Alertmanager/0.34.1 | {"version":"4",…}
-test_posts=$(podman logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert)
+test_posts=$(podman logs --since "$since" lab-mon-webhook 2>&1 | grep ConfluentTestAlert)
 post=$(echo "$test_posts" | grep "^POST /default" | head -1)
 
 # 2. 拆開：路徑、User-Agent（前後各帶一個空白）、JSON 本文
@@ -7416,7 +7418,7 @@ print(json.dumps({"status": a["status"], "labels": a["labels"], "annotations": a
 
 ```bash
 # 1. 接收端日誌裡第一筆送到 /omnibus 的測試告警
-test_posts=$(podman logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert)
+test_posts=$(podman logs --since "$since" lab-mon-webhook 2>&1 | grep ConfluentTestAlert)
 post=$(echo "$test_posts" | grep "^POST /omnibus" | head -1)
 
 # 2. 拆開：路徑、User-Agent（前後各帶一個空白）、JSON 本文
@@ -7458,8 +7460,9 @@ rm prometheus/confluent/confluent-alerts-test.yml
 podman exec lab-mon-prometheus wget -q -O- --post-data='' http://localhost:9090/-/reload
 sleep 290
 
-# 2. 接收端收到的每一筆測試告警：路徑與狀態（Python 在 lab-node:96 裡跑）
-podman logs lab-mon-webhook 2>&1 | grep ConfluentTestAlert | podman run --rm -i lab-node:96 python3 -c '
+# 2. 接收端收到的每一筆測試告警：路徑與狀態（Python 在 lab-node:96 裡跑；since 是這一節開頭記下的時間）
+test_posts=$(podman logs --since "$since" lab-mon-webhook 2>&1 | grep ConfluentTestAlert)
+echo "$test_posts" | podman run --rm -i lab-node:96 python3 -c '
 import re, sys
 for line in sys.stdin:
     path = re.match(r"POST (\S+)", line).group(1)
@@ -8551,7 +8554,7 @@ REST 經 LB：200
 kb01 confluent-server 重試次數：0
 ```
 
-master key 落地在每台的 `service.env`，開機不依賴保管庫，所以重試次數是 0。C3 在第 13 章的 drop-in 加了「等 MDS」之後約 2–3 分鐘回來；沒加之前 lab 實測是 12 分鐘（C3 比 MDS 先起來會卡住不開 9021）。
+master key 落地在每台的 `service.env`，開機不連任何外部系統，所以重試次數是 0。C3 在第 13 章的 drop-in 加了「等 MDS」之後約 2–3 分鐘回來；沒加之前 lab 實測是 12 分鐘（C3 比 MDS 先起來會卡住不開 9021）。
 
 操作機也重開了。`/secure/ssh` 的 volume 還在，金鑰不用重放；正式環境那個加密的 file system 要先解鎖、掛載好，ssh 才連得上各主機（沒掛載好時 ssh 找不到金鑰檔）。確認金鑰還在、連得上各主機：
 
@@ -12544,7 +12547,7 @@ echo "lab-mon-blackbox：$blackbox_state；prometheus.yml：$wildcard_lines 行�
 lab-mon-blackbox：running；prometheus.yml：1 行用萬用字元
 ```
 
-驗三件事：`promtool test rules` 通過（在 Prometheus 容器裡跑，它自帶 promtool）、`cert-expiry` 的 target 全 up（第一次抓要等一個 `scrape_interval`，最多 5 分鐘）、規則 24 條載入沒錯：
+驗三件事：`promtool test rules` 通過（在 Prometheus 容器裡跑，它自帶 promtool）、`cert-expiry` 的 target 全 up（第一次抓要等一個 `scrape_interval`，最多 5 分鐘）、規則 29 條載入沒錯：
 
 ```bash
 # 1. promtool test rules（在 Prometheus 容器裡跑，它自帶 promtool）
@@ -12698,8 +12701,8 @@ echo "rc=$rc"
 
 ```out
 app-legacy-billing.crt（CN=app-legacy-billing）到期 2027-10-28，剩 364 天
-（…每張一行）
-檢查了 10 張憑證，結束碼 0
+（…每張一行：7 張平台憑證加銀行根憑證）
+檢查了 8 張憑證，結束碼 0
 rc=0
 ```
 
@@ -12801,7 +12804,7 @@ echo "syslog：$(journalctl -t confluent-cert -n 1 --no-pager -o cat)"
 
 ```out
 下次執行：Thu 2026-10-30 08:10:00 CST
-syslog：檢查了 10 張憑證，結束碼 0
+syslog：檢查了 8 張憑證，結束碼 0
 ```
 
 ## 22.4 告警響了做什麼
@@ -12813,7 +12816,7 @@ syslog：檢查了 10 張憑證，結束碼 0
 | `CertificateExpiringSoon`（剩 < 60 天）或 syslog `快到期` | 該排換發了 | 第 21 章：同一個 CA 換 leaf（21.2）；銀行說要換根或中繼才是 21.3／21.4。整個平台共用 `cp-server`、`kafka-internal`，一條告警通常代表全部 |
 | `CertificateExpiringCritical`（< 14 天） | 來不及走正常變更流程就要出事 | 立刻換；換不及就先和銀行 CA 要一張短效的 |
 | `CertificateProbeFailed` | 探不到：服務掛了（看 `ConfluentTargetDown`）或憑證已經不被 exporter 信任（過期、換了 CA 沒更新 `ca.pem`） | 先 28.2 快照分辨是服務還是憑證 |
-| 選單 17 顯示「剩不到 30 天」 | 同上，維運人員隨時能看 | — |
+| 選單 17 顯示「剩不到 30 天」 | 維運人員隨時能看；30 天是選單畫面的提醒色，排換發以上面 60 天的告警為準 | — |
 
 > 誰負責看：規則與 syslog 都進銀行的監控／SIEM，告警到平台維運；換發是平台的變更單，CA 窗口要先排。不要把「到期日」只記在某個人的行事曆。
 
@@ -13142,11 +13145,11 @@ echo "密碼字樣：$(cat *.txt | grep -ciE 'password=|salt|stored_key')"
 acls.txt              4 行
 broker-configs.txt    2 行
 features.txt          8 行
-rbac.txt             47 行
+rbac.txt             45 行
 topic-configs.txt    66 行
 topics.txt          160 行
 users.txt            11 行
-RBAC 的 principal：15 個；SHA256SUMS：7 個檔
+RBAC 的 principal：14 個；SHA256SUMS：7 個檔
 密碼字樣：0
 ```
 
@@ -13337,7 +13340,7 @@ done
 ```
 
 ```out
-已匯出變更前快照(32 筆權限,7 個清單):/var/log/opmenu/snapshot-<時間>-alice
+已匯出變更前快照(31 筆權限,7 個清單):/var/log/opmenu/snapshot-<時間>-alice
 acls.txt           相同
 broker-configs.txt 相同
 features.txt       相同
@@ -13739,7 +13742,7 @@ app-restore 寫一筆：ok；讀回：1
 
 ![disk]
 
-**這一章在做什麼**：broker 的資料盤（`log.dirs=/var/lib/kafka/data`，第 10 章）是平台裡唯一會自己長大的東西：topic 沒設 retention、應用程式流量變大、replication factor 3 讓每筆訊息存三份。這一章把「看用量 → 告警 → 快滿時的處理 → 擴容與換碟」走一遍，24.3 在 lab 用一個示範 topic 真的做：寫 5 MB、縮短 retention 看 segment 被刪、再把 partition 搬到別台 broker。前提：第 14 章的檢查正常、第 17 章的監控已接上（24.2 要多給一個規則檔）。完成的樣子：24.1 印得出每台 broker 的合計與最大的 topic；銀行 Prometheus 多載入一個規則檔（多 2 條：第 17 章做完是 22 → 24 條，做過第 22 章是 25 → 27 條）；示範 topic 縮短 retention 後三個 replica 都變 0、partition 搬離 kb01 後 kb01 上的目錄消失。
+**這一章在做什麼**：broker 的資料盤（`log.dirs=/var/lib/kafka/data`，第 10 章）是平台裡唯一會自己長大的東西：topic 沒設 retention、應用程式流量變大、replication factor 3 讓每筆訊息存三份。這一章把「看用量 → 告警 → 快滿時的處理 → 擴容與換碟」走一遍，24.3 在 lab 用一個示範 topic 真的做：寫 5 MB、縮短 retention 看 segment 被刪、再把 partition 搬到別台 broker。前提：第 14 章的檢查正常、第 17 章的監控已接上（24.2 要多給一個規則檔）。完成的樣子：24.1 印得出每台 broker 的合計與最大的 topic；銀行 Prometheus 多載入一個規則檔（多 1 條：第 17 章做完是 26 → 27 條，做過第 22 章是 29 → 30 條）；示範 topic 縮短 retention 後三個 replica 都變 0、partition 搬離 kb01 後 kb01 上的目錄消失。
 
 ## 24.1 看用量：哪台 broker、哪個 topic 吃多少
 
@@ -16195,7 +16198,7 @@ echo "舊密碼登入：$login；binding：$binding_total 條；topic：$topics_
 
 ![triage]
 
-**這一章在做什麼**：安裝期的「出問題先看哪裡」在 14.1；這一章是**上線後**的版本：告警響了或有人回報，依症狀查表（28.1），先跑一分鐘快照（28.2），用 lab 演一次最常見的「一台 broker 掉了」（28.3），再列常見錯誤訊息的意思（28.4）與要找原廠時帶什麼（28.5）。前提：第 17 章的監控接著、第 16 章的選單裝好。完成的樣子：快照在健康叢集全綠；演練裡 kb04 停掉 → 快照看到 3／4 台、under-replicated、MDS 連不上，銀行 Prometheus 兩條告警 firing → 重啟 → 歸零、告警解除。
+**這一章在做什麼**：安裝期的「出問題先看哪裡」在 14.1；這一章是**上線後**的版本：告警響了或有人回報，依症狀查表（28.1），先跑一分鐘快照（28.2），用 lab 演一次最常見的「一台 broker 掉了」（28.3），再列常見錯誤訊息的意思（28.4）、要找原廠時帶什麼（28.5），以及 MDS 不能用時的備用路徑（28.6）。前提：第 17 章的監控接著、第 16 章的選單裝好。完成的樣子：快照在健康叢集全綠；演練裡 kb04 停掉 → 快照看到 3／4 台、under-replicated、MDS 連不上，銀行 Prometheus 三條告警 firing（`ConfluentTargetDown`、`KafkaUnderReplicatedPartitions`、`KafkaFencedBrokers`）→ 重啟 → 歸零、告警解除。
 
 ## 28.1 速查表：症狀 → 看什麼 → 做什麼
 
@@ -16291,7 +16294,7 @@ EOF
 ```
 
 ```out
-firing：無；pending：無
+firing：無；pending：JvmHeapHigh
 （pending 那一欄每次不同：lab 的 controller heap 小，常看到 JvmHeapHigh；也可能是無）
 ```
 
@@ -16371,7 +16374,7 @@ kb04：failed；日誌最後一行：Oct 29 03:35:36 kb04 systemd[1]: confluent-
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-告警：`ConfluentTargetDown` 2 分鐘後 firing、`KafkaUnderReplicatedPartitions` 5 分鐘後 firing（`for` 是故意放寬的，滾動重啟時才不會叫人）。lab 每 10 秒看一次、最多等 7 分鐘：
+告警：`ConfluentTargetDown` 2 分鐘後 firing、`KafkaUnderReplicatedPartitions` 與 `KafkaFencedBrokers` 5 分鐘後 firing（`for` 是故意放寬的，滾動重啟時才不會叫人；兩條 5 分鐘的差不多同時響）。lab 每 10 秒看一次、最多等 7 分鐘：
 
 ```bash
 # 等 KafkaUnderReplicatedPartitions 變 firing：每 10 秒看一次，最多 42 次（7 分鐘）
@@ -16400,7 +16403,7 @@ echo "等了約 $((i * 10)) 秒：$status"
 ```
 
 ```out
-等了約 320 秒：firing：ConfluentTargetDown(kb04.poc.lab), KafkaUnderReplicatedPartitions(lab)；pending：CertificateProbeFailed
+等了約 280 秒：firing：ConfluentTargetDown(kb04.poc.lab), KafkaFencedBrokers(lab), KafkaUnderReplicatedPartitions(lab)；pending：CertificateProbeFailed
 （pending 那一欄每次不同：CertificateProbeFailed、JvmHeapHigh 都可能出現，也可能是無）
 ```
 
@@ -16510,7 +16513,7 @@ echo "等了約 $((i * 10)) 秒：$status"
 
 ![mdsdown]
 
-**這一節在做什麼**：操作機連不到任何一台 MDS（8090）時，人員的 AD 登入做不了，選單進不去，91 緊急憑證也換不到 token。常見原因是防火牆規則改壞了，或 MDS 全掛了（看 28.4 的 `Waiting for all of the authorizer futures`）。這時還有兩扇門：主機類的工作（看日誌、重啟服務）走選單的**緊急主機模式**，Kafka 類的工作（topic、設定、SCRAM 帳號）走 **`kafka-admin`**（SCRAM，9095）。兩者都不經 MDS、不經 AD，授權由 broker 本機的 binding 判斷（11.2 驗證過）。做不到的是改 role binding；MDS 全掛時人員也登不進 C3，經 REST Proxy 的應用程式要看 REST 是否還換得到 token（28.4）。
+**這一節在做什麼**：操作機連不到任何一台 MDS（8090）時，人員的 AD 登入做不了，選單進不去，91 緊急憑證也換不到 token。常見原因是防火牆規則改壞了，或 MDS 全掛了（看 28.4 的 `Waiting for all of the authorizer futures`）。這時還有兩扇門：主機類的工作（看日誌、重啟服務）走選單的**緊急主機模式**，Kafka 類的工作（topic、設定、SCRAM 帳號）走 **`kafka-admin`**（SCRAM，9095）。兩者都不經 MDS、不經 AD，授權由 broker 本機的 binding 判斷（11.2 驗證過）。做不到的是改 role binding；MDS 全掛時人員也登不進 C3，經 REST Proxy 的應用程式也會受影響（REST Proxy 要經 MDS 取得權限，見第 12 章）。
 
 lab 用「網路團隊在 broker 上擋掉操作機連 8090」模擬（只加 runtime 規則，`firewall-cmd --reload` 或重開機就消失）；broker 之間、REST Proxy、C3 連 MDS 都不受影響。
 
@@ -16795,7 +16798,7 @@ kafka-admin: SCRAM-SHA-512=iterations=8192
 
 | 段 | 做什麼 | 出問題怎麼退 |
 |---|---|---|
-| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3（2.5.1 → 2.6.1）→ broker 逐台 → controller 逐台（leader 最後）→ REST Proxy → 操作機的工具 | `dnf downgrade` 回 8.2.4（29.8） |
+| 一 | 套件 8.2.4 → 8.3.2，JDK 維持 21。順序照原廠：C3（2.5.1 → 2.6.1）→ broker 逐台 → controller 逐台（leader 最後）→ 操作機的工具 → REST Proxy | `dnf downgrade` 回 8.2.4（29.8） |
 | 二 | JDK 21 → 25：controller、broker、REST Proxy、C3、操作機逐台切換 `/opt/java/current` | 連結切回 21、重啟 |
 | 三 | finalize：features 升到 4.3（`kafka-features upgrade --release-version 4.3`） | **不能退**：之後只有新舊版之間沒有 metadata 變更才能降版，8.3 降回去可能要從備份還原 |
 
@@ -16812,7 +16815,7 @@ kafka-admin: SCRAM-SHA-512=iterations=8192
 
 每一段、每一台都要等健康（MDS 回 200、under-replicated 為 0、quorum Lag 為 0）才做下一台。
 
-> 實測（lab，全程持續流量，2026-10-26 的升級演練，當時 C3 不動；這一版多了 C3 先升的一步，從零重跑後以新數字為準）：約 48 分鐘。直連應用程式送出 14,009 筆、讀回 14,009 筆，遺失 0；經負載平衡的 REST 2,684 次中失敗 2 次（HTTP 402，都發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 19 章的驗收，都全數通過。
+> 實測（lab，全程持續流量，2026-11-09 從零重跑，含 C3 先升的一步）：約 36 分鐘。直連應用程式送出 10,348 筆、讀回 10,348 筆，遺失 0；經負載平衡的 REST 1,918 次，失敗 0 次（2026-10-26 那次演練曾有 2 次 HTTP 402，發生在 controller 重啟的那幾秒，lab 用的是試用 license）。三段結束各跑一次第 19 章的驗收，都全數通過。
 
 ## 29.1 目標版本上架與升級前檢查
 
@@ -17082,7 +17085,7 @@ C3 自己寫的 4 個檔：cp-control-center
 alice 從 C3 登入：200
 ```
 
-> 陷阱（lab 實測，2.6.0／2.6.1 之間的換版本）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。2.5.1 → 2.6.1 用的是同一段，從零重跑時再確認這個行為。
+> 陷阱（lab 實測，2.6.0／2.6.1 之間的換版本）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`（還有 `alertmanager-generated.yml`）。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。2.5.1 → 2.6.1 也一樣（上面的 out）。
 
 > 此時 C3（2.6.1）配著 CP 8.2.4：在原廠支援範圍內（2.6.x：7.5.15 到 8.3.x），第一段中途、也就是 broker 只升了一部分時 C3 看到的是新舊混合的叢集，這是原廠建議的順序。
 
@@ -17262,11 +17265,27 @@ source ~/conf/kraft.env
 # svc-ops 登入 MDS，給 svc-rest 在 _confluent-command 的 ResourceOwner
 confluent login --url https://kb01.poc.lab:8090 --certificate-authority-path ~/pki/certs/bank-root.pem \
   --certificate-only --client-cert-path ~/pki/certs/svc-ops.crt --client-key-path ~/pki/keys/svc-ops.key > /dev/null
-confluent iam rbac role-binding create \
+result=$(confluent iam rbac role-binding create \
   --principal User:svc-rest \
   --role ResourceOwner \
   --resource Topic:_confluent-command \
-  --kafka-cluster $CLUSTER_ID | grep -E 'Role|Name' | tr -s ' '
+  --kafka-cluster $CLUSTER_ID 2>&1)
+
+# 剛逐台重啟過 broker：auth topic 的 leader 剛搬家，第一筆寫入常回 50003（見 28.4）；只有這個錯誤再送一次
+if echo "$result" | grep -q "not the current leader"; then
+  result=$(confluent iam rbac role-binding create \
+    --principal User:svc-rest \
+    --role ResourceOwner \
+    --resource Topic:_confluent-command \
+    --kafka-cluster $CLUSTER_ID 2>&1)
+fi
+
+# 成功只印兩行；其他錯誤整段印出來，停下來看
+if echo "$result" | grep -q "ResourceOwner"; then
+  echo "$result" | grep -E 'Role|Name' | tr -s ' '
+else
+  echo "$result"
+fi
 ```
 
 ```out
@@ -17860,7 +17879,7 @@ EOF
 ```
 
 ```out
-9.8 更新集合：156 個 RPM、79 MB（約 100–220 秒）；合併後的套件庫 227 個 RPM
+9.8 更新集合：155 個 RPM、80 MB（約 100–250 秒）；合併後的套件庫 226 個 RPM
 ```
 
 把合併好的內容換上 repo01 的 `/os/`：
@@ -17882,10 +17901,10 @@ EOF
 ```
 
 ```out
-repo01 /os/：227 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
+repo01 /os/：226 個 RPM；rocky-release：rocky-release-9.8-1.2.el9.noarch.rpm
 ```
 
-> 說明：更新集合是 156 個 RPM（124 個要更新的套件加上相依，2026-11-01 從 Rocky 9.8 鏡像實測，10-30 是 154 個；鏡像更新後數字會變），只有 79 MB，因為這批主機的套件只有最小安裝加上平台要用的工具；真正的 RHEL 主機裝的東西多，數字會大很多，請銀行的 OS 團隊用同樣的方法（在代表性的主機上 `dnf update --downloadonly`）估算。套件庫合併後同時有 9.6 和 9.8 的版本，dnf 會挑最新的。
+> 說明：更新集合是 155 個 RPM（124 個要更新的套件加上相依，2026-11-08 從 Rocky 9.8 鏡像實測，11-01 是 156 個、10-30 是 154 個；鏡像更新後數字會變），只有 80 MB，因為這批主機的套件只有最小安裝加上平台要用的工具；真正的 RHEL 主機裝的東西多，數字會大很多，請銀行的 OS 團隊用同樣的方法（在代表性的主機上 `dnf update --downloadonly`）估算。套件庫合併後同時有 9.6 和 9.8 的版本，dnf 會挑最新的。
 
 > 陷阱：dnf 會快取套件庫的中繼資料 48 小時，剛同步完主機可能還看到舊的清單。30.1 之後的指令都帶 `--refresh`。
 
@@ -18395,7 +18414,7 @@ ops02 Rocky Linux 9.8 (Blue Onyx)
 under-replicated：0；REST 經 LB=200 C3=200
 ```
 
-再跑一次第 19 章的驗收（19.1–19.3），結果要全數通過。持續流量（直連應用程式的背景寫入、經 LB 的 REST 呼叫）在更新期間的數字：直連應用程式遺失幾筆、經 LB 的 REST 失敗幾次，從零重跑後以實測為準（尚無實測）；REST 照 12.1 一台一台從 LB 停用再重啟，預期和第 29 章一樣沒有失敗。
+再跑一次第 19 章的驗收（19.1–19.3），結果要全數通過。持續流量（直連應用程式的背景寫入、經 LB 的 REST 呼叫）在更新期間的數字（lab，2026-11-09 從零重跑，約 15 分鐘）：直連應用程式送出 3,261 筆、讀回 3,261 筆，遺失 0；經 LB 的 REST 605 次，失敗 0 次（REST 照 12.1 一台一台從 LB 停用再重啟）。
 
 **lab 做不到的事（要老實說）**：
 - 容器不能重開機，kernel 沒有更新（容器沒有自己的核心）。lab 只驗證「套件更新的指令、順序、versionlock 擋住 Confluent、服務在新的 glibc／systemd 套件下重啟後是健康的」，**沒有驗證**重開機本身：開機順序、`fstab` 掛載、網卡命名、核心模組、`systemctl enable` 過的服務是否自己起來（19.4 的冷開機演練只涵蓋「容器一起停、一起開」，不是 OS 的開機）。
@@ -18595,7 +18614,7 @@ C3 自己寫的 4 個檔：cp-control-center
 alice 從 C3 登入：200
 ```
 
-> 陷阱（lab 實測）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。
+> 陷阱（lab 實測）：RPM 換版本（升級或退回）會把 `trigger_rules-generated.yml`、`recording_rules-generated.yml`、`prometheus-generated-local.yml` 改回 `root:root 644`（還有 `alertmanager-generated.yml`）。畫面照樣打得開，但之後在 C3 上改告警規則會寫不進去，所以 `c3-change.sh` 換完套件一定把這 4 個檔改回 `cp-control-center`（`prometheus-generated.yml` 是我們寫的，維持 root）。
 
 最後用瀏覽器登入 C3 看一眼叢集總覽（lab：`https://localhost:19021`，alice）。
 
@@ -19020,8 +19039,8 @@ echo "$urls" | sort
 
 ```out
 抓到 10 / 10 台
-control-center 61
-kafka-broker 712
+control-center 55
+kafka-broker 689
 kafka-controller 60
 rest-proxy 188
 告警規則 26 條，health 不是 ok 的 0 條
@@ -19060,10 +19079,14 @@ print("\n".join(sorted(lines)))
 '
 names='ConfluentTargetDown|KafkaUnderReplicatedPartitions|KafkaFencedBrokers'
 
+# 只讀現在以後的接收端日誌（UTC）：重測時才不會讀到上一次的通知；停機是上一塊剛做的，告警最快 2 分鐘後才會來
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
 # 等 4 筆 OPEN：每 15 秒看一次，最多 40 次
 for i in $(seq 1 40); do
   # 接收端日誌裡這三種告警，去掉 { 之前的字，只留 JSON
-  json=$(podman logs lab-mon-webhook 2>&1 | grep -E "^POST /c3-omnibus.*($names)" | sed 's/^[^{]*//')
+  logs=$(podman logs --since "$since" lab-mon-webhook 2>&1)
+  json=$(echo "$logs" | grep -E "^POST /c3-omnibus.*($names)" | sed 's/^[^{]*//')
 
   # 用 printf 不多加換行：還沒有資料時，Python 讀到的就是空的
   result=$(printf '%s' "$json" | podman run --rm -i lab-node:96 python3 -c "$py")
@@ -19105,12 +19128,13 @@ kc03 active，kb04 active
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
-等 4 筆 RESOLVED（exporter 在服務啟動後約 2 分鐘才回應，加上規則與通知間隔，最多等 10 分鐘）。`py`、`names` 沿用上一塊：
+等 4 筆 RESOLVED（exporter 在服務啟動後約 2 分鐘才回應，加上規則與通知間隔，最多等 10 分鐘）。`py`、`names`、`since` 沿用上一塊：
 
 ```bash
 # 每 15 秒看一次，最多 40 次
 for i in $(seq 1 40); do
-  json=$(podman logs lab-mon-webhook 2>&1 | grep -E "^POST /c3-omnibus.*($names)" | sed 's/^[^{]*//')
+  logs=$(podman logs --since "$since" lab-mon-webhook 2>&1)
+  json=$(echo "$logs" | grep -E "^POST /c3-omnibus.*($names)" | sed 's/^[^{]*//')
   result=$(printf '%s' "$json" | podman run --rm -i lab-node:96 python3 -c "$py")
 
   if [ "$(echo "$result" | grep -c '^RESOLVED')" -ge 4 ]; then
@@ -19171,8 +19195,9 @@ guid=$(echo "$guids" | tail -1)
 # 3. 看兩台 Alertmanager（每 10 秒看一次，最多 3 分鐘）；到 c3-01 上問
 for i in $(seq 1 18); do
   result=$(ssh c3-01.poc.lab bash -s <<'EOF'
-# 第二台：告警名稱去重複，多個用逗號接起來
-names=$(curl -s -m 5 127.0.0.1:9193/api/v2/alerts | grep -o '"alertname":"chapter32-test"' | sed 's/"alertname"://')
+# C3 的告警名稱是「trigger 名稱$$guid」，所以比對 annotation 的 trigger 名稱
+# 第二台：trigger 名稱去重複，多個用逗號接起來
+names=$(curl -s -m 5 127.0.0.1:9193/api/v2/alerts | grep -o '"trigger":"chapter32-test"' | sed 's/"trigger"://')
 second=$(echo "$names" | sort -u | paste -sd, -)
 
 # 內建那台：同樣的做法
@@ -19180,7 +19205,7 @@ names=$(sudo curl -s -m 5 \
   --cacert /etc/confluent/ssl/ca.pem \
   --cert /etc/confluent/ssl/svc-c3.crt \
   --key /etc/confluent/ssl/svc-c3.key \
-  https://c3-01.poc.lab:9093/api/v2/alerts | grep -o '"alertname":"chapter32-test"' | sed 's/"alertname"://')
+  https://c3-01.poc.lab:9093/api/v2/alerts | grep -o '"trigger":"chapter32-test"' | sed 's/"trigger"://')
 builtin=$(echo "$names" | sort -u | paste -sd, -)
 
 echo "第二台=[$second] 內建=[$builtin]"
@@ -19229,11 +19254,1116 @@ custom-rules-confluent.yml root
 | 情況 | 要做什麼 |
 |---|---|
 | 新增或調整告警 | 改第 17 章的規則檔（17.5），重做 32.3 第一塊，`sudo systemctl restart prometheus`；規則用到新的指標時，把名稱加進 `prometheus-generated.yml` 對應 job 的保留清單 |
-| 新增、移除主機（第 25、31 章） | 改 `prometheus-generated.yml` 的 targets，`sudo systemctl restart prometheus` |
+| 新增、移除主機（第 25 章） | 改 `prometheus-generated.yml` 的 targets，`sudo systemctl restart prometheus` |
 | 升級 C3（29.3、31.4） | `c3-change.sh` 不會動這些檔（lab 實測雜湊不變）；第二台用內附的執行檔，換完 `sudo systemctl restart alertmanager-custom`，並用 32.4 再測一次 |
 | 換憑證（第 21 章） | 第二台只聽 127.0.0.1、走 HTTP，沒有憑證；抓 7071 只驗伺服器憑證（銀行根憑證不變就不用處理） |
 | omnibus 位址或認證改了 | 改 `alertmanager.yml`，`sudo systemctl restart alertmanager-custom`；要認證時加 `http_config` |
 | 銀行之後提供了 Prometheus | 改走第 17 章；同一個告警不要兩邊都送 omnibus（把 `rule_files` 的 `custom-rules-confluent.yml` 拿掉） |
+
+# 33. 第三十三站：密碼學資產盤點（CBOM）與合規報告
+
+![cbom]
+
+**這一章在做什麼**：把平台用到的密碼學資產（憑證、金鑰、演算法、TLS 設定、密碼函式庫）盤點成一份 **CBOM**（Cryptography Bill of Materials，CycloneDX 格式），用 OPA 依規則判斷，產出一頁 HTML 的合規報告。目的是後量子密碼（PQC）遷移的盤點：哪些資產是量子電腦破解得了的、在哪幾台、要先處理哪些。完成的樣子：操作機上有 `cbom.json`、`findings.json`、`report.html` 三個檔，報告開頭寫明這次盤了哪些元件、有沒有違規。
+
+Confluent Platform 是原廠產品，我們沒有原始碼，所以不能用掃原始碼的工具；盤的是**部署出來的東西**，分五層：
+
+| 層 | 盤什麼 | 怎麼取得 | 工具 |
+|---|---|---|---|
+| ① 憑證與金鑰 | 每個埠實際出示的憑證鏈、操作機的憑證來源、MDS token 公鑰、ssh 金鑰 | 從操作機連每個埠；讀公開的憑證檔 | cbomkit-theia（PQCA）、cbom-tools |
+| ② JDK 與 OS 設定 | `java.security` 停用了哪些演算法、OS 的 crypto-policies | 讀各台的檔 | cbom-tools |
+| ③ 平台設定 | properties 裡的 TLS 版本、SASL 機制、token 簽章、Secret Protection | 讀各台的 properties（密碼類的值在主機上先遮掉） | cbom-tools |
+| ④ 實際連線 | 每個埠支援的 TLS 版本、cipher suite、金鑰交換群組 | 從操作機掃 | testssl.sh |
+| 函式庫 | 原廠 jar 裡帶了哪些密碼函式庫、什麼版本 | 各台的 jar 清單雜湊相同的歸一組，每組掃一台 | syft |
+| ⑤ 執行期證據（可選） | 服務執行時實際用了哪些演算法、由哪段程式呼叫 | 用 JDK 內建的 JFR 對執行中的服務錄一段時間 | jcmd、jfr |
+
+**每一台都收**，不是每種元件挑一台：盤點要抓的正是「某一台和別台不一樣」。同一個資產在 CBOM 裡只記一筆，附上出現在哪幾台。
+
+**全程只讀**：不取私鑰、不取密碼（properties 裡密碼類的值在主機上就換成 `<遮蔽>` 才傳回）、平台主機上不放任何新程式（只跑系統本來就有的指令）。
+
+**判斷分六級**（規則在 `policy/cbom.rego`，門檻要調整改這個檔就好）：
+
+| 等級 | 意思 | 影響合規結果 |
+|---|---|---|
+| 違規 | 現在就不合格，和量子電腦無關：SHA-1、3DES、RSA 小於 2048、TLS 1.1 以下、過期的憑證、金鑰檔權限太鬆 | 有任何一個就是不合規 |
+| 量子脆弱 | 現在安全，但量子電腦可破解：RSA、ECDSA、ECDH 等。NIST IR 8547：2030 年後棄用、2035 年後禁用 | 不影響，但要排進遷移計畫 |
+| 警告 | 建議改善：還接受 TLS 1.2、CBC 類的 cipher suite | 不影響 |
+| 待人工判斷 | 規則不認得 | 不影響 |
+| 通過 | 後量子演算法、混合式金鑰交換、AES、SHA-2 等 | — |
+| 盤點資訊 | 只是列出來，例如帶了哪些密碼函式庫 | — |
+
+> 預期的結果：現在的憑證都是 RSA，所以「量子脆弱」一定有不少，這是事實、不是工具的問題。報告的用途是盤點與排遷移的優先序，不是拿到「全部通過」。金鑰交換則比較好：JDK 25.0.5 的 TLS 1.3 預設就支援後量子混合金鑰交換（`X25519MLKEM768`），所以遷移到 JDK 25 之後，broker 之間與用新版 JDK 的用戶端已經在用；實際用不用取決於用戶端也要支援。
+
+> 限制：(1) 原廠程式內部怎麼用密碼學，只盤得到函式庫與執行期證據，完整的要向原廠要 SBOM／CBOM。(2) 執行期證據只看得到錄製期間發生的事。(3) CBOM 列出所有端點與演算法，本身是敏感資料，存放位置與誰能看要照銀行的規定。
+
+## 33.1 下載工具
+
+@role 小安 | dl01 | root
+
+三個原廠有發行執行檔的工具在下載機抓，各自核對原廠提供的雜湊：OPA（規則判斷）、syft（列出 jar）、testssl.sh（掃 TLS）。testssl.sh 的 release 沒有附雜湊檔，用下面寫的雜湊核對（我方 2026-11-11 下載 3.2.5 時算的；換版本時要重算並更新這一行）。
+
+```bash
+# 1. 版本與放的位置（落地區的 tools/cbom）
+opa_version=1.22.3
+syft_version=1.57.1
+testssl_version=3.2.5
+testssl_sha256=23bb53d50ae093b89631e9fff547c087f632bf35f7a3d7dc78dd4ffff56cd779
+dest=/out/tools/cbom
+mkdir -p $dest
+rm -f $dest/opa_linux_amd64 $dest/syft_*.tar.gz $dest/testssl.sh-*.tar.gz
+
+# 2. OPA：release 附 .sha256
+opa_base=https://github.com/open-policy-agent/opa/releases/download/v$opa_version
+curl -fsSL -o $dest/opa_linux_amd64 $opa_base/opa_linux_amd64
+curl -fsSL -o /tmp/opa.sha256 $opa_base/opa_linux_amd64.sha256
+expected=$(cut -d' ' -f1 /tmp/opa.sha256)
+actual=$(sha256sum $dest/opa_linux_amd64 | cut -d' ' -f1)
+
+if [ "$actual" = "$expected" ]; then
+  echo "opa $opa_version sha256-ok"
+else
+  echo "opa 的 sha256 對不上，已刪掉：不要帶進行內"
+  rm -f $dest/opa_linux_amd64
+  false
+fi
+
+# 3. syft：release 附 checksums.txt（每行「雜湊  檔名」）
+syft_tar=syft_${syft_version}_linux_amd64.tar.gz
+syft_base=https://github.com/anchore/syft/releases/download/v$syft_version
+curl -fsSL -o $dest/$syft_tar $syft_base/$syft_tar
+curl -fsSL -o /tmp/syft.sums $syft_base/syft_${syft_version}_checksums.txt
+expected=$(grep " $syft_tar\$" /tmp/syft.sums | cut -d' ' -f1)
+actual=$(sha256sum $dest/$syft_tar | cut -d' ' -f1)
+
+if [ "$actual" = "$expected" ]; then
+  echo "syft $syft_version sha256-ok"
+else
+  echo "syft 的 sha256 對不上，已刪掉：不要帶進行內"
+  rm -f $dest/$syft_tar
+  false
+fi
+
+# 4. testssl.sh：GitHub 的版本原始碼包，和上面寫的雜湊比
+testssl_tar=testssl.sh-$testssl_version.tar.gz
+curl -fsSL -o $dest/$testssl_tar https://github.com/testssl/testssl.sh/archive/refs/tags/v$testssl_version.tar.gz
+actual=$(sha256sum $dest/$testssl_tar | cut -d' ' -f1)
+
+if [ "$actual" = "$testssl_sha256" ]; then
+  echo "testssl.sh $testssl_version sha256-ok"
+else
+  echo "testssl.sh 的 sha256 對不上，已刪掉：不要帶進行內"
+  rm -f $dest/$testssl_tar
+  false
+fi
+
+rm -f /tmp/opa.sha256 /tmp/syft.sums
+```
+
+```out
+opa 1.22.3 sha256-ok
+syft 1.57.1 sha256-ok
+testssl.sh 3.2.5 sha256-ok
+```
+
+## 33.2 我方的交付物進落地區，整批送進操作機
+
+@role 小安 | Windows 終端 | 本機
+
+另外兩樣是我方的**交付物**，和這本手冊一起給：`cbom-kit-<日期>.<雜湊>.tar.gz` 與它的 `SHA256SUMS`。裡面是 `cbom-tools.jar`（把原料做成 CBOM、把判斷結果做成報告，需要 JDK 17 以上）、`cbomkit-theia`（PQCA 的工具，原廠只發行原始碼與容器映像，我方從 1.1.2 的原始碼編成靜態執行檔）、`policy/`（OPA 的規則與規則的測試）、`cbom-collect.sh`（33.4–33.7 的同一套收集指令包成的腳本，33.10 的 Jenkins 用）、`VERSIONS`（各元件的版本與雜湊）。把它們複製進落地區的 `tools/cbom/`、核對雜湊，再替整個目錄產生一份 `SHA256SUMS`（`<CBOM 交付物的目錄>` 換成你放這兩個檔的地方）：
+
+```bash
+D="<CBOM 交付物的目錄>"
+dest=~/kafka-lab/landing/tools/cbom
+
+# 1. 落地區只留最新一版的交付物
+mkdir -p $dest
+rm -f $dest/cbom-kit-*.tar.gz $dest/SHA256SUMS
+cp "$D"/cbom-kit-*.tar.gz $dest/
+
+# 2. 用交付物自己的 SHA256SUMS 核對
+cd $dest
+sha256sum -c "$D/SHA256SUMS"
+
+# 3. 整個目錄（交付物＋33.1 下載的三個工具）產生一份 SHA256SUMS，進內網後用它核對
+sha256sum cbom-kit-*.tar.gz opa_linux_amd64 syft_*.tar.gz testssl.sh-*.tar.gz > SHA256SUMS
+wc -l < SHA256SUMS
+```
+
+```out
+cbom-kit-20261111.8aaca17b.tar.gz: OK
+4
+```
+
+> 正式環境同樣是這幾個檔，經銀行的檔案交換平台進落地區（第 3 章）。雜湊對不上就不要裝。
+
+整包送進操作機（就是 3.4 的做法，`D=cbom`）：
+
+@role Lab 管理員（扮演銀行） | Windows 終端 | 本機
+
+```bash
+D=cbom   # 要送的目錄（落地區 tools/ 底下）
+src="$HOME/kafka-lab/landing/tools/$D"
+dest=/root/landing/tools/$D
+
+# 1. 操作機上同名的舊目錄先清掉（落地區是唯讀的，要先打開寫入權限）
+if podman exec lab-ops02-1 test -d "$dest"; then
+  podman exec lab-ops02-1 chmod -R u+w "$dest"
+  podman exec lab-ops02-1 rm -rf "$dest"
+fi
+
+# 2. 送過去，再收回寫入權限
+podman cp "$(cygpath -m "$src")" lab-ops02-1:/root/landing/tools/
+podman exec lab-ops02-1 chmod -R a-w "$dest"
+
+# 3. 在操作機上核對 sha256
+if podman exec -w "$dest" lab-ops02-1 sha256sum -c --quiet SHA256SUMS; then
+  echo sha256-ok
+else
+  echo "sha256 對不上：請重送，不要裝"
+  false
+fi
+```
+
+```out
+sha256-ok
+```
+
+## 33.3 裝到操作機
+
+@role 小安 | ops02 | root
+
+工具都裝在 `/opt/cbom`：`bin/` 放執行檔，`policy/` 放規則。testssl.sh 一定要有 DNS 查詢工具（`dig`），所以從銀行的 OS 套件庫裝 `bind-utils`。裝完跑規則的測試，確認規則檔和 OPA 的版本合得來。
+
+```bash
+# 1. 清掉舊的，解開交付物（cbom-kit/ 底下的東西直接放進 /opt/cbom）
+rm -rf /opt/cbom
+mkdir -p /opt/cbom/bin
+cd ~/landing/tools/cbom
+tar -xzf cbom-kit-*.tar.gz -C /opt/cbom --strip-components=1
+mv /opt/cbom/cbom-tools.jar /opt/cbom/bin/
+
+# 執行檔的權限在這裡明確設定：交付物經過檔案交換之後，壓縮檔裡的執行權限不一定還在
+install -m 755 /opt/cbom/cbomkit-theia /opt/cbom/bin/cbomkit-theia
+install -m 755 /opt/cbom/cbom-collect.sh /opt/cbom/bin/cbom-collect.sh
+rm -f /opt/cbom/cbomkit-theia /opt/cbom/cbom-collect.sh
+
+# 2. 三個原廠工具
+install -m 755 opa_linux_amd64 /opt/cbom/bin/opa
+tar -xzf syft_*.tar.gz -C /opt/cbom/bin syft
+mkdir -p /opt/cbom/bin/testssl
+tar -xzf testssl.sh-*.tar.gz -C /opt/cbom/bin/testssl --strip-components=1
+
+# 3. testssl.sh 需要的 DNS 工具（OS 套件，來自銀行的套件庫）
+dnf -y -q install bind-utils
+
+# 4. 確認每個都能執行
+/opt/cbom/bin/opa version | head -1
+/opt/cbom/bin/syft version | grep '^Version'
+testssl_version=$(/opt/cbom/bin/testssl/testssl.sh --version | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)
+echo "testssl.sh $testssl_version"
+/opt/cbom/bin/cbomkit-theia --help | grep -c 'CBOMkit-theia analyzes'
+/opt/java/current/bin/java -jar /opt/cbom/bin/cbom-tools.jar 2>&1 | head -1
+rpm -q bind-utils
+
+# 5. 規則的測試（調整規則之後也先跑這個）
+/opt/cbom/bin/opa test /opt/cbom/policy/
+```
+
+```out
+Version: 1.22.3
+Version:       1.57.1
+testssl.sh 3.2.5
+1
+用法：
+bind-utils-9.16.23-40.el9_8.13.x86_64
+PASS: 22/22
+```
+
+## 33.4 收集：這次的範圍、每台的設定與檔案清單
+
+@role 小安 | ops02 | root
+
+原料都收到 `~/cbom/raw`（每次重新收，舊的先清掉）。先決定這次的範圍：`roles` 可以只寫其中幾個，例如只盤 broker 就寫 `roles="broker"`；沒有全選的話，報告開頭會標成「部分盤點」。`shared` 是不屬於單一元件的資產（銀行的根憑證與簽發憑證、SCRAM 帳號、ssh 金鑰、操作機的憑證來源）。
+
+```bash
+# 1. 這次要盤哪些元件（全部＝完整盤點）
+roles="controller broker rest c3 shared"
+domain=poc.lab
+raw=~/cbom/raw
+rm -rf $raw
+mkdir -p $raw/shared
+
+# 2. 依選的元件列出主機（「主機:元件」）
+host_roles=""
+
+if echo " $roles " | grep -q " controller "; then
+  host_roles="$host_roles kc01:controller kc02:controller kc03:controller"
+fi
+
+if echo " $roles " | grep -q " broker "; then
+  host_roles="$host_roles kb01:broker kb02:broker kb03:broker kb04:broker"
+fi
+
+if echo " $roles " | grep -q " rest "; then
+  host_roles="$host_roles rest01:rest rest02:rest"
+fi
+
+if echo " $roles " | grep -q " c3 "; then
+  host_roles="$host_roles c3-01:c3"
+fi
+
+# 只留主機名（kc01:controller → kc01）
+hosts=$(echo "$host_roles" | sed -E 's/:[a-z0-9]+//g')
+
+# 3. 記下這次的範圍：cbom-tools 與報告都讀這個檔
+cat > $raw/collect.env <<EOF
+DOMAIN=$domain
+ENV=lab
+CP_VERSION=$(rpm -q --qf '%{VERSION}' confluent-server)
+COLLECTED_AT=$(date +%Y-%m-%dT%H:%M:%S%:z)
+ALL_ROLES=controller broker rest c3 shared
+ROLES=$roles
+HOSTS=$host_roles
+JFR_SECONDS=
+TOOLS=$(grep -E '^(cbom-tools|cbomkit-theia) ' /opt/cbom/VERSIONS | paste -sd, -), testssl.sh 3.2.5, syft 1.57.1, opa 1.22.3
+EOF
+
+echo "主機：$hosts"
+grep -E '^(ROLES|CP_VERSION|TOOLS)=' $raw/collect.env
+```
+
+```out
+主機： kc01 kc02 kc03 kb01 kb02 kb03 kb04 rest01 rest02 c3-01
+CP_VERSION=8.3.2
+ROLES=controller broker rest c3 shared
+TOOLS=cbom-tools 1.0.0,cbomkit-theia 1.1.2, testssl.sh 3.2.5, syft 1.57.1, opa 1.22.3
+```
+
+每一台送一段腳本過去：在主機上把要的東西整理成幾個小檔，打成 tar 傳回來，主機上的暫存目錄隨即刪掉。properties 裡只取和密碼學有關的設定鍵，密碼類的值在主機上就換成 `<遮蔽>`。`hosts`、`domain`、`raw`、`roles` 沿用上一塊（33.4 到 33.8 在同一個終端機做完）。
+
+```bash
+for host in $hosts; do
+  mkdir -p $raw/$host
+
+  ssh $host.$domain bash -s <<'EOF' | tar -xf - -C $raw/$host
+tmp=$(mktemp -d)
+cd "$tmp"
+
+# 1. 服務實際用的 properties：只留密碼學相關的設定，密碼類的值遮掉
+unit_exec=$(systemctl show confluent-server confluent-kafka-rest confluent-control-center -p ExecStart 2>/dev/null)
+props=$(echo "$unit_exec" | grep -o '/etc/confluent[^ ;]*properties' | head -1)
+keys='ssl|sasl|tls|cipher|protocol|keystore|truststore|algorithm|scram|token|secret|fips|security\.providers|listeners'
+secrets='password|secret|jaas|credentials|api\.key'
+echo "# file=$props" > platform-config.properties
+settings=$(sudo cat "$props" | grep -E "^[^#=]*($keys)[^=]*=")
+echo "$settings" | sed -E "/^[^=]*($secrets)[^=]*=/ s/=.*/=<遮蔽>/" >> platform-config.properties
+
+# 2. Secret Protection 的非機密參數（金鑰長度、迭代次數；不取 salt 與密文）
+metadata=$(sudo cat /etc/confluent/secrets/security.properties | grep '^_metadata\.')
+echo "$metadata" | grep -vE 'salt|\.enc' > secret-protection.properties
+
+# 3. 憑證與金鑰檔：只列權限、擁有者、大小、路徑；公開的 token 公鑰取回
+sudo find /etc/confluent/ssl -type f -printf '%m %u:%g %s %p\n' > ssl-files.list
+sudo cat /etc/confluent/ssl/mds-token-public.pem > mds-token-public.pem
+
+# 4. JDK 與 OS 的密碼設定
+cat /opt/java/current/conf/security/java.security > java.security
+/opt/java/current/bin/java -version > java-version.txt 2>&1
+readlink -f /opt/java/current >> java-version.txt
+update-crypto-policies --show > os-crypto.txt
+cat /etc/redhat-release >> os-crypto.txt
+openssl version >> os-crypto.txt
+
+# 5. jar 清單的雜湊（之後用來分組）、Confluent 套件版本、監聽的埠（不含 ssh）
+find /usr/share/java -name '*.jar' -type f -exec sha256sum {} + | sort -k2 > jars.sha256
+rpm -qa 'confluent*' | sort > rpm-confluent.txt
+listening=$(ss -ltnH | awk '{print $4}' | sed 's/.*://')
+echo "$listening" | sort -un | grep -v '^22$' > ports.txt
+
+tar -cf - .
+cd /
+rm -rf "$tmp"
+EOF
+
+  files=$(ls $raw/$host | wc -l)
+  settings=$(grep -vc '^#' $raw/$host/platform-config.properties)
+  jars=$(wc -l < $raw/$host/jars.sha256)
+  echo "$host：$files 個檔，設定 $settings 行，jar $jars 個"
+done
+```
+
+```out
+kc01：10 個檔，設定 42 行，jar 2818 個
+kc02：10 個檔，設定 42 行，jar 2818 個
+kc03：10 個檔，設定 42 行，jar 2818 個
+kb01：10 個檔，設定 72 行，jar 2818 個
+kb02：10 個檔，設定 72 行，jar 2818 個
+kb03：10 個檔，設定 72 行，jar 2818 個
+kb04：10 個檔，設定 72 行，jar 2818 個
+rest01：10 個檔，設定 32 行，jar 1809 個
+rest02：10 個檔，設定 32 行，jar 1809 個
+c3-01：10 個檔，設定 43 行，jar 1019 個
+```
+
+收回來的東西不該有私鑰，密碼類的設定都該是遮過的。檢查一次：
+
+```bash
+private_keys=$(grep -rl 'PRIVATE KEY' $raw | wc -l)
+secret_lines=$(grep -rhE '^[^=]*(password|secret|jaas|credentials)[^=]*=' $raw --include=platform-config.properties)
+unmasked=$(echo "$secret_lines" | awk '!/=<遮蔽>/ {c++} END {print c + 0}')
+echo "含私鑰的檔：$private_keys 個；沒遮到的密碼類設定：$unmasked 行；原料大小 $(du -sh $raw | cut -f1)"
+```
+
+```out
+含私鑰的檔：0 個；沒遮到的密碼類設定：0 行；原料大小 4.3M
+```
+
+## 33.5 收集：每個埠出示的憑證、TLS 掃描
+
+@role 小安 | ops02 | root
+
+從操作機連每台的每個監聽埠，把伺服器出示的憑證鏈存下來（之後交給 cbomkit-theia）。要求用戶端憑證的埠交握不會完成，但伺服器的憑證鏈在那之前就送出來了，一樣存得到；不是 TLS 的埠（例如 JMX 的隨機埠）存不到東西，略過。
+
+```bash
+for host in $hosts; do
+  mkdir -p $raw/$host/served
+
+  for port in $(cat $raw/$host/ports.txt); do
+    pem=$raw/$host/served/$port.pem
+
+    # 交握失敗（要求用戶端憑證、不是 TLS）不算錯：能存到憑證鏈就存
+    if echo | timeout 8 openssl s_client -connect $host.$domain:$port -showcerts > /tmp/cbom-chain.txt 2>/dev/null; then
+      handshake=ok
+    else
+      handshake=failed
+    fi
+
+    sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' /tmp/cbom-chain.txt > $pem
+
+    if [ ! -s $pem ]; then
+      rm -f $pem
+    fi
+  done
+
+  listening=$(wc -l < $raw/$host/ports.txt)
+  served=$(ls $raw/$host/served | wc -l)
+  served_ports=$(ls $raw/$host/served | sed 's/.pem//' | paste -sd' ' -)
+  echo "$host：監聽 $listening 個埠，出示憑證的 $served 個（$served_ports）"
+done
+
+rm -f /tmp/cbom-chain.txt
+```
+
+```out
+kc01：監聽 3 個埠，出示憑證的 2 個（7071 9093）
+kc02：監聽 3 個埠，出示憑證的 2 個（7071 9093）
+kc03：監聽 3 個埠，出示憑證的 2 個（7071 9093）
+kb01：監聽 7 個埠，出示憑證的 6 個（7071 8090 9092 9094 9095 9096）
+kb02：監聽 7 個埠，出示憑證的 6 個（7071 8090 9092 9094 9095 9096）
+kb03：監聽 7 個埠，出示憑證的 6 個（7071 8090 9092 9094 9095 9096）
+kb04：監聽 7 個埠，出示憑證的 6 個（7071 8090 9092 9094 9095 9096）
+rest01：監聽 3 個埠，出示憑證的 2 個（7071 8082）
+rest02：監聽 3 個埠，出示憑證的 2 個（7071 8082）
+c3-01：監聽 6 個埠，出示憑證的 3 個（7071 9021 9090）
+```
+
+對出示憑證的每個埠跑 testssl.sh，看它支援哪些 TLS 版本、cipher suite、金鑰交換群組。一個埠約 1 分鐘，所以每台主機各開一個背景工作同時掃，lab 的 10 台約 4 分鐘。testssl.sh 只做交握，不送資料，不影響服務。
+
+```bash
+start=$(date +%s)
+
+for host in $hosts; do
+  mkdir -p $raw/$host/tls
+  ip=$(getent hosts $host.$domain | cut -d' ' -f1)
+
+  # 這台的每個埠依序掃；整台放到背景，和其他主機同時進行
+  (
+    for pem in $raw/$host/served/*.pem; do
+      port=$(basename $pem .pem)
+      /opt/cbom/bin/testssl/testssl.sh --quiet --color 0 --nodns none --ip $ip -p -s -f -S \
+        --jsonfile $raw/$host/tls/$port.json $host.$domain:$port
+    done
+  ) > $raw/$host/tls/scan.log 2>&1 &
+done
+
+wait
+scanned=$(ls $raw/*/tls/*.json | wc -l)
+failed=$(grep -l '"scanProblem"' $raw/*/tls/*.json | wc -l)
+echo "掃了 $scanned 個埠，掃不了的 $failed 個（約 $(( $(date +%s) - start )) 秒）"
+```
+
+```out
+掃了 37 個埠，掃不了的 0 個（約 240 秒）
+```
+
+## 33.6 收集：jar 分組、平台共用的資產、憑證掃描
+
+@role 小安 | ops02 | root
+
+每台的 jar 有幾百 MB，全部搬回來太浪費。33.4 已經收回每台 jar 清單的雜湊：清單完全相同的主機歸成一組，每組只取一台的 jar 回操作機，用 syft 列出來，掃完就刪。正常情況是 controller 與 broker 一組（裝的是同一套 RPM）、REST Proxy 一組、C3 一組；升級做到一半、某台還是舊版時，它會自己成一組被單獨掃，報告看得出來。
+
+```bash
+mkdir -p $raw/shared/jars
+rm -f $raw/shared/jars/groups.txt
+
+# 1. 每台一行「清單雜湊前 12 碼 主機」
+for host in $hosts; do
+  digest=$(sha256sum < $raw/$host/jars.sha256 | cut -c1-12)
+  echo "$digest $host" >> $raw/shared/jars/groups.txt
+done
+
+# 2. 每一組取第一台的 jar 回來掃（暫存放磁碟，不放 /tmp：一組可能有 2 GB）
+for digest in $(cut -d' ' -f1 $raw/shared/jars/groups.txt | sort -u); do
+  members=$(grep "^$digest " $raw/shared/jars/groups.txt | cut -d' ' -f2 | paste -sd' ' -)
+  first=$(echo "$members" | cut -d' ' -f1)
+  tmp=~/cbom/tmp-jars
+  rm -rf $tmp
+  mkdir -p $tmp
+
+  ssh $first.$domain "tar -C /usr/share -cf - java" | tar -C $tmp -xf -
+  SYFT_CHECK_FOR_APP_UPDATE=false /opt/cbom/bin/syft scan dir:$tmp/java \
+    -o cyclonedx-json=$raw/shared/jars/sbom-$digest.json -q 2>/dev/null
+
+  echo "組 $digest（$members）：取 $first 的 jar $(du -sh $tmp | cut -f1)"
+  rm -rf $tmp
+done
+```
+
+```out
+組 60ff3024640f（kc01 kc02 kc03 kb01 kb02 kb03 kb04）：取 kc01 的 jar 2.1G
+組 650ce6cfe64f（c3-01）：取 c3-01 的 jar 837M
+組 ea89dcc9eadc（rest01 rest02）：取 rest01 的 jar 1.4G
+```
+
+平台共用的資產（`roles` 有 `shared` 才收）：操作機的憑證來源只取公開的 `.crt`／`.pem`，不取 `.p12` 與私鑰；SCRAM 帳號只取機制與迭代次數，不取雜湊；ssh 金鑰只取類型、長度、指紋。
+
+```bash
+if echo " $roles " | grep -q " shared "; then
+  mkdir -p $raw/shared/pki
+
+  # 1. 操作機的憑證來源：公開的憑證檔（含私鑰的檔一律不取）
+  for file in ~/pki/certs/*.crt ~/pki/certs/*.pem; do
+    if ! grep -q 'PRIVATE KEY' $file; then
+      cp $file $raw/shared/pki/
+    fi
+  done
+
+  # 2. SCRAM 帳號：kafka-configs 的輸出裡只留 SCRAM 的那幾行（機制與迭代次數，沒有密碼雜湊）
+  users=$(kafka-configs --bootstrap-server kb01.$domain:9094 --command-config ~/conf/client-admin.properties \
+    --describe --entity-type users 2>/dev/null)
+  echo "$users" | grep '^SCRAM credential configs' > $raw/shared/scram-users.txt
+
+  # 3. ssh 金鑰：操作機連各台用的那把，與每台的主機金鑰（ssh-keygen -l 印長度、指紋、類型）
+  ssh-keygen -l -f /secure/ssh/cpuser_ed25519.pub > $raw/shared/ssh-client-key.txt
+  rm -f $raw/shared/ssh-host-keys.txt
+
+  for host in $hosts; do
+    keys=$(ssh-keyscan -T 5 $host.$domain 2>/dev/null | grep -v '^#')
+    echo "$keys" | ssh-keygen -l -f - | sed "s/^/$host /" >> $raw/shared/ssh-host-keys.txt
+  done
+
+  certs=$(ls $raw/shared/pki | wc -l)
+  scram_users=$(wc -l < $raw/shared/scram-users.txt)
+  host_keys=$(wc -l < $raw/shared/ssh-host-keys.txt)
+  echo "憑證來源 $certs 個檔，SCRAM 帳號 $scram_users 個，ssh 主機金鑰 $host_keys 把"
+fi
+```
+
+```out
+憑證來源 9 個檔，SCRAM 帳號 8 個，ssh 主機金鑰 30 把
+```
+
+最後用 cbomkit-theia 掃整包原料裡的憑證檔（每個埠出示的憑證鏈、操作機的憑證來源），產出憑證、公鑰、簽章演算法：
+
+```bash
+/opt/cbom/bin/cbomkit-theia dir $raw -p certificates > $raw/shared/theia.json 2> $raw/shared/theia.log
+grep -o 'numberOfDetectedCertificates=[0-9]*' $raw/shared/theia.log
+du -sh $raw | cut -f1
+```
+
+```out
+numberOfDetectedCertificates=89
+25M
+```
+
+> `theia.log` 裡會有幾行 `x509: malformed certificate`：那是 `mds-token-public.pem`（公鑰，不是憑證），cbomkit-theia 讀不了；這把公鑰由 cbom-tools 另外處理。
+
+## 33.7 （可選）執行期證據：用 JFR 錄一段
+
+@role 小安 | ops02 | root
+
+前面幾層回答「設定成什麼、支援什麼」；這一節回答「**執行時實際用了什麼**」：對執行中的服務用 JDK 內建的 `jcmd` 啟動 JFR 錄製，只開密碼學相關的事件，錄一段時間後取回，用 `jfr print --json` 轉成 JSON。不用重啟服務，不用在主機上放新程式。看得到原廠程式實際向 JDK 要了哪些演算法（連呼叫它的程式都有），以及有沒有連線真的用了後量子金鑰交換。
+
+不想做就跳過這一節，CBOM 與報告照樣產得出來，只是報告會寫「執行期證據：沒有錄製」。
+
+> 限制（lab 實測）：只看得到錄製期間發生的事；`jdk.TLSHandshake` 只記 TLS 1.3 的交握，TLS 1.2 的交握成功了也沒有事件，所以不能用它找還在用 TLS 1.2 的用戶端。錄製檔含連線對象的位址（不含金鑰），屬於敏感資料。這是對正式環境服務的操作，要先經銀行同意。
+
+```bash
+seconds=60
+events="jdk.SecurityProviderService#enabled=true jdk.TLSHandshake#enabled=true jdk.X509Certificate#enabled=true"
+
+# 1. 每台啟動錄製（jcmd 要用服務自己的帳號執行；三個事件名稱各是一個參數，遠端用 "$@" 全部收下）
+for host in $hosts; do
+  ssh $host.$domain bash -s -- $events <<'EOF'
+unit=$(systemctl list-units --state=running --no-legend 'confluent-*.service' | awk '{print $1}' | head -1)
+pid=$(systemctl show $unit -p MainPID --value)
+user=$(ps -o user= -p $pid)
+sudo -u $user /opt/java/current/bin/jcmd $pid JFR.start name=cbom maxsize=50m "$@" > /dev/null
+echo "$(hostname -s)：$unit（pid $pid，$user）開始錄"
+EOF
+done
+
+# 2. 錄製期間平台照常運作；這裡等設定的秒數
+sleep $seconds
+```
+
+```out
+kc01：confluent-server.service（pid 27，cp-kafka）開始錄
+kc02：confluent-server.service（pid 27，cp-kafka）開始錄
+kc03：confluent-server.service（pid 27，cp-kafka）開始錄
+kb01：confluent-server.service（pid 27，cp-kafka）開始錄
+kb02：confluent-server.service（pid 27，cp-kafka）開始錄
+kb03：confluent-server.service（pid 27，cp-kafka）開始錄
+kb04：confluent-server.service（pid 27，cp-kafka）開始錄
+rest01：confluent-kafka-rest.service（pid 27，cp-kafka-rest）開始錄
+rest02：confluent-kafka-rest.service（pid 27，cp-kafka-rest）開始錄
+c3-01：confluent-control-center.service（pid 62，cp-control-center）開始錄
+```
+
+停止錄製、取回、轉成 JSON，主機上的錄製檔隨即刪掉；最後把錄了幾秒記進 `collect.env`：
+
+```bash
+for host in $hosts; do
+  mkdir -p $raw/$host/jfr
+
+  # 1. 匯出並停止錄製，把錄製檔傳回來，主機上的刪掉
+  ssh $host.$domain bash -s > $raw/$host/jfr/service.jfr <<'EOF'
+unit=$(systemctl list-units --state=running --no-legend 'confluent-*.service' | awk '{print $1}' | head -1)
+pid=$(systemctl show $unit -p MainPID --value)
+user=$(ps -o user= -p $pid)
+sudo rm -f /tmp/cbom.jfr
+sudo -u $user /opt/java/current/bin/jcmd $pid JFR.dump name=cbom filename=/tmp/cbom.jfr > /dev/null
+sudo -u $user /opt/java/current/bin/jcmd $pid JFR.stop name=cbom > /dev/null
+sudo cat /tmp/cbom.jfr
+sudo rm -f /tmp/cbom.jfr
+EOF
+
+  # 2. 轉成 JSON（只取用得到的事件），原始的錄製檔刪掉
+  /opt/java/current/bin/jfr print --json --events jdk.SecurityProviderService,jdk.TLSHandshake \
+    $raw/$host/jfr/service.jfr > $raw/$host/jfr/service.json
+  rm -f $raw/$host/jfr/service.jfr
+
+  requests=$(grep -o '"jdk.SecurityProviderService"' $raw/$host/jfr/service.json | wc -l)
+  handshakes=$(grep -o '"jdk.TLSHandshake"' $raw/$host/jfr/service.json | wc -l)
+  echo "$host：演算法請求 $requests 筆，TLS 交握 $handshakes 筆"
+done
+
+sed -i "s/^JFR_SECONDS=.*/JFR_SECONDS=$seconds/" $raw/collect.env
+```
+
+```out
+kc01：演算法請求 0 筆，TLS 交握 0 筆
+kc02：演算法請求 0 筆，TLS 交握 0 筆
+kc03：演算法請求 0 筆，TLS 交握 0 筆
+kb01：演算法請求 480 筆，TLS 交握 5 筆
+kb02：演算法請求 282 筆，TLS 交握 3 筆
+kb03：演算法請求 480 筆，TLS 交握 5 筆
+kb04：演算法請求 282 筆，TLS 交握 3 筆
+rest01：演算法請求 2 筆，TLS 交握 0 筆
+rest02：演算法請求 2 筆，TLS 交握 0 筆
+c3-01：演算法請求 0 筆，TLS 交握 0 筆
+（數字隨錄製期間的連線量而不同）
+```
+
+> 0 筆不是錯：這 60 秒內那個服務沒有建立新的連線、也沒有向 JDK 要新的演算法（controller 之間是長時間保持的連線）。要看到更多，就在有流量的時段錄，或錄久一點。
+
+## 33.8 產生 CBOM、用 OPA 判斷、產出報告
+
+@role 小安 | ops02 | root
+
+三個指令：`cbom-tools build` 把原料併成一份 CBOM 並用 CycloneDX 官方的 schema 驗證；`opa eval` 依規則判斷；`cbom-tools report` 做成 HTML。產出在 `~/cbom/out`。
+
+```bash
+out=~/cbom/out
+rm -rf $out
+mkdir -p $out
+java=/opt/java/current/bin/java
+opa=/opt/cbom/bin/opa
+policy=/opt/cbom/policy/
+
+# 1. 原料 → CBOM（預設 CycloneDX 1.7；接收的系統只收 1.6 時在最後加 --spec 1.6）
+$java -jar /opt/cbom/bin/cbom-tools.jar build $raw $out/cbom.json
+
+# 2. 依規則判斷
+$opa eval --data $policy --input $out/cbom.json --format json 'data.cbom.report' > $out/findings.json
+
+# 3. 報告
+$java -jar /opt/cbom/bin/cbom-tools.jar report $out/cbom.json $out/findings.json $out/report.html
+```
+
+```out
+CBOM（CycloneDX 1.7）：168 個元件 {algorithm=39, certificate=9, file=44, library=25, protocol=10, related-crypto-material=41}
+範圍：完整（controller broker rest c3 shared）
+已通過官方 schema 驗證，寫到 /root/cbom/out/cbom.json
+報告寫到 /root/cbom/out/report.html
+```
+
+合規結果與各等級的數量（自動化時用這兩行決定要不要讓工作失敗：只有 `compliant` 是 `false` 才算失敗）：
+
+```bash
+$opa eval --data $policy --input $out/cbom.json --format raw 'data.cbom.report.compliant'
+echo
+$opa eval --data $policy --input $out/cbom.json --format raw 'data.cbom.report.counts'
+echo
+ls $out
+```
+
+```out
+true
+{"quantum-vulnerable":72,"unknown":0,"violation":0,"warning":3}
+cbom.json
+findings.json
+report.html
+```
+
+> 數字隨環境不同：憑證張數、ssh 金鑰、有沒有做 33.7 都會影響。lab 的結果是違規 0、量子脆弱 72（9 張憑證、41 把金鑰、22 個演算法，都是 RSA 與橢圓曲線）、警告 3（三組 TLS 1.2 的設定）；執行期看到的演算法每次錄到的不一樣，所以元件數與量子脆弱的數字會差幾個。
+
+## 33.9 取回報告
+
+@role Lab 管理員 | Windows 終端 | 本機
+
+lab 把三個檔從操作機複製出來，用瀏覽器開 `report.html`（單一檔，不連外）。正式環境照銀行的檔案交換流程取出，或由 33.10 的 Jenkins 提供下載。
+
+```bash
+dest=~/kafka-lab/cbom-out
+mkdir -p $dest
+
+for file in cbom.json findings.json report.html; do
+  podman cp lab-ops02-1:/root/cbom/out/$file "$(cygpath -m $dest/$file)"
+done
+
+ls $dest
+grep -o '<div class="verdict [a-z]*">[^<]*' $dest/report.html | cut -d'>' -f2
+grep -o '<strong>[^<]*盤點</strong>' $dest/report.html
+```
+
+```out
+cbom.json
+findings.json
+report.html
+合規：沒有違規項目
+<strong>完整盤點</strong>
+```
+
+怎麼讀這份報告：
+
+| 區塊 | 看什麼 |
+|---|---|
+| 範圍 | 「完整盤點」還是「部分盤點」；部分盤點會寫沒盤到哪些元件，這種報告不代表整個平台 |
+| 合規結論 | 有沒有違規。量子脆弱與警告不影響這一行 |
+| 後量子遷移的重點 | 幾個端點支援後量子金鑰交換、幾個還接受 TLS 1.2、憑證是什麼金鑰、執行期有沒有真的用到後量子金鑰交換 |
+| 違規 | 要立刻處理，每一列有原因、依據、出現在哪幾台 |
+| 量子脆弱 | 遷移計畫的清單。寫「優先處理」的是有效期跨過 2030 或 2035 年的憑證 |
+| 警告、待人工判斷 | 排改善；待人工判斷的看過之後把規則補進 `cbom.rego` |
+| 通過、盤點資訊 | 預設收合；函式庫清單在盤點資訊裡 |
+
+## 33.10 用 Jenkins 自動執行
+
+**這一節在做什麼**：把 33.4–33.8 交給 Jenkins：在畫面上勾選這次要盤的元件、按執行，跑完在同一頁看報告、下載 `cbom.json`、`findings.json`、`report.html`，每次執行的結果都留著。pipeline（交付物裡的 `Jenkinsfile`）只是依序呼叫前面用過的程式，沒有自己的邏輯，所以同樣的事不靠 Jenkins 也能照 33.4–33.8 手動做。
+
+| 步驟 | 在哪裡執行 | 做什麼 |
+|---|---|---|
+| 收集 | 操作機 | Jenkins 用一把**受限的 ssh 金鑰**連進來，只能執行 `cbom-collect.sh`（33.4–33.7 的同一套指令包成的腳本），原料從這條連線傳回 Jenkins |
+| 產生、判斷、報告 | Jenkins | `cbom-tools build` → `opa test`＋`opa eval` → `cbom-tools report` |
+| 結果 | Jenkins | 只有「違規」讓這次執行失敗；量子脆弱與警告不擋 |
+
+**Jenkins 拿不到操作機的 shell，也不持有平台的任何金鑰。** 操作機不開放 root 用 ssh 登入，所以收集的入口是一個專用帳號 `cbomsvc`（密碼鎖定、只收金鑰，和 `cpuser` 同樣的做法）：Jenkins 的公鑰在它的 `authorized_keys` 裡被 `command=` 固定成只能執行一個指令、`from=` 限定只收 Jenkins 的 IP；那個指令用 sudo 執行收集腳本，sudoers 只開這一條。連線時帶的字串只接受 `collect roles=… jfr=…` 這種寫法，其他一律拒絕，所以金鑰外洩最多只能再做一次盤點。
+
+Jenkins 是銀行的；lab 用容器扮演。銀行的 Jenkins 要有 Credentials Binding、SSH Credentials、HTML Publisher 三個 plugin，執行的 agent 上要有 JDK 17 以上、`/opt/cbom/bin` 的 `cbom-tools.jar` 與 `opa`、`/opt/cbom/policy`、ssh、curl、tar。
+
+> 報告有兩份、內容相同：`report.html` 是單一檔（樣式寫在檔案裡），下載、寄送用；Jenkins 畫面上那份把樣式放在另一個檔。原因是 Jenkins 預設的安全設定（Content-Security-Policy）不允許寫在 HTML 裡的樣式，硬要顯示單一檔的那份版面會全掉；不要為了這個去放寬 Jenkins 的安全設定。
+
+@role Lab 管理員（扮演銀行的 Jenkins 管理員） | Windows 終端 | 本機
+
+先準備 lab 的 Jenkins 要用的檔案，都放在 `~/kafka-lab/jenkins`：一把專用的金鑰、管理員密碼（隨機產生，存檔不顯示）、agent 要用的工具（從落地區的交付物解出來）：
+
+```bash
+dir=~/kafka-lab/jenkins
+mkdir -p $dir/secrets $dir/init.groovy.d $dir/cbom/bin
+
+# 1. Jenkins 專用的 ssh 金鑰（已經有就不重產）；公鑰之後交給操作機
+if [ ! -f $dir/secrets/cbom_collect_ed25519 ]; then
+  ssh-keygen -q -t ed25519 -N '' -C "jenkins-cbom-$(date +%Y%m%d)" -f $dir/secrets/cbom_collect_ed25519
+fi
+
+# 2. 管理員密碼：24 個字的亂數，寫進檔案，不印出來（Windows 上 openssl 的輸出帶 \r，要一起去掉）
+if [ ! -f $dir/secrets/admin.pass ]; then
+  openssl rand -base64 18 | tr -d '\r\n' > $dir/secrets/admin.pass
+fi
+
+# 3. agent 要用的工具：交付物裡的 cbom-tools.jar、policy、Jenkinsfile，加上 OPA
+src=~/kafka-lab/landing/tools/cbom
+tar -xzf $src/cbom-kit-*.tar.gz -C $dir/cbom --strip-components=1
+mv $dir/cbom/cbom-tools.jar $dir/cbom/bin/cbom-tools.jar
+cp $src/opa_linux_amd64 $dir/cbom/bin/opa
+
+# 4. 把公鑰送到操作機，給 OS 團隊放進 cbomsvc 的 authorized_keys
+podman cp "$(cygpath -m $dir/secrets/cbom_collect_ed25519.pub)" lab-ops02-1:/tmp/jenkins-cbom.pub
+
+ls $dir/cbom $dir/cbom/bin
+echo "密碼檔 $(wc -c < $dir/secrets/admin.pass) 個字"
+```
+
+```out
+/c/Users/<你>/kafka-lab/jenkins/cbom:
+Jenkinsfile
+VERSIONS
+bin
+cbom-collect.sh
+cbomkit-theia
+policy
+
+/c/Users/<你>/kafka-lab/jenkins/cbom/bin:
+cbom-tools.jar
+opa
+密碼檔 24 個字
+```
+
+@role 銀行 OS 團隊（lab 由小安代勞） | ops02 | root
+
+操作機這一端：收集腳本要讀的主機清單 `/etc/cbom/cbom.conf`、專用帳號 `cbomsvc`、受限的公鑰、那一條 sudo。`172.35.0.70` 是 lab 裡 Jenkins 的 IP，正式環境換成銀行 Jenkins agent 的 IP。
+
+```bash
+jenkins_ip=172.35.0.70
+
+# 1. 收集腳本的主機清單（短名稱，空白隔開）與管理用的連線
+mkdir -p /etc/cbom
+cat > /etc/cbom/cbom.conf <<'EOF'
+DOMAIN=poc.lab
+ENV_NAME=lab
+CONTROLLERS="kc01 kc02 kc03"
+BROKERS="kb01 kb02 kb03 kb04"
+RESTS="rest01 rest02"
+C3_HOSTS="c3-01"
+ADMIN_BOOTSTRAP=kb01.poc.lab:9094
+ADMIN_CLIENT_CONF=/root/conf/client-admin.properties
+EOF
+chmod 644 /etc/cbom/cbom.conf
+
+# 2. 專用帳號：密碼鎖定、只收金鑰
+if ! id cbomsvc > /dev/null 2>&1; then
+  useradd -m -s /bin/bash cbomsvc
+fi
+
+passwd -l cbomsvc > /dev/null
+
+# 3. Jenkins 的公鑰：連進來只會執行收集腳本，只收 Jenkins 的 IP（整行不換行）
+install -d -m 700 -o cbomsvc -g cbomsvc /home/cbomsvc/.ssh
+forced='sudo /opt/cbom/bin/cbom-collect.sh --from-ssh \"$SSH_ORIGINAL_COMMAND\"'
+options="command=\"$forced\",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,from=\"$jenkins_ip\""
+echo "$options $(cat /tmp/jenkins-cbom.pub)" > /home/cbomsvc/.ssh/authorized_keys
+chown cbomsvc:cbomsvc /home/cbomsvc/.ssh/authorized_keys
+chmod 600 /home/cbomsvc/.ssh/authorized_keys
+rm -f /tmp/jenkins-cbom.pub
+
+# 4. sudo 只開這一條
+echo 'cbomsvc ALL=(root) NOPASSWD: /opt/cbom/bin/cbom-collect.sh --from-ssh *' > /etc/sudoers.d/cbomsvc
+chmod 440 /etc/sudoers.d/cbomsvc
+visudo -cf /etc/sudoers.d/cbomsvc
+sudo -l -U cbomsvc | tail -1
+cut -d' ' -f1-5 /home/cbomsvc/.ssh/authorized_keys | cut -c1-120
+```
+
+```out
+/etc/sudoers.d/cbomsvc: parsed OK
+    (root) NOPASSWD: /opt/cbom/bin/cbom-collect.sh --from-ssh *
+command="sudo /opt/cbom/bin/cbom-collect.sh --from-ssh \"$SSH_ORIGINAL_COMMAND\"",no-pty,no-port-forwarding,no-agent-forw
+```
+
+收集腳本會拒絕不認得的元件，也拒絕夾帶其他指令的字串。直接在操作機上試（這兩行都應該被拒絕，所以包在 `if` 裡）：
+
+```bash
+if /opt/cbom/bin/cbom-collect.sh --from-ssh 'collect roles=broker; id' 2> /tmp/cbom-reject.txt; then
+  echo "不該成功"
+else
+  echo "夾帶其他指令：拒絕（$(cut -d' ' -f2- /tmp/cbom-reject.txt)）"
+fi
+
+if /opt/cbom/bin/cbom-collect.sh --roles nothing 2> /tmp/cbom-reject.txt; then
+  echo "不該成功"
+else
+  echo "不認得的元件：拒絕（$(cut -d' ' -f2- /tmp/cbom-reject.txt)）"
+fi
+
+rm -f /tmp/cbom-reject.txt
+```
+
+```out
+夾帶其他指令：拒絕（失敗：這把金鑰只能執行：collect [roles=a,b] [jfr=秒數]）
+不認得的元件：拒絕（失敗：不認得的元件：nothing（可以用的：controller broker rest c3 shared））
+```
+
+@role Lab 管理員（扮演銀行的 Jenkins 管理員） | Windows 終端 | 本機
+
+lab 的 Jenkins 映像：官方 LTS 加這條 pipeline 需要的 plugin。啟動時由 `init.groovy.d` 的腳本自動建立管理員帳號、credential `cbom-collect-key`（那把受限金鑰，使用者 `cbomsvc`）、工作 `cbom`（內容是交付物的 `Jenkinsfile`）；正式環境由銀行的 Jenkins 管理員在畫面上做同樣三件事。
+
+```bash
+dir=~/kafka-lab/jenkins
+
+cat > $dir/Containerfile <<'EOF'
+# lab 的 Jenkins（扮演銀行的 Jenkins）：官方 LTS 映像＋這條 pipeline 需要的 plugin
+FROM docker.io/jenkins/jenkins:2.580.2-lts-jdk21
+RUN jenkins-plugin-cli --plugins workflow-aggregator credentials-binding ssh-credentials htmlpublisher timestamper
+# 不跑安裝精靈：帳號、credential、工作由 init.groovy.d 的腳本在啟動時建立
+ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false -Xmx640m"
+COPY init.groovy.d/ /usr/share/jenkins/ref/init.groovy.d/
+EOF
+
+cat > $dir/init.groovy.d/cbom.groovy <<'EOF'
+// lab 的 Jenkins 啟動時自動設定：管理員 admin、credential cbom-collect-key、工作 cbom
+import com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey
+import com.cloudbees.plugins.credentials.CredentialsScope
+import com.cloudbees.plugins.credentials.SystemCredentialsProvider
+import com.cloudbees.plugins.credentials.domains.Domain
+import hudson.security.FullControlOnceLoggedInAuthorizationStrategy
+import hudson.security.HudsonPrivateSecurityRealm
+import jenkins.model.Jenkins
+import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition
+import org.jenkinsci.plugins.workflow.job.WorkflowJob
+
+def jenkins = Jenkins.get()
+
+def realm = new HudsonPrivateSecurityRealm(false)
+realm.createAccount('admin', new File('/run/lab/admin.pass').text.trim())
+jenkins.setSecurityRealm(realm)
+def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+strategy.setAllowAnonymousRead(false)
+jenkins.setAuthorizationStrategy(strategy)
+
+def store = SystemCredentialsProvider.getInstance().getStore()
+def existing = store.getCredentials(Domain.global()).find { it.id == 'cbom-collect-key' }
+if (existing != null) {
+  store.removeCredentials(Domain.global(), existing)
+}
+def key = new BasicSSHUserPrivateKey.DirectEntryPrivateKeySource(new File('/run/lab/cbom_collect_ed25519').text)
+store.addCredentials(Domain.global(),
+  new BasicSSHUserPrivateKey(CredentialsScope.GLOBAL, 'cbom-collect-key', 'cbomsvc', key, '', '操作機的 CBOM 收集入口（受限金鑰）'))
+
+def job = jenkins.getItem('cbom')
+if (job == null) {
+  job = jenkins.createProject(WorkflowJob, 'cbom')
+}
+job.setDefinition(new CpsFlowDefinition(new File('/opt/cbom/Jenkinsfile').text, true))
+job.save()
+jenkins.save()
+println 'lab：admin、cbom-collect-key、工作 cbom 已設定'
+EOF
+
+podman build -q -t lab-jenkins:1 -f "$(cygpath -m $dir/Containerfile)" "$(cygpath -m $dir)" > /dev/null
+podman images --format '{{.Repository}}:{{.Tag}}' | grep '/lab-jenkins:'
+```
+
+```out
+localhost/lab-jenkins:1
+```
+
+啟動。lab 的內部網路 `lab_labnet` 是隔離的（不對外、不做埠對應），所以 Jenkins 和 lb01 一樣接兩個網路：`lab_labnet`（固定 IP，連操作機）與 `lab_frontnet`（把 8080 對應到 Windows 的 18088，給瀏覽器用）。起來之後把操作機的主機金鑰記進 Jenkins 的 `known_hosts`。
+
+```bash
+dir=~/kafka-lab/jenkins
+
+# 1. 舊的容器先收掉再啟動
+if podman container exists lab-jenkins; then
+  podman rm -f lab-jenkins > /dev/null
+fi
+
+podman run -d --name lab-jenkins \
+  --network lab_labnet:ip=172.35.0.70 --network lab_frontnet \
+  --add-host ops02.poc.lab:172.35.0.10 -p 18088:8080 -m 1200m \
+  -v "$(cygpath -m $dir/secrets):/run/lab:ro" \
+  -v "$(cygpath -m $dir/cbom):/opt/cbom:ro" \
+  lab-jenkins:1 > /dev/null
+
+# 2. 等登入頁回 200：每 5 秒看一次，最多 3 分鐘
+for i in $(seq 1 36); do
+  if curl -s -f -m 4 http://localhost:18088/login > /dev/null; then
+    break
+  fi
+
+  sleep 5
+done
+
+# 3. 操作機的主機金鑰記進 Jenkins 的 known_hosts（之後 ssh 才不會問）
+podman exec -i lab-jenkins bash -s <<'EOF'
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+keys=$(ssh-keyscan -T 5 ops02.poc.lab 2>/dev/null)
+echo "$keys" | grep -v '^#' > ~/.ssh/known_hosts
+echo "known_hosts $(wc -l < ~/.ssh/known_hosts) 行"
+EOF
+
+podman logs lab-jenkins 2>&1 | grep '^lab：'
+```
+
+```out
+known_hosts 3 行
+lab：admin、cbom-collect-key、工作 cbom 已設定
+```
+
+執行工作。這裡用 Jenkins 的 API 觸發與等待，和在畫面上按按鈕是同一件事。工作剛建好、還沒執行過時，Jenkins 還不知道它有參數（參數寫在 `Jenkinsfile` 裡，跑過一次才登記），所以第一次用不帶參數的 `build`，全部是預設值（全選、不錄 JFR）；畫面上第一次也只有「Build Now」，跑過一次才變成「Build with Parameters」。lab 的 10 台約 7–11 分鐘（Jenkins 剛啟動、lab 記憶體吃緊時比較慢）。
+
+```bash
+base=http://localhost:18088
+pass=$(cat ~/kafka-lab/jenkins/secrets/admin.pass)
+# Windows 版的 curl 不認得 /tmp、/dev/null：檔名用 cygpath 轉成 Windows 的寫法，要丟掉的輸出用 > /dev/null（由 shell 處理）
+cookies=$(cygpath -m /tmp/cbom-jenkins-cookies.txt)
+
+# 1. Jenkins 的 API 要帶 crumb（防跨站請求）；同一個 cookie 檔之後都用
+crumb_json=$(curl -s -c $cookies -u "admin:$pass" $base/crumbIssuer/api/json)
+crumb=$(echo "$crumb_json" | grep -o '"crumb":"[^"]*"' | cut -d'"' -f4)
+
+# 2. 記下下一次執行的編號，再觸發（第一次執行：不帶參數的 build）
+job_json=$(curl -s -b $cookies -u "admin:$pass" $base/job/cbom/api/json)
+number=$(echo "$job_json" | grep -o '"nextBuildNumber":[0-9]*' | cut -d: -f2)
+curl -s -b $cookies -u "admin:$pass" -H "Jenkins-Crumb: $crumb" -X POST $base/job/cbom/build > /dev/null
+
+# 3. 等這次執行結束：每 10 秒看一次，最多 20 分鐘
+for i in $(seq 1 120); do
+  build_json=$(curl -s -b $cookies -u "admin:$pass" $base/job/cbom/$number/api/json)
+
+  if echo "$build_json" | grep -q '"result":"[A-Z]*"'; then
+    break
+  fi
+
+  sleep 10
+done
+
+echo "第 $number 次執行：$(echo "$build_json" | grep -o '"result":"[A-Z]*"')（約 $(( i * 10 )) 秒）"
+
+# 4. 這次執行的重點訊息
+log=$(curl -s -b $cookies -u "admin:$pass" $base/job/cbom/$number/consoleText)
+echo "$log" | grep -o '這次的範圍.*'
+echo "$log" | grep -o 'CBOM（CycloneDX.*'
+echo "$log" | grep -o 'PASS: .*'
+echo "$log" | grep -o '合規：.*'
+```
+
+```out
+第 1 次執行："result":"SUCCESS"（約 670 秒）
+這次的範圍：controller,broker,rest,c3,shared；執行期證據：不錄
+CBOM（CycloneDX 1.7）：150 個元件 {algorithm=23, certificate=9, file=44, library=25, protocol=8, related-crypto-material=41}
+PASS: 22/22
+合規：沒有違規項目 {"quantum-vulnerable":69,"unknown":0,"violation":0,"warning":3}
+```
+
+> 這次沒有錄 JFR，所以元件比 33.8 少（沒有執行期看到的演算法），量子脆弱也少幾個。
+
+三個產出都能從這次執行下載；Jenkins 畫面上的報告用的是樣式放在另一個檔的那一份（`base`、`pass`、`cookies`、`number` 沿用上一塊）：
+
+```bash
+dest=~/kafka-lab/cbom-out/jenkins-$number
+mkdir -p $dest
+
+# 1. 下載三個產出
+for file in cbom.json findings.json report.html; do
+  curl -s -f -b $cookies -u "admin:$pass" $base/job/cbom/$number/artifact/out/$file > $dest/$file
+done
+
+ls $dest
+
+# 2. 畫面上的報告頁與它的樣式檔（HTML Publisher 把報告名稱編碼成這個路徑）
+report=$base/job/cbom/$number/CBOM_20_e59088_e8a68f_e5a0b1_e5918a
+curl -s -f -b $cookies -u "admin:$pass" $report/index.html > /tmp/cbom-index.html
+curl -s -f -b $cookies -u "admin:$pass" $report/report.css > /tmp/cbom-report.css
+linked=$(grep -o 'href="report.css"' /tmp/cbom-index.html | wc -l)
+inline=$(grep -o '<style' /tmp/cbom-index.html | wc -l)
+echo "報告頁：引用樣式檔 $linked 處，寫在 HTML 裡的樣式 $inline 處"
+echo "樣式檔：$(grep -c 'font-family' /tmp/cbom-report.css) 行字型設定（讀得到）"
+rm -f /tmp/cbom-index.html /tmp/cbom-report.css
+```
+
+```out
+cbom.json
+findings.json
+report.html
+報告頁：引用樣式檔 1 處，寫在 HTML 裡的樣式 0 處
+樣式檔：1 行字型設定（讀得到）
+```
+
+再跑一次部分範圍：只盤 broker，加上 20 秒的執行期證據。跑過一次之後參數已經登記，這次用 `buildWithParameters`；參數就是畫面上那幾個勾選框的名稱（`base`、`pass`、`cookies`、`crumb` 沿用）：
+
+```bash
+job_json=$(curl -s -b $cookies -u "admin:$pass" $base/job/cbom/api/json)
+number=$(echo "$job_json" | grep -o '"nextBuildNumber":[0-9]*' | cut -d: -f2)
+params="CONTROLLER=false&BROKER=true&REST_PROXY=false&CONTROL_CENTER=false&SHARED=false"
+params="$params&RUNTIME_EVIDENCE=true&JFR_SECONDS=20"
+curl -s -b $cookies -u "admin:$pass" -H "Jenkins-Crumb: $crumb" -X POST \
+  --data "$params" $base/job/cbom/buildWithParameters > /dev/null
+
+for i in $(seq 1 120); do
+  build_json=$(curl -s -b $cookies -u "admin:$pass" $base/job/cbom/$number/api/json)
+
+  if echo "$build_json" | grep -q '"result":"[A-Z]*"'; then
+    break
+  fi
+
+  sleep 10
+done
+
+echo "第 $number 次執行：$(echo "$build_json" | grep -o '"result":"[A-Z]*"')"
+curl -s -f -b $cookies -u "admin:$pass" $base/job/cbom/$number/artifact/out/report.html > /tmp/cbom-partial.html
+grep -o '<strong>[^<]*盤點</strong>' /tmp/cbom-partial.html
+grep -o '沒有盤到：[^<]*' /tmp/cbom-partial.html
+grep -o '執行期證據：[^<]*' /tmp/cbom-partial.html
+rm -f /tmp/cbom-partial.html $cookies
+```
+
+```out
+第 2 次執行："result":"SUCCESS"
+<strong>部分盤點</strong>
+沒有盤到：controller、REST Proxy、Control Center、平台共用
+執行期證據：JFR 20 秒
+```
+
+在瀏覽器看：Windows 開 `http://localhost:18088`，帳號 `admin`，密碼在 `~/kafka-lab/jenkins/secrets/admin.pass`。
+
+| 要做什麼 | 在哪裡 |
+|---|---|
+| 執行 | 工作 `cbom` → 左邊「Build with Parameters」→ 勾選範圍 → Build（工作第一次執行時是「Build Now」） |
+| 看報告 | 那一次執行 → 左邊「CBOM 合規報告」 |
+| 下載 | 那一次執行的頁面上方「Build Artifacts」：`cbom.json`、`findings.json`、`report.html` |
+| 看結果摘要 | 執行清單上每一次的說明：範圍與各等級的數量 |
+| 之前的結果 | 最近 30 次執行都留著（`Jenkinsfile` 的 `buildDiscarder`） |
+
+> lab 的 Jenkins 接在 lab 的網路上：要拆 lab（`podman compose down -v`）之前先 `podman rm -f lab-jenkins`，否則網路刪不掉（和第 17 章的 `lab-mon-*` 一樣）。附錄 B.2 的收尾會一起收掉。
+
+## 33.11 交付之後：權限、排程、要確認的事
+
+**cpuser 的 sudo**：安裝期 `cpuser` 有完整的 sudo，交付後只剩 `cpuser-ops` 逐條列出的指令（第 16、19 章）。收集要讀幾個只有 root 讀得到的檔，所以交付後要請 OS 團隊在每台的 `/etc/sudoers.d/cpuser-ops` 加這幾條唯讀的指令（寫法要和收集腳本用的完全一樣，sudoers 比對整個參數）。lab 做這一章時還留著安裝期的 sudo，這幾條在收窄後的 sudoers 下還沒有實測，交付前要在收窄後的環境再跑一次 33.4：
+
+| 主機 | 要加的指令 |
+|---|---|
+| controller、broker | `/usr/bin/cat /etc/confluent/kafka/server.properties` |
+| REST Proxy | `/usr/bin/cat /etc/confluent/kafka-rest/kafka-rest.properties` |
+| Control Center | `/usr/bin/cat /etc/confluent/control-center/control-center.properties` |
+| 全部 | `/usr/bin/cat /etc/confluent/secrets/security.properties` |
+| 全部 | `/usr/bin/cat /etc/confluent/ssl/mds-token-public.pem` |
+| 全部 | `/usr/bin/find /etc/confluent/ssl -type f -printf …`（列出金鑰檔的權限、擁有者、大小、路徑，不讀內容；格式字串那一段在 sudoers 的寫法和 OS 團隊定） |
+
+執行期證據（33.7）另外要以服務的帳號執行 `jcmd`，而且 pid 每次重啟都不同，沒辦法逐條寫死；要做的話和 OS 團隊定一個包好的小腳本（只接受 start／dump），sudoers 開那支腳本。沒有這幾條 sudo 時收集腳本會在那一台停下來，不會交出不完整的原料。
+
+**多久做一次**：憑證換發、升級、OS 修補之後各做一次；平常每季一次。Jenkins 可以排程（工作的 Build periodically），執行期證據不要排進定期執行。
+
+**結果怎麼用**：
+
+| 報告上的 | 怎麼處理 |
+|---|---|
+| 違規 | 當成事件處理：照報告列的主機與原因修正，再跑一次確認歸零 |
+| 量子脆弱：憑證 | 等銀行的 CA 能簽後量子演算法的憑證再換；有效期跨過 2030／2035 年的優先（通常是根憑證與簽發憑證，由 CA 團隊規劃） |
+| 量子脆弱：金鑰交換 | 伺服器端 JDK 25 已經支援混合金鑰交換；盤點**用戶端**（應用程式的 JDK、librdkafka 版本）是否支援 |
+| 警告：TLS 1.2 | 確認所有用戶端都能用 TLS 1.3 之後，把 `ssl.enabled.protocols` 改成只留 `TLSv1.3` |
+
+**要向銀行確認**（已列入「請銀行確認的事項」）：行內 Jenkins 的版本與 plugin、agent 能不能連操作機的 22 埠、可否建立 `cbomsvc` 帳號與那一條 sudo、CBOM 與報告的存放位置與誰能看、接收 CBOM 的系統支援 CycloneDX 1.6 還是 1.7、有沒有指定的後量子規範、執行期證據（JFR）能不能在正式環境做。**要向原廠確認**：Confluent Platform 的 SBOM／CBOM、後量子路線圖。
 
 # B. 附錄 B：監控的覆蓋率，與 lab 監控容器的收尾
 
@@ -19340,7 +20470,7 @@ confluent-rbac.json                    10      7
 debezium-connectors.json               34      0  
 flink-jobmanager.json                  27      0  
 flink-taskmanager.json                 52      0  
-globalktable.json                      24     14  
+globalktable.json                      24     13  
 kafka-cluster-kraft.json               80     67  
 kafka-cluster.json                     87     64  
 kafka-connect-cluster.json             54      0  
@@ -19348,7 +20478,7 @@ kafka-consumer.json                    25      3
 kafka-lag-exporter.json                 9      3  
 kafka-producer.json                    32      3  
 kafka-quotas.json                       6      0  
-kafka-stream.json                      27     26  
+kafka-stream.json                      27     23  
 kafka-streams-rocksdb.json             40     39  
 kafka-topics-kraft.json                13     13  
 kafka-topics.json                      12     10  
@@ -19362,10 +20492,10 @@ rest-proxy.json                        10     10
 schema-registry-cluster.json           12      0  
 tiered-storage.json                     8      3  
 zookeeper-cluster.json                 11      0  
-合計 32 個 dashboard、816 個 panel、296 個有資料
+合計 32 個 dashboard、816 個 panel、292 個有資料
 ```
 
-怎麼讀這張表（2026-10-29 在**遷移完成後**的 lab 實測；2026-10-31 在 Podman 上從零重跑到遷移、OS 9.8 之後再量，數字完全相同——Confluent Server 8.3.2、C3 2.6.1，3 台 controller、4 台 broker、2 台 REST Proxy、1 台 C3，第 18 章的稽核已開。和安裝基底 8.2.4／C3 2.5.1 時量的比，只有 C3 Streams 那三張變了（17.2 改收 Kafka Streams），其餘各列相同；**Tiered Storage 沒開，要在正式叢集上補驗**）：
+怎麼讀這張表（2026-10-29 在**遷移完成後**的 lab 實測；2026-10-31 在 Podman 上從零重跑到遷移、OS 9.8 之後再量，數字完全相同；2026-11-08 從零重跑時 C3 的 Streams 規則已調整（17.2），只有 `kafka-stream.json`、`globalktable.json` 少了執行緒數的 panel（見下表），其餘相同——Confluent Server 8.3.2、C3 2.6.1，3 台 controller、4 台 broker、2 台 REST Proxy、1 台 C3，第 18 章的稽核已開。和安裝基底 8.2.4／C3 2.5.1 時量的比，只有 C3 Streams 那三張變了（17.2 改收 Kafka Streams），其餘各列相同；**Tiered Storage 沒開，要在正式叢集上補驗**）：
 
 | dashboard（檔名） | 有資料／總數 | 判讀 |
 |---|---|---|
@@ -19381,12 +20511,12 @@ zookeeper-cluster.json                 11      0
 | `cluster-linking.json`、`tiered-storage.json` | 12／19、3／8 | 沒開這兩個功能，有值的是不分功能的計數（多數是 0） |
 | `kafka-quotas.json` | 0／6 | **有流量才有值**。`kafka_server_produce_byte_rate{user=…}` 這類序列來自 `kafka.server:type=Produce,user=…`，只在設了配額的帳號正在傳資料時存在，閒置約一小時就消失；lab 量的時候沒有應用程式流量（設了配額的帳號都在，2026-10-31 確認 MBean 也不在）。正式叢集有流量時應該有值，上線後再看一次 |
 | `confluent-rbac.json` | 7／10 | **大部分可用**。MDS 與 RBAC 開著，授權相關的計數有值；其餘 3 個沒有查明原因 |
-| `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 26／27、14／24、39／40 | **C3 自己的 Kafka Streams**（17.2：C3 收 `kafka.streams:*`，套官方 `kafka_streams.yml` 規則，約 2,100 條序列）。選 `job=control-center` 就看到 C3 的 thread、task、RocksDB store（`AlertHistoryStore`、`commander`）。空的兩個 panel 用 `task_created_total`、`number_file_errors_total`：JMX exporter 1.x 會把 gauge 名稱結尾的 `_total` 拿掉（OpenMetrics 規定 `_total` 只給 counter），官方 dashboard 還用舊名。globalktable 空的 10 個是 C3 沒有用到的 GlobalKTable、cache 類指標。銀行目前沒有自己的 Kafka Streams 應用（2026-10-30 確認），所以這幾張看的只有 C3；之後若有，應用程式掛同一份規則就能看 |
+| `kafka-stream.json`、`globalktable.json`、`kafka-streams-rocksdb.json` | 23／27、13／24、39／40 | **C3 自己的 Kafka Streams**（17.2：C3 收 `kafka.streams:*`，套官方 `kafka_streams.yml` 規則，約 2,100 條序列）。選 `job=control-center` 就看到 C3 的 thread、task、RocksDB store（`AlertHistoryStore`、`commander`）。空的 panel 有兩種：`task_created_total`、`number_file_errors_total` 是 JMX exporter 1.x 會把 gauge 名稱結尾的 `_total` 拿掉（OpenMetrics 規定 `_total` 只給 counter），官方 dashboard 還用舊名；「Alive Stream Threads」「Failed Stream Threads」「Alive/Failed Stream Threads」三個是官方規則把執行緒數放在**標籤**裡（數字一變就多一條新序列，舊的留到過期），我們的 `rules-c3.yml` 改成數值指標 `kafka_streams_stream_metrics_alive_stream_threads`／`_failed_stream_threads`，告警 `ControlCenterStreamThreadsFailed` 用的就是它，要看這個數字直接在 Grafana 查這兩個指標。globalktable 其他空的 10 個是 C3 沒有用到的 GlobalKTable、cache 類指標。銀行目前沒有自己的 Kafka Streams 應用（2026-10-30 確認），所以這幾張看的只有 C3；之後若有，應用程式掛同一份規則就能看 |
 | `kafka-connect-cluster.json`、`confluent-oracle-cdc.json`、`mongo.json`、`debezium-connectors.json`、`replicator.json` | 全 0 | **空**。沒有 Connect |
 | `ksqldb-cluster.json`、`schema-registry-cluster.json` | 0／38、0／12 | **空**。沒有 ksqlDB、Schema Registry |
 | `flink-jobmanager.json`、`flink-taskmanager.json`、`librdkafka-application.json`、`OTel_kafkametrics.json`、`zookeeper-cluster.json` | 全 0 | **空**。沒有 Flink、librdkafka 應用、OTel kafkametrics 來源、ZooKeeper |
 
-## B.2 收尾：收掉 lab 的監控容器
+## B.2 收尾：收掉 lab 的監控容器與 Jenkins
 
 @role 銀行監控團隊（lab 由 Lab 管理員扮演） | Windows 終端 | 本機
 
@@ -19395,15 +20525,20 @@ zookeeper-cluster.json                 11      0
 ```bash
 podman rm -f lab-mon-prometheus lab-mon-alertmanager lab-mon-grafana lab-mon-webhook lab-mon-blackbox > /dev/null
 echo "lab-mon-* 已收掉：$(podman ps -a --format '{{.Names}}' | grep -c '^lab-mon-') 個剩下"
+
+# 第 33 章的 lab Jenkins 也接在 lab 的網路上（沒做 33.10 就沒有這個容器，--ignore 讓它不算錯）
+podman rm -f --ignore lab-jenkins > /dev/null
+echo "lab-jenkins 已收掉：$(podman ps -a --format '{{.Names}}' | grep -c '^lab-jenkins$') 個剩下"
 ```
 
 ```out
 lab-mon-* 已收掉：0 個剩下
+lab-jenkins 已收掉：0 個剩下
 ```
 
 > 兩件事要跟銀行講清楚：(1) exporter 的 YAML 沒有明文密碼（keystore 密碼在 root 0600 的 `/etc/confluent/jmx-exporter.env`，YAML 裡也沒有帳密：7071 只做 HTTPS，存取控制靠防火牆只放行 Prometheus），YAML 維持 root:confluent 0640；(2) consumer lag 不是 broker 的 JMX 指標，要看 C3（畫面）或另外接 lag exporter；Grafana 的 `kafka-consumer.json`、`kafka-lag-exporter.json` 要有對應來源才有資料。
 >
-> 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不抓、不告警；license 到期用第 26 章、憑證到期用第 22 章的 syslog 告警；稽核事件看第 18 章。
+> 監控的邊界：這一章是**主機與程序層**的監控（程序在不在、KRaft 健不健康、partition 狀態、延遲、JVM）。C3 內建 Prometheus 收的 telemetry（`confluent_kafka_server_*`）只給 C3 畫面，不拿來告警（銀行沒有 Prometheus 時，第 32 章讓內建 Prometheus 改抓 JMX exporter 來告警）；license 到期用第 26 章、憑證到期用第 22 章的 syslog 告警；稽核事件看第 18 章。
 >
 > KRaft 指標：Confluent Server 的 `kafka_server_raft_metrics_*`（current_leader、number_of_voters、commit／election latency 等）**只有單台 controller（`--standalone`）的環境抓得到**。三台 controller 的叢集，不論 8.2.4 或遷移後的 8.3.2，實測 controller job 有三千多條序列，raft 指標卻是 0 條。所以 quorum 健康靠 controller 自己的四個指標：`ActiveControllerCount`（全叢集剛好 1）、`LastAppliedRecordLagMs`、`MetadataErrorCount`、`NewActiveControllersCount`（leader 更換次數）；quorum 內容用 `kafka-metadata-quorum describe --status` 看。官方 `kraft.json` 這張 dashboard 因此只有一部分有值（實測 10／18），其餘靠 raft 指標的 panel 是空的。
 

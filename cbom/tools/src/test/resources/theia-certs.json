@@ -1,0 +1,2219 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:6e94487f-a17b-479d-b511-9a7cee24b1aa",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-11-11T18:25:34+08:00",
+    "tools": {
+      "services": [
+        {
+          "provider": {
+            "name": "PQCA"
+          },
+          "name": "cbomkit-theia",
+          "version": "edge",
+          "services": [
+            {
+              "name": "Certificate File Plugin"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "a45eabd9-98d2-475a-98e9-40c617d674cf",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "83a1f3c9-5539-44ed-9d4e-ea937f7c8fbb",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "46f41fb9-76a3-4daf-a373-884c4b4bc269",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "34dd889b-b3f5-451c-a286-1bafeb75390d",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "cryptoFunctions": [
+            "encapsulate",
+            "decapsulate",
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "046f923a-4436-4233-9c95-b3e1e1243ef6",
+      "type": "cryptographic-asset",
+      "name": "RSA-2048",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "34dd889b-b3f5-451c-a286-1bafeb75390d",
+          "value": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvVPrH0IYy5RZXFVSZKhCYSSpwHy7XFM3d8ezxENpHR24ojkE7H0O71KFeGXzPcKJ8B1bVOqg376UE+nhfTzVJfzRGmfEwo+fqxVIcFzKLG8vkSP0h6Zql8MeLmfRlGxTSuv/e9a4l9j9uIsFP99Hhkl9idW07oCHRK91OX1HJBDE4lT3/RUgETWd4QGqw/N6wyBO/5O0RpabOfSbb6ZQytj3BR5eajQeNHb/w01isjn30Yn38+tiNnz532RV3Wu7722VAkQzS1DgsVXcnzbRr/Tn8yA2v1Igi6liKJFQEkrDKssq4qDRUIoH8pfOrp2wLElGJV7NWyLgPfJOZ87TOwIDAQAB",
+          "size": 2048,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "54ffeb9a-544b-4e2c-969c-1d58c03e39d9",
+      "type": "cryptographic-asset",
+      "name": "app-legacy-billing",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "app-legacy-billing",
+          "issuerName": "PoC Bank Issuing CA 01",
+          "notValidBefore": "2026-11-09T00:58:55Z",
+          "notValidAfter": "2027-11-09T00:58:55Z",
+          "signatureAlgorithmRef": "46f41fb9-76a3-4daf-a373-884c4b4bc269",
+          "subjectPublicKeyRef": "046f923a-4436-4233-9c95-b3e1e1243ef6",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "db05158d-ed13-496b-b051-94480e96437f",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "fb01ed8a-514d-4078-97f4-7f7a351feef9",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "71fa96ce-1a74-471a-aaa9-527a0e3529c5",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "441d7916-761d-4703-a06d-94661572ce64",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "97763c51-0d5a-4f3e-914c-b93187ee6ef5",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "441d7916-761d-4703-a06d-94661572ce64",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAuzKYbHe9mBFNRHeyMry90Y9iPYKgOztlolvFLJwaQoXAeJLbFfzmrgGOZFpB1hH+cud59hWoh6CBwsI4Vv1o7BieDmDFxNyNbxShttDFaUAwgMxvRtBe12MCJ/JSv9zhEiofvgkmUYxFZk1IYavXbN2T/S9EZh2IlbtaPiuppAcZFtTgmCZIYzJdcfsqHFWE1XquvE9ZnFpBYoXPfDAd4A4+PcpCscmS9TVIZ2qX0g/AXuNGx5bPCQh6SlwLuqK4y7ZlShzsfNus/EFIkWcFhChjQcSTZrPh9smSVOJcJeNThDIbwJpEqS4ij5lfJRPhifGNQvhjzIk4uZEK63UcgywIhDVwEcR6YLZWfTz4+laOJMrVsxWS5Agml3EJ3bQ8b07W2sOlsDiKI4WNm5ZpSm5naHAIeW785F3tEwMoywYiK6/L9ZN2CQR7hOAy44mePvnDCCjNrPf1J6Hcmux4QINlhr5G0JLmhPTYeIPoUYLgfQWgBYz/67L+XLha0pwIxFeo/WL0r747vsf0ytqdx0kYZCJIvVSRvNQeXlXzOvE4xgtpowCiw3dIBMxwIzOKp+qlFIpvKu5hN3YaEUu1jBMRzS1OrUsX57PWcQAEydCvMSBIp8G9jpzDijd/gkqWP21S1b1/Q9ShIUPceSiW8FAJIsn+9vLKTuucePEv8vcCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "a0c838fd-9ee9-402b-8671-ecf2bdd91ca7",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Issuing CA 01",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "app-legacy-billing.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Issuing CA 01",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:39Z",
+          "notValidAfter": "2036-11-05T13:26:39Z",
+          "signatureAlgorithmRef": "71fa96ce-1a74-471a-aaa9-527a0e3529c5",
+          "subjectPublicKeyRef": "97763c51-0d5a-4f3e-914c-b93187ee6ef5",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "a4950b45-58d0-43a4-b3f3-fccc1be28951",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "bank-root.pem"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "2128f145-31b3-4552-a91d-79e1176bfb79",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "bank-root.pem"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "ecdf7565-559e-4752-8ff6-c2d0333c2b91",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "bank-root.pem"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "7450ec85-708d-4f83-b546-1bea71fcf26d",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "bank-root.pem"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "4a73e37c-d6f8-446b-bad7-90fd6d5fdeb7",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "bank-root.pem"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "7450ec85-708d-4f83-b546-1bea71fcf26d",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAqTy6fZqRIm4BmC5AXlXsKuPuYB+4sfPO3C1sdNxLrL+4yW7oAbN8QopghopQ0HH62dSN4MI7Cyik4qsIP0/QieQ6B7PmfXcgyWSnsLFbZrFujJdjOa0NONNtFVkI5OctTPYeLYbK0Qg+rwAqyVUwLM0l28MCOH1Q/uhNk1KZREjqZiFWP0skYz/3x+mG6bwfM1LW41akSAfImCFyT60PVLSxfUTzjmabglyLskQgLOOYQJKyhGMWyTkWBOk21zISW/b46xusonFmmnpEk2sTDCNwKgM21NDD5UCX5mK6WVaLBGCTRbGUX0vDxJBa/7tbduHyQich8hn11C8idfIxPhopgl7UARpqK3rE+p0haW2tsC5g6ShtqMdgD/gyJDtoUC8vAWvIyyyqBczJkPmmKTdZW8BOVa53oFmsCrIWrdEAUzRW2OuEDEpSSLeaegmOp3s1mjffXHBd0ugdijgeUxIVdiDRm/f6KmDyJBRUlyE+lNi5NxtAzPVTM4Nnky/YlxO2pJwbs5KPsUbvKskrTQfwcpOXKQN/hYRA+esTj+wZDkCtftKiZb9JuhuEEanuzbsauVkCYWCvl/qFbrG8agpvctOomB47ZWV7j63kp03oeQ7t0opLVJ8TYYk+gVaggZ4T/lunlN5p7YGvrWTdxqNiS3TeE/NMD+eb4EXRTmMCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "82433d2a-d351-4219-b92e-d969e1cf6564",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Root CA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "bank-root.pem"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Root CA",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:37Z",
+          "notValidAfter": "2046-11-03T13:26:37Z",
+          "signatureAlgorithmRef": "ecdf7565-559e-4752-8ff6-c2d0333c2b91",
+          "subjectPublicKeyRef": "4a73e37c-d6f8-446b-bad7-90fd6d5fdeb7",
+          "certificateFormat": "X.509",
+          "certificateExtension": "pem"
+        }
+      }
+    },
+    {
+      "bom-ref": "dfad20a8-03ea-4b47-a8fa-9ee37ab89309",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "b0e81f6a-491c-4347-b247-70e41f918e3a",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "112c8fb0-6ead-4605-bb9f-4a78d50e85f1",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "3fed1cfa-6c22-4c54-94f1-9a7237202442",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "c9603b62-b2c5-445c-aee2-73a64ed69b72",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "3fed1cfa-6c22-4c54-94f1-9a7237202442",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAuzKYbHe9mBFNRHeyMry90Y9iPYKgOztlolvFLJwaQoXAeJLbFfzmrgGOZFpB1hH+cud59hWoh6CBwsI4Vv1o7BieDmDFxNyNbxShttDFaUAwgMxvRtBe12MCJ/JSv9zhEiofvgkmUYxFZk1IYavXbN2T/S9EZh2IlbtaPiuppAcZFtTgmCZIYzJdcfsqHFWE1XquvE9ZnFpBYoXPfDAd4A4+PcpCscmS9TVIZ2qX0g/AXuNGx5bPCQh6SlwLuqK4y7ZlShzsfNus/EFIkWcFhChjQcSTZrPh9smSVOJcJeNThDIbwJpEqS4ij5lfJRPhifGNQvhjzIk4uZEK63UcgywIhDVwEcR6YLZWfTz4+laOJMrVsxWS5Agml3EJ3bQ8b07W2sOlsDiKI4WNm5ZpSm5naHAIeW785F3tEwMoywYiK6/L9ZN2CQR7hOAy44mePvnDCCjNrPf1J6Hcmux4QINlhr5G0JLmhPTYeIPoUYLgfQWgBYz/67L+XLha0pwIxFeo/WL0r747vsf0ytqdx0kYZCJIvVSRvNQeXlXzOvE4xgtpowCiw3dIBMxwIzOKp+qlFIpvKu5hN3YaEUu1jBMRzS1OrUsX57PWcQAEydCvMSBIp8G9jpzDijd/gkqWP21S1b1/Q9ShIUPceSiW8FAJIsn+9vLKTuucePEv8vcCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "a2762e98-fee6-409c-be9f-2cf0058c3622",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Issuing CA 01",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Issuing CA 01",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:39Z",
+          "notValidAfter": "2036-11-05T13:26:39Z",
+          "signatureAlgorithmRef": "112c8fb0-6ead-4605-bb9f-4a78d50e85f1",
+          "subjectPublicKeyRef": "c9603b62-b2c5-445c-aee2-73a64ed69b72",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "3307210e-3990-4631-afdb-ebdc78842b0e",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "ef9b3cda-1779-433b-adf9-72cea17884e0",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "460df9f9-ef31-4ab9-a16a-f7acf79e7f47",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "a8dc5333-3273-43ea-a0c7-9fb9b812865b",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "cryptoFunctions": [
+            "encapsulate",
+            "decapsulate",
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "80ab9fe5-aa55-489b-a31a-0ec73d0eacb6",
+      "type": "cryptographic-asset",
+      "name": "RSA-2048",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "a8dc5333-3273-43ea-a0c7-9fb9b812865b",
+          "value": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAojN5Xr1S7Q/1AxwXdhzdmCAqtY++QG2YL3fyQzix4oKIZZNjed472oMIWibleNCaPvr2p7HdJDnhshyu9UEtiwS1fk0mXw3YfMea1qOnemt1mP3VYJR4+3a/Fas0sLZQbK/xICoqNiNhxJ578Dxq+JUZp8YWhzaNbSYd6JfmNueXAzSNXTWg1NcE1kIhKdjZJFNyoIKOSCtEJsHBW69obHa0jwCzxmav2EhVeXN/fewVT750gsPncT1b+1vhw8+42//dyirFSxd5Zbmak3+TQuJ9ZM0GDuJ+5V/QEwFoTRCrvNYuBFpK9FBYiTj9IcBv1MZYOOg6pbQLzbKjyvwVwQIDAQAB",
+          "size": 2048,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "43664ae3-f2a2-4f0d-8694-b0d2d79783ff",
+      "type": "cryptographic-asset",
+      "name": "cp-server",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "cp-server.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "cp-server",
+          "issuerName": "PoC Bank Issuing CA 01",
+          "notValidBefore": "2026-11-09T00:58:56Z",
+          "notValidAfter": "2027-11-09T00:58:56Z",
+          "signatureAlgorithmRef": "460df9f9-ef31-4ab9-a16a-f7acf79e7f47",
+          "subjectPublicKeyRef": "80ab9fe5-aa55-489b-a31a-0ec73d0eacb6",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "a710a2f8-c365-435a-bc81-1c490b7702d1",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "765a28ff-6d4d-437d-b0b6-11c858f2b445",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "156e2443-3fa9-4239-85e3-7bd7d4a25b23",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "b2aaedcf-28c6-4f10-83fb-fc2d93da1518",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "cryptoFunctions": [
+            "encapsulate",
+            "decapsulate",
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "cf4ef039-9df3-49a3-ae68-c9982d613b11",
+      "type": "cryptographic-asset",
+      "name": "RSA-2048",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "b2aaedcf-28c6-4f10-83fb-fc2d93da1518",
+          "value": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApmJqfiH/FMUm0ACa6zV/5cJOQrpJ2fqQc76NqLYXODHsvubUbDmXbFL//uVHRfpcIdB3VQ21DDkaV6kt42zJaQVEJ2IQHc2EAeu1VIkg6Lc8FD/xIq1LyZdgBnptAqnQ7X05lMbRZA7EZCSmnP+1/rkfqxoWMbjpeaHlAQ+1PoqObWJh1kujwAn1Gtwf2SFJrG9+pWJtd4tBL8YFF655DexUeTWic2zuLgOiLhNuZNp/LWAWS8slNfR5BbHoUQLxRqVuABXdsD6ppMy8cKseQIBurXUzcXVnkhVW3fsOoFN6mE7plBEM/dGa3FGacfN9Y+jhwZZXJ32yBUFHz23+XQIDAQAB",
+          "size": 2048,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "9e422085-2814-4e56-b44e-7cb6d890f6a5",
+      "type": "cryptographic-asset",
+      "name": "kafka-internal",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "kafka-internal",
+          "issuerName": "PoC Bank Issuing CA 01",
+          "notValidBefore": "2026-11-09T00:58:57Z",
+          "notValidAfter": "2027-11-09T00:58:57Z",
+          "signatureAlgorithmRef": "156e2443-3fa9-4239-85e3-7bd7d4a25b23",
+          "subjectPublicKeyRef": "cf4ef039-9df3-49a3-ae68-c9982d613b11",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "47307c81-82dc-442d-9d27-55cdacc66374",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "5fe38290-abc1-439a-9e15-b02d08e96f9c",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "bd36cde9-db89-44a9-a62e-0327244101c5",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "e1144230-4587-48b7-9523-a70333810e96",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "a01010bd-824c-48cf-b934-06a4b4bf5a35",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "e1144230-4587-48b7-9523-a70333810e96",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAuzKYbHe9mBFNRHeyMry90Y9iPYKgOztlolvFLJwaQoXAeJLbFfzmrgGOZFpB1hH+cud59hWoh6CBwsI4Vv1o7BieDmDFxNyNbxShttDFaUAwgMxvRtBe12MCJ/JSv9zhEiofvgkmUYxFZk1IYavXbN2T/S9EZh2IlbtaPiuppAcZFtTgmCZIYzJdcfsqHFWE1XquvE9ZnFpBYoXPfDAd4A4+PcpCscmS9TVIZ2qX0g/AXuNGx5bPCQh6SlwLuqK4y7ZlShzsfNus/EFIkWcFhChjQcSTZrPh9smSVOJcJeNThDIbwJpEqS4ij5lfJRPhifGNQvhjzIk4uZEK63UcgywIhDVwEcR6YLZWfTz4+laOJMrVsxWS5Agml3EJ3bQ8b07W2sOlsDiKI4WNm5ZpSm5naHAIeW785F3tEwMoywYiK6/L9ZN2CQR7hOAy44mePvnDCCjNrPf1J6Hcmux4QINlhr5G0JLmhPTYeIPoUYLgfQWgBYz/67L+XLha0pwIxFeo/WL0r747vsf0ytqdx0kYZCJIvVSRvNQeXlXzOvE4xgtpowCiw3dIBMxwIzOKp+qlFIpvKu5hN3YaEUu1jBMRzS1OrUsX57PWcQAEydCvMSBIp8G9jpzDijd/gkqWP21S1b1/Q9ShIUPceSiW8FAJIsn+9vLKTuucePEv8vcCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "c355d896-55c1-4fb2-b9e9-720917036be5",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Issuing CA 01",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "kafka-internal.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Issuing CA 01",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:39Z",
+          "notValidAfter": "2036-11-05T13:26:39Z",
+          "signatureAlgorithmRef": "bd36cde9-db89-44a9-a62e-0327244101c5",
+          "subjectPublicKeyRef": "a01010bd-824c-48cf-b934-06a4b4bf5a35",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "21c713c8-8b5f-483f-9562-52ef4c128dfa",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "2fde818e-c04c-493b-a2aa-8fd344ef4937",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "670a827e-5a34-4e46-a854-026194374621",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "80bce5f2-c9ad-4c41-a07f-f445c694d77d",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "cryptoFunctions": [
+            "encapsulate",
+            "decapsulate",
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "c7f3f91e-464d-4b8c-9200-87990d5ff9f8",
+      "type": "cryptographic-asset",
+      "name": "RSA-2048",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "80bce5f2-c9ad-4c41-a07f-f445c694d77d",
+          "value": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxSiFyLCD25C8VRl3gTHU/Z+Y4aMz+JQM4AWlrpeI+JTow//r9rWOVR/fVuMW4xRPqIVxyMVAdAfZOuKNcAvvj1Oc/faGURuOJYGRKXwM853OzJKZBYqciHAxTs6qTgKWv1fzFEv2f11mcTeRtdlQeFnOQe8IYJvMdbuUOlfGfFZG/UUYNCp0pLoE8uhZEfqJyy7KO/DsrtKQN+vg6tgjbfWZqDBtusbj+gjKWn3CATRdkKUhzw1A5W06I92OznR4CjbHcO62fWO9hxqUUiuTdjQ5LwkS4Hum/fNNAGSqDtd3aZa0FzEkY2kOOyzMHbrsyiCxtzuRS64NER5snSH7UQIDAQAB",
+          "size": 2048,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "768e354d-8d02-4272-9aec-fd3a18cc1aef",
+      "type": "cryptographic-asset",
+      "name": "svc-backup",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "svc-backup",
+          "issuerName": "PoC Bank Issuing CA 01",
+          "notValidBefore": "2026-11-09T00:58:59Z",
+          "notValidAfter": "2027-11-09T00:58:59Z",
+          "signatureAlgorithmRef": "670a827e-5a34-4e46-a854-026194374621",
+          "subjectPublicKeyRef": "c7f3f91e-464d-4b8c-9200-87990d5ff9f8",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "5bb63592-10f2-420a-8000-8b29c898f559",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "5bbb7ff6-98a8-4d55-9cad-2d19586039e3",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "c263351c-7dd4-468b-b4d2-0c16f600ce69",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "591981b5-35c4-4096-a27e-2f38bb8c79be",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "36cef4db-a051-46c3-a682-c9e87d582f91",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "591981b5-35c4-4096-a27e-2f38bb8c79be",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAuzKYbHe9mBFNRHeyMry90Y9iPYKgOztlolvFLJwaQoXAeJLbFfzmrgGOZFpB1hH+cud59hWoh6CBwsI4Vv1o7BieDmDFxNyNbxShttDFaUAwgMxvRtBe12MCJ/JSv9zhEiofvgkmUYxFZk1IYavXbN2T/S9EZh2IlbtaPiuppAcZFtTgmCZIYzJdcfsqHFWE1XquvE9ZnFpBYoXPfDAd4A4+PcpCscmS9TVIZ2qX0g/AXuNGx5bPCQh6SlwLuqK4y7ZlShzsfNus/EFIkWcFhChjQcSTZrPh9smSVOJcJeNThDIbwJpEqS4ij5lfJRPhifGNQvhjzIk4uZEK63UcgywIhDVwEcR6YLZWfTz4+laOJMrVsxWS5Agml3EJ3bQ8b07W2sOlsDiKI4WNm5ZpSm5naHAIeW785F3tEwMoywYiK6/L9ZN2CQR7hOAy44mePvnDCCjNrPf1J6Hcmux4QINlhr5G0JLmhPTYeIPoUYLgfQWgBYz/67L+XLha0pwIxFeo/WL0r747vsf0ytqdx0kYZCJIvVSRvNQeXlXzOvE4xgtpowCiw3dIBMxwIzOKp+qlFIpvKu5hN3YaEUu1jBMRzS1OrUsX57PWcQAEydCvMSBIp8G9jpzDijd/gkqWP21S1b1/Q9ShIUPceSiW8FAJIsn+9vLKTuucePEv8vcCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "0b12fd97-587f-4164-bbd4-64b0913bb5af",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Issuing CA 01",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-backup.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Issuing CA 01",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:39Z",
+          "notValidAfter": "2036-11-05T13:26:39Z",
+          "signatureAlgorithmRef": "c263351c-7dd4-468b-b4d2-0c16f600ce69",
+          "subjectPublicKeyRef": "36cef4db-a051-46c3-a682-c9e87d582f91",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "f4c92b42-7f6b-4db1-b8b2-61ef73251f7c",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "9f3e47e7-f2fd-4f17-b9af-4cda5748d267",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "f53a4835-811b-4c34-a4fd-144f1ab537d3",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "df35500d-112e-40d0-a2eb-687aba95adb7",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "cryptoFunctions": [
+            "encapsulate",
+            "decapsulate",
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "1038d346-765e-4e49-b693-6b179efe8f26",
+      "type": "cryptographic-asset",
+      "name": "RSA-2048",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "df35500d-112e-40d0-a2eb-687aba95adb7",
+          "value": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp6AbNZjixI7E8Qkol8QQFP2nel8eUz84sZqhUOgxi7S53s3AoaGJu8UixsXu3kIsCNDwMMxUCsJbMa1riyR4asrljY0PoNio7paEOW+t+9nWhxlKSyxQTVdXgVwrxGixWnTbuzcU/Gv3S0vHW8kKVMAEUUk+p573za1yWOCuEFIKHrxmJ7NT/u+MxiTrGRyH4q698DhHlCYQ8E6JyneuM45CGRKDVw8GNV+LzeN5/gvkQyAxcE2mQ/a9ibY651WkMuFE4/XbyNQxzHDQzl1255oURabeg95D8VUGk8sLCJpQKQYhvcrTsWVpV3q2WUtSALC4BUUmW1UeMR4it3XrYwIDAQAB",
+          "size": 2048,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "c33f422b-35d5-4700-ae44-aa8d57204bce",
+      "type": "cryptographic-asset",
+      "name": "svc-c3",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "svc-c3",
+          "issuerName": "PoC Bank Issuing CA 01",
+          "notValidBefore": "2026-11-09T00:59:00Z",
+          "notValidAfter": "2027-11-09T00:59:00Z",
+          "signatureAlgorithmRef": "f53a4835-811b-4c34-a4fd-144f1ab537d3",
+          "subjectPublicKeyRef": "1038d346-765e-4e49-b693-6b179efe8f26",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "aaf8191c-588f-4e6e-bee1-64d13d38293d",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "db1ef981-9d5a-4b17-8b3f-7b1b0aae07c1",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "b3fd9d51-3363-4320-b9c4-e12ab0a4847c",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "b7c47931-55c8-49d8-83aa-2a4bba3c2426",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "97232e32-7699-447d-af60-9f6f212cb557",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "b7c47931-55c8-49d8-83aa-2a4bba3c2426",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAuzKYbHe9mBFNRHeyMry90Y9iPYKgOztlolvFLJwaQoXAeJLbFfzmrgGOZFpB1hH+cud59hWoh6CBwsI4Vv1o7BieDmDFxNyNbxShttDFaUAwgMxvRtBe12MCJ/JSv9zhEiofvgkmUYxFZk1IYavXbN2T/S9EZh2IlbtaPiuppAcZFtTgmCZIYzJdcfsqHFWE1XquvE9ZnFpBYoXPfDAd4A4+PcpCscmS9TVIZ2qX0g/AXuNGx5bPCQh6SlwLuqK4y7ZlShzsfNus/EFIkWcFhChjQcSTZrPh9smSVOJcJeNThDIbwJpEqS4ij5lfJRPhifGNQvhjzIk4uZEK63UcgywIhDVwEcR6YLZWfTz4+laOJMrVsxWS5Agml3EJ3bQ8b07W2sOlsDiKI4WNm5ZpSm5naHAIeW785F3tEwMoywYiK6/L9ZN2CQR7hOAy44mePvnDCCjNrPf1J6Hcmux4QINlhr5G0JLmhPTYeIPoUYLgfQWgBYz/67L+XLha0pwIxFeo/WL0r747vsf0ytqdx0kYZCJIvVSRvNQeXlXzOvE4xgtpowCiw3dIBMxwIzOKp+qlFIpvKu5hN3YaEUu1jBMRzS1OrUsX57PWcQAEydCvMSBIp8G9jpzDijd/gkqWP21S1b1/Q9ShIUPceSiW8FAJIsn+9vLKTuucePEv8vcCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "f998ce62-5bcb-43e7-81d5-705d066ddba3",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Issuing CA 01",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-c3.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Issuing CA 01",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:39Z",
+          "notValidAfter": "2036-11-05T13:26:39Z",
+          "signatureAlgorithmRef": "b3fd9d51-3363-4320-b9c4-e12ab0a4847c",
+          "subjectPublicKeyRef": "97232e32-7699-447d-af60-9f6f212cb557",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "e849c868-843d-47a4-935a-69f498904379",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "3fddf54d-d1ac-4e23-8b62-353f16dec78f",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "8a8051b7-db74-4f38-b4fa-9e2b3c5fe903",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "7300cc82-7a2d-4685-b212-1bc4fee10d99",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "cryptoFunctions": [
+            "encapsulate",
+            "decapsulate",
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "0bf6ae0a-0356-41f1-831a-3a19d46bdfd7",
+      "type": "cryptographic-asset",
+      "name": "RSA-2048",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "7300cc82-7a2d-4685-b212-1bc4fee10d99",
+          "value": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuqihFqCt5Zn51xLubY95ZLLHJvjJBerA2jWt0SlqvA0Y1owHC56Em6rTQdoxy01/vUvysRAxZpQX13MBhZxjTY1cPXGVIUEdZC7hL6ZkA2FC+zGLT4s7Kvg1v+/l6aDAvwqUsE2weUWZTj5VwyDH3M5UsjQUTtscgG76xhSlWpd9enGjNvVBizQXMnOmkZgwtUWhO78smSSV9LkTYusMRz3bVhgXQSjyTHw8E8n/B/w3XT3MNNj0K8iq8SD/WANVu0SHN9tWoWfCWlk8EUkUuCwR8LEhdBfStkNOP4BLNSwzgKqfBjHaCMm/QYx5zddaCOhkucQNnGsKJAodQycpmQIDAQAB",
+          "size": 2048,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "12002c68-139e-49b6-a12c-ddb146244f92",
+      "type": "cryptographic-asset",
+      "name": "svc-ops",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "svc-ops",
+          "issuerName": "PoC Bank Issuing CA 01",
+          "notValidBefore": "2026-11-09T00:59:01Z",
+          "notValidAfter": "2027-11-09T00:59:01Z",
+          "signatureAlgorithmRef": "8a8051b7-db74-4f38-b4fa-9e2b3c5fe903",
+          "subjectPublicKeyRef": "0bf6ae0a-0356-41f1-831a-3a19d46bdfd7",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "b1bf937c-49e6-4fd2-9bad-3db1c59604f9",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "d61c8c92-03c5-4ccb-a5e9-77a5668f2bff",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "a61762f6-d352-4b22-a890-42c8ec9efbf7",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "68796176-b5b9-4523-844a-0eeca7f2f17e",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "b85c8a80-c247-4171-8d97-d19a41cc5fe3",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "68796176-b5b9-4523-844a-0eeca7f2f17e",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAuzKYbHe9mBFNRHeyMry90Y9iPYKgOztlolvFLJwaQoXAeJLbFfzmrgGOZFpB1hH+cud59hWoh6CBwsI4Vv1o7BieDmDFxNyNbxShttDFaUAwgMxvRtBe12MCJ/JSv9zhEiofvgkmUYxFZk1IYavXbN2T/S9EZh2IlbtaPiuppAcZFtTgmCZIYzJdcfsqHFWE1XquvE9ZnFpBYoXPfDAd4A4+PcpCscmS9TVIZ2qX0g/AXuNGx5bPCQh6SlwLuqK4y7ZlShzsfNus/EFIkWcFhChjQcSTZrPh9smSVOJcJeNThDIbwJpEqS4ij5lfJRPhifGNQvhjzIk4uZEK63UcgywIhDVwEcR6YLZWfTz4+laOJMrVsxWS5Agml3EJ3bQ8b07W2sOlsDiKI4WNm5ZpSm5naHAIeW785F3tEwMoywYiK6/L9ZN2CQR7hOAy44mePvnDCCjNrPf1J6Hcmux4QINlhr5G0JLmhPTYeIPoUYLgfQWgBYz/67L+XLha0pwIxFeo/WL0r747vsf0ytqdx0kYZCJIvVSRvNQeXlXzOvE4xgtpowCiw3dIBMxwIzOKp+qlFIpvKu5hN3YaEUu1jBMRzS1OrUsX57PWcQAEydCvMSBIp8G9jpzDijd/gkqWP21S1b1/Q9ShIUPceSiW8FAJIsn+9vLKTuucePEv8vcCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "720040b9-5c71-4e06-b148-9de3ed5a43d8",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Issuing CA 01",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-ops.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Issuing CA 01",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:39Z",
+          "notValidAfter": "2036-11-05T13:26:39Z",
+          "signatureAlgorithmRef": "a61762f6-d352-4b22-a890-42c8ec9efbf7",
+          "subjectPublicKeyRef": "b85c8a80-c247-4171-8d97-d19a41cc5fe3",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "a0e88b02-b66c-478f-9363-b6eb79e3718e",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "71c7946c-1aec-47f9-aaa6-4b67b53e47a2",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "6d2703ce-bc49-4457-9ea3-af8ac9314583",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "b0844bfe-295a-4b58-93f2-57383f241461",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "cryptoFunctions": [
+            "encapsulate",
+            "decapsulate",
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "98ed080c-7306-42d6-b369-f7cabed71fd4",
+      "type": "cryptographic-asset",
+      "name": "RSA-2048",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "b0844bfe-295a-4b58-93f2-57383f241461",
+          "value": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0hY71p3Wn0kUdtlRQAh7L0PJrC/v20E2XL+oAvCDYMcBd7yH4E6+MlINg0xtSJ6WB8oWR6RYopS4OcOpDJ8WPBNZND9hJQEpp6TwIa/gE4ysLomBHQMIyXH/eJaMRj00gtR9tZDSXvE/DFepl3RrVnoyLw/wme3gerwemljX83ivVk+3GbjK3tVVnzJyBwGwsQL20OtVOTjdVL/BBQVJK4uwqhHwLJTM6srWB2xZEo6kGHrSVvHi2d0+/RlVQG4snoa+yZWGQl8CTnBchcGunnTCPOvPUf2eR5DMlSEZpiUI88R80aP/xOdCErXp47OfcO8xeJbspJGssRHiwdNgkwIDAQAB",
+          "size": 2048,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "5f475591-4b86-4b9a-9b96-38b20722c12a",
+      "type": "cryptographic-asset",
+      "name": "svc-rest",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "svc-rest",
+          "issuerName": "PoC Bank Issuing CA 01",
+          "notValidBefore": "2026-11-09T00:59:03Z",
+          "notValidAfter": "2027-11-09T00:59:03Z",
+          "signatureAlgorithmRef": "6d2703ce-bc49-4457-9ea3-af8ac9314583",
+          "subjectPublicKeyRef": "98ed080c-7306-42d6-b369-f7cabed71fd4",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "bom-ref": "a885a429-8f56-4b5a-999a-4ff87407d57d",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "419b11cf-b5c5-41f3-b0ee-8c5013c20d6d",
+      "type": "cryptographic-asset",
+      "name": "SHA256",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "cryptoFunctions": [
+            "digest"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "01dd3824-cd57-45d2-b097-76d7d513f18e",
+      "type": "cryptographic-asset",
+      "name": "SHA256-RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "256",
+          "padding": "pkcs1v15",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.11"
+      }
+    },
+    {
+      "bom-ref": "e0e01f3f-e525-48a6-9d55-23cacf3cece4",
+      "type": "cryptographic-asset",
+      "name": "RSA",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "cryptoFunctions": [
+            "sign"
+          ]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "c168960d-edcb-41e6-97c5-b6cd26f8b13d",
+      "type": "cryptographic-asset",
+      "name": "RSA-4096",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "algorithmRef": "e0e01f3f-e525-48a6-9d55-23cacf3cece4",
+          "value": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAuzKYbHe9mBFNRHeyMry90Y9iPYKgOztlolvFLJwaQoXAeJLbFfzmrgGOZFpB1hH+cud59hWoh6CBwsI4Vv1o7BieDmDFxNyNbxShttDFaUAwgMxvRtBe12MCJ/JSv9zhEiofvgkmUYxFZk1IYavXbN2T/S9EZh2IlbtaPiuppAcZFtTgmCZIYzJdcfsqHFWE1XquvE9ZnFpBYoXPfDAd4A4+PcpCscmS9TVIZ2qX0g/AXuNGx5bPCQh6SlwLuqK4y7ZlShzsfNus/EFIkWcFhChjQcSTZrPh9smSVOJcJeNThDIbwJpEqS4ij5lfJRPhifGNQvhjzIk4uZEK63UcgywIhDVwEcR6YLZWfTz4+laOJMrVsxWS5Agml3EJ3bQ8b07W2sOlsDiKI4WNm5ZpSm5naHAIeW785F3tEwMoywYiK6/L9ZN2CQR7hOAy44mePvnDCCjNrPf1J6Hcmux4QINlhr5G0JLmhPTYeIPoUYLgfQWgBYz/67L+XLha0pwIxFeo/WL0r747vsf0ytqdx0kYZCJIvVSRvNQeXlXzOvE4xgtpowCiw3dIBMxwIzOKp+qlFIpvKu5hN3YaEUu1jBMRzS1OrUsX57PWcQAEydCvMSBIp8G9jpzDijd/gkqWP21S1b1/Q9ShIUPceSiW8FAJIsn+9vLKTuucePEv8vcCAwEAAQ==",
+          "size": 4096,
+          "format": "PEM"
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "bom-ref": "fb131652-631c-4dae-b20f-164620412785",
+      "type": "cryptographic-asset",
+      "name": "PoC Bank Issuing CA 01",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "svc-rest.crt"
+          }
+        ]
+      },
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "PoC Bank Issuing CA 01",
+          "issuerName": "PoC Bank Root CA",
+          "notValidBefore": "2026-11-08T13:26:39Z",
+          "notValidAfter": "2036-11-05T13:26:39Z",
+          "signatureAlgorithmRef": "01dd3824-cd57-45d2-b097-76d7d513f18e",
+          "subjectPublicKeyRef": "c168960d-edcb-41e6-97c5-b6cd26f8b13d",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "46f41fb9-76a3-4daf-a373-884c4b4bc269",
+      "dependsOn": [
+        "a45eabd9-98d2-475a-98e9-40c617d674cf",
+        "83a1f3c9-5539-44ed-9d4e-ea937f7c8fbb"
+      ]
+    },
+    {
+      "ref": "71fa96ce-1a74-471a-aaa9-527a0e3529c5",
+      "dependsOn": [
+        "db05158d-ed13-496b-b051-94480e96437f",
+        "fb01ed8a-514d-4078-97f4-7f7a351feef9"
+      ]
+    },
+    {
+      "ref": "ecdf7565-559e-4752-8ff6-c2d0333c2b91",
+      "dependsOn": [
+        "a4950b45-58d0-43a4-b3f3-fccc1be28951",
+        "2128f145-31b3-4552-a91d-79e1176bfb79"
+      ]
+    },
+    {
+      "ref": "112c8fb0-6ead-4605-bb9f-4a78d50e85f1",
+      "dependsOn": [
+        "dfad20a8-03ea-4b47-a8fa-9ee37ab89309",
+        "b0e81f6a-491c-4347-b247-70e41f918e3a"
+      ]
+    },
+    {
+      "ref": "460df9f9-ef31-4ab9-a16a-f7acf79e7f47",
+      "dependsOn": [
+        "3307210e-3990-4631-afdb-ebdc78842b0e",
+        "ef9b3cda-1779-433b-adf9-72cea17884e0"
+      ]
+    },
+    {
+      "ref": "156e2443-3fa9-4239-85e3-7bd7d4a25b23",
+      "dependsOn": [
+        "a710a2f8-c365-435a-bc81-1c490b7702d1",
+        "765a28ff-6d4d-437d-b0b6-11c858f2b445"
+      ]
+    },
+    {
+      "ref": "bd36cde9-db89-44a9-a62e-0327244101c5",
+      "dependsOn": [
+        "47307c81-82dc-442d-9d27-55cdacc66374",
+        "5fe38290-abc1-439a-9e15-b02d08e96f9c"
+      ]
+    },
+    {
+      "ref": "670a827e-5a34-4e46-a854-026194374621",
+      "dependsOn": [
+        "21c713c8-8b5f-483f-9562-52ef4c128dfa",
+        "2fde818e-c04c-493b-a2aa-8fd344ef4937"
+      ]
+    },
+    {
+      "ref": "c263351c-7dd4-468b-b4d2-0c16f600ce69",
+      "dependsOn": [
+        "5bb63592-10f2-420a-8000-8b29c898f559",
+        "5bbb7ff6-98a8-4d55-9cad-2d19586039e3"
+      ]
+    },
+    {
+      "ref": "f53a4835-811b-4c34-a4fd-144f1ab537d3",
+      "dependsOn": [
+        "f4c92b42-7f6b-4db1-b8b2-61ef73251f7c",
+        "9f3e47e7-f2fd-4f17-b9af-4cda5748d267"
+      ]
+    },
+    {
+      "ref": "b3fd9d51-3363-4320-b9c4-e12ab0a4847c",
+      "dependsOn": [
+        "aaf8191c-588f-4e6e-bee1-64d13d38293d",
+        "db1ef981-9d5a-4b17-8b3f-7b1b0aae07c1"
+      ]
+    },
+    {
+      "ref": "8a8051b7-db74-4f38-b4fa-9e2b3c5fe903",
+      "dependsOn": [
+        "e849c868-843d-47a4-935a-69f498904379",
+        "3fddf54d-d1ac-4e23-8b62-353f16dec78f"
+      ]
+    },
+    {
+      "ref": "a61762f6-d352-4b22-a890-42c8ec9efbf7",
+      "dependsOn": [
+        "b1bf937c-49e6-4fd2-9bad-3db1c59604f9",
+        "d61c8c92-03c5-4ccb-a5e9-77a5668f2bff"
+      ]
+    },
+    {
+      "ref": "6d2703ce-bc49-4457-9ea3-af8ac9314583",
+      "dependsOn": [
+        "a0e88b02-b66c-478f-9363-b6eb79e3718e",
+        "71c7946c-1aec-47f9-aaa6-4b67b53e47a2"
+      ]
+    },
+    {
+      "ref": "01dd3824-cd57-45d2-b097-76d7d513f18e",
+      "dependsOn": [
+        "a885a429-8f56-4b5a-999a-4ff87407d57d",
+        "419b11cf-b5c5-41f3-b0ee-8c5013c20d6d"
+      ]
+    }
+  ]
+}

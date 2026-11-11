@@ -112,7 +112,7 @@ async function main() {
   slides.push({ kind: "divider", title: "維運篇", sub: "第 20–28 章\n上線後的輪替、監控、備份、節點與故障處理" });
   for (const s of OPS) slides.push(await prepare(s, "ops"));
 
-  slides.push({ kind: "divider", title: "升級遷移篇", sub: "第 29–32 章\n從基底遷移到目標版本，每一段都再驗收" });
+  slides.push({ kind: "divider", title: "升級遷移篇", sub: "第 29–32 章\n從基底遷移到目標版本，每一段都再驗收；最後是沒有行內監控時的告警" });
   for (const s of MIGRATE) slides.push(await prepare(s, "migrate"));
 
   slides.push(await prepare(CLOSING, "close"));

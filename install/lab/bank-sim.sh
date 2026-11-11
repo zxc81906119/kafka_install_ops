@@ -765,6 +765,9 @@ reset() {
     echo "收 lab-mon-* 容器時有錯，down -v 可能刪不掉網路"
   fi
 
+  # 第 33 章的 lab Jenkins 也接在 lab 的網路上（沒做過 33.10 就沒有這個容器）
+  podman rm -f --ignore lab-jenkins > /dev/null 2>&1
+
   announce "lab 從零：down -v（volume 全刪，落地區 $LAB/landing 保留）→ up -d"
   cd "$LAB"
 

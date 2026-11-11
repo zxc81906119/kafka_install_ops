@@ -246,8 +246,8 @@
   - api（lab）：腳本把 master key 寫進保管庫（不再只限 Summon）。
   - manual（客戶，只有 PVWA）：passphrase 由小安從 PVWA 取出放 `~/secrets/sp-passphrase.txt`；master key 產生後停下（rc 2），Secrets 團隊存進 PVWA、小安把「雜湊 單號」寫進 `~/secrets/master-key.custody`，再跑一次才派送；換了 master key 雜湊對不上會再停。lab 用隔離複本驗過四種情況。`SUMMON=1` 必須 `VAULT_ACCESS=api`。
 - **只有 PAM 時 CyberArk 的角色＝保管與稽核，不參與執行期**；master key 落地 `service.env`（0600 root），擋得住設定檔外流、擋不住本機 root。要連 root 都擋，需要啟動時向外取的機制（CCP，或 Conjur＋Summon）。寫進手把手 16.7。
-- **輪替（2026-10-25 定案，lab 實測）**：15.6 是原廠的 `confluent secret file rotate --master-key`，必須同時給舊 passphrase 與舊 master key（環境變數），CLI 也無法由 passphrase＋`security.properties` 重算 master key → PVWA 兩個 object 都要保管。**data key 不例行輪替**；懷疑外洩時換密碼本身（第 20 章、15.8）再重新加密。輪替週期問銀行（問題清單 8.7，預設每年＋保管人異動時）。
-- **查明（2026-10-25，lab 實測）**：Confluent CLI v4.72 的 `--passphrase`／`--passphrase-new` 不認 `@檔案`（也不認 `-`），把「`@/home/cpadmin/secrets/…`」字串本身當 passphrase：PVWA 的 passphrase 從沒用到、知道路徑＋拿到 security.properties 就算得出 master key；檔名一換（16.6 的 mv）下一次輪替就失敗。改為給值 `"$(cat 檔案)"`（手把手 16.2、16.6、install 16）；16.5、16.6 結尾加「用 PVWA 的 passphrase 還能輪替、錯的被拒」檢查。代價：值短暫出現在行程參數 → 操作機 `/proc` 掛 `hidepid=2`（問題清單 4.6）。
+- **輪替（2026-10-25 定案，lab 實測）**：15.6 是原廠的 `confluent secret file rotate --master-key`，必須同時給舊 passphrase 與舊 master key（環境變數），CLI 也無法由 passphrase＋`security.properties` 重算 master key → PVWA 兩個 object 都要保管。**data key 不例行輪替**；懷疑外洩時換密碼本身（第 20 章、15.8）再重新加密。輪替週期問銀行（問題清單 8.6，預設每年＋保管人異動時）。
+- **查明（2026-10-25，lab 實測）**：Confluent CLI v4.72 的 `--passphrase`／`--passphrase-new` 不認 `@檔案`（也不認 `-`），把「`@/home/cpadmin/secrets/…`」字串本身當 passphrase：PVWA 的 passphrase 從沒用到、知道路徑＋拿到 security.properties 就算得出 master key；檔名一換（16.6 的 mv）下一次輪替就失敗。改為給值 `"$(cat 檔案)"`（手把手 16.2、16.6、install 16）；16.5、16.6 結尾加「用 PVWA 的 passphrase 還能輪替、錯的被拒」檢查。代價：值短暫出現在行程參數 → 操作機 `/proc` 掛 `hidepid=2`（問題清單 4.8，後來改成接受風險）。
 
 ### 作業系統版本（2026-10-23 定案）
 
@@ -657,3 +657,84 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - 實測（2026-11-04，lab 8.2.4，同一人同時在 4 個群組）：沒有 filter 時 3 個群組的權限都有；`(cn=KAFKA*)` 大小寫都比對得到（kafka-zzin、KAFKA_ZZUP 有，zzout-grp 沒有）；`(cn=kafka-*)` 只剩 kafka-zzin。既有帳號不受影響。手冊第 10 章、common.tpl、site.env（`AD_GROUP_SEARCH_FILTER`）已加；lab 用 `(cn=kafka-*)`。
 - **RBAC 的群組名有分大小寫**（實測）：`Group:kafka_zzlow` 對不到 AD 的 `KAFKA_ZZLOW`，沒有 filter 時也一樣 DENIED。
 - 只影響群組；人員的 `ldap.user.search.base` 仍要涵蓋所有會登入的人。待銀行確認（請銀行確認的事項 7.6）。
+
+## CBOM 與密碼學資產合規報告（PQC 盤點；2026-11-11 設計，使用者確認後才實作）
+
+**為什麼做**：客戶要求 Confluent Platform 提供 CBOM（Cryptography Bill of Materials）以利 PQC 盤點。做法是 Jenkins 自動產生 CBOM、用 OPA 依規則判斷、產出合規報告。手冊新增一章（暫定第 33 章），照三步驟：lab 手動 → 手冊 → 腳本。
+
+**已定案（使用者 2026-11-11）**
+
+| 項目 | 決定 |
+|---|---|
+| 格式 | CycloneDX CBOM **預設 1.7**（ECMA-424 第 2 版），可用參數輸出 1.6（2026-11-11 改：lab 實測 1.6 沒有 TLS 金鑰交換群組的欄位，`cipherSuites[].tlsGroups` 與 `algorithmFamily` 是 1.7 才有；輸出 1.6 時群組改記在自訂 properties）。官方 Java 函式庫（cyclonedx-core-java 13.4.0）兩版都能讀寫，cbomkit-theia 的 1.6 輸出可直接升成 1.7 |
+| 盤點範圍 | 四層＋函式庫（下表） |
+| TLS 掃描 | testssl.sh（JSON 輸出，自寫轉換） |
+| OPA | pipeline 裡直接 `opa eval`，不架常駐服務、不架 CBOMkit |
+| 規則基準 | NIST IR 8547＋FIPS 203／204／205；客戶有指定規範再加 |
+| 多台主機 | 每台都收；CBOM 內同一資產只記一筆，用 occurrences 附主機（看得出哪台不一樣）。jar 例外：各台先用 `sha256sum` 算 jar 清單的雜湊，相同的歸一組，每組取一台回操作機用 syft 掃（lab：controller＋broker 7 台一組、REST 2 台一組、C3 一組）；平台主機上不放任何新程式 |
+| 盤點範圍可選 | Jenkins 執行時勾選（內建的 boolean 參數，不用額外 plugin）：controller、broker、REST Proxy、Control Center、**平台共用**（銀行根憑證與簽發憑證、SCRAM 帳號、ssh 金鑰、操作機的憑證來源）五個，預設全勾。收集腳本收 `--roles` 參數，手動與 Jenkins 用同一個。報告開頭與 CBOM 的 metadata 寫明本次範圍；不是全選時標成「部分盤點」 |
+| Jenkins 上的產出 | HTML 報告（HTML Publisher，點了直接看）、`cbom.json`、`findings.json`（build 產出物，可下載；保留份數可設）；手動執行時同樣的檔在操作機的輸出目錄 |
+| 執行期證據 | 納入，用 JFR，**可選、預設不勾**（Jenkins 第六個勾選框，錄製長度可設）；不用 crypto-census（2026-10 才建立的個人專案、0 星、沒有 release、自述仍在測試與 staging；`-javaagent` 要重啟服務，且在 broker JVM 內執行、碰得到 keystore 密碼與私鑰，判定為不可信來源，沒有下載執行）。JFR 是補充證據：只看得到錄製期間發生的事，不取代其他四層 |
+| CBOMkit 平台 | **選配**（2026-11-11）：主流程不變（pipeline 內 `opa eval`＋可下載的 HTML 報告，不依賴常駐服務）；有設定 CBOMkit 位址時，多一步用 API 上傳 `cbom.json` 供瀏覽（`POST /api/v1/cbom/{projectIdentifier}`；另有 `POST /api/v1/compliance/check?policyIdentifier=`）。不改成以它為主的理由：要架四個常駐服務（API、前端、PostgreSQL、OPA，只有容器映像）；判定只有 quantum-safe／quantum-vulnerable／na／unknown 四種，放不下我們的三級與 2030／2035 標註；沒有可下載的報告；官方自述合規檢查是 proof of concept。它的掃描只吃 git 原始碼，產不出 CP 的 CBOM（Confluent Server、C3 是封閉程式），對我們只是檢視器。lab 先不架，只寫好上傳的步驟；未查證：2.3.0 是否支援 CycloneDX 1.7、有沒有登入管制、重複上傳是覆蓋還是保留歷史、主機型的 occurrences 在介面上的呈現 |
+| 讀檔權限 | `cpuser-ops` 逐條加唯讀指令（讀 properties、`/etc/confluent/ssl` 的檔案雜湊與公開 PEM）；要 OS 團隊更新 sudoers |
+| 執行位置 | 操作機做收集（唯讀腳本，產出不含私鑰與密碼），Jenkins 取回後合併、判斷、出報告；Jenkins 不持有平台的金鑰 |
+| 報告 | HTML（Jenkins 上直接看） |
+| SBOM 工具 | syft 為主（單一執行檔、直接讀 jar 與 RPM 資料庫、預設不連網）；辨識結果不如預期再換 cdxgen |
+| 自訂腳本 | 收集用 bash（照 COMMAND-STYLE）；轉換與報告是一個 **Maven 專案**（第三方套件版本都在 `pom.xml`，有單元測試），產出一個含相依套件的可執行 jar（`java -jar cbom-tools.jar <子指令>`）。JSON 用 Jackson（Maven 管理，不借用 Confluent 套件裡那份）；產生與驗證 CBOM 用 CycloneDX 官方的 cyclonedx-core-java（實作時先驗證它對 CBOM 1.6 欄位的支援，夠用才採用並評估省掉 cyclonedx-cli；不夠就退回 Jackson 自己組 JSON）；用 cyclonedx-maven-plugin 產出工具自己的 SBOM |
+| 建置位置 | 外面（下載機）用 Maven 建好，jar 照第 2、3 章的離線引進流程（雜湊核對）帶進去；行內不需要 Maven 與 Maven 套件庫，操作機與 Jenkins agent 只要 JDK 17 以上。之後銀行有 Nexus／Artifactory 可改成行內 Jenkins 建置，專案不用改 |
+| pipeline | Jenkinsfile（宣告式）只依序呼叫腳本，邏輯不寫在 Groovy 裡，同一套腳本不靠 Jenkins 也能手動跑 |
+
+**為什麼分層**：Confluent Platform 是原廠產品，我們只有 RPM 與 jar，沒有原始碼；掃原始碼的工具（PQCA 的 sonar-cryptography）用不上。能盤的是「部署出來的東西」。
+
+| 層 | 盤什麼（這個平台的實際內容） | 來源 | 工具 |
+|---|---|---|---|
+| ① 憑證與金鑰檔 | 7 張憑證與憑證鏈（簽章演算法、公鑰演算法與長度、到期日）、keystore／truststore、MDS token 金鑰對、cpuser 的 ssh 金鑰（只記類型與長度） | 操作機 `~/pki`、各台 `/etc/confluent/ssl` | cbomkit-theia（certificates、secrets／keys plugin） |
+| ② JDK 與 OS 的密碼設定 | `java.security`（`jdk.tls.disabledAlgorithms` 等）、`openssl.cnf`、OS 的 crypto-policies | 各台 `/opt/java/current/conf/security`、`/etc/crypto-policies` | cbomkit-theia（javasecurity、opensslconf）；crypto-policies 自寫 |
+| ③ 平台設定 | 每個 listener 的 TLS 版本與 cipher 設定、SASL 機制（SCRAM-SHA-512、OAUTHBEARER）、MDS token 簽章（RS256）、Secret Protection 的加密演算法、SCRAM 迭代次數 | 各台的 properties（密文不收）、`kafka-configs --describe` | 自寫收集器 → CycloneDX components |
+| ④ 實際連線 | 每個埠實際協商的 TLS 版本、cipher suite、金鑰交換群組、伺服器憑證（9092–9095、9093、8090、8082、9021、9090、7071） | 從操作機掃 | testssl.sh → 自寫轉換 |
+| ⑤ 執行期證據（可選） | 服務在錄製期間**實際用到**的演算法與 provider（含呼叫堆疊，追得到 Kafka／Confluent 的呼叫點）、每次 TLS 交握（對方位址、協定版本、cipher suite）、實際載入的憑證 | 各台服務的 JVM | JDK 內建的 JFR：`jcmd <pid> JFR.start`（不用重啟）只開 `jdk.SecurityProviderService`、`jdk.TLSHandshake`、`jdk.X509Certificate`、`jdk.X509Validation`、`jdk.SecurityPropertyModification`，`jfr print --json` 後自寫轉換 |
+| 函式庫 | 原廠 jar 裡的密碼函式庫與版本（BouncyCastle 等）、JDK 版本 | 各台 `/usr/share/java`、RPM 清單 | syft 列出 jar，再由我們的程式挑出密碼函式庫；另向 Confluent 要原廠 SBOM／CBOM |
+
+**流程**
+
+```
+操作機（唯讀收集腳本）                    Jenkins
+ ├─ 各台取憑證、設定檔（不取私鑰、密文）     ├─ 取回原料（tar＋SHA256）
+ ├─ cbomkit-theia 掃收回來的目錄            ├─ cyclonedx-cli merge／validate → cbom.json
+ ├─ 平台設定收集器                          ├─ opa eval（規則在 git）→ findings.json
+ ├─ testssl.sh 掃每個埠                     ├─ 產生 HTML 報告（HTML Publisher）
+ └─ 打包 cbom-raw-<日期>.tar.gz             └─ cbom.json、findings.json 存成 build 產出物
+```
+
+**規則草案（Rego；每筆 finding：bom-ref、result、rule、依據）**
+
+| 規則 | 判定 | 依據 |
+|---|---|---|
+| 公鑰演算法是 RSA、ECDSA、ECDH、DH、DSA（憑證、金鑰交換、簽章） | quantum-vulnerable；標註 2030 棄用、2035 禁用 | NIST IR 8547 |
+| ML-KEM、ML-DSA、SLH-DSA，或含 ML-KEM 的混合金鑰交換 | quantum-safe | FIPS 203／204／205 |
+| 對稱式：AES-256 → 安全；AES-128 → 可接受（標註）；3DES、RC4 → 違規 | 依強度 | NIST IR 8547、SP 800-131A |
+| 雜湊：SHA-256 以上 → 安全；SHA-1、MD5 → 違規 | 依強度 | SP 800-131A |
+| TLS 1.3 → 通過；TLS 1.2 → 警告；1.1 以下 → 違規 | 協定版本 | SP 800-52r2 |
+| RSA 小於 2048、EC 小於 P-256 | 違規（現在就不合格，和 PQC 無關） | SP 800-131A |
+| 憑證有效期跨過 2030／2035 | 標註（遷移優先序） | NIST IR 8547 的時程 |
+| 沒有對到任何規則 | unknown（報告列出，人工判斷） | — |
+
+報告分三級：違規（現在就不合格）、量子脆弱（要排遷移）、通過。
+
+**先講清楚的限制**
+
+- 現況會有不少「量子脆弱」：憑證是 RSA-2048（身分驗證）、TLS 1.2 的金鑰交換是 ECDHE。**金鑰交換比預期好（lab 實測 2026-11-11，更正先前「JDK 25 做不到」的說法）**：JEP 527 的 PQC 混合金鑰交換雖然是 JDK 27 的功能，但 Temurin 25.0.5 已經有，而且預設把 `X25519MLKEM768` 排在 named groups 第一位；testssl.sh 回報 kb01:9092 支援它，`openssl s_client -groups X25519MLKEM768` 連線成功。所以遷移到 JDK 25 後，broker 之間與 Java 用戶端（同樣新版 JDK）的 TLS 1.3 預設就是混合金鑰交換；舊用戶端（例如 openssl 預設、舊 JDK、librdkafka）協商到的仍是 X25519／ECDHE。實際用哪個群組取決於用戶端，CBOM 的第④層要記「伺服器支援哪些」，不是「每條連線用哪個」。基底的 JDK 21 有沒有，實作時查。報告的價值是盤點與遷移優先序。
+- 原廠程式內部怎麼用密碼學，只能盤到函式庫層級；要原廠提供 SBOM／CBOM 與 PQC 路線圖（Confluent 目前只公布 Confluent Cloud 的 PQC 路線圖）。
+- cbomkit-theia 沒有正式 release 版本號，離線引進時固定 commit／映像 digest，照第 2、3 章的引進流程（雜湊核對）。
+- CBOM 本身是敏感資料（列出所有端點與演算法）：存放位置與誰能看要問銀行。
+
+**要引進的工具（都要經第 2、3 章的離線引進；實作時定版本）**：cbomkit-theia、testssl.sh、OPA（單一執行檔）、syft、我們建置的 cbom-tools.jar（Jackson、cyclonedx-core-java 打包在裡面）；cyclonedx-cli 視官方函式庫的驗證結果決定要不要。Jenkins 用銀行的；lab 用容器模擬。Jenkins agent 要有 JDK 17 以上與 OPA 執行檔。下載機要裝 Maven（只在外面用）。
+
+**待定／待問**
+
+- 給銀行：行內 Jenkins 的版本、能不能連操作機（或由操作機推送）、HTML Publisher plugin 可否安裝、CBOM 與報告存放位置與權限、有沒有指定的 PQC 規範與 CBOM 交付格式、執行頻率。
+- 給原廠：Confluent Platform 的 SBOM／CBOM、PQC 路線圖、支援 JDK 27 的時程。
+- 給銀行（補）：Jenkins agent 的 JDK 版本、能不能放 OPA 執行檔。接收 CBOM 的系統支援 CycloneDX 哪一版（1.6 或 1.7）。
+- JFR lab 實測（2026-11-11，kb01 錄 134 秒）：SecurityProviderService 2,007 筆、28 種（含 `KEM｜X25519MLKEM768` 8 次、`ML-KEM` 8 次，證實 PQC 混合金鑰交換真的被用到）、TLSHandshake 21 筆（沒有 named group 欄位）、X509Certificate 18 筆；.jfr 4.3 MB、JSON 12.8 MB。要用服務的帳號執行（`sudo -u cp-kafka jcmd`），`cpuser-ops` 要再加這幾條；錄製檔含連線對象的位址（敏感、不含金鑰）。**限制（已查清）**：`jdk.TLSHandshake` 在這個環境只記 TLS 1.3 的交握；用 openssl 與 Java 用戶端強制 TLS 1.2 連線都成功，但一筆事件都沒有（不帶憑證連要求 mTLS 的 9092 則是交握失敗，本來就不會有）。所以 JFR 不能用來找還在用 TLS 1.2 的用戶端；要找的話另外評估 Kafka 依協定版本統計連線數的指標。
+- lab 實測的前提（2026-11-11）：testssl.sh 一定要有 DNS 查詢工具（`dig`／`host`；`--nodns none` 也繞不過），操作機要從銀行套件庫裝 `bind-utils`；cbomkit-theia 只發行原始碼與容器映像，我們在下載機用 Go 編成靜態執行檔（v1.1.2，28 MB）；它讀 `.crt`／`.pem`，讀不了有密碼的 `.p12`。
+- 實作時定：章號（暫定 33）、Jenkins 取回原料的方式（操作機推送或 Jenkins 來拉）、各工具與 Jackson 的版本。

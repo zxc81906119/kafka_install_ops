@@ -142,6 +142,24 @@ function RowCards($slide, $y, $h, $blocks, [int]$color, [int]$number) {
   }
 }
 
+# FitRowHeight: the height a row of cards needs for its text (cards are measured, then removed); at least 52
+function FitRowHeight($slide, $blocks, [int]$color) {
+  $count = $blocks.Count
+  $w = ($WIDTH - ($count - 1) * $GAP) / $count
+  $needed = 52
+  $i = 0
+  foreach ($block in $blocks) {
+    $card = NewCard $slide ($LEFT + $i * ($w + $GAP)) 0 $w 112 $block $color ($i + 1)
+    $h = CardNeededHeight $card
+    if ($h -gt $needed) {
+      $needed = $h
+    }
+    $card.Delete()
+    $i++
+  }
+  return [Math]::Ceiling($needed)
+}
+
 function AddPicture($slide, [string]$file, $x, $y, $w, $h, [string]$alt) {
   $picture = $slide.Shapes.AddPicture((Join-Path $BuildDir $file), 0, -1, $x, $y, $w, $h)
   $picture.AlternativeText = $alt
@@ -152,9 +170,20 @@ function FillDiagram($slide, $item, [int]$color, [int]$number) {
   $blocks = @($item.blocks)
   $height = $BOTTOM - $TOP
 
+  if ($item.compact -and ($blocks.Count -eq 0)) {
+    # No cards: the picture takes the whole content area
+    $pictureWidth = [Math]::Min($WIDTH, $height * $item.ratio)
+    $pictureHeight = $pictureWidth / $item.ratio
+    [void](AddPicture $slide $item.file ($LEFT + ($WIDTH - $pictureWidth) / 2) ($TOP + ($height - $pictureHeight) / 2) $pictureWidth $pictureHeight $item.title)
+    return
+  }
+
   if ($item.ratio -ge 2.2) {
-    # Wide picture on top, cards below
+    # Wide picture on top, cards below (compact slides: the card row is only as tall as its text)
     $cardHeight = 112
+    if ($item.compact) {
+      $cardHeight = FitRowHeight $slide $blocks $color
+    }
     $maxHeight = $height - $cardHeight - $GAP
     if ($blocks.Count -eq 0) {
       $maxHeight = $height
@@ -229,6 +258,12 @@ function FillTable($slide, $item, [int]$color, [int]$number) {
   $columns = @($table.head).Count
   $blocks = @($item.blocks)
   $rowHeight = 36
+  $fontSize = 14
+  # compact slides: small tables (up to 6 rows with the header) get taller rows and a larger font
+  if ($item.compact -and ($blocks.Count -eq 0) -and (($rows.Count + 1) -le 6)) {
+    $rowHeight = [Math]::Min(60, [Math]::Floor(($BOTTOM - $TOP) / ($rows.Count + 1)))
+    $fontSize = 16
+  }
   $shape = $slide.Shapes.AddTable($rows.Count + 1, $columns, $LEFT, $TOP, $WIDTH, $rowHeight * ($rows.Count + 1))
   $shape.Name = "Table"
   for ($c = 1; $c -le $columns; $c++) {
@@ -242,7 +277,7 @@ function FillTable($slide, $item, [int]$color, [int]$number) {
       $range.Text = $text
       $range.Font.Name = $FONT
       $range.Font.NameFarEast = $FONT
-      $range.Font.Size = 14
+      $range.Font.Size = $fontSize
       $cell.Shape.TextFrame.VerticalAnchor = 3
       if ($r -eq 1) {
         $range.Font.Bold = -1

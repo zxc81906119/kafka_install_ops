@@ -1,0 +1,167 @@
+// 密碼學資產盤點（CBOM）與合規報告 —— 手把手第 33 章的 Jenkins 版
+//
+// 這個 pipeline 只是把手冊的步驟依序叫一次，邏輯都在被叫的程式裡：
+//   收集     操作機上的 /opt/cbom/bin/cbom-collect.sh（Jenkins 用一把受限的 ssh 金鑰觸發：操作機的專用帳號 cbomsvc，
+//            連進來只能執行那支腳本，不能開 shell）
+//   產生     cbom-tools.jar build
+//   判斷     opa eval（規則 policy/cbom.rego）
+//   報告     cbom-tools.jar report
+// 所以同樣的事不靠 Jenkins 也能在操作機上手動做（手冊 33.4–33.8）。
+//
+// agent 上要有：JDK 17 以上（java）、/opt/cbom/bin 的 cbom-tools.jar 與 opa、/opt/cbom/policy、ssh、curl、tar；
+//               操作機的主機金鑰已經在 known_hosts。
+// Jenkins 要有：Credentials Binding、SSH Credentials、HTML Publisher 三個 plugin；
+//               一筆「SSH Username with private key」的 credential，ID 是 cbom-collect-key，使用者是 cbomsvc。
+// Jenkins 不持有平台的任何金鑰：那把 ssh 金鑰在操作機上被 command= 限制，只能觸發收集、取回原料。
+pipeline {
+  agent any
+
+  options {
+    // 保留最近 30 次的 CBOM 與報告
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+    disableConcurrentBuilds()
+    timestamps()
+    timeout(time: 60, unit: 'MINUTES')
+  }
+
+  parameters {
+    booleanParam(name: 'CONTROLLER', defaultValue: true, description: '盤點 controller')
+    booleanParam(name: 'BROKER', defaultValue: true, description: '盤點 broker')
+    booleanParam(name: 'REST_PROXY', defaultValue: true, description: '盤點 REST Proxy')
+    booleanParam(name: 'CONTROL_CENTER', defaultValue: true, description: '盤點 Control Center')
+    booleanParam(name: 'SHARED', defaultValue: true,
+      description: '平台共用的資產（銀行的根憑證與簽發憑證、SCRAM 帳號、ssh 金鑰、操作機的憑證來源）')
+    booleanParam(name: 'RUNTIME_EVIDENCE', defaultValue: false,
+      description: '執行期證據：另外用 JFR 對每台的服務錄一段（要先經銀行同意）')
+    string(name: 'JFR_SECONDS', defaultValue: '60', description: '執行期證據錄幾秒（勾了上一項才有用）')
+    choice(name: 'SPEC_VERSION', choices: ['1.7', '1.6'], description: 'CBOM 的 CycloneDX 版本')
+    string(name: 'OPS_HOST', defaultValue: 'ops02.poc.lab', description: '操作機')
+    string(name: 'CBOMKIT_URL', defaultValue: '',
+      description: '（選配）CBOMkit 平台的網址，例如 https://cbomkit.example:8081；有填才把 CBOM 上傳過去供瀏覽')
+  }
+
+  environment {
+    CBOM_HOME = '/opt/cbom'
+  }
+
+  stages {
+    stage('範圍') {
+      steps {
+        script {
+          // 勾選的項目 → 收集腳本認得的元件名稱
+          def selected = []
+          if (params.CONTROLLER) { selected << 'controller' }
+          if (params.BROKER) { selected << 'broker' }
+          if (params.REST_PROXY) { selected << 'rest' }
+          if (params.CONTROL_CENTER) { selected << 'c3' }
+          if (params.SHARED) { selected << 'shared' }
+
+          if (selected.isEmpty()) {
+            error('至少要勾一個盤點範圍')
+          }
+
+          if (!(params.JFR_SECONDS ==~ /[0-9]{1,4}/)) {
+            error('JFR_SECONDS 要是秒數')
+          }
+
+          // 參數明確存成變數再給後面的 sh 用：工作第一次執行時，參數的預設值還不會變成 shell 的環境變數
+          env.CBOM_OPS_HOST = params.OPS_HOST
+          env.CBOM_SPEC = params.SPEC_VERSION
+          env.CBOM_KIT_URL = params.CBOMKIT_URL?.trim() ?: ''
+
+          if (!(env.CBOM_OPS_HOST ==~ /[A-Za-z0-9.-]+/)) {
+            error('OPS_HOST 要是主機名稱')
+          }
+
+          env.CBOM_ROLES = selected.join(',')
+          env.CBOM_COMMAND = "collect roles=${env.CBOM_ROLES}" + (params.RUNTIME_EVIDENCE ? " jfr=${params.JFR_SECONDS}" : '')
+          echo "這次的範圍：${env.CBOM_ROLES}；執行期證據：${params.RUNTIME_EVIDENCE ? params.JFR_SECONDS + ' 秒' : '不錄'}"
+        }
+      }
+    }
+
+    stage('收集') {
+      steps {
+        sh 'rm -rf raw out raw.tar.gz && mkdir -p raw out/html'
+
+        // 這把金鑰在操作機上只能執行收集腳本；原料（tar.gz）從這條連線的 stdout 傳回來
+        withCredentials([sshUserPrivateKey(credentialsId: 'cbom-collect-key', keyFileVariable: 'CBOM_KEY', usernameVariable: 'CBOM_USER')]) {
+          sh 'ssh -i "$CBOM_KEY" -o BatchMode=yes -o IdentitiesOnly=yes "$CBOM_USER@$CBOM_OPS_HOST" "$CBOM_COMMAND" > raw.tar.gz'
+        }
+
+        sh 'tar -xzf raw.tar.gz -C raw && rm -f raw.tar.gz'
+        sh 'grep -E "^(ROLES|HOSTS|COLLECTED_AT)=" raw/collect.env'
+      }
+    }
+
+    stage('產生 CBOM') {
+      steps {
+        sh 'java -jar "$CBOM_HOME/bin/cbom-tools.jar" build raw out/cbom.json --spec "$CBOM_SPEC"'
+      }
+    }
+
+    stage('規則判斷') {
+      steps {
+        // 先跑規則自己的測試：規則檔被改壞的話在這裡就停
+        sh '"$CBOM_HOME/bin/opa" test "$CBOM_HOME/policy/"'
+        sh '"$CBOM_HOME/bin/opa" eval --data "$CBOM_HOME/policy/" --input out/cbom.json --format json "data.cbom.report" > out/findings.json'
+      }
+    }
+
+    stage('報告') {
+      steps {
+        // 兩份內容相同：report.html 是單一檔（下載用）；html/ 那份把樣式放在另一個檔，Jenkins 預設的安全設定才顯示得出來
+        sh 'java -jar "$CBOM_HOME/bin/cbom-tools.jar" report out/cbom.json out/findings.json out/report.html'
+        sh 'java -jar "$CBOM_HOME/bin/cbom-tools.jar" report out/cbom.json out/findings.json out/html/index.html --external-css'
+      }
+    }
+
+    stage('上傳 CBOMkit（選配）') {
+      when {
+        expression { return env.CBOM_KIT_URL }
+      }
+      steps {
+        // CBOMkit 只是檢視器；上傳失敗不影響這次的結果
+        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+          sh 'curl -fsS -X POST -H "Content-Type: application/json" --data-binary @out/cbom.json "$CBOM_KIT_URL/api/v1/cbom/confluent-platform"'
+        }
+      }
+    }
+
+    stage('合規結果') {
+      steps {
+        script {
+          def compliant = sh(returnStdout: true,
+            script: '"$CBOM_HOME/bin/opa" eval --data "$CBOM_HOME/policy/" --input out/cbom.json --format raw "data.cbom.report.compliant"').trim()
+          def counts = sh(returnStdout: true,
+            script: '"$CBOM_HOME/bin/opa" eval --data "$CBOM_HOME/policy/" --input out/cbom.json --format raw "data.cbom.report.counts"').trim()
+
+          currentBuild.description = "範圍 ${env.CBOM_ROLES}｜${counts}"
+
+          // 只有「違規」讓這次執行失敗；量子脆弱與警告不擋，看報告排進遷移計畫
+          if (compliant != 'true') {
+            error("不合規：有違規項目 ${counts}，看報告的「違規」一節")
+          }
+
+          echo "合規：沒有違規項目 ${counts}"
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      // 原料含主機與端點的細節，不留在 workspace；三個產出存成這次執行的檔案，供下載
+      sh 'rm -rf raw raw.tar.gz'
+      archiveArtifacts artifacts: 'out/cbom.json, out/findings.json, out/report.html', allowEmptyArchive: true
+      publishHTML(target: [
+        reportName: 'CBOM 合規報告',
+        reportDir: 'out/html',
+        reportFiles: 'index.html',
+        keepAll: true,
+        alwaysLinkToLastBuild: true,
+        allowMissing: true
+      ])
+    }
+  }
+}

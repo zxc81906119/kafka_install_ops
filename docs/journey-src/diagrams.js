@@ -130,7 +130,7 @@ D.journey = () => svg(760, 310, [
   box(510, 140, 230, 56, '10–14 啟動與驗證', ['controller → broker → REST → C3'], 'blue'),
   arrow(250, 168, 263, 168), arrow(495, 168, 508, 168),
   box(20, 222, 400, 56, '15–19 延伸與交付', ['加密設定檔密碼、維運選單、監控、稽核日誌、驗收'], 'purple'),
-  box(440, 222, 300, 56, '20–32 上線之後', ['輪替、憑證、備份、換機、license、遷移、修補'], 'gray'),
+  box(440, 222, 300, 56, '20–32 上線之後', ['輪替、憑證、備份、換機、license', '遷移、修補、沒有行內監控時的告警'], 'gray'),
   arrow(625, 196, 215, 220, null, { via: [[625, 208], [215, 208]] }), arrow(420, 250, 438, 250),
   legend(20, 298, [['teal', '我方'], ['amber', '銀行'], ['blue', '我方，在行內主機上'], ['purple', '延伸'], ['gray', '上線後']]),
 ].join(''));
@@ -293,7 +293,7 @@ D.jmx = () => svg(820, 330, [
   box(36, 56, 238, 50, "controller ×3", ["官方 kafka_controller.yml"], "blue"),
   box(36, 114, 238, 50, "broker ×4", ["官方 kafka_broker.yml"], "blue"),
   box(36, 172, 238, 50, "REST Proxy ×2", ["官方 confluent_rest.yml"], "blue"),
-  box(36, 230, 238, 50, "Control Center", ["我方的小規則（Streams、JVM）"], "blue"),
+  box(36, 230, 238, 50, "Control Center", ["rules-c3.yml＋官方 kafka_streams.yml"], "blue"),
   note(36, 298, ":7071 只用 HTTPS，憑證用這台的 keystore"),
   region(330, 28, 470, 282, "銀行提供，我方交付設定", "amber"),
   box(350, 60, 190, 62, "Prometheus", ["4 個 job、env 標籤", "26 條告警規則"], "amber"),
@@ -345,7 +345,7 @@ D.certrotate = () => svg(800, 300, [
 
 // 22. upgrade: three phases, rollback only before finalize
 D.upgrade = () => svg(800, 300, [
-  box(20, 30, 240, 120, "一：套件 8.2.4 → 8.3.2", ["JDK 維持 21", "C3 2.5.1 → 2.6.1 先，再 broker →", "controller 逐台（leader 最後）", "→ REST → 操作機"], "blue"),
+  box(20, 30, 240, 120, "一：套件 8.2.4 → 8.3.2", ["JDK 維持 21", "C3 2.5.1 → 2.6.1 先，再 broker →", "controller 逐台（leader 最後）", "→ 操作機 → REST"], "blue"),
   arrow(260, 90, 288, 90),
   box(290, 30, 220, 120, "二：JDK 21 → 25", ["切 /opt/java/current", "controller、broker、REST、", "C3、操作機逐台重啟"], "teal"),
   arrow(510, 90, 538, 90),
@@ -793,11 +793,12 @@ D.disk = () => svg(800, 440, [
   box(286, 178, 230, 50, "資料盤用量 > 80%（銀行主機監控）", ["node_exporter 指標；給範例規則"], "amber"),
   box(536, 178, 240, 50, "停掉的 broker（第 17 章既有）", ["TargetDown、UnderReplicated 一起響"], "gray"),
   region(10, 258, 780, 170, "24.3 快滿時的順序：先爭取空間，再處理根因", "coral"),
-  box(26, 290, 170, 80, "① 找最大的 topic", ["24.1 的清單", "常是沒設 retention 的"], "coral"), num(26, 290, "1"),
-  box(216, 290, 180, 80, "② 縮短 retention", ["kafka-configs 改 retention", "只刪關掉的 segment", "最多等 5 分鐘才真的刪"], "coral"), num(216, 290, "2"),
-  box(416, 290, 180, 80, "③ 把 partition 搬走", ["kafka-reassign-partitions", "指定新的 replica 名單", "搬完舊 broker 上的檔自己消失"], "blue"), num(416, 290, "3"),
-  box(616, 290, 160, 80, "④ 擴容或加 broker", ["銀行 OS 團隊放大資料盤", "或 25.2.3 加 broker"], "blue"), num(616, 290, "4"),
-  arrow(196, 330, 214, 330), arrow(396, 330, 414, 330), arrow(596, 330, 614, 330),
+  box(26, 290, 134, 80, "① 找最大的 topic", ["24.1 的清單", "常是沒設 retention"], "coral"), num(26, 290, "1"),
+  box(180, 290, 134, 80, "② 縮短 retention", ["kafka-configs", "只刪關掉的 segment", "最多等 5 分鐘"], "coral"), num(180, 290, "2"),
+  box(334, 290, 134, 80, "③ 刪到指定 offset", ["kafka-delete-records", "應用程式確定", "不再需要時"], "coral"), num(334, 290, "3"),
+  box(488, 290, 134, 80, "④ 搬走 partition", ["kafka-reassign-", "partitions", "舊檔自己消失"], "blue"), num(488, 290, "4"),
+  box(642, 290, 134, 80, "⑤ 擴容或加 broker", ["OS 團隊放大資料盤", "或 25.2.3 加 broker"], "blue"), num(642, 290, "5"),
+  arrow(160, 330, 178, 330), arrow(314, 330, 332, 330), arrow(468, 330, 486, 330), arrow(622, 330, 640, 330),
   box(26, 382, 750, 36, "不要做的事：手動 rm /var/lib/kafka/data 底下的檔（broker 會壞）；也不要停 broker 來「省空間」", [], "gray"),
 ].join(""));
 
@@ -957,6 +958,45 @@ D.c3alert = () => svg(1010, 420, [
   box(848, 304, 148, 84, 'C3 action', ['有設才送；預設格式', '不能自訂 JSON'], 'gray'),
   arrow(804, 232, 846, 232),
   arrow(804, 346, 846, 346),
+].join(''));
+
+// Chapter 33: cryptographic inventory (CBOM) -> OPA -> report
+D.cbom = () => svg(1010, 430, [
+  region(16, 14, 176, 400, '平台主機（每台都收）', 'blue'),
+  box(30, 48, 148, 56, 'controller ×3', ['kc01–kc03'], 'blue'),
+  box(30, 118, 148, 56, 'broker ×4', ['kb01–kb04'], 'blue'),
+  box(30, 188, 148, 56, 'REST Proxy ×2', ['rest01–rest02'], 'blue'),
+  box(30, 258, 148, 56, 'Control Center', ['c3-01'], 'blue'),
+  note(30, 342, '只讀：不取私鑰與密碼'),
+  note(30, 362, '主機上不放新程式'),
+  arrow(192, 216, 224, 216),
+  region(212, 14, 570, 400, '操作機', 'teal'),
+  box(228, 44, 172, 50, '① 憑證與金鑰', ['cbomkit-theia'], 'teal'),
+  box(228, 104, 172, 50, '② JDK 與 OS 設定', ['java.security'], 'teal'),
+  box(228, 164, 172, 50, '③ 平台設定', ['密碼類的值先遮掉'], 'teal'),
+  box(228, 224, 172, 50, '④ 實際連線', ['testssl.sh 掃每個埠'], 'teal'),
+  box(228, 284, 172, 50, '函式庫', ['syft，每組掃一台'], 'teal'),
+  box(228, 344, 172, 50, '⑤ 執行期（可選）', ['JFR 錄一段'], 'gray'),
+  // 六層的原料先匯到一條主線，再進 build
+  `<path d="M400 69 H418 M400 129 H418 M400 189 H418 M400 249 H418 M400 309 H418 M400 369 H418 M418 69 V369" fill="none" stroke="#444441" stroke-width="2.5"/>`,
+  arrow(418, 140, 436, 140),
+  box(438, 96, 152, 88, 'cbom-tools build', ['同一資產併成一筆', '官方 schema 驗證'], 'amber'),
+  box(438, 216, 152, 76, 'opa eval', ['規則 cbom.rego', '分六個等級'], 'purple'),
+  box(438, 324, 152, 66, 'cbom-tools report', ['一頁 HTML'], 'amber'),
+  box(626, 108, 140, 64, 'cbom.json', ['CycloneDX 1.7'], 'coral'),
+  box(626, 222, 140, 64, 'findings.json', ['判斷結果'], 'coral'),
+  box(626, 326, 140, 64, 'report.html', ['合規報告'], 'coral'),
+  arrow(590, 140, 624, 140),
+  arrow(696, 172, 514, 214, null, { via: [[696, 196], [514, 196]] }),
+  arrow(590, 254, 624, 254),
+  arrow(696, 286, 514, 322, null, { via: [[696, 306], [514, 306]] }),
+  arrow(590, 358, 624, 358),
+  region(800, 14, 194, 400, '產出給誰', 'gray'),
+  box(814, 48, 166, 76, 'Jenkins', ['勾選範圍、執行', '下載三個檔'], 'gray'),
+  box(814, 150, 166, 64, '客戶的盤點系統', ['收 cbom.json'], 'gray'),
+  box(814, 240, 166, 76, '遷移計畫', ['違規：立刻處理', '量子脆弱：排優先序'], 'gray'),
+  note(814, 346, '只有「違規」會讓'),
+  note(814, 366, '結果變成不合規'),
 ].join(''));
 
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)

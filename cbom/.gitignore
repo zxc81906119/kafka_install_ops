@@ -1,0 +1,6 @@
+# 產出（每次執行都會重新產生，不進 git）
+out/
+# build.sh 建出來的執行檔（從原始碼重建得出來，不進 git）
+dist/
+# Maven 的建置結果
+tools/target/

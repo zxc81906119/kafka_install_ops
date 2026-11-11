@@ -1,5 +1,5 @@
 <!--meta
-{"kicker":"Confluent Platform 企業版 · 離線安裝與遷移（8.2 → 8.3）","title":"請銀行確認的事項","subtitle":"安裝前要先有答案的問題，以及沒有答案時我們的做法","header":"Confluent Platform 安裝與遷移 · 請銀行確認的事項","author":"zxc81906119","facts":[["適用版本","安裝基底：Confluent Platform 8.2.4、Control Center 2.5.1、JDK 21、RHEL 9.6；遷移目標：8.3.2、2.6.1、JDK 25、RHEL 9.8（以銀行實際的小版本為準）"],["驗證環境","RHEL 9 相容環境（Rocky Linux 9）模擬 11 台主機，離線安裝全程實跑"],["已知前提","主機不接 AD、只有固定帳號；CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登進操作機），沒有 CCP、Conjur；平台不用 CPM 自動輪替，root 由銀行管、svc-mds-bind 由人手動換"],["文件日期","2026-10-30"]]}
+{"kicker":"Confluent Platform 企業版 · 離線安裝與遷移（8.2 → 8.3）","title":"請銀行確認的事項","subtitle":"安裝前要先有答案的問題，以及沒有答案時我們的做法","header":"Confluent Platform 安裝與遷移 · 請銀行確認的事項","author":"zxc81906119","facts":[["適用版本","安裝基底：Confluent Platform 8.2.4、Control Center 2.5.1、JDK 21、RHEL 9.6；遷移目標：8.3.2、2.6.1、JDK 25、RHEL 9.8（以銀行實際的小版本為準）"],["驗證環境","RHEL 9 相容環境（Rocky Linux 9）模擬 11 台主機，離線安裝全程實跑"],["已知前提","主機不接 AD、只有固定帳號；CyberArk 只有 PAM（PVWA 網頁＋PSMP 代登進操作機），沒有 CCP、Conjur；平台不用 CPM 自動輪替，root 由銀行管、svc-mds-bind 由人手動換"],["文件日期","2026-11-08"]]}
 -->
 [[toc]]
 
@@ -13,8 +13,8 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 2.1 | 外網下載機由誰提供？能否連 `packages.confluent.io`、`repo1.maven.org`、`github.com`？ | 所有安裝檔都在下載機抓、驗證後才送進來 | 我方提供一台；只抓 Confluent 套件、監控用的 jar，以及 Confluent 官方的監控檔（GitHub 的 jmx-monitoring-stacks，固定在一個 commit：exporter 規則、告警規則、32 個 Grafana dashboard），OS 套件與 JDK 不下載 |
-| 2.2 | 檔案交換的方式與單次大小上限？ | 整批約 3.1 GB | 超過上限就分批送，每批附各自的雜湊清單 |
+| 2.1 | 外網下載機由誰提供？能否連 `packages.confluent.io`、`github.com`、`keys.openpgp.org`（exporter 的 GPG 公鑰）？ | 所有安裝檔都在下載機抓、驗證後才送進來 | 我方提供一台；只抓 Confluent 套件、監控用的 jar，以及 Confluent 官方的監控檔（GitHub 的 jmx-monitoring-stacks，固定在一個 commit：exporter 規則、告警規則、32 個 Grafana dashboard），OS 套件與 JDK 不下載 |
+| 2.2 | 檔案交換的方式與單次大小上限？ | 兩套版本合計約 6 GB（每套約 3 GB），另加兩個 JDK | 超過上限就分批送，每批附各自的雜湊清單 |
 | 2.3 | 放行標準：RPM 有原廠 GPG 簽章＋SHA256，是否足夠？jar、tar、GitHub 上的監控檔沒有原廠簽章，怎麼放行？ | 決定我們要準備哪些證明 | 附 SHA256SUMS 與驗證報告（RPM 原廠簽章逐一驗過、jar 比對 GitHub release 的 sha256 與 GPG 簽章、監控檔記下 commit 並列入 SHA256SUMS；監控檔都是純文字（YAML、JSON），可逐一審閱） |
 | 2.4 | 之後補帶檔案（修補版、升級版）的申請流程與時程？ | 升級、修補都要再走一次 | 每次升級前兩週提出 |
 | 2.5 | 我們先裝 Confluent Platform 8.2.4，再遷移到 8.3.2：兩套 RPM（各約 3 GB，其中 `confluent-security` 與 Control Center 各超過 1 GB）加兩個 JDK 合計約 6 GB，能否一次掃描、一次送進來？ | 遷移時才補帶要再等一輪開單；單檔大小上限會卡住 | 一次送兩套（安裝基底與遷移目標分在兩個目錄），遷移時直接上架；若平台有單次容量上限，分兩批 |
@@ -53,9 +53,10 @@
 | 5.3 | NTP 來源？ | 憑證與 token 要求時鐘誤差 2 秒內 | 指向行內 NTP |
 | 5.4 | REST Proxy 前的負載平衡：設備型態、VIP 名稱、能否做 L4 直通（不解 TLS）？ | 應用程式用 client 憑證，必須由 REST Proxy 自己驗 | L4 直通、依來源 IP 黏著 |
 | 5.5 | 維運人員從哪個網段連 Control Center（9021）？ | Control Center 直連，不經負載平衡 | 從維運網段（跳板或 VDI）直連 |
-| 5.6 | 變更時段內，LB 團隊能否配合「停用 REST Proxy 的一台 → 我方重啟 → 恢復 → 換另一台」？由誰操作、怎麼聯絡？LB 有沒有主動健康檢查（REST 是雙向 TLS）？ | 只靠被動檢查時，REST 每重啟一次就有幾秒的請求失敗（lab 升級演練實測 4 次）；先停用再重啟可以做到 0 失敗 | 每次重啟 REST 前由 LB 團隊停用該台、我方確認排空後重啟、200 後通知恢復（手把手 12.1） |
-| 5.7 | AD 的 LDAPS（636）只有 broker（kb01–kb04）會連，操作機、Control Center、REST Proxy 都不直接連 AD：防火牆可否只放行這四台到 AD？ | 人員與 C3 的 AD 驗證都經 MDS（在 broker 上）轉手；少開來源就少一個面 | 只放行 broker → AD 636 |
+| 5.6 | 變更時段內，LB 團隊能否配合「停用 REST Proxy 的一台 → 我方重啟 → 恢復 → 換另一台」？由誰操作、怎麼聯絡？LB 有沒有主動健康檢查（REST 是雙向 TLS）？ | 只靠被動檢查時，REST 每重啟一次就有幾秒的請求失敗（lab 遷移時換 JDK 重啟 REST，實測 4 次）；先停用再重啟可以做到 0 失敗 | 每次重啟 REST 前由 LB 團隊停用該台、我方確認排空後重啟、200 後通知恢復（手把手 12.1） |
+| 5.7 | AD 的 LDAPS（636）只有 broker（kb01–kb04）會連，操作機、Control Center、REST Proxy 平常都不直接連 AD（只有 11.2 斷線演練時從操作機檢查 636）：防火牆可否只放行這四台到 AD？ | 人員與 C3 的 AD 驗證都經 MDS（在 broker 上）轉手；少開來源就少一個面 | 只放行 broker → AD 636 |
 | 5.8 | controller 的 9093、broker 的 9092 可否只放行 controller、broker 與操作機（有用憑證到期監控時再加 blackbox exporter）？ | 這兩個埠是叢集內部用的，應用程式、REST Proxy、Control Center 都不需要；controller 也要連 broker 的 9092（metadata）；操作機要連 9093 查 quorum（安裝時 broker 還沒啟動，只能直接問 controller），連 9092、9093 確認憑證 | 只放行這三種來源；換主機（第 25 章）時要一起加上新主機位址 |
+
 # 6. 憑證（CA 窗口）
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
@@ -70,7 +71,7 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 7.1 | 平台查 AD 用的唯讀帳號（svc-mds-bind）由誰建立？密碼由誰換、多久換？ | 換密碼時平台要更新密文、滾動重啟才會生效（見 8.5） | 不自動輪替，由 AD 團隊依變更單換並通知平台；可以的話建兩組（-a／-b）交替，換密碼不中斷 |
+| 7.1 | 平台查 AD 用的唯讀帳號（svc-mds-bind）由誰建立？密碼由誰換、多久換？ | 換密碼時平台要更新密文、滾動重啟才會生效（見 8.5） | 不自動輪替，由 AD 團隊依變更單換並通知平台；單一帳號（見 8.5）；銀行願意給兩組時才改成 -a／-b 交替 |
 | 7.2 | 平台用的群組（管理、維運、開發、稽核）命名與成員由誰管理？ | 權限只綁群組，不綁個人 | 群組由 AD 團隊依申請單管理 |
 | 7.3 | LDAPS 用哪幾台 DC？憑證由哪個 CA 簽？ | 平台要能驗 DC 的憑證、DC 故障時切換 | 設兩台以上，連線逾時 3 秒 |
 | 7.4 | 維運人員用 AD 帳密登入 Control Center 是否可以？是否要求 MFA？ | Control Center 只支援帳號密碼 | AD 帳密登入，不做 MFA |
@@ -117,17 +118,17 @@
 
 | # | 問題 | 為什麼要知道 | 我們的預設 |
 |---|---|---|---|
-| 11.1 | 監控採「JMX exporter＋行內 Prometheus＋行內 Alertmanager＋行內 Grafana」，行內 Prometheus、Alertmanager、Grafana 的版本與位置？ | 我們交付設定，不安裝這三套；版本影響設定寫法（自訂 webhook 內容要較新的 Alertmanager，我們在 0.34.1 實測；Prometheus 2.43 以上才有 scrape_config_files，我們用 3.5.0） | 銀行提供；我方交付 scrape 設定、26 條告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方 32 個 dashboard、根憑證、抓取密碼 |
+| 11.1 | 監控採「JMX exporter＋行內 Prometheus＋行內 Alertmanager＋行內 Grafana」，行內 Prometheus、Alertmanager、Grafana 的版本與位置？ | 我們交付設定，不安裝這三套；版本影響設定寫法（自訂 webhook 內容要較新的 Alertmanager，我們在 0.34.1 實測；Prometheus 2.43 以上才有 scrape_config_files，我們用 3.5.0） | 銀行提供；我方交付 scrape 設定、26 條告警規則、Alertmanager 設定、Grafana 的 datasource 與 Confluent 官方 32 個 dashboard、根憑證 |
 | 11.2 | 機房斷電演練時的開機順序可否配合（controller → broker → REST Proxy／Control Center）？ | 全部同時開機時 Control Center 要等權限服務起來 | 已加上等待機制；仍建議依順序開機 |
 | 11.3 | 7071（監控指標）我方只做 HTTPS、不設帳密（2026-10-31 定案）：資安是否接受「HTTPS＋來源限制」，還是要求每個 HTTP 端點都要認證？ | 指標只能讀、沒有訊息內容與密碼；不設帳密就不用交付、輪替一組共用的抓取密碼 | 只用 HTTPS（銀行根憑證驗鏈）＋11.4 的來源限制；資安要求認證時可改回 HTTPS＋帳密，或另發 Prometheus 的 client 憑證做 mTLS |
 | 11.4 | 每台的 7071 可否只放行行內 Prometheus 的來源位址？請提供位址（或網段） | 7071 沒有帳密，**來源限制是唯一的存取控制**：沒做的話，內網連得到的人都讀得到平台的結構資訊（topic、consumer group、client id） | 主機防火牆目前對所有來源開放 7071；拿到位址後改成只放行它（必要） |
-| 11.5 | 告警要送到哪裡？接收端是 IBM Netcool/OMNIbus（下稱 omnibus）；我們送的 JSON 欄位（附範例）符合它的接收規格嗎？要不要認證（API token）？ | 我們準備了兩種 webhook 範例：Alertmanager 預設的 JSON，和照 omnibus 規格自訂的 JSON（source、ClassName、msg_catalog、msg、state、severity、sub_origin、origin、hostname、sub_source）；其中 source、ClassName、origin、hostname、sub_source 先填你們提供的範例值，請確認正式值 | 兩種都交付，銀行留一種；欄位對應（例如 critical → ERROR）依行內的定義改範本。token 放檔案、不寫進設定 |
+| 11.5 | 告警要送到哪裡？接收端是 IBM Netcool/OMNIbus（下稱 omnibus）；我們送的 JSON 欄位（附範例）符合它的接收規格嗎？範例裡哪些欄位值要改成 Kafka 平台的正式值？要不要認證（API token）？ | 我們準備了兩種 webhook 範例：Alertmanager 預設的 JSON，和照 omnibus 規格自訂的 JSON（source、ClassName、msg_catalog、msg、state、severity、sub_origin、origin、hostname、sub_source）；欄位值先照你們提供的範例（Dynatrace 用的格式）填，變數的部分換成告警規則的對應值，欄位值請行內確認 | 兩種都交付，銀行留一種；欄位對應（例如 critical → ERROR）依行內的定義改範本。token 放檔案、不寫進設定 |
 | 11.6 | Grafana 怎麼放 dashboard 與 datasource：檔案佈建（provisioning）還是手動匯入？登入用 AD（LDAP／SSO）嗎？誰能改 dashboard？ | 32 個官方 dashboard 以檔案佈建最容易維護與重建；Grafana 的權限要和平台的 RBAC 分開想 | 檔案佈建、唯讀；datasource 名稱與 uid 固定為 Prometheus |
 | 11.7 | 行內 Prometheus 的容量與保留天數？ | Confluent 官方的 exporter 規則依 topic、partition 產生序列，broker 每台可到上萬條，partition 多時要評估 | 我方提供序列數的估算（每 1,000 個 partition 約增加多少）；保留天數由銀行定 |
 | 11.8 | 確認：告警與 dashboard 只用行內這一套，不在 Control Center 建 alert trigger／action（C3 內建的 Prometheus、Alertmanager 只給 C3 畫面用） | C3 內建 Alertmanager 的設定會被 C3 重寫、webhook 內容不能自訂 | 如此設計；請銀行確認沒有別的流程依賴 C3 的告警功能 |
 | 11.9 | broker 主機有沒有 node_exporter（或其他主機監控）？資料盤用量超過 80% 的告警由誰設？ | Kafka 的 JMX 沒有「磁碟剩多少」的指標，用量告警只能靠主機層；我們給一條範例規則（`KafkaDataDiskFillingUp`，手把手 24.2），mountpoint、job 要照行內 node_exporter 改 | 銀行主機監控負責；log dir 離線（`KafkaLogDirOffline`）由我方規則負責 |
 | 11.10 | 行內 Prometheus 有沒有 blackbox_exporter（或同類的 TLS 探測）？能不能用它探平台的每個 TLS 端點看憑證到期日？ | 憑證到期會讓整個平台連不上；我們給 blackbox 的模組設定、每個端點一個 target 的 scrape 檔、三條規則與 promtool 測試（手把手 22.2）；沒有的話只靠操作機每天的檢查腳本（22.3）與選單 17 | 建議有；沒有也能上線，到期提醒靠操作機 syslog（tag `confluent-cert`） |
-| 11.11 | 銀行沒有提供 Prometheus 時：告警走 C3 內建 Prometheus（抓 10 台的 JMX exporter，套第 17 章同一份 26 條規則）加第二個 Alertmanager（手冊第 32 章），可以接受嗎？c3-01 到 10 台 7071 的防火牆能開嗎？omnibus 的欄位：`sub_origin` 用「規則名稱: 摘要」、`state` 用 OPEN／RESOLVED、`severity` 用 ERROR／PERFORMANCE、`origin` 與 `hostname` 要填什麼？收到物件或數字會怎麼處理？ | 行內給的格式是 Dynatrace 的變數，這些對應是我們定的；第二個 Alertmanager 用 C3 內附的執行檔，原廠文件寫不支援客戶自管的 Alertmanager，我們同時向原廠確認 | 所有欄位都送字串；`origin` 暫填 c3-embedded、`hostname` 填主機名（整個叢集的告警填環境名稱）；只有帶 `target: omnibus` 的規則才送 omnibus，C3 畫面的 trigger 不送；c3-01 整台掛掉時發不出告警，請行內主機監控偵測 c3-01 |
+| 11.11 | 銀行沒有提供 Prometheus 時：告警走 C3 內建 Prometheus（抓 10 台的 JMX exporter，套第 17 章同一份 26 條規則）加第二個 Alertmanager（手冊第 32 章），可以接受嗎？c3-01 到 10 台 7071 的防火牆能開嗎？omnibus JSON 的欄位值見 11.5，這條路徑和銀行 Prometheus 的路徑是否用同一份？收到物件或數字會怎麼處理？ | 行內給的格式是 Dynatrace 的變數，這些對應是我們定的；第二個 Alertmanager 用 C3 內附的執行檔，原廠文件寫不支援客戶自管的 Alertmanager，我們同時向原廠確認 | 所有欄位都送字串；欄位值確認後兩條路徑用同一份（目前 C3 的路徑有兩個值是我們暫定的）；只有帶 `target: omnibus` 的規則才送 omnibus，C3 畫面的 trigger 不送；c3-01 整台掛掉時發不出告警，請行內主機監控偵測 c3-01 |
 
 # 12. 範圍確認（專案窗口）
 
@@ -138,7 +139,25 @@
 | 12.3 | （問 Confluent 原廠）MDS 寫 `_confluent-metadata-auth` 的內部 producer 為什麼 `retries=0`？auth topic 的 leader 搬家後第一筆 role binding 寫入會回 50003，可否調整或修正？ | lab 重現：leader 搬家後約 3 分鐘再寫，第一筆必失敗、第二筆成功；腳本只對這個錯誤再送一次（手把手 28.4） | 維持「只對 50003 再送一次」 |
 | 12.4 | License：正式 license 什麼時候買得到、涵蓋哪些環境（正式、DR、UAT／SIT）與幾台 broker？買到之前用試用版的期間，銀行能不能接受下面的風險？ | 試用版只有 30 天（從叢集第一次啟動算），到期後服務一重啟就起不來；正式環境不能用試用版。測試環境到期時，可以請原廠延長評估 license（不丟資料），或在原廠同意下重置叢集（清空訊息、重新算 30 天，手把手 26.4，約 15 分鐘停機） | 正式環境上線前一定要有正式 license（手把手 26.3 換上）；採購前的測試環境先用試用版，到期前 7 天請原廠延長，來不及才照 26.4 重置；採購時一起談涵蓋的環境 |
 
-# 13. 附件：要開的連線
+# 13. 密碼學資產盤點（CBOM；資安、Jenkins 管理員、OS 團隊）
+
+手冊第 33 章：把平台的憑證、金鑰、演算法、TLS 設定、密碼函式庫盤點成 CBOM（CycloneDX），用 OPA 依規則判斷，產出合規報告，供後量子密碼（PQC）遷移盤點。全程只讀，不取私鑰與密碼。
+
+| # | 問題 | 為什麼要知道 | 我們的預設 |
+|---|---|---|---|
+| 13.1 | 行內有沒有指定的後量子密碼規範或時程？CBOM 有沒有指定的格式與欄位？ | 規則的門檻照它訂 | 規則依 NIST IR 8547（2030 年後棄用、2035 年後禁用）、FIPS 203／204／205、NIST SP 800-131A、SP 800-52；格式 CycloneDX |
+| 13.2 | 接收 CBOM 的系統支援 CycloneDX 1.6 還是 1.7？ | 1.7 才有 TLS 金鑰交換群組的欄位（後量子盤點最需要的資訊） | 預設輸出 1.7；只收 1.6 時可以改輸出 1.6（群組改記在自訂屬性） |
+| 13.3 | CBOM 與報告放哪裡、誰能看、保留多久？ | CBOM 列出所有端點與演算法，本身是敏感資料 | 存成 Jenkins 該次執行的檔案，保留最近 30 次；權限照 Jenkins 的工作權限 |
+| 13.4 | 行內 Jenkins 的版本？能不能裝 Credentials Binding、SSH Credentials、HTML Publisher 三個 plugin？執行的 agent 上能不能放 JDK 17 以上、OPA 執行檔與我方的 `cbom-tools.jar`？ | pipeline 需要 | 需要這三個 plugin；工具經離線引進流程帶進去 |
+| 13.5 | Jenkins agent 能不能連操作機的 22 埠？能不能在操作機建專用帳號 `cbomsvc`（密碼鎖定、只收金鑰），放一把只能執行收集腳本的公鑰（`command=`、`from=`），並開一條 sudo？ | Jenkins 用這把受限金鑰觸發收集、取回原料；它拿不到 shell，也不持有平台的金鑰。操作機不開放 root 用 ssh 登入，所以用專用帳號 | 可以；不行的話改由操作機排程收集、把原料交給 Jenkins（不能在 Jenkins 上選範圍） |
+| 13.6 | 交付後 `cpuser-ops` 能不能加幾條唯讀的 sudo（讀各台的 properties、`/etc/confluent/ssl` 的檔案清單、token 公鑰）？ | 收集要讀只有 root 讀得到的檔；密碼類的設定值在主機上就遮掉才傳回 | 加手冊 33.11 列的那幾條 |
+| 13.7 | 執行期證據：能不能在正式環境用 JDK 內建的 JFR 對執行中的服務錄一段（不重啟、不裝新程式）？ | 看得到服務實際用了哪些演算法、有沒有連線真的用到後量子金鑰交換；錄製檔含連線對象的位址 | 預設不做；要做時每次先申請 |
+| 13.8 | 多久盤一次？ | 排進維運作業 | 憑證換發、升級、OS 修補之後各一次，平常每季一次 |
+| 13.9 | 銀行的 CA 什麼時候能簽後量子演算法（ML-DSA 等）的憑證？ | 現在的憑證都是 RSA，報告上是「量子脆弱」；要等 CA 才能換 | 等 CA 的時程；有效期跨過 2030／2035 年的憑證（根憑證、簽發憑證）優先規劃 |
+| 13.10 | 連平台的應用程式用什麼用戶端、什麼版本（JDK、librdkafka 等）？ | 伺服器端 JDK 25 的 TLS 1.3 已經支援後量子混合金鑰交換，實際用不用取決於用戶端 | 請應用程式團隊提供清單，一起評估哪些要升級 |
+| 13.11 | （問 Confluent 原廠）能不能提供 Confluent Platform 的 SBOM／CBOM？後量子密碼的路線圖（支援 JDK 27、後量子簽章的憑證）？ | 原廠程式是封閉的，內部怎麼用密碼學只盤得到函式庫與執行期證據 | 以我方盤點為準，原廠資料作為補充 |
+
+# 14. 附件：要開的連線
 
 | 從 | 到 | port | 用途 |
 |---|---|---|---|
@@ -159,4 +178,7 @@
 | 所有平台主機 | NTP | 123/udp | 校時 |
 | 行內 Prometheus | controller、broker、REST Proxy、Control Center | 7071 | 抓指標（只用 HTTPS、不設帳密；只放行行內 Prometheus，見 11.4） |
 | 行內 Alertmanager | 行內事件系統（omnibus） | 由銀行定 | 告警 webhook |
-| Control Center | 自己 | 9090 | 內建 Prometheus（不對外） |
+| controller、broker | Control Center | 9090 | telemetry（OTLP，雙向憑證），C3 畫面用 |
+| 操作機 | Control Center | 9090 | 維運檢查（svc-ops 憑證） |
+| Control Center（第 32 章，銀行沒有 Prometheus 時） | controller、broker、REST Proxy、Control Center | 7071 | 內建 Prometheus 抓指標來告警（見 11.11） |
+| 行內 Jenkins 的 agent（第 33 章） | 操作機 | 22 | 用受限的 ssh 金鑰觸發密碼學資產盤點的收集（見 13.5） |

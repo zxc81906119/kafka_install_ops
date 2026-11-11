@@ -11,10 +11,19 @@ const L = require("react-icons/lu");
 const { Resvg } = require("../journey-src/node_modules/@resvg/resvg-js");
 const D = require("../journey-src/diagrams");
 const CD = require("./c3alert-diagrams");
-const { COLOR, SLIDES } = require("./c3alert-slides");
+const { COLOR, SLIDES, APPENDIX } = require("./c3alert-slides");
 
 const buildDir = path.resolve(process.argv[2] || "c3alert-build");
 fs.mkdirSync(buildDir, { recursive: true });
+
+const REWORD = {
+  c3alert: [
+    ["第 17 章同一份 26 條", "同一份 26 條規則"],
+    ["4 個 job，只留規則用的指標", "抓取、算規則"], ["prometheus-generated.yml（root）", ""],
+    ["HTTPS，每 30 秒抓一次", ""], ["10 個欄位都是字串", ""],
+    ["有設才送；預設格式", "有設才送"], ["不能自訂 JSON", ""], ["C3 自己寫設定", ""],
+  ],
+};
 
 function renderDiagram(id) {
   const draw = CD[id] || D[id];
@@ -22,7 +31,14 @@ function renderDiagram(id) {
     throw new Error("unknown diagram: " + id);
   }
 
-  const svg = draw();
+  // The guide`s diagrams may name other chapters; the deck says what is meant instead
+  let svg = draw();
+  for (const [from, to] of REWORD[id] || []) {
+    if (!svg.includes(from)) {
+      throw new Error(`${id}: 找不到要改的字「${from}」`);
+    }
+    svg = svg.split(from).join(to);
+  }
   const width = +/width="(\d+)"/.exec(svg)[1];
   const height = +/height="(\d+)"/.exec(svg)[1];
   const png = new Resvg(svg, { fitTo: { mode: "zoom", value: 2.5 }, font: { loadSystemFonts: true } }).render().asPng();
@@ -49,7 +65,8 @@ async function renderIcon(name, color) {
 
 async function prepare(slide) {
   const color = slide.color || COLOR;
-  const out = { kind: "content", tag: `第 32 章｜${slide.tag}`, color, title: slide.title, blocks: slide.blocks || [], notes: slide.notes || "" };
+  // compact: guide-build.ps1 sizes pictures, card rows and small tables to the content (this deck only)
+  const out = { kind: "content", compact: true, tag: slide.tag, color, title: slide.title, blocks: slide.blocks || [], notes: slide.notes || "" };
 
   if (slide.diagram) {
     Object.assign(out, renderDiagram(slide.diagram));
@@ -89,8 +106,14 @@ function wrapExpr(line) {
     .split(NL);
 }
 
+// Source of each rule: the same table the metric diagrams use (c3alert-diagrams.js)
+function ruleSources() {
+  return CD._sources;
+}
+
 function ruleLines() {
   const out = [];
+  const sources = ruleSources();
   let inAnnotations = false;
   for (const line of fs.readFileSync(RULES_FILE, "utf8").split(String.fromCharCode(10))) {
     const trimmed = line.trim();
@@ -107,6 +130,13 @@ function ruleLines() {
     if (trimmed === "annotations:") {
       inAnnotations = true;
       continue;
+    }
+    const alert = /^      - alert: (\S+)/.exec(line);
+    if (alert) {
+      if (!sources[alert[1]]) {
+        throw new Error("no source in the rule tables for " + alert[1]);
+      }
+      out.push("      # 出處：" + sources[alert[1]]);
     }
     out.push(...wrapExpr(line));
     if (/^  - name: /.test(line)) {
@@ -129,7 +159,7 @@ function rulePages() {
     // A new unit starts at each alert, unless the previous unit is only a group header (keep the header with its first rule)
     const last = units[units.length - 1];
     const headerOnly = last && !last.lines.some((l) => /^      - alert: /.test(l));
-    if (units.length === 0 || /^  - name: /.test(line) || (/^      - alert: /.test(line) && !headerOnly)) {
+    if (units.length === 0 || /^  - name: /.test(line) || (/^      # 出處：/.test(line) && !headerOnly)) {
       units.push({ group, lines: [] });
     }
     units[units.length - 1].lines.push(line);
@@ -150,18 +180,23 @@ function rulePages() {
 async function main() {
   const slides = [];
 
-  slides.push({ kind: "cover", title: "Kafka 平台告警方案", sub: "銀行沒有 Prometheus 時（手冊第 32 章）" });
+  slides.push({ kind: "cover", title: "Kafka 平台告警方案", sub: "銀行沒有 Prometheus 時" });
   for (const s of SLIDES) {
+    slides.push(await prepare(s));
+  }
+
+  // Appendix A: the real settings
+  for (const s of APPENDIX) {
     slides.push(await prepare(s));
   }
 
   const pages = rulePages();
   const count = ruleLines().filter((l) => /^      - alert: /.test(l)).length;
   pages.forEach((lines, i) => {
-    slides.push(Object.assign({ kind: "content", tag: `第 32 章｜附錄 ${i + 1}／${pages.length}`, color: COLOR,
-      title: `附錄：${count} 條規則全文（${i + 1}／${pages.length}）`, blocks: [],
+    slides.push(Object.assign({ kind: "content", tag: `附錄 B：規則全文 ${i + 1}／${pages.length}`, color: COLOR,
+      title: `附錄 B：${count} 條規則全文（${i + 1}／${pages.length}）`, blocks: [],
       notes: "c3-01 上 custom-rules-confluent.yml 的實際內容（由交給銀行的 confluent-alerts.yml 每個群組加 target 產生）。每條另有 summary、description（送 omnibus 的 sub_origin、msg），這裡省略。" },
-      { code: lines.join(String.fromCharCode(10)), codeFile: "/etc/confluent-control-center/custom-rules-confluent.yml（省略註解與 annotations）" }));
+      { code: lines.join(String.fromCharCode(10)), codeFile: "/etc/confluent-control-center/custom-rules-confluent.yml（省略原註解與 annotations；# 出處 依規則表補上）" }));
   });
   slides.push({ kind: "end", title: "謝謝", sub: "" });
 

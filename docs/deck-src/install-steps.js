@@ -19,8 +19,8 @@ module.exports = function makeSteps(ctx) {
   return async function steps() {
     // ---------------------------------------------------------------- 1 download
     {
-      const s = stepSlide(0, "只帶 Confluent 原廠套件，OS 與 Java 由行內提供",
-        "第一步在可以連外的下載機進行。只下載版本清單上指定的 Confluent 原廠套件（含 Control Center），連同原廠的簽章公鑰一起保存。下載環境用和正式主機同版的精簡系統，算出來的相依才會正確。作業系統需要的套件和 Java 都不帶進去：Java 21 由行內直接提供壓縮檔，其他 OS 套件只列出名稱，交給行內 OS 團隊從既有來源提供，修補也跟著行內的 OS 修補流程。每個檔案都記下來源、版本、雜湊值與下載時間；舊版本也保留，回滾或原廠下架時才有得用。");
+      const s = stepSlide(0, "只帶 Confluent 套件與監控元件，OS 與 Java 由行內提供",
+        "第一步在可以連外的下載機進行。只下載版本清單上指定的 Confluent 原廠套件（含 Control Center），連同原廠的簽章公鑰一起保存；監控用的 JMX exporter 與 Confluent 官方監控設定檔也一起下載、驗證。下載環境用和正式主機同版的精簡系統，算出來的相依才會正確。作業系統需要的套件和 Java 都不帶進去：Java 21 由行內直接提供壓縮檔，其他 OS 套件只列出名稱，交給行內 OS 團隊從既有來源提供，修補也跟著行內的 OS 修補流程。每個檔案都記下來源、版本、雜湊值與下載時間；舊版本也保留，回滾或原廠下架時才有得用。");
       await badge(s, 1.35, 2.85, 1.0, "LuGlobe", C.teal);
       under(s, 1.35, 3.42, 2.0, "外網下載機", null, { headSize: 15 });
       arrow(s, 1.9, 2.85, 2.95, 2.85, C.mute, 2);
@@ -42,7 +42,7 @@ module.exports = function makeSteps(ctx) {
         ["LuKeyRound", "保存原廠公鑰", "之後每一關都用它驗簽"],
         ["LuFingerprint", "記錄每個檔案", "來源、版本、雜湊、時間"],
         ["LuArchive", "保留舊版本", "回滾、原廠下架時仍可用"],
-        ["LuFileText", "OS 與 Java 清單", "Java 21 由行內提供壓縮檔"],
+        ["LuFileText", "OS 與 Java 清單", "JDK 21、25 由行內提供壓縮檔"],
       ]);
     }
 
@@ -82,7 +82,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 3 exchange + publish
     {
       const s = stepSlide(2, "只有驗證過的檔案能進內網",
-        "放行的檔案經行內既有的檔案交換平台進入內網，必須是掃描過的同一批檔案。上架前在內網再驗一次雜湊與簽章；已經上架的檔案絕不覆蓋，同名但內容不同就拒絕。接著建立套件索引，由行內套件庫提供給各主機：優先沿用既有的 Satellite、Artifactory 或 Nexus，沒有才用 web server。每次引進的檔案清單與驗證報告都留存，供稽核。");
+        "放行的檔案經行內既有的檔案交換平台進入內網，必須是掃描過的同一批檔案。上架前在內網再驗一次雜湊與簽章，全部相符才上架。接著建立套件索引，由行內套件庫提供給各主機：優先沿用既有的 Satellite、Artifactory 或 Nexus，沒有才用 web server。每次引進的檔案清單與驗證報告都留存，供稽核。");
       const zones = [
         [M, 3.6, "外網區", "可連外", "LuLaptop", C.soft, C.mute],
         [M + 3.85, 3.6, "行內檔案交換", "依行內規範", "LuArrowRightLeft", "E6ECF5", "4E6E9E"],
@@ -99,7 +99,7 @@ module.exports = function makeSteps(ctx) {
       await worklist(s, [
         ["LuArrowRightLeft", "經檔案交換平台", "與掃描過的是同一批檔案"],
         ["LuShieldCheck", "上架前再驗一次", "雜湊與簽章重新比對"],
-        ["LuLock", "已上架不可覆蓋", "同名不同內容即拒絕"],
+        ["LuLock", "上架前再驗", "雜湊與簽章都相符才上架"],
         ["LuDatabase", "建立套件索引", "主機才能依名稱安裝"],
         ["LuServer", "由行內套件庫提供", "沿用既有平台或 web server"],
         ["LuArchive", "留存引進紀錄", "清單與報告供稽核"],
@@ -109,7 +109,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 4 host baseline
     {
       const s = stepSlide(3, "每台主機都照同一套標準設定",
-        "安裝 Kafka 之前，先把每台主機的作業系統調成同一套標準：檔案數、記憶體、網路緩衝等系統參數調到建議值；關閉透明大頁、避免使用 swap；時間與行內 NTP 同步，誤差小於 1 秒；防火牆只開各元件需要的埠；建立不能登入的服務專用帳號；信任行內 CA，日誌限量保留。");
+        "安裝 Kafka 之前，先把每台主機的作業系統調成同一套標準：檔案數、記憶體、網路緩衝等系統參數調到建議值；關閉透明大頁、避免使用 swap；時間與行內 NTP 同步，誤差 2 秒內；防火牆只開各元件需要的埠；日誌限量保留。服務專用帳號由安裝套件時建立，行內 CA 由 OS 團隊預先信任。");
       const roles = [["LuServerCog", "Controller"], ["LuServer", "Broker"], ["LuNetwork", "REST 介面"], ["LuMonitor", "Control Center"], ["LuLaptop", "操作機"]];
       const step = (W - 2 * M) / roles.length;
       panel(s, M, 1.95, W - 2 * M, 2.1, C.accentSoft);
@@ -121,17 +121,17 @@ module.exports = function makeSteps(ctx) {
       await worklist(s, [
         ["LuSlidersHorizontal", "系統參數", "檔案數、記憶體、網路緩衝"],
         ["LuMemoryStick", "記憶體行為", "關透明大頁，避免 swap"],
-        ["LuClock", "時間同步", "與行內 NTP 誤差小於 1 秒"],
+        ["LuClock", "時間同步", "與行內 NTP 誤差 2 秒內"],
         ["LuBrickWall", "防火牆", "只開各元件需要的埠"],
         ["LuUserCog", "服務專用帳號", "不能登入、不能 SSH"],
-        ["LuBadgeCheck", "信任與日誌", "信任行內 CA，日誌限量保留"],
+        ["LuBadgeCheck", "日誌", "限量保留，不塞爆磁碟"],
       ]);
     }
 
     // ---------------------------------------------------------------- 5 install packages
     {
-      const s = stepSlide(4, "先試算，通過才安裝，裝完鎖定版本",
-        "Confluent 套件從內部套件庫安裝，作業系統套件從行內的 RHEL 套件來源安裝，Java 用行內提供的壓縮檔裝到統一路徑；連線都用 HTTPS 並驗證伺服器憑證，安裝時逐一驗證簽章。正式安裝前先試算：確認不缺任何套件，也不會順帶升級其他系統套件。依主機上的元件只裝需要的套件和指定版本，裝完鎖定版本，日後例行更新不會誤升級。Control Center 主機不裝其他平台套件，避免衝突。");
+      const s = stepSlide(4, "只裝需要的套件，裝完鎖定版本",
+        "Confluent 套件從內部套件庫安裝，作業系統套件從行內的 RHEL 套件來源安裝，Java 用行內提供的壓縮檔裝到統一路徑；連線都用 HTTPS 並驗證伺服器憑證，安裝時逐一驗證簽章。依主機上的元件只裝需要的套件和指定版本，裝完鎖定版本，日後例行更新不會誤升級。Control Center 主機不裝其他平台套件，避免衝突。");
       const steps = [["LuDatabase", "內部套件庫", C.teal], ["LuCalculator", "試算", C.accent], ["LuPackage", "安裝", C.teal], ["LuLock", "鎖定版本", C.teal]];
       const sx = 1.9, step = (W - 2 * sx) / 3, cy = 2.75;
       for (let i = 0; i < steps.length; i++) {
@@ -143,7 +143,7 @@ module.exports = function makeSteps(ctx) {
       await worklist(s, [
         ["LuLink", "指向內部套件庫", "HTTPS，驗證伺服器憑證"],
         ["LuKeyRound", "匯入原廠公鑰", "安裝時逐一驗證簽章"],
-        ["LuCalculator", "安裝前試算", "不缺套件、不動系統套件"],
+        ["LuCalculator", "依元件安裝", "只裝該台需要的套件"],
         ["LuPackage", "依元件安裝", "只裝需要的套件與版本"],
         ["LuLock", "鎖定版本", "例行更新不會誤升級"],
         ["LuMonitor", "C3 主機獨立", "不裝其他平台套件"],
@@ -153,7 +153,7 @@ module.exports = function makeSteps(ctx) {
     // ---------------------------------------------------------------- 6 certificates
     {
       const s = stepSlide(5, "憑證由銀行 CA 簽發，匯入前先檢查",
-        "平台之間的連線全部加密。我們在行內產生私鑰與申請單，申請單寫清楚用途、主機名稱與效期，只把申請單交給銀行 CA，私鑰不離開行內。簽回後先檢查名稱、用途、效期、憑證鏈，以及和私鑰是否相符，全部正確才部署。伺服器、內部通訊、各平台服務各用各的憑證；應用程式多半直連 Kafka、用帳號密碼，不需要憑證；只有經 REST 介面的應用程式要各發一張憑證，以憑證識別身分；所有主機都信任銀行根憑證；到期前 30 天提出換發。");
+        "平台之間的連線全部加密。我們在行內產生私鑰與申請單，申請單寫清楚用途、主機名稱與效期，只把申請單交給銀行 CA，私鑰不離開行內。簽回後先檢查名稱、用途、效期、憑證鏈，以及和私鑰是否相符，全部正確才部署。伺服器、內部通訊、各平台服務各用各的憑證；應用程式多半直連 Kafka、用帳號密碼，不需要憑證；只有經 REST 介面的應用程式要各發一張憑證，以憑證識別身分；所有主機都信任銀行根憑證；剩 60 天告警、排變更換發。");
       panel(s, M, 1.95, W - 2 * M, 1.0, C.soft);
       panel(s, M, 3.05, W - 2 * M, 1.0, C.accentSoft);
       txt(s, "我方", { x: M + 0.25, y: 1.95, w: 1.2, h: 1.0, fontSize: 16, bold: true, color: C.teal, valign: "middle" });

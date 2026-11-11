@@ -74,7 +74,7 @@ const INSTALL = [
     widths: [0.3, 0.7],
   }, blocks: [
     ["為什麼要鎖版本", "OS 例行更新不會把 Confluent 升掉。"],
-    ["只鎖 Confluent 和 JDK", "C3 的兩個 OS 前置套件跟著 OS 修補走，不鎖。"],
+    ["只鎖 Confluent", "JDK 是 tar，不受 dnf 影響；C3 的兩個 OS 前置套件跟著 OS 修補走，不鎖。"],
   ], notes: "鎖定在第 29 章遷移時逐台解開、換完再鎖回。" },
   { ch: "第 9 章", title: "所有內部連線都加密，並用憑證識別身分", diagram: "certs", blocks: [
     ["在做什麼", "我方產生私鑰與 CSR，銀行 CA 簽發，收回後逐張檢查再做成 keystore。"],
@@ -142,7 +142,7 @@ const INSTALL = [
   ], notes: "手冊第 16 章。" },
   { ch: "第 16 章", title: "一次操作：從登入到留下紀錄", diagram: "opmenuflow", blocks: [
     ["碰主機", "以 cpuser 連線，sudo 只放行逐一列出的動作。"],
-    ["誠實的限制", "操作者是 root，碰主機前的權限檢查是流程控管，不是硬性隔離；追溯靠 PSMP 錄影。"],
+    ["誠實的限制", "操作者是 root，碰主機前的權限檢查是流程控管，不是硬性隔離；追溯靠 CyberArk 登入紀錄與 PSMP 錄影。"],
     ["繞不過的", "Kafka 類動作的權限與稽核由 Kafka 端強制。"],
   ], notes: "這一點要讓資安知道。" },
   { ch: "第 17 章", title: "監控交給銀行的系統，我方交付設定", diagram: "jmx", blocks: [
@@ -207,7 +207,7 @@ const OPS = [
     ["不要做", "手動刪資料目錄底下的檔；也不要停 broker 來省空間。"],
   ], notes: "lab 用示範 topic 實際做過：縮短 retention、搬 partition。" },
   { ch: "第 25 章", title: "換掉一台 controller，服務不中斷", diagram: "controllerswap", blocks: [
-    ["做法", "移出舊成員 → 清空重建 → 以觀察者追上 → 再加回 quorum。"],
+    ["做法", "移出舊成員 → 以觀察者重新格式化、追上 → 再加回 quorum。"],
     ["規則", "一次一台；應用程式不用改設定。"],
   ], notes: "手冊 25.1。" },
   { ch: "第 25 章", title: "broker 縮減與擴充，資料自動搬移", diagram: "brokerscale", blocks: [
@@ -238,7 +238,7 @@ const OPS = [
   { ch: "第 28 章", title: "MDS 不能用時，還有備用路徑", diagram: "mdsdown", blocks: [
     ["選單", "進入緊急主機模式，只開放主機類項目。"],
     ["Kafka 類操作", "改用緊急帳號 kafka-admin。"],
-    ["事後", "換緊急帳號的密碼，並對稽核紀錄結案。"],
+    ["事後", "換緊急帳號的密碼；稽核裡記的是 kafka-admin，要和 CyberArk 登入紀錄、PSMP 錄影對起來。"],
   ], notes: "手冊 28.6，已演練。" },
 ];
 
@@ -272,7 +272,7 @@ const MIGRATE = [
 ];
 
 const CLOSING = { ch: "手冊現況", title: "手冊的驗證狀態與 lab 驗不到的部分", tiles: [
-  ["34 章", "第 0–32 章與附錄 B 都在 lab 實跑過", "LuListChecks"],
+  ["33 章＋附錄", "第 0–32 章與附錄 B 都在 lab 實跑過", "LuListChecks"],
   ["手動優先", "手冊教手動步驟，腳本走同一條路", "LuRoute"],
   ["待銀行", "換金鑰週期、master key 週期等待確認", "LuMessageCircleQuestion"],
 ], blocks: [
@@ -305,7 +305,7 @@ const REWORD = {
   ospatch: [["不要靠 dnf history undo", "不要靠套件回退"], ["dnf update 只動", "更新只動"], ["dnf update", "更新 OS 套件"], ["--refresh", "（重讀索引）"], ["正式：systemctl reboot", "正式：重開機"], [">needs-restarting<", ">判斷影響範圍<"], ["-r：要不要重開機", "要不要重開機"], ["-s：哪些服務要重啟", "哪些服務要重啟"]],
   restore: [["kafka-topics --create", "重建 topic"], ["--partitions／--replication-factor", "partition 數與副本數照備份"], ["kafka-configs --alter --add-config", "把設定寫回去"], ["iam rbac role-binding create", "建回 role binding"]],
   scramab: [["kafka-configs --alter", "改密碼"]],
-  disk: [["kafka-log-dirs --describe", "查 log dir 用量"], ["kafka-configs 改 retention", "縮短 retention"], ["kafka-reassign-partitions", "搬移 partition"], ["手動 rm /var/lib/kafka/data 底下的檔", "手動刪資料目錄底下的檔"]],
+  disk: [["kafka-log-dirs --describe", "查 log dir 用量"], ["kafka-configs", "改 topic 設定"], ["kafka-delete-records", "刪到指定 offset"], ["kafka-reassign-", "指定新的"], ["partitions", "replica 名單"], ["手動 rm /var/lib/kafka/data 底下的檔", "手動刪資料目錄底下的檔"]],
   triage: [["systemctl is-active", "服務狀態"], ["journalctl 最後 20 行的 ERROR", "日誌最後的 ERROR"], ["單台 curl 8082", "單台直接測 8082"]],
   onboard: [["kafka-topics --create", "建 topic"], ["kafka-configs 配額", "設配額"]],
   certexpiry: [["cert-expiry.sh 讀", "讀"]],
