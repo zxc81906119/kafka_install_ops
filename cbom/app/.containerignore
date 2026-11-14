@@ -1,0 +1,6 @@
+# podman build 的 build context 只需要這兩個檔（deploy/app/Containerfile 會 COPY 它們），
+# 其他全部排除：上傳更快，也避免把原始碼、金鑰檔與其他建置產物帶進映像檔的 build context
+# 寫法：第一行 * 是全部排除，! 開頭的是例外（要留下的）
+*
+!target/crypto-lab-*.jar
+!deploy/app/crypto.jfc

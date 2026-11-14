@@ -999,6 +999,43 @@ D.cbom = () => svg(1010, 430, [
   note(814, 366, '結果變成不合規'),
 ].join(''));
 
+// web app 的盤點照生命週期分三段（手冊已不含 web app；這張圖只有簡報「Cbom 探討」用：cbom/deck/build-cbom-talk.mjs）
+// shared：右邊那一區的標題。手冊寫章號；別的文件（簡報）可以換成自己的說法
+D.cbomweb = (shared = '和第 33 章共用') => svg(1010, 430, [
+  region(16, 14, 590, 400, 'Jenkins agent（有容器引擎）', 'teal'),
+  region(30, 44, 180, 356, '建置時（每次都做）', 'blue'),
+  box(44, 76, 152, 62, '建置', ['mvnw verify', '→ jar、SBOM'], 'blue'),
+  box(44, 152, 152, 62, '原始碼掃描', ['cbomkit-action', '程式呼叫的演算法'], 'blue'),
+  box(44, 228, 152, 74, '憑證與秘密', ['cbomkit-theia dir', '私鑰、寫死的金鑰'], 'blue'),
+  note(44, 330, '不需要 app 在跑'),
+  region(222, 44, 180, 356, '部署物', 'amber'),
+  box(236, 76, 152, 62, '建成映像', ['Containerfile'], 'amber'),
+  box(236, 152, 152, 62, '掃映像', ['cbomkit-theia image', 'OpenSSL 設定、信任庫'], 'amber'),
+  box(236, 228, 152, 74, 'JDK 與 OS 設定', ['java.security', 'crypto-policies'], 'amber'),
+  note(236, 330, '掃的是真正要上線的'),
+  note(236, 350, '那個映像'),
+  region(414, 44, 180, 356, '執行期（勾選才做）', 'gray'),
+  box(428, 76, 152, 62, '用映像啟動', ['帶 JFR'], 'gray'),
+  box(428, 152, 152, 62, '把端點打一輪', ['讓每個演算法被用到'], 'gray'),
+  box(428, 228, 152, 74, 'TLS 與 JFR', ['testssl.sh', '實際用到的演算法'], 'gray'),
+  note(428, 330, '函式庫代為呼叫的'),
+  note(428, 350, '只有這裡看得到'),
+  arrow(606, 216, 640, 216, '原料目錄'),
+  region(650, 14, 344, 400, shared, 'purple'),
+  box(664, 48, 152, 76, 'cbom-tools build', ['同一資產併成一筆', '官方 schema 驗證'], 'amber'),
+  box(664, 162, 152, 76, 'opa eval', ['同一份 cbom.rego', '分六個等級'], 'purple'),
+  box(664, 276, 152, 66, 'cbom-tools report', ['一頁 HTML'], 'amber'),
+  arrow(740, 124, 740, 160),
+  arrow(740, 238, 740, 274),
+  box(838, 54, 142, 64, 'cbom.json', ['CycloneDX 1.7'], 'coral'),
+  box(838, 168, 142, 64, 'findings.json', ['判斷結果'], 'coral'),
+  box(838, 278, 142, 64, 'report.html', ['合規報告'], 'coral'),
+  arrow(816, 86, 836, 86),
+  arrow(816, 200, 836, 200),
+  arrow(816, 310, 836, 310),
+  note(664, 372, '有違規就讓這次執行失敗（關卡可以關）'),
+].join(''));
+
 // helpers for other document builders (non-enumerable, so build.js still sees only diagrams)
 Object.defineProperty(D, "_h", { value: { svg, box, arrow, region, note, legend, P, esc, ctext, num, outline } });
 module.exports = D;

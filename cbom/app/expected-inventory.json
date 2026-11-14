@@ -1,0 +1,503 @@
+{
+  "description": "標準答案：這個 web app 實際用到的密碼學資產（49 項），用來看盤點工具漏了什麼。每個欄位的意義（id、layer、kind、match、assetType、locationMatch、endpoints、note）、description 開頭的標記（[舊做法]、[壞例子·故意]）、pipeline 找不到的 3 項，都寫在同目錄的 README.md。endpoints 對應 /api/lab/{category}/{algorithm}：CryptoLabInventoryConsistencyTest 會檢查每個演算法端點都被某一項涵蓋。新增項目的步驟見 README.md 的「怎麼加一個新例子」。",
+  "items": [
+    {
+      "id": "PWD-BCRYPT",
+      "layer": "L1 source",
+      "expectedLevel": "not-detectable",
+      "description": "bcrypt 密碼雜湊 (Spring BCryptPasswordEncoder)",
+      "match": "bcrypt",
+      "endpoints": [
+        "password/bcrypt"
+      ],
+      "note": "Spring 的純 Java 實作，不經過 JCA：sonar 與 JFR 都看不到"
+    },
+    {
+      "id": "PWD-ARGON2",
+      "layer": "L1 source",
+      "expectedLevel": "not-detectable",
+      "description": "Argon2id 密碼雜湊 (Spring Argon2PasswordEncoder → BC)",
+      "match": "argon2",
+      "endpoints": [
+        "password/argon2"
+      ],
+      "note": "Spring → BouncyCastle 輕量 API，不經過 JCA：sonar 與 JFR 都看不到"
+    },
+    {
+      "id": "PWD-PBKDF2",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "PBKDF2WithHmacSHA256 (Spring / JCA SecretKeyFactory)",
+      "match": "PBKDF2",
+      "endpoints": [
+        "password/pbkdf2-spring",
+        "password/pbkdf2-jca"
+      ]
+    },
+    {
+      "id": "HASH-SHA256",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "SHA-256 (JCA MessageDigest / BC SHA256Digest)",
+      "match": "^SHA-?256$",
+      "endpoints": [
+        "hash/sha256",
+        "hash/sha256-bc"
+      ]
+    },
+    {
+      "id": "HASH-SHA512",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "SHA-512",
+      "match": "^SHA-?512$",
+      "endpoints": [
+        "hash/sha512"
+      ]
+    },
+    {
+      "id": "HASH-SHA3",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "SHA3-256 (JCA / BC SHA3Digest)",
+      "match": "SHA-?3[-_ ]?(224|256|384|512)",
+      "endpoints": [
+        "hash/sha3-256",
+        "hash/sha3-256-bc"
+      ]
+    },
+    {
+      "id": "HASH-MD5",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "[壞例子·故意] MD5（密碼與一般雜湊）",
+      "match": "MD5",
+      "endpoints": [
+        "password/md5-weak",
+        "hash/md5-weak"
+      ]
+    },
+    {
+      "id": "HASH-SHA1",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "[壞例子·故意] SHA-1",
+      "match": "SHA-?1(?![0-9])",
+      "endpoints": [
+        "password/sha1-weak",
+        "hash/sha1-weak"
+      ]
+    },
+    {
+      "id": "MAC-HMAC256",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "HmacSHA256 (JCA Mac / BC HMac)",
+      "match": "HMAC.?SHA-?256|SHA-?256.?HMAC",
+      "endpoints": [
+        "hash/hmac-sha256",
+        "hash/hmac-sha256-bc"
+      ]
+    },
+    {
+      "id": "MAC-HMAC512",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "HmacSHA512",
+      "match": "HMAC.?SHA-?512",
+      "endpoints": [
+        "hash/hmac-sha512"
+      ]
+    },
+    {
+      "id": "MAC-HMACSHA1",
+      "layer": "L1 source",
+      "expectedLevel": "warning",
+      "description": "[舊做法] HmacSHA1",
+      "match": "HMAC.?SHA-?1(?![0-9])",
+      "endpoints": [
+        "hash/hmac-sha1-legacy"
+      ],
+      "note": "規則 hmac-sha1：HMAC 不受 SHA-1 碰撞影響、NIST 仍允許，所以是 warning 而不是 violation（2026-11-14 定案）；程式裡標的是 [舊做法]"
+    },
+    {
+      "id": "MAC-HMACMD5",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "[壞例子·故意] HmacMD5",
+      "match": "HMAC.?MD5|MD5.?HMAC",
+      "endpoints": [
+        "hash/hmac-md5-weak"
+      ]
+    },
+    {
+      "id": "SYM-AES-GCM",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "AES-256-GCM (JCA Cipher / BC GCMBlockCipher)",
+      "match": "^AES.*GCM",
+      "endpoints": [
+        "symmetric/aes-gcm",
+        "symmetric/aes-gcm-bc"
+      ]
+    },
+    {
+      "id": "SYM-AES-CBC",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "AES-CBC/PKCS5Padding（含 [壞例子·故意] 固定 IV）",
+      "match": "AES.*CBC",
+      "endpoints": [
+        "symmetric/aes-cbc",
+        "symmetric/aes-cbc-static-iv-weak"
+      ],
+      "note": "固定 IV 是「用法」問題，CBOM 只記錄演算法，看不出 IV 是否固定。expectedLevel 寫的是工具看得到的 AES-CBC 應得的等級；壞例子的部分（aes-cbc-static-iv-weak 的固定 IV）工具看不出來，只能靠程式碼審查"
+    },
+    {
+      "id": "SYM-AES-ECB",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "[壞例子·故意] AES-ECB",
+      "match": "AES.*ECB",
+      "endpoints": [
+        "symmetric/aes-ecb-weak"
+      ],
+      "note": "區塊加密用 ECB 模式：相同的明文區塊變成相同的密文區塊，不論金鑰多長都是 violation"
+    },
+    {
+      "id": "SYM-CHACHA",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "ChaCha20-Poly1305",
+      "match": "^ChaCha20",
+      "endpoints": [
+        "symmetric/chacha20-poly1305"
+      ]
+    },
+    {
+      "id": "SYM-DES",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "[壞例子·故意] DES",
+      "match": "(^|[^A-Z3])DES([^A-Z]|$)",
+      "endpoints": [
+        "symmetric/des-weak"
+      ]
+    },
+    {
+      "id": "SYM-3DES",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "[壞例子·故意] 3DES / DESede",
+      "match": "DESede|3DES|TripleDES|TDEA",
+      "endpoints": [
+        "symmetric/3des-weak"
+      ]
+    },
+    {
+      "id": "SIG-RSA",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "SHA256withRSA (RSA-3072, PKCS#1 v1.5)",
+      "match": "SHA-?256.?with.?RSA|RSA.*SHA-?256",
+      "endpoints": [
+        "signature/rsa-sha256"
+      ]
+    },
+    {
+      "id": "SIG-RSA-PSS",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "RSASSA-PSS",
+      "match": "PSS",
+      "endpoints": [
+        "signature/rsa-pss"
+      ]
+    },
+    {
+      "id": "SIG-ECDSA",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "ECDSA P-256 / P-384",
+      "match": "^(ECDSA|ECDSA-SHA-?(256|384)|SHA(256|384)withECDSA)$",
+      "endpoints": [
+        "signature/ecdsa-p256",
+        "signature/ecdsa-p384"
+      ],
+      "assetType": "algorithm"
+    },
+    {
+      "id": "SIG-ED25519",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "Ed25519 (JCA / BC Ed25519Signer)",
+      "match": "Ed25519",
+      "endpoints": [
+        "signature/ed25519",
+        "signature/ed25519-bc"
+      ]
+    },
+    {
+      "id": "SIG-RSA-SHA1",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "[壞例子·故意] SHA1withRSA + RSA-1024",
+      "match": "SHA-?1.?with.?RSA|RSA.*SHA-?1(?![0-9])",
+      "endpoints": [
+        "signature/rsa1024-sha1-weak"
+      ],
+      "note": "sonar 只分別回報 RSA-1024 與 SHA-1；JFR 錄到完整的 SHA1withRSA"
+    },
+    {
+      "id": "KEX-ECDH",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "ECDH P-256",
+      "match": "ECDH",
+      "endpoints": [
+        "key-exchange/ecdh-p256-hkdf"
+      ]
+    },
+    {
+      "id": "KEX-X25519",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "X25519 (XDH)",
+      "match": "X25519|XDH",
+      "endpoints": [
+        "key-exchange/x25519-hkdf"
+      ]
+    },
+    {
+      "id": "KEX-DH",
+      "layer": "L1 source",
+      "expectedLevel": "violation",
+      "description": "Finite-field DH 2048 / [壞例子·故意] 1024",
+      "match": "(^|[^A-Z])(FF)?DH([^A-Z]|$)|Diffie",
+      "endpoints": [
+        "key-exchange/dh-2048",
+        "key-exchange/dh-1024-weak"
+      ],
+      "note": "dh-2048 應得的等級是 quantum-vulnerable，dh-1024-weak 金鑰太短是 violation，取最重的。工具要掃得到 1024 這個長度才判得出來"
+    },
+    {
+      "id": "KEM-RSA-OAEP",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "RSA-OAEP (SHA-256) 金鑰包裝",
+      "match": "OAEP",
+      "endpoints": [
+        "key-exchange/rsa-oaep-wrap"
+      ]
+    },
+    {
+      "id": "KEM-RSA-PKCS1",
+      "layer": "L1 source",
+      "expectedLevel": "not-detectable",
+      "description": "[壞例子·故意] RSA PKCS#1 v1.5 加密",
+      "match": "RSAES-PKCS1|RSA/ECB/PKCS1",
+      "endpoints": [
+        "key-exchange/rsa-pkcs1-wrap-weak"
+      ],
+      "note": "工具看不到填充方式：原始碼掃描把這個呼叫點回報成 RSA-2048（沒有填充資訊），執行期也沒有錄到。規則 rsa-pkcs1-encryption（NIST SP 800-131A Rev.2：PKCS#1 v1.5 金鑰傳輸 2023 年底後禁用）已經備妥，工具回報得出 PKCS1 填充時才會判違規；目前只能靠程式碼審查"
+    },
+    {
+      "id": "KDF-HKDF",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "HKDF-SHA256 (BC HKDFBytesGenerator)",
+      "match": "HKDF",
+      "endpoints": [
+        "key-exchange/ecdh-p256-hkdf",
+        "key-exchange/x25519-hkdf"
+      ]
+    },
+    {
+      "id": "RNG",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "SecureRandom / DRBG / [壞例子·故意] java.util.Random",
+      "match": "DRBG|SecureRandom|PRNG|RNG",
+      "endpoints": [
+        "token/secure-random",
+        "token/drbg",
+        "token/util-random-weak"
+      ],
+      "note": "sonar 不列入 CBOM；JFR 錄到 SecureRandom（NativePRNG / DRBG）。java.util.Random 不經過 JCA，兩者都看不到。expectedLevel 寫的是工具看得到的 SecureRandom／DRBG 應得的等級；壞例子的部分（util-random-weak 的 java.util.Random）工具看不出來，只能靠程式碼審查"
+    },
+    {
+      "id": "JWT-HS256",
+      "layer": "L1 source",
+      "expectedLevel": "pass",
+      "description": "JWT HS256 (nimbus-jose-jwt)",
+      "match": "HS256|HMAC.?SHA-?256",
+      "endpoints": [
+        "jwt/HS256"
+      ],
+      "note": "原始碼掃描看不到（走函式庫 API）；JFR 執行期可以，呼叫者是 nimbus-jose-jwt",
+      "locationMatch": "nimbusds"
+    },
+    {
+      "id": "JWT-RS256",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "JWT RS256 (nimbus-jose-jwt)",
+      "match": "RS256|SHA256withRSA",
+      "endpoints": [
+        "jwt/RS256"
+      ],
+      "note": "原始碼掃描看不到（走函式庫 API）；JFR 執行期可以，呼叫者是 nimbus-jose-jwt",
+      "locationMatch": "nimbusds"
+    },
+    {
+      "id": "JWT-PS256",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "JWT PS256 (nimbus-jose-jwt)",
+      "match": "PS256|RSASSA-PSS",
+      "endpoints": [
+        "jwt/PS256"
+      ],
+      "note": "原始碼掃描看不到（走函式庫 API）；JFR 執行期可以，呼叫者是 nimbus-jose-jwt",
+      "locationMatch": "nimbusds"
+    },
+    {
+      "id": "JWT-ES256",
+      "layer": "L1 source",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "JWT ES256 (nimbus-jose-jwt)",
+      "match": "ES256|SHA-?256withECDSA|ECDSA-SHA-?256",
+      "endpoints": [
+        "jwt/ES256"
+      ],
+      "note": "原始碼掃描看不到（走函式庫 API）；JFR 執行期可以，呼叫者是 nimbus-jose-jwt",
+      "locationMatch": "nimbusds"
+    },
+    {
+      "id": "JWT-NONE",
+      "layer": "L1 source",
+      "expectedLevel": "not-detectable",
+      "description": "[壞例子·故意] 未簽章 JWT (alg=none)",
+      "match": "^none$|alg.?none",
+      "endpoints": [
+        "jwt/none-weak"
+      ],
+      "note": "沒有演算法就沒有 CBOM 元件（靜態與 JFR 都看不到）：這類弱點只能靠程式碼審查或 SAST"
+    },
+    {
+      "id": "LIB-BC",
+      "layer": "L2 dependency",
+      "expectedLevel": "info",
+      "kind": "library",
+      "description": "BouncyCastle provider",
+      "match": "bouncycastle:bcprov"
+    },
+    {
+      "id": "LIB-BCPKIX",
+      "layer": "L2 dependency",
+      "expectedLevel": "info",
+      "kind": "library",
+      "description": "BouncyCastle PKIX (PEM)",
+      "match": "bouncycastle:bcpkix"
+    },
+    {
+      "id": "LIB-NIMBUS",
+      "layer": "L2 dependency",
+      "expectedLevel": "info",
+      "kind": "library",
+      "description": "nimbus-jose-jwt",
+      "match": "nimbus-jose-jwt"
+    },
+    {
+      "id": "LIB-SPRING-CRYPTO",
+      "layer": "L2 dependency",
+      "expectedLevel": "info",
+      "kind": "library",
+      "description": "spring-security-crypto",
+      "match": "spring-security-crypto"
+    },
+    {
+      "id": "CERT-RSA2048",
+      "layer": "L3 config/keys",
+      "expectedLevel": "violation",
+      "kind": "any",
+      "description": "TLS 憑證 server-rsa2048 (RSA-2048 / SHA256withRSA)",
+      "match": "server-rsa2048|CN ?= ?localhost($|[,/ ])",
+      "note": "憑證本身（RSA-2048）應得的等級是 quantum-vulnerable；但 kind=any 連位置一起比，同名的私鑰檔 server-rsa2048.key 也放在原始碼庫（違規），取最重的所以是 violation"
+    },
+    {
+      "id": "CERT-EC",
+      "layer": "L3 config/keys",
+      "expectedLevel": "violation",
+      "kind": "any",
+      "description": "TLS 憑證 server-ec-p256",
+      "match": "server-ec-p256|localhost-ec",
+      "note": "憑證本身（EC P-256）應得的等級是 quantum-vulnerable；但 kind=any 連位置一起比，同名的私鑰檔 server-ec-p256.key 也放在原始碼庫（違規），取最重的所以是 violation"
+    },
+    {
+      "id": "CERT-LEGACY",
+      "layer": "L3 config/keys",
+      "expectedLevel": "violation",
+      "kind": "any",
+      "description": "[壞例子·故意] 舊合作夥伴憑證 RSA-1024 / SHA1withRSA",
+      "match": "legacy-rsa1024|legacy-partner"
+    },
+    {
+      "id": "KEY-JWT-PEM",
+      "layer": "L3 config/keys",
+      "expectedLevel": "violation",
+      "kind": "any",
+      "description": "JWT 私鑰 PEM 放在 repo",
+      "match": "jwt-(rs|es)256-private"
+    },
+    {
+      "id": "SECRET-YAML",
+      "layer": "L3 config/keys",
+      "expectedLevel": "violation",
+      "kind": "any",
+      "description": "application.yml 寫死的 HMAC secret / AES key",
+      "match": "application\\.ya?ml",
+      "note": "gitleaks 規則不一定命中自訂欄位名稱"
+    },
+    {
+      "id": "JRE-OPENSSL-CONF",
+      "layer": "L4 runtime image",
+      "expectedLevel": "info",
+      "kind": "any",
+      "description": "base image 的 OpenSSL 設定檔 (openssl.cnf)",
+      "match": "openssl\\.cnf"
+    },
+    {
+      "id": "JRE-JDK-KEY",
+      "layer": "L4 runtime image",
+      "expectedLevel": "unknown",
+      "kind": "any",
+      "description": "base image 內 JDK 目錄中被偵測到的金鑰/秘密（UBI：java.security 被 gitleaks 誤判成 generic-api-key，用來練習判讀）",
+      "match": "/usr/lib/jvm/|/opt/java/",
+      "note": "這一項指的是 JDK 目錄裡被秘密掃描命中的檔案；base image 內建的 CA 憑證庫不算在這一項"
+    },
+    {
+      "id": "TLS-1.3",
+      "layer": "L5 runtime TLS",
+      "expectedLevel": "quantum-vulnerable",
+      "assetType": "protocol",
+      "description": "實際開放 TLS 1.3",
+      "match": "TLS ?v?1\\.3"
+    },
+    {
+      "id": "TLS-1.2",
+      "layer": "L5 runtime TLS",
+      "expectedLevel": "warning",
+      "assetType": "protocol",
+      "description": "實際開放 TLS 1.2",
+      "match": "TLS ?v?1\\.2"
+    },
+    {
+      "id": "TLS-GROUP",
+      "layer": "L5 runtime TLS",
+      "expectedLevel": "quantum-vulnerable",
+      "description": "TLS 金鑰交換群組 (x25519 / secp256r1 …)",
+      "match": "x25519|secp256r1|ffdhe"
+    }
+  ]
+}

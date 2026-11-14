@@ -36,7 +36,7 @@ class ConvertersTest {
     @Test
     void tlsEndpointBecomesProtocolsAndKeyExchangeGroups() {
         ObjectNode bom = Cdx.newBom();
-        TlsCommand.endpoint(bom, "kb01.poc.lab:9092", scan(
+        TlsScanLayer.endpoint(bom, "kb01.poc.lab:9092", scan(
             "SSLv3", "not offered", "TLS1", "not offered", "TLS1_1", "not offered",
             "TLS1_2", "offered", "TLS1_3", "offered with final",
             "cipherlist_3DES_IDEA", "not offered", "cipherlist_OBSOLETED", "offered",
@@ -69,8 +69,8 @@ class ConvertersTest {
     void sameTlsSetupOnTwoEndpointsIsOneComponentWithTwoLocations() {
         ObjectNode bom = Cdx.newBom();
         JsonNode same = scan("TLS1_3", "offered with final", "FS_ciphers", "TLS_AES_256_GCM_SHA384", "FS_KEMs", "X25519MLKEM768");
-        TlsCommand.endpoint(bom, "kb01.poc.lab:9092", same);
-        TlsCommand.endpoint(bom, "kb02.poc.lab:9092", same);
+        TlsScanLayer.endpoint(bom, "kb01.poc.lab:9092", same);
+        TlsScanLayer.endpoint(bom, "kb02.poc.lab:9092", same);
         ObjectNode tls13 = find(bom, "TLS 1.3");
         assertEquals(2, tls13.path("evidence").path("occurrences").size());
         assertEquals(1, count(bom, "TLS 1.3"));
@@ -79,7 +79,7 @@ class ConvertersTest {
     @Test
     void failedScanAddsNothing() {
         ObjectNode bom = Cdx.newBom();
-        TlsCommand.endpoint(bom, "kb01.poc.lab:1234", scan("scanProblem", "doesn't seem to be a TLS/SSL enabled server"));
+        TlsScanLayer.endpoint(bom, "kb01.poc.lab:1234", scan("scanProblem", "doesn't seem to be a TLS/SSL enabled server"));
         assertEquals(0, bom.path("components").size());
     }
 
@@ -88,7 +88,7 @@ class ConvertersTest {
     @Test
     void platformConfigKeepsSettingsAndFindsSaslAndTokenSignature() {
         ObjectNode bom = Cdx.newBom();
-        ConfigCommand.platformConfig(bom, KB01, List.of(
+        PlatformConfigLayer.platformConfig(bom, KB01, List.of(
             "# file=/etc/confluent/kafka/server.properties",
             "ssl.enabled.protocols = TLSv1.3,TLSv1.2",
             "ssl.keystore.password =<遮蔽>",
@@ -107,7 +107,7 @@ class ConvertersTest {
     @Test
     void scramUsersRecordTheLowestIterationCount() {
         ObjectNode bom = Cdx.newBom();
-        ConfigCommand.scramUsers(bom, List.of(
+        PlatformConfigLayer.scramUsers(bom, List.of(
             "SCRAM credential configs for user-principal 'kafka-admin' are SCRAM-SHA-512=iterations=8192",
             "SCRAM credential configs for user-principal 'app-orders-a' are SCRAM-SHA-512=iterations=4096",
             "Quota configs for user-principal 'app-orders-a' are producer_byte_rate=5242880.0"));
@@ -119,10 +119,10 @@ class ConvertersTest {
     @Test
     void sshKeysBecomeKeyMaterialWithAlgorithm() {
         ObjectNode bom = Cdx.newBom();
-        ConfigCommand.sshKeys(bom, List.of(
+        PlatformConfigLayer.sshKeys(bom, List.of(
             "kc01 3072 SHA256:aaa kc01.poc.lab (RSA)",
             "kc01 256 SHA256:bbb kc01.poc.lab (ED25519)"), true);
-        ConfigCommand.sshKeys(bom, List.of("256 SHA256:ccc cpuser-ops-20261109 (ED25519)"), false);
+        PlatformConfigLayer.sshKeys(bom, List.of("256 SHA256:ccc cpuser-ops-20261109 (ED25519)"), false);
 
         ObjectNode rsa = find(bom, "ssh 主機金鑰（RSA-3072）");
         assertEquals("3072", Cdx.prop(rsa, "keySize"));
@@ -134,7 +134,7 @@ class ConvertersTest {
     @Test
     void secretProtectionReportsKeyLengthInBits() {
         ObjectNode bom = Cdx.newBom();
-        ConfigCommand.secretProtection(bom, KB01, List.of(
+        PlatformConfigLayer.secretProtection(bom, KB01, List.of(
             "_metadata.symmetric_key.0.length = 32",
             "_metadata.symmetric_key.0.iterations = 10000"));
         assertEquals("256", Cdx.prop(find(bom, "AES-256-CBC"), "keySize"));
@@ -144,7 +144,7 @@ class ConvertersTest {
     @Test
     void keyFilesRecordModeButSkipPublicFiles() {
         ObjectNode bom = Cdx.newBom();
-        ConfigCommand.keyFiles(bom, KB01, List.of(
+        PlatformConfigLayer.keyFiles(bom, KB01, List.of(
             "640 root:confluent 4518 /etc/confluent/ssl/cp-server.p12",
             "640 root:confluent 1766 /etc/confluent/ssl/truststore.p12",
             "640 root:confluent 1704 /etc/confluent/ssl/mds-token-keypair.pem",
@@ -166,13 +166,13 @@ class ConvertersTest {
             "jdk.tls.disabledAlgorithms=SSLv3, TLSv1, TLSv1.1, \\",
             "    RC4, 3DES_EDE_CBC",
             "keystore.type=pkcs12");
-        Map<String, String> settings = JdkCommand.parse(lines);
+        Map<String, String> settings = JdkSettingsLayer.parse(lines);
         assertEquals("SSLv3, TLSv1, TLSv1.1, RC4, 3DES_EDE_CBC", settings.get("jdk.tls.disabledAlgorithms"));
 
         ObjectNode bom = Cdx.newBom();
         List<String> version = List.of("openjdk version \"25.0.5\" 2026-10-20 LTS", "/opt/java/jdk-25.0.5+8");
-        JdkCommand.javaSecurity(bom, KB01, lines, version);
-        JdkCommand.javaSecurity(bom, new Raw.Host("kb02", "broker"), lines, version);
+        JdkSettingsLayer.javaSecurity(bom, KB01, lines, version);
+        JdkSettingsLayer.javaSecurity(bom, new Raw.Host("kb02", "broker"), lines, version);
         assertEquals(1, bom.path("components").size(), "內容相同的主機併成一筆");
         JsonNode file = bom.path("components").get(0);
         assertEquals(2, file.path("evidence").path("occurrences").size());
@@ -190,12 +190,21 @@ class ConvertersTest {
         library(components, "tink", "1.12.0", "pkg:maven/com.google.crypto.tink/tink@1.12.0");
 
         ObjectNode bom = Cdx.newBom();
-        LibsCommand.group(bom, sbom, List.of("kb01", "kb02"), "abc123");
+        LibraryLayer.group(bom, sbom, List.of("kb01", "kb02"), "abc123", new ConfluentPlatformProfile());
         assertEquals(2, bom.path("components").size());
         ObjectNode bc = find(bom, "bc-fips");
         assertEquals("true", Cdx.prop(bc, "fipsVariant"));
         assertEquals(2, bc.path("evidence").path("occurrences").size());
+        assertEquals("kb01:/usr/share/java", bc.path("evidence").path("occurrences").get(0).path("location").asText());
+        assertEquals("jar 組 abc123", bc.path("evidence").path("occurrences").get(0).path("additionalContext").asText());
         assertNull(findOrNull(bom, "jackson-databind"));
+
+        // web app：函式庫在可執行 jar 裡，不是 /usr/share/java
+        ObjectNode webBom = Cdx.newBom();
+        LibraryLayer.group(webBom, sbom, List.of("app"), "abc123", new WebAppProfile());
+        JsonNode webOccurrence = find(webBom, "bc-fips").path("evidence").path("occurrences").get(0);
+        assertEquals("app:可執行 jar 的 BOOT-INF/lib", webOccurrence.path("location").asText());
+        assertEquals("可執行 jar 的 sha256 前 12 碼 abc123", webOccurrence.path("additionalContext").asText());
     }
 
     private static void library(ArrayNode components, String name, String version, String purl) {
@@ -222,7 +231,7 @@ class ConvertersTest {
               {"type":"jdk.TLSHandshake","values":{"peerHost":"172.35.0.51","protocolVersion":"TLSv1.3","cipherSuite":"TLS_AES_256_GCM_SHA384"}}
             ]}}""";
         ObjectNode bom = Cdx.newBom();
-        JfrCommand.recording(bom, "kb01", Cdx.JSON.readTree(json));
+        RuntimeLayer.recording(bom, "kb01", Cdx.JSON.readTree(json));
 
         ObjectNode kem = find(bom, "X25519MLKEM768");
         assertEquals("runtime", Cdx.prop(kem, "source"));

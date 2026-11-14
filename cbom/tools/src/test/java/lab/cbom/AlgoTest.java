@@ -8,6 +8,59 @@ import org.junit.jupiter.params.provider.CsvSource;
 /** 各工具給的演算法名稱 → 家族、金鑰長度、搭配的雜湊。規則靠這三樣判斷，所以每種寫法都要認得。 */
 class AlgoTest {
 
+    /** 模式與填充：看得出來才給，看不出來是 null（不猜）。規則 ecb-mode、rsa-pkcs1-encryption 靠這兩個判斷。 */
+    @ParameterizedTest(name = "{0} → mode {1}、padding {2}")
+    @CsvSource(nullValues = "-", value = {
+        // 名稱,                                    模式, 填充
+        "AES/ECB/PKCS5Padding,                      ECB,  PKCS5",
+        "AES128-ECB-PKCS5,                          ECB,  PKCS5",
+        "AES/CBC/PKCS5Padding,                      CBC,  PKCS5",
+        "AES/GCM/NoPadding,                         GCM,  NONE",
+        "AES-256-CBC,                               CBC,  -",
+        "TLS_AES_256_GCM_SHA384,                    GCM,  -",
+        "AES/CFB8/NoPadding,                        CFB,  NONE",
+        "AES,                                       -,    -",
+        "RSA/ECB/PKCS1Padding,                      ECB,  PKCS1",
+        "RSA/ECB/OAEPWithSHA-256AndMGF1Padding,     ECB,  OAEP",
+        "RSA-OAEP,                                  -,    OAEP",
+        "RSASSA-PKCS1-v1_5,                         -,    PKCS1",
+        "SHA256withRSA,                             -,    -",
+        "PKCS12,                                    -,    -",
+    })
+    void modeAndPaddingComeFromTheName(String name, String mode, String padding) {
+        assertEquals(mode, Algo.modeOf("", name));
+        assertEquals(padding, Algo.paddingOf("", name));
+    }
+
+    /** 掃描工具有給 mode、padding 時（CycloneDX 的小寫寫法）以它為準；給的是不認得的值就回頭看名稱。 */
+    @org.junit.jupiter.api.Test
+    void modeAndPaddingFromTheScannerWin() {
+        assertEquals("ECB", Algo.modeOf("ecb", "AES128"));
+        assertEquals("PKCS1", Algo.paddingOf("pkcs1v15", "RSA-2048"));
+        assertEquals("CBC", Algo.modeOf("other", "AES-256-CBC"));
+        assertEquals(null, Algo.paddingOf("unknown", "RSA-2048"));
+    }
+
+    /** apply 把模式與填充寫成屬性；RSA/ECB/PKCS1Padding 的用途是加密（pke）。 */
+    @org.junit.jupiter.api.Test
+    void applyWritesModeAndPadding() {
+        com.fasterxml.jackson.databind.node.ObjectNode ecb = Cdx.asset("algorithm", "AES/ECB/PKCS5Padding", "t|1");
+        Algo.apply(ecb, "AES/ECB/PKCS5Padding");
+        assertEquals("AES", Cdx.prop(ecb, "family"));
+        assertEquals("ECB", Cdx.prop(ecb, "mode"));
+        assertEquals("PKCS5", Cdx.prop(ecb, "padding"));
+
+        com.fasterxml.jackson.databind.node.ObjectNode rsa = Cdx.asset("algorithm", "RSA/ECB/PKCS1Padding", "t|2");
+        Algo.apply(rsa, "RSA/ECB/PKCS1Padding");
+        assertEquals("PKCS1", Cdx.prop(rsa, "padding"));
+        assertEquals("pke", rsa.path("cryptoProperties").path("algorithmProperties").path("primitive").asText());
+
+        com.fasterxml.jackson.databind.node.ObjectNode signature = Cdx.asset("algorithm", "SHA256withRSA", "t|3");
+        Algo.apply(signature, "SHA256withRSA");
+        assertEquals(null, Cdx.prop(signature, "mode"));
+        assertEquals(null, Cdx.prop(signature, "padding"));
+    }
+
     @ParameterizedTest(name = "{0} → {1} {2} {3}")
     @CsvSource(nullValues = "-", value = {
         // 名稱,                家族,           長度, 雜湊

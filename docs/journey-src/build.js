@@ -2,6 +2,7 @@
 //   @role 銀行 OS 團隊 | repo01 | root        -> a role badge line (who runs the next commands, where, as whom)
 //   ```bash  / ```out                            -> command block / expected-output block
 //   ![diagram-id]                                -> diagram from diagrams.js rendered to PNG
+//   ![images/shot.png]                           -> a PNG file (screenshot), path relative to the .md
 const fs = require('fs');
 const path = require('path');
 const { Resvg } = require('@resvg/resvg-js');
@@ -81,6 +82,7 @@ function callout(text, warn) {
 }
 
 function image(id) {
+  if (/.png$/.test(id)) return screenshot(id);
   const fn = D[id];
   if (!fn) throw new Error('unknown diagram: ' + id);
   const svg = fn();
@@ -90,6 +92,18 @@ function image(id) {
   const scale = Math.min(1, maxW / w);
   return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 120, after: 160 }, keepNext: false,
     children: [new ImageRun({ type: 'png', data: png, transformation: { width: Math.round(w * scale), height: Math.round(h * scale) } })] });
+}
+
+// 截圖：PNG 檔，寬高讀檔頭（第 16–23 位元組）；縮到版面寬，外加一圈細框（截圖多半是白底）
+function screenshot(file) {
+  const data = fs.readFileSync(path.resolve(path.dirname(SRC), file));
+  const w = data.readUInt32BE(16), h = data.readUInt32BE(20);
+  const maxW = CONTENT_W / 20 * 1.333 - 8;
+  const scale = Math.min(1, maxW / w);
+  const line = { style: BorderStyle.SINGLE, size: 4, color: C.codeBorder, space: 2 };
+  return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 120, after: 200 },
+    border: { top: line, bottom: line, left: line, right: line },
+    children: [new ImageRun({ type: 'png', data, transformation: { width: Math.round(w * scale), height: Math.round(h * scale) } })] });
 }
 
 function table(rows) {
@@ -159,7 +173,7 @@ function parse(md) {
     if (l.trim() === '[[toc]]') { out.push(new TableOfContents('目錄', { hyperlink: true, headingStyleRange: '1-2' })); i++; continue; }
     if (l.trim() === '[[pagebreak]]') { out.push(new Paragraph({ children: [new PageBreak()] })); i++; continue; }
     if ((m = /^@role (.*)$/.exec(l))) { out.push(role(m[1])); i++; continue; }
-    if ((m = /^!\[([\w-]+)\]\s*$/.exec(l))) { out.push(image(m[1])); i++; continue; }
+    if ((m = /^!\[([\w./-]+)\]\s*$/.exec(l))) { out.push(image(m[1])); i++; continue; }
     if ((m = /^(#{1,3}) (.*)$/.exec(l))) {
       const lvl = m[1].length;
       out.push(new Paragraph({ heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][lvl - 1],
@@ -216,7 +230,8 @@ const md = fs.readFileSync(SRC, 'utf8');
     const m = !open && /^# ([0-9]{1,2}|[A-Z])\. /.exec(line); if (m) ids.push(m[1]);
   });
   const want = [...Array(32).keys()].map(String).concat('B');
-  const missing = want.filter((id) => !ids.includes(id));
+  // 章號齊不齊只檢查手把手（不帶參數時）；其他文件各有自己的章
+  const missing = process.argv[2] ? [] : want.filter((id) => !ids.includes(id));
   if (open || missing.length) {
     if (open) console.error(`journey.md:${open} 開了 \`\`\` 沒有關`);
     if (missing.length) console.error(`找不到這些章（多半是前面的 \`\`\` 沒成對）：${missing.join(' ')}`);

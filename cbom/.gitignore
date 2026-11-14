@@ -4,3 +4,14 @@ out/
 dist/
 # Maven 的建置結果
 tools/target/
+app/target/
+
+# 例外：web app（cbom/app）的測試金鑰、憑證、keystore 要進 git（使用者 2026-11-11 決定）。
+# 它們是 lab 專用的測試素材，刻意好壞並存（例如 RSA-1024 配 SHA-1），是教材的一部分：CBOMkit 與 pipeline
+# 掃的是 commit 過的內容，要掃得到它們。專案其他地方的金鑰與憑證照舊不進 git（根目錄的 .gitignore）。
+# 重新產生：bash cbom/app/scripts/generate-key-material.sh。切勿用於正式環境。
+!app/src/main/resources/crypto/**
+
+# CBOMkit 平台測試：自動產生的資料庫密碼、暫存的 git repo
+cbomkit-demo/.env
+cbomkit-demo/.repo/

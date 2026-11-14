@@ -3,24 +3,34 @@
 // 這個 pipeline 只是把手冊的步驟依序叫一次，邏輯都在被叫的程式裡：
 //   收集     操作機上的 /opt/cbom/bin/cbom-collect.sh（Jenkins 用一把受限的 ssh 金鑰觸發：操作機的專用帳號 cbomsvc，
 //            連進來只能執行那支腳本，不能開 shell）
-//   產生     cbom-tools.jar build
-//   判斷     opa eval（規則 policy/cbom.rego）
-//   報告     cbom-tools.jar report
+//   產生、判斷、報告   cbom-report.sh 的 build、evaluate、report、verdict 四步（和 web app 那支共用）：
+//            cbom-tools.jar build → opa eval（規則 policy/cbom.rego）→ cbom-tools.jar report
 // 所以同樣的事不靠 Jenkins 也能在操作機上手動做（手冊 33.4–33.8）。
 //
-// agent 上要有：JDK 17 以上（java）、/opt/cbom/bin 的 cbom-tools.jar 與 opa、/opt/cbom/policy、ssh、curl、tar；
+// agent 上要有：JDK 17 以上（java）、/opt/cbom 的 bin/cbom-tools.jar、bin/opa、bin/cbom-report.sh、lib/cbom-lib.sh、policy/，
+//               以及 ssh、tar；
 //               操作機的主機金鑰已經在 known_hosts。
-// Jenkins 要有：Credentials Binding、SSH Credentials、HTML Publisher 三個 plugin；
+// Jenkins 要有：Pipeline、Credentials Binding、SSH Credentials、HTML Publisher、Timestamper（options 的 timestamps()）；
 //               一筆「SSH Username with private key」的 credential，ID 是 cbom-collect-key，使用者是 cbomsvc。
 // Jenkins 不持有平台的任何金鑰：那把 ssh 金鑰在操作機上被 command= 限制，只能觸發收集、取回原料。
+//
+// 每次執行留下：out/cbom.json、out/findings.json、out/report.html（下載用）與左邊選單的「CBOM 合規報告」頁。
+// 結果的顏色：綠＝合規；紅＝有違規項目，或某個 stage 失敗。這支沒有黃色（不穩定）的結果。
+// 和 web app 那支（cbom/webapp/Jenkinsfile）的差別：
+//   - 原料來源不同：這支用 ssh 請操作機收集（一個「收集」stage）；那支在 agent 上自己建置、掃描（五個 stage）。
+//   - 這支沒有 GATE 參數：有違規項目一律讓這次執行失敗（紅）。那支多一個 GATE，取消勾選時有違規只標成不穩定（黃）。
+//   - 這支不上傳 CBOMkit（沒有 CBOMKIT_URL 參數）；那支可以選配上傳。
 pipeline {
   agent any
 
   options {
     // 保留最近 30 次的 CBOM 與報告
     buildDiscarder(logRotator(numToKeepStr: '30'))
+    // 同一時間只跑一次（兩次同時跑會共用同一個 workspace 的 raw/、out/）
     disableConcurrentBuilds()
+    // log 的每一行前面加時間（Timestamper plugin）
     timestamps()
+    // 整個 pipeline 超過 60 分鐘就中止
     timeout(time: 60, unit: 'MINUTES')
   }
 
@@ -36,19 +46,23 @@ pipeline {
     string(name: 'JFR_SECONDS', defaultValue: '60', description: '執行期證據錄幾秒（勾了上一項才有用）')
     choice(name: 'SPEC_VERSION', choices: ['1.7', '1.6'], description: 'CBOM 的 CycloneDX 版本')
     string(name: 'OPS_HOST', defaultValue: 'ops02.poc.lab', description: '操作機')
-    string(name: 'CBOMKIT_URL', defaultValue: '',
-      description: '（選配）CBOMkit 平台的網址，例如 https://cbomkit.example:8081；有填才把 CBOM 上傳過去供瀏覽')
   }
 
+  // 每個 sh 步驟都看得到的環境變數：工具裝在哪、後半段共用的那支腳本
   environment {
     CBOM_HOME = '/opt/cbom'
+    REPORT = '/opt/cbom/bin/cbom-report.sh'
   }
 
   stages {
+    // 做什麼：把勾選的參數轉成收集腳本認得的一行指令，並檢查參數的格式（這些值會放進 ssh 的指令，所以只收固定的字元）。
+    // 產出：環境變數 CBOM_ROLES（例 controller,broker）、CBOM_COMMAND（例 collect roles=controller,broker jfr=60）、
+    //       CBOM_OPS_HOST、CBOM_SPEC；不產生檔案。
+    // 失敗：一個範圍都沒勾、JFR_SECONDS 不是 1 到 4 位數字、OPS_HOST 有主機名稱以外的字元。
     stage('範圍') {
       steps {
         script {
-          // 勾選的項目 → 收集腳本認得的元件名稱
+          // 勾選的項目 → 收集腳本認得的元件名稱（<< 是「加到清單最後面」）
           def selected = []
           if (params.CONTROLLER) { selected << 'controller' }
           if (params.BROKER) { selected << 'broker' }
@@ -60,6 +74,7 @@ pipeline {
             error('至少要勾一個盤點範圍')
           }
 
+          // ==~ 是「整個字串都要符合這個樣式」：/[0-9]{1,4}/ = 1 到 4 位數字。例：'60' 符合；'60s'、'' 不符合
           if (!(params.JFR_SECONDS ==~ /[0-9]{1,4}/)) {
             error('JFR_SECONDS 要是秒數')
           }
@@ -67,24 +82,35 @@ pipeline {
           // 參數明確存成變數再給後面的 sh 用：工作第一次執行時，參數的預設值還不會變成 shell 的環境變數
           env.CBOM_OPS_HOST = params.OPS_HOST
           env.CBOM_SPEC = params.SPEC_VERSION
-          env.CBOM_KIT_URL = params.CBOMKIT_URL?.trim() ?: ''
 
           if (!(env.CBOM_OPS_HOST ==~ /[A-Za-z0-9.-]+/)) {
             error('OPS_HOST 要是主機名稱')
           }
 
+          // 清單用逗號接起來。例：['controller', 'broker'] → 'controller,broker'
           env.CBOM_ROLES = selected.join(',')
+
+          // 要送給操作機的那一行指令；有勾執行期證據才在後面加「 jfr=秒數」
+          //   「條件 ? 甲 : 乙」：條件成立用甲，不成立用乙
+          //   例：collect roles=controller,broker 或 collect roles=controller,broker jfr=60
           env.CBOM_COMMAND = "collect roles=${env.CBOM_ROLES}" + (params.RUNTIME_EVIDENCE ? " jfr=${params.JFR_SECONDS}" : '')
           echo "這次的範圍：${env.CBOM_ROLES}；執行期證據：${params.RUNTIME_EVIDENCE ? params.JFR_SECONDS + ' 秒' : '不錄'}"
         }
       }
     }
 
+    // 做什麼：用受限的 ssh 金鑰請操作機執行 cbom-collect.sh，原料（tar.gz）從連線的 stdout 傳回來，解到 raw/。
+    // 產出：workspace 的 raw/（collect.env、每台主機一個目錄、shared/）；最後一步印出這次的範圍與主機。
+    // 失敗：ssh 連不上或金鑰被拒、指令格式被收集腳本拒絕（結束碼 1）、收集途中有步驟失敗（結束碼 2，
+    //       失敗的步驟列在這個 stage 的 log；那時傳回來的原料不完整，這次執行就停在這裡）。
     stage('收集') {
       steps {
+        // 清掉上次留下的，建好空目錄
         sh 'rm -rf raw out raw.tar.gz && mkdir -p raw out/html'
 
         // 這把金鑰在操作機上只能執行收集腳本；原料（tar.gz）從這條連線的 stdout 傳回來
+        // withCredentials：只在這個區塊裡把金鑰寫成暫存檔（路徑在 CBOM_KEY）、帳號放進 CBOM_USER，出了區塊就刪
+        // BatchMode=yes：不問密碼（沒有人可以回答）；IdentitiesOnly=yes：只用這一把金鑰
         withCredentials([sshUserPrivateKey(credentialsId: 'cbom-collect-key', keyFileVariable: 'CBOM_KEY', usernameVariable: 'CBOM_USER')]) {
           sh 'ssh -i "$CBOM_KEY" -o BatchMode=yes -o IdentitiesOnly=yes "$CBOM_USER@$CBOM_OPS_HOST" "$CBOM_COMMAND" > raw.tar.gz'
         }
@@ -94,66 +120,64 @@ pipeline {
       }
     }
 
+    // 做什麼：先檢查原料（沒有私鑰內容、密碼類設定都遮了），再由 cbom-tools.jar 把各層原料合併成一份 CBOM。
+    // 產出：out/cbom.json（CycloneDX，版本照參數 SPEC_VERSION；已通過官方 schema 驗證）。
+    // 失敗：原料檢查不合格、某一層的原料格式不對、或產出的 CBOM 沒通過 schema。
     stage('產生 CBOM') {
       steps {
-        sh 'java -jar "$CBOM_HOME/bin/cbom-tools.jar" build raw out/cbom.json --spec "$CBOM_SPEC"'
+        sh 'bash "$REPORT" build --raw raw --out out --spec "$CBOM_SPEC"'
       }
     }
 
+    // 做什麼：先跑規則自己的測試（opa test），再用 OPA 以 /opt/cbom/policy 的規則判斷 out/cbom.json。
+    // 產出：out/findings.json（每一筆發現與等級）、out/counts.json（各等級的數量）。
+    // 失敗：規則的測試沒過（規則檔被改壞）或 OPA 執行出錯。有違規項目「不會」讓這個 stage 失敗，那是最後一個 stage 的事。
     stage('規則判斷') {
       steps {
-        // 先跑規則自己的測試：規則檔被改壞的話在這裡就停
-        sh '"$CBOM_HOME/bin/opa" test "$CBOM_HOME/policy/"'
-        sh '"$CBOM_HOME/bin/opa" eval --data "$CBOM_HOME/policy/" --input out/cbom.json --format json "data.cbom.report" > out/findings.json'
+        sh 'bash "$REPORT" evaluate --out out'
       }
     }
 
+    // 做什麼：把 CBOM 與判斷結果做成 HTML 報告。
+    // 產出：out/report.html（單一檔，下載用）、out/html/index.html＋report.css（給 Jenkins 的報告頁顯示）。
+    // 失敗：報告程式出錯，或 out/cbom.json、out/findings.json 不在。
     stage('報告') {
       steps {
-        // 兩份內容相同：report.html 是單一檔（下載用）；html/ 那份把樣式放在另一個檔，Jenkins 預設的安全設定才顯示得出來
-        sh 'java -jar "$CBOM_HOME/bin/cbom-tools.jar" report out/cbom.json out/findings.json out/report.html'
-        sh 'java -jar "$CBOM_HOME/bin/cbom-tools.jar" report out/cbom.json out/findings.json out/html/index.html --external-css'
+        sh 'bash "$REPORT" report --out out'
       }
     }
 
-    stage('上傳 CBOMkit（選配）') {
-      when {
-        expression { return env.CBOM_KIT_URL }
-      }
-      steps {
-        // CBOMkit 只是檢視器；上傳失敗不影響這次的結果
-        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-          sh 'curl -fsS -X POST -H "Content-Type: application/json" --data-binary @out/cbom.json "$CBOM_KIT_URL/api/v1/cbom/confluent-platform"'
-        }
-      }
-    }
-
+    // 做什麼：讀規則的結論，決定這次執行的結果，並把範圍與各等級的數量寫在這次執行的說明欄。
+    // 產出：不產生檔案。
+    // 失敗（紅）：有違規項目（腳本回 3），或判斷本身出錯（其他非 0）。這支沒有「只標示、不失敗」的模式，所以不會變黃。
     stage('合規結果') {
       steps {
         script {
-          def compliant = sh(returnStdout: true,
-            script: '"$CBOM_HOME/bin/opa" eval --data "$CBOM_HOME/policy/" --input out/cbom.json --format raw "data.cbom.report.compliant"').trim()
-          def counts = sh(returnStdout: true,
-            script: '"$CBOM_HOME/bin/opa" eval --data "$CBOM_HOME/policy/" --input out/cbom.json --format raw "data.cbom.report.counts"').trim()
-
+          // 腳本的結束碼：0 合規；3 有違規項目。只有「違規」算不合規；量子脆弱與警告不擋，看報告排進遷移計畫
+          // returnStatus: true：腳本回非 0 時不讓這一步直接失敗，而是把結束碼交回來，由下面自己決定
+          def code = sh(returnStatus: true, script: 'bash "$REPORT" verdict --out out')
+          def counts = readFile('out/counts.json').trim()
           currentBuild.description = "範圍 ${env.CBOM_ROLES}｜${counts}"
 
-          // 只有「違規」讓這次執行失敗；量子脆弱與警告不擋，看報告排進遷移計畫
-          if (compliant != 'true') {
+          if (code == 3) {
             error("不合規：有違規項目 ${counts}，看報告的「違規」一節")
+          } else if (code != 0) {
+            error("判斷合規結果時失敗（結束碼 ${code}）")
           }
-
-          echo "合規：沒有違規項目 ${counts}"
+          // 合規時腳本已經印出「合規：沒有違規項目 …」
         }
       }
     }
   }
 
+  // 不管成功或失敗，最後都做（前面的 stage 失敗時檔案可能不在，所以兩個步驟都設成「沒有檔也不算錯」）
   post {
     always {
       // 原料含主機與端點的細節，不留在 workspace；三個產出存成這次執行的檔案，供下載
       sh 'rm -rf raw raw.tar.gz'
       archiveArtifacts artifacts: 'out/cbom.json, out/findings.json, out/report.html', allowEmptyArchive: true
+
+      // 把 out/html/ 掛成這次執行的一頁「CBOM 合規報告」（HTML Publisher）；每次執行各留一份，工作首頁連到最新一次
       publishHTML(target: [
         reportName: 'CBOM 合規報告',
         reportDir: 'out/html',

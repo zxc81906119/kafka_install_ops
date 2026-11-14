@@ -1,0 +1,110 @@
+# ============================================================================
+# CBOM Lab - Spring Boot 4 web app
+# 這個檔案本身就是 CBOM 的「設定層」來源：TLS 協定、cipher suites、keystore、
+# JWT 演算法、對稱金鑰（刻意寫死在設定檔，示範反模式）都在這裡。
+#
+# 註解的格式和 Java 檔相同：
+#   # [標記] 用了什麼：原因
+#   #   標準答案：expected-inventory.json 的 id　pipeline 判定：cbom/policy/cbom.rego 的等級
+# 四種標記（[好例子]、[可接受·量子脆弱]、[舊做法]、[壞例子·故意]）的定義見 README.md。
+# ============================================================================
+spring:
+  application:
+    name: crypto-lab
+  ssl:
+    bundle:
+      jks:
+        # [可接受·量子脆弱] 主要的 HTTPS 憑證：RSA-2048／SHA256withRSA（現在安全，量子電腦可破解）
+        #   標準答案：CERT-RSA2048　pipeline 判定：量子脆弱（certificate-quantum-vulnerable）
+        server-rsa:
+          key:
+            alias: server
+          keystore:
+            location: classpath:crypto/tls/server-rsa2048.p12
+            # [壞例子·故意] keystore 的密碼寫死在設定檔（lab 專用的測試值，和 scripts/generate-key-material.sh 的 PASS 相同）
+            #   標準答案：SECRET-YAML（那一項的描述只提 HMAC secret 與 AES key；密碼沒有獨立的項目）　pipeline 判定：沒有發現（實測秘密掃描沒有命中 keystore 的密碼）
+            password: changeit-lab-only
+            type: PKCS12
+          options:
+            # 開放的 TLS 版本。TLS 1.3 = [可接受·量子脆弱]（金鑰交換仍是傳統演算法時）；
+            # TLS 1.2 = [舊做法]（還沒被破解，但用不了後量子金鑰交換，規劃只留 1.3）
+            #   標準答案：TLS-1.3、TLS-1.2、TLS-GROUP（實際開放的版本與群組由執行期的 testssl.sh 掃出來）
+            #   pipeline 判定：TLS 1.2 是警告；TLS 1.3 量子脆弱（tls-1.3-classical：伺服器沒有後量子金鑰交換群組）
+            enabled-protocols: TLSv1.3,TLSv1.2
+            # 允許的 cipher suite：前三個是 TLS 1.3 的，後兩個是 TLS 1.2 的（ECDHE 金鑰交換＋RSA 憑證＋AES-GCM）。
+            # [好例子] 五個都是同時加密與驗證的 AEAD（GCM、ChaCha20-Poly1305），沒有列 CBC 或 3DES
+            #   標準答案：無（沒有逐一列 cipher suite 的項目；相關的是 TLS-1.3、TLS-1.2、TLS-GROUP）　pipeline 判定：沒有發現（規則只在伺服器接受 CBC 或 3DES 時才提出警告或違規）
+            ciphers:
+              - TLS_AES_256_GCM_SHA384
+              - TLS_AES_128_GCM_SHA256
+              - TLS_CHACHA20_POLY1305_SHA256
+              - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+              - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        # [可接受·量子脆弱] 替代的 HTTPS 憑證：EC P-256（用環境變數 SERVER_SSL_BUNDLE=server-ec 切換）
+        #   標準答案：CERT-EC　pipeline 判定：量子脆弱（certificate-quantum-vulnerable）
+        server-ec:
+          key:
+            alias: server-ec
+          keystore:
+            location: classpath:crypto/tls/server-ec-p256.p12
+            # [壞例子·故意] 寫死的 keystore 密碼：說明同上面的 server-rsa
+            password: changeit-lab-only
+            type: PKCS12
+          options:
+            # 開放的 TLS 版本：說明同上面的 server-rsa。這個 bundle 沒有列 ciphers，用 JDK 的預設清單
+            enabled-protocols: TLSv1.3,TLSv1.2
+        # [壞例子·故意] 合作夥伴的舊憑證 RSA-1024／SHA1withRSA，放在舊格式（JKS）的 truststore：金鑰太短、SHA-1 已有碰撞
+        #   標準答案：CERT-LEGACY　pipeline 判定：違規（certificate-weak-key、certificate-broken-digest）
+        legacy-partner:
+          truststore:
+            location: classpath:crypto/legacy/legacy-truststore.jks
+            # [壞例子·故意] 寫死的 truststore 密碼：說明同上面的 server-rsa
+            password: changeit-lab-only
+            type: JKS
+
+server:
+  # HTTPS 的 port（deploy/app/Containerfile 的 EXPOSE 也是這個數字）
+  port: 8443
+  ssl:
+    enabled: true
+    # 對外用哪一個 SSL bundle（上面 spring.ssl.bundle.jks 定義的名稱）
+    bundle: server-rsa
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 開放的 actuator 端點：health、info，以及 sbom（建置時產生的函式庫清單 META-INF/sbom/application.cdx.json）
+        include: health,info,sbom
+
+lab:
+  jwt:
+    # JWT 的簽發者（iss）；SecurityConfig 驗證 token 時也比對這個值
+    issuer: https://crypto-lab.local
+    # [壞例子·故意] HMAC secret 寫死在設定檔（JWT 的 HS256 與 /api/lab/hash 的 HMAC 共用這一把）：
+    #   拿得到設定檔的人就能偽造 token；秘密掃描（cbomkit-theia 的 secrets plugin）應該抓到
+    #   標準答案：SECRET-YAML　pipeline 判定：違規（hardcoded-secret：秘密掃描命中這一行）
+    hmac-secret: "oerg4EcMIDDwlpJGzujXGJ15mCIkz+7gtdNw9t7NoLpSopK7qjfTVNvGsIAwpgip"
+    # [壞例子·故意] JWT 的私鑰 PEM 放在原始碼庫（classpath: = src/main/resources/ 底下）：拿得到程式的人就拿得到金鑰
+    #   標準答案：KEY-JWT-PEM　pipeline 判定：違規（private-key-in-repository）
+    # 金鑰本身（RSA-2048、EC P-256）是 [可接受·量子脆弱]，用法見 JwtService
+    rs256-private-key: classpath:crypto/jwt/jwt-rs256-private.pem
+    rs256-public-key: classpath:crypto/jwt/jwt-rs256-public.pem
+    es256-private-key: classpath:crypto/jwt/jwt-es256-private.pem
+    es256-public-key: classpath:crypto/jwt/jwt-es256-public.pem
+    # /api/secure/** 只接受的簽章演算法（只能填一個名稱）
+    #   [可接受·量子脆弱] RS256　標準答案：JWT-RS256　pipeline 判定：量子脆弱
+    accepted-algorithms: RS256
+  crypto:
+    # [壞例子·故意] AES-256 金鑰寫死在設定檔（正式環境應放 KMS／Vault）：拿得到設定檔的人就能解密所有資料
+    #   標準答案：SECRET-YAML　pipeline 判定：違規（hardcoded-secret：秘密掃描命中這一行）
+    aes-key-base64: "2LZ2VG0viW3dH9HdtNKmyP9FvnzKaDzMM7WAAD1XQYI="
+    # [好例子] PBKDF2 的迭代次數（/api/lab/password/pbkdf2-jca 用）：310000 是 OWASP 2021 年對 PBKDF2-HMAC-SHA256 的建議值
+    # （之後的建議調高到 600000）；規則的門檻是不到 10000 才警告
+    #   標準答案：PWD-PBKDF2　pipeline 判定：通過
+    pbkdf2-iterations: 310000
+
+# 記錄的詳細程度：Spring Security 用 INFO（要看驗證失敗的細節時改成 DEBUG）
+logging:
+  level:
+    org.springframework.security: INFO

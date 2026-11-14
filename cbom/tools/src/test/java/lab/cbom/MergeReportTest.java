@@ -74,14 +74,15 @@ class MergeReportTest {
         for (int i = 0; i < pairs.length; i += 2) {
             scan.addObject().put("id", pairs[i]).put("finding", pairs[i + 1]);
         }
-        TlsCommand.endpoint(bom, "kb01.poc.lab:9092", scan);
+        TlsScanLayer.endpoint(bom, "kb01.poc.lab:9092", scan);
         return bom;
     }
 
     @Test
     void sameCertificateOnTwoHostsIsOneComponentAndRefsStayValid() throws Exception {
         Raw raw = raw("broker");
-        ObjectNode bom = MergeCommand.run(raw, List.of(tlsFragment()), "1.7");
+        // 憑證來自「檔案」那一層（cbomkit-theia 的輸出），和 TLS 那一層一起合併
+        ObjectNode bom = MergeCommand.run(raw, List.of(tlsFragment(), new FilesLayer().convert(raw)), "1.7");
 
         long certificates = 0;
         Set<String> refs = new HashSet<>();
@@ -165,6 +166,14 @@ class MergeReportTest {
         assertTrue(html.contains("測試 &lt;b&gt;原因&lt;/b&gt;"), "原因裡的 HTML 要跳脫");
         assertFalse(html.contains("<b>原因</b>"));
         assertTrue(html.contains("支援後量子混合金鑰交換的端點</th><td>1 / 1"));
+        assertTrue(html.contains("個元件，其中密碼學資產 "), "元件總數與密碼學資產數分開寫");
+        assertFalse(html.contains("待人工判斷"), "等級用詞和 cbom.rego 一致：無法判斷");
+        assertTrue(html.contains("</b>無法判斷</a>"));
+        assertTrue(html.contains("</b>資訊</a>"));
+        assertTrue(html.contains("盤點完整性：有 "), "測試的原料目錄幾乎是空的，一定有缺口");
+        assertTrue(html.contains("kb01：沒有這台的原料目錄"));
+        assertTrue(html.contains("<h2>這份盤點看不到什麼</h2>"));
+        assertTrue(html.contains("原廠的程式沒有原始碼"), "沒寫 PROFILE 是 Confluent Platform 的那一份");
         assertTrue(html.contains("<style>"), "預設是單一檔，樣式寫在 HTML 裡");
 
         // 給 Jenkins 的版本：不能有寫在 HTML 裡的樣式（Jenkins 預設的安全設定會擋）
@@ -172,6 +181,14 @@ class MergeReportTest {
         assertFalse(external.contains("<style"));
         assertFalse(external.contains(" style="));
         assertTrue(external.contains("<link rel=\"stylesheet\" href=\"report.css\">"));
+    }
+
+    @Test
+    void noteAboutPostQuantumKeyExchangeAgreesWithTheNumbers() {
+        assertEquals("（伺服器都支援；實際用不用要看用戶端）", ReportCommand.pqcNote(37, 37));
+        assertEquals("（伺服器不支援：要先升級 JDK 或 TLS 函式庫）", ReportCommand.pqcNote(0, 1));
+        assertEquals("（其餘 2 個的伺服器還不支援）", ReportCommand.pqcNote(35, 37));
+        assertEquals("（這次沒有掃 TLS 端點）", ReportCommand.pqcNote(0, 0));
     }
 
     @Test

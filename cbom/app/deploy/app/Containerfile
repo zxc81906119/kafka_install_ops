@@ -1,0 +1,49 @@
+# ============================================================================
+# crypto-lab 的執行環境映像檔：Red Hat UBI 9 + Red Hat OpenJDK 21（runtime）
+#
+# 用途：讓 pipeline 的映像掃描（cbomkit-theia image）、執行期錄製（JFR）、TLS 掃描（testssl.sh）
+#       掃的都是「真正會上線的映像檔」，而不是 Jenkins 容器裡的另一個 JDK。
+#       誰會用這個檔：cbom/webapp/webapp-collect.sh 的 image 步驟。
+#
+# 建置（在 repo 根目錄，先 ./mvnw verify 產生 jar）：
+#   podman build -f deploy/app/Containerfile --build-arg CRYPTO_POLICY=DEFAULT -t localhost/crypto-lab:dev .
+#
+# CRYPTO_POLICY：RHEL 的系統層級密碼學政策，Red Hat OpenJDK 會遵守它
+#                （java.security 裡 security.useSystemPropertiesFile=true，讀 /etc/crypto-policies/back-ends/java.config）
+#   DEFAULT  RHEL 9 預設：TLS 1.2+；TLS 與憑證驗證停用 SHA-1 簽章、MD5、RSA < 2048
+#   FUTURE   更嚴格：實測（server-ec bundle）TLS 1.2 只剩 AES-256-GCM 與 ChaCha20，CBC + SHA-1 MAC 的
+#            舊 suite 與 ffdhe2048 都被拿掉。注意：伺服器自己的 RSA-2048 憑證仍可使用，
+#            「RSA keySize < 3072」限制的是驗證「對方」的憑證
+#   LEGACY   較寬鬆：相容舊系統（在本 app 的設定下，實測與 DEFAULT 相同）
+#
+# 傳給 app 的設定用環境變數（Spring Boot 會自動對應），例如 SERVER_SSL_BUNDLE=server-ec
+# ============================================================================
+
+# 1. 基底映像：寫死到完整的版本號（不用 latest），每次建出來的內容才會一樣；要換版本時改這一行
+ARG BASE_IMAGE=registry.access.redhat.com/ubi9/openjdk-21-runtime:1.24-3.1793323798
+FROM ${BASE_IMAGE}
+
+# 2. 建置參數：系統層級的密碼學政策（三種值的說明在檔頭）
+ARG CRYPTO_POLICY=DEFAULT
+
+# 3. 套用政策，並把結果印在建置紀錄裡
+#    切換政策需要 root；切完立刻換回映像檔預設的非 root 使用者（uid 185）
+#    兩個指令用 && 接在同一個 RUN：第一個成功才做第二個，而且只產生一層映像
+USER 0
+RUN update-crypto-policies --set "${CRYPTO_POLICY}" > /dev/null \
+ && echo "crypto-policy: $(cat /etc/crypto-policies/config)"
+USER 185
+
+# 4. 放進 app 的 jar 與 JFR 的設定檔（擁有者 185:0 = 上面那個非 root 使用者）
+# run-java.sh（映像檔的預設啟動腳本）會自動執行 /deployments 下唯一的 jar：
+#   JAVA_OPTS_APPEND  額外的 JVM 參數（pipeline 用它開 JFR）
+COPY --chown=185:0 target/crypto-lab-*.jar /deployments/
+COPY --chown=185:0 deploy/app/crypto.jfc /deployments/crypto.jfc
+
+# 5. 映像的標籤：名稱、說明（提醒裡面有故意放的弱密碼學）、建置時用的政策
+LABEL org.opencontainers.image.title="crypto-lab" \
+      org.opencontainers.image.description="CBOM lab app (deliberately contains weak cryptography - lab only)" \
+      cbomlab.crypto-policy="${CRYPTO_POLICY}"
+
+# 6. app 的 HTTPS port（和 application.yml 的 server.port 相同）
+EXPOSE 8443

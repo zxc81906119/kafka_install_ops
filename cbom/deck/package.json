@@ -1,0 +1,19 @@
+{
+  "name": "cbom-lab-manual-builder",
+  "private": true,
+  "description": "產生簡報 docs/Cbom-探討.pptx。用法：npm ci，然後 node build-cbom-talk.mjs <公司模板.pptx>",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node build-cbom-talk.mjs"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "docx": "9.15.2",
+    "jszip": "3.10.2",
+    "lucide-static": "0.460.0",
+    "marked": "16.4.1",
+    "pptxgenjs": "4.0.1"
+  }
+}

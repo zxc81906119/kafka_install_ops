@@ -9,7 +9,7 @@ const MODE=process.env.MODE||"customer";
 if(MODE!=="customer") throw new Error("MODE must be customer (the only mode left)");
 const s=fs.readFileSync(md,"utf8");
 // chapters are `# <id>. title` outside code fences; ids are 0..33 (0 = build the lab) plus appendix B (monitoring coverage, lab tear-down).
-// run order = 0, 1..32, then B. <from>/<to> are chapter ids, both inclusive; <to> may be "end".
+// run order = 0, 1..33, then B. <from>/<to> are chapter ids, both inclusive; <to> may be "end".
 const chapters=[]; { let fence=false, cur=null; for(const l of s.split("\n")){ if(/^```/.test(l)) fence=!fence; const m=!fence&&/^# ([0-9]{1,2}|[A-Z])\. /.exec(l); if(m){ cur={id:m[1],lines:[]}; chapters.push(cur); } else if(cur) cur.lines.push(l); } }
 const order=[...chapters.filter(c=>/^\d+$/.test(c.id)).sort((x,y)=>+x.id-+y.id),...chapters.filter(c=>/^[A-Z]$/.test(c.id))];
 const idx=(id)=>{ if(String(id)==="A") id="0"; const i=order.findIndex(c=>c.id===String(id)); if(i<0) throw new Error("chapter not found "+id); return i; };

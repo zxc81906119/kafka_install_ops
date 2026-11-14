@@ -19271,7 +19271,7 @@ Confluent Platform 是原廠產品，我們沒有原始碼，所以不能用掃�
 | 層 | 盤什麼 | 怎麼取得 | 工具 |
 |---|---|---|---|
 | ① 憑證與金鑰 | 每個埠實際出示的憑證鏈、操作機的憑證來源、MDS token 公鑰、ssh 金鑰 | 從操作機連每個埠；讀公開的憑證檔 | cbomkit-theia（PQCA）、cbom-tools |
-| ② JDK 與 OS 設定 | `java.security` 停用了哪些演算法、OS 的 crypto-policies | 讀各台的檔 | cbom-tools |
+| ② JDK 與 OS 設定 | JDK 實際生效的安全設定（停用了哪些演算法、TLS 啟用的版本與 cipher suite）、OS 的 crypto-policies | 請各台的 JDK 自己印出來，和 `java.security` 檔案對照 | cbom-tools |
 | ③ 平台設定 | properties 裡的 TLS 版本、SASL 機制、token 簽章、Secret Protection | 讀各台的 properties（密碼類的值在主機上先遮掉） | cbom-tools |
 | ④ 實際連線 | 每個埠支援的 TLS 版本、cipher suite、金鑰交換群組 | 從操作機掃 | testssl.sh |
 | 函式庫 | 原廠 jar 裡帶了哪些密碼函式庫、什麼版本 | 各台的 jar 清單雜湊相同的歸一組，每組掃一台 | syft |
@@ -19288,9 +19288,9 @@ Confluent Platform 是原廠產品，我們沒有原始碼，所以不能用掃�
 | 違規 | 現在就不合格，和量子電腦無關：SHA-1、3DES、RSA 小於 2048、TLS 1.1 以下、過期的憑證、金鑰檔權限太鬆 | 有任何一個就是不合規 |
 | 量子脆弱 | 現在安全，但量子電腦可破解：RSA、ECDSA、ECDH 等。NIST IR 8547：2030 年後棄用、2035 年後禁用 | 不影響，但要排進遷移計畫 |
 | 警告 | 建議改善：還接受 TLS 1.2、CBC 類的 cipher suite | 不影響 |
-| 待人工判斷 | 規則不認得 | 不影響 |
+| 無法判斷 | 規則不認得，或這次的原料沒有收齊 | 不影響 |
 | 通過 | 後量子演算法、混合式金鑰交換、AES、SHA-2 等 | — |
-| 盤點資訊 | 只是列出來，例如帶了哪些密碼函式庫 | — |
+| 資訊 | 只是列出來，例如帶了哪些密碼函式庫 | — |
 
 > 預期的結果：現在的憑證都是 RSA，所以「量子脆弱」一定有不少，這是事實、不是工具的問題。報告的用途是盤點與排遷移的優先序，不是拿到「全部通過」。金鑰交換則比較好：JDK 25.0.5 的 TLS 1.3 預設就支援後量子混合金鑰交換（`X25519MLKEM768`），所以遷移到 JDK 25 之後，broker 之間與用新版 JDK 的用戶端已經在用；實際用不用取決於用戶端也要支援。
 
@@ -19432,7 +19432,7 @@ sha256-ok
 
 @role 小安 | ops02 | root
 
-工具都裝在 `/opt/cbom`：`bin/` 放執行檔，`policy/` 放規則。testssl.sh 一定要有 DNS 查詢工具（`dig`），所以從銀行的 OS 套件庫裝 `bind-utils`。裝完跑規則的測試，確認規則檔和 OPA 的版本合得來。
+工具都裝在 `/opt/cbom`：`bin/` 放執行檔，`policy/` 放規則，`lib/` 放腳本共用的函式（交付物裡已經是這個位置）。testssl.sh 一定要有 DNS 查詢工具（`dig`），所以從銀行的 OS 套件庫裝 `bind-utils`。裝完跑規則的測試，確認規則檔和 OPA 的版本合得來。
 
 ```bash
 # 1. 清掉舊的，解開交付物（cbom-kit/ 底下的東西直接放進 /opt/cbom）
@@ -19445,7 +19445,8 @@ mv /opt/cbom/cbom-tools.jar /opt/cbom/bin/
 # 執行檔的權限在這裡明確設定：交付物經過檔案交換之後，壓縮檔裡的執行權限不一定還在
 install -m 755 /opt/cbom/cbomkit-theia /opt/cbom/bin/cbomkit-theia
 install -m 755 /opt/cbom/cbom-collect.sh /opt/cbom/bin/cbom-collect.sh
-rm -f /opt/cbom/cbomkit-theia /opt/cbom/cbom-collect.sh
+install -m 755 /opt/cbom/cbom-report.sh /opt/cbom/bin/cbom-report.sh
+rm -f /opt/cbom/cbomkit-theia /opt/cbom/cbom-collect.sh /opt/cbom/cbom-report.sh
 
 # 2. 三個原廠工具
 install -m 755 opa_linux_amd64 /opt/cbom/bin/opa
@@ -19476,7 +19477,7 @@ testssl.sh 3.2.5
 1
 用法：
 bind-utils-9.16.23-40.el9_8.13.x86_64
-PASS: 22/22
+PASS: 38/38
 ```
 
 ## 33.4 收集：這次的範圍、每台的設定與檔案清單
@@ -19517,6 +19518,7 @@ hosts=$(echo "$host_roles" | sed -E 's/:[a-z0-9]+//g')
 
 # 3. 記下這次的範圍：cbom-tools 與報告都讀這個檔
 cat > $raw/collect.env <<EOF
+PROFILE=cp
 DOMAIN=$domain
 ENV=lab
 CP_VERSION=$(rpm -q --qf '%{VERSION}' confluent-server)
@@ -19566,6 +19568,21 @@ echo "$metadata" | grep -vE 'salt|\.enc' > secret-protection.properties
 sudo find /etc/confluent/ssl -type f -printf '%m %u:%g %s %p\n' > ssl-files.list
 sudo cat /etc/confluent/ssl/mds-token-public.pem > mds-token-public.pem
 
+tar -cf - .
+cd /
+rm -rf "$tmp"
+EOF
+done
+```
+
+再送一段：JDK 與 OS 的密碼設定、jar 清單、監聽的埠。JDK 的設定不只讀檔案，還請 JDK 自己印出**實際生效**的值：服務可能用 `-D` 指定了別的設定檔，有的 JDK 會跟著 OS 的密碼政策走，這兩種情況檔案寫的都不算數。
+
+```bash
+for host in $hosts; do
+  ssh $host.$domain bash -s <<'EOF' | tar -xf - -C $raw/$host
+tmp=$(mktemp -d)
+cd "$tmp"
+
 # 4. JDK 與 OS 的密碼設定
 cat /opt/java/current/conf/security/java.security > java.security
 /opt/java/current/bin/java -version > java-version.txt 2>&1
@@ -19573,6 +19590,24 @@ readlink -f /opt/java/current >> java-version.txt
 update-crypto-policies --show > os-crypto.txt
 cat /etc/redhat-release >> os-crypto.txt
 openssl version >> os-crypto.txt
+
+# 4b. JDK「實際生效」的設定：檔案寫的不一定就是生效的（服務可能用 -D 指定別的設定檔）
+#     先看執行中的服務的系統屬性裡和安全有關的幾項（名稱含 password 的不取）
+unit=$(systemctl list-units --state=running --no-legend 'confluent-*.service' | awk '{print $1}' | head -1)
+pid=$(systemctl show $unit -p MainPID --value)
+user=$(ps -o user= -p $pid)
+system_properties=$(sudo -u $user /opt/java/current/bin/jcmd $pid VM.system_properties 2>/dev/null)
+wanted='^(java\.security\.|jdk\.tls\.|jdk\.security\.|https\.protocols|javax\.net\.ssl\.|java\.home|java\.version=)'
+echo "$system_properties" | grep -E "$wanted" | grep -viE '^[^=]*password' > jvm-system-properties.txt
+#     再請同一個 JDK 印出生效的安全屬性、provider 順序、TLS 啟用的版本與 cipher suite
+override=$(grep '^java.security.properties=' jvm-system-properties.txt | cut -d= -f2-)
+
+if [ -n "$override" ]; then
+  /opt/java/current/bin/java "-Djava.security.properties=$override" -XshowSettings:security:all -version \
+    > java-security-effective.txt 2>&1
+else
+  /opt/java/current/bin/java -XshowSettings:security:all -version > java-security-effective.txt 2>&1
+fi
 
 # 5. jar 清單的雜湊（之後用來分組）、Confluent 套件版本、監聽的埠（不含 ssh）
 find /usr/share/java -name '*.jar' -type f -exec sha256sum {} + | sort -k2 > jars.sha256
@@ -19593,16 +19628,16 @@ done
 ```
 
 ```out
-kc01：10 個檔，設定 42 行，jar 2818 個
-kc02：10 個檔，設定 42 行，jar 2818 個
-kc03：10 個檔，設定 42 行，jar 2818 個
-kb01：10 個檔，設定 72 行，jar 2818 個
-kb02：10 個檔，設定 72 行，jar 2818 個
-kb03：10 個檔，設定 72 行，jar 2818 個
-kb04：10 個檔，設定 72 行，jar 2818 個
-rest01：10 個檔，設定 32 行，jar 1809 個
-rest02：10 個檔，設定 32 行，jar 1809 個
-c3-01：10 個檔，設定 43 行，jar 1019 個
+kc01：12 個檔，設定 42 行，jar 2818 個
+kc02：12 個檔，設定 42 行，jar 2818 個
+kc03：12 個檔，設定 42 行，jar 2818 個
+kb01：12 個檔，設定 72 行，jar 2818 個
+kb02：12 個檔，設定 72 行，jar 2818 個
+kb03：12 個檔，設定 72 行，jar 2818 個
+kb04：12 個檔，設定 72 行，jar 2818 個
+rest01：12 個檔，設定 32 行，jar 1809 個
+rest02：12 個檔，設定 32 行，jar 1809 個
+c3-01：12 個檔，設定 43 行，jar 1019 個
 ```
 
 收回來的東西不該有私鑰，密碼類的設定都該是遮過的。檢查一次：
@@ -19615,7 +19650,7 @@ echo "含私鑰的檔：$private_keys 個；沒遮到的密碼類設定：$unmas
 ```
 
 ```out
-含私鑰的檔：0 個；沒遮到的密碼類設定：0 行；原料大小 4.3M
+含私鑰的檔：0 個；沒遮到的密碼類設定：0 行；原料大小 4.7M
 ```
 
 ## 33.5 收集：每個埠出示的憑證、TLS 掃描
@@ -19783,7 +19818,7 @@ du -sh $raw | cut -f1
 
 ```out
 numberOfDetectedCertificates=89
-25M
+26M
 ```
 
 > `theia.log` 裡會有幾行 `x509: malformed certificate`：那是 `mds-token-public.pem`（公鑰，不是憑證），cbomkit-theia 讀不了；這把公鑰由 cbom-tools 另外處理。
@@ -19902,7 +19937,7 @@ $java -jar /opt/cbom/bin/cbom-tools.jar report $out/cbom.json $out/findings.json
 ```
 
 ```out
-CBOM（CycloneDX 1.7）：168 個元件 {algorithm=39, certificate=9, file=44, library=25, protocol=10, related-crypto-material=41}
+CBOM（CycloneDX 1.7）：173 個元件 {algorithm=43, certificate=9, data=1, file=44, library=25, protocol=10, related-crypto-material=41}
 範圍：完整（controller broker rest c3 shared）
 已通過官方 schema 驗證，寫到 /root/cbom/out/cbom.json
 報告寫到 /root/cbom/out/report.html
@@ -19920,13 +19955,13 @@ ls $out
 
 ```out
 true
-{"quantum-vulnerable":72,"unknown":0,"violation":0,"warning":3}
+{"quantum-vulnerable":73,"unknown":0,"violation":0,"warning":3}
 cbom.json
 findings.json
 report.html
 ```
 
-> 數字隨環境不同：憑證張數、ssh 金鑰、有沒有做 33.7 都會影響。lab 的結果是違規 0、量子脆弱 72（9 張憑證、41 把金鑰、22 個演算法，都是 RSA 與橢圓曲線）、警告 3（三組 TLS 1.2 的設定）；執行期看到的演算法每次錄到的不一樣，所以元件數與量子脆弱的數字會差幾個。
+> 數字隨環境不同：憑證張數、ssh 金鑰、有沒有做 33.7 都會影響。lab 的結果是違規 0、量子脆弱 73（9 張憑證、41 把金鑰、23 個演算法，都是 RSA 與橢圓曲線）、警告 3（三組 TLS 1.2 的設定）；執行期看到的演算法每次錄到的不一樣，所以元件數與量子脆弱的數字會差幾個。元件裡的 `data=1` 是「盤點完整性檢查」：該收的原料（每台的設定、憑證、TLS 掃描…）有沒有收齊，報告的結論下面那一行就是它；有缺的話會列出缺什麼，並判成「無法判斷」。
 
 ## 33.9 取回報告
 
@@ -19961,11 +19996,13 @@ report.html
 |---|---|
 | 範圍 | 「完整盤點」還是「部分盤點」；部分盤點會寫沒盤到哪些元件，這種報告不代表整個平台 |
 | 合規結論 | 有沒有違規。量子脆弱與警告不影響這一行 |
+| 盤點完整性 | 該收的原料有沒有收齊。寫「完整」才能相信下面的數字；有缺會列出缺哪一台的哪一種 |
 | 後量子遷移的重點 | 幾個端點支援後量子金鑰交換、幾個還接受 TLS 1.2、憑證是什麼金鑰、執行期有沒有真的用到後量子金鑰交換 |
 | 違規 | 要立刻處理，每一列有原因、依據、出現在哪幾台 |
 | 量子脆弱 | 遷移計畫的清單。寫「優先處理」的是有效期跨過 2030 或 2035 年的憑證 |
-| 警告、待人工判斷 | 排改善；待人工判斷的看過之後把規則補進 `cbom.rego` |
-| 通過、盤點資訊 | 預設收合；函式庫清單在盤點資訊裡 |
+| 警告、無法判斷 | 排改善；無法判斷的看過之後把規則補進 `cbom.rego` |
+| 通過、資訊 | 預設收合；函式庫清單在資訊裡 |
+| 這份盤點看不到什麼 | 報告最後一節：工具的極限（例如不經過 JDK 的密碼學實作、沒有列在設定檔裡的東西），看報告的人要知道這些不在數字裡 |
 
 ## 33.10 用 Jenkins 自動執行
 
@@ -20005,6 +20042,7 @@ fi
 src=~/kafka-lab/landing/tools/cbom
 tar -xzf $src/cbom-kit-*.tar.gz -C $dir/cbom --strip-components=1
 mv $dir/cbom/cbom-tools.jar $dir/cbom/bin/cbom-tools.jar
+mv $dir/cbom/cbom-report.sh $dir/cbom/bin/cbom-report.sh
 cp $src/opa_linux_amd64 $dir/cbom/bin/opa
 
 # 4. 把公鑰送到操作機，給 OS 團隊放進 cbomsvc 的 authorized_keys
@@ -20021,9 +20059,11 @@ VERSIONS
 bin
 cbom-collect.sh
 cbomkit-theia
+lib
 policy
 
 /c/Users/<你>/kafka-lab/jenkins/cbom/bin:
+cbom-report.sh
 cbom-tools.jar
 opa
 密碼檔 24 個字
@@ -20077,7 +20117,7 @@ cut -d' ' -f1-5 /home/cbomsvc/.ssh/authorized_keys | cut -c1-120
 ```out
 /etc/sudoers.d/cbomsvc: parsed OK
     (root) NOPASSWD: /opt/cbom/bin/cbom-collect.sh --from-ssh *
-command="sudo /opt/cbom/bin/cbom-collect.sh --from-ssh \"$SSH_ORIGINAL_COMMAND\"",no-pty,no-port-forwarding,no-agent-forw
+command="sudo /opt/cbom/bin/cbom-collect.sh --from-ssh \"$SSH_ORIGINAL_COMMAND\"",no-pty,no-port-forwarding,no-agent-for
 ```
 
 收集腳本會拒絕不認得的元件，也拒絕夾帶其他指令的字串。直接在操作機上試（這兩行都應該被拒絕，所以包在 `if` 裡）：
@@ -20160,7 +20200,7 @@ println 'lab：admin、cbom-collect-key、工作 cbom 已設定'
 EOF
 
 podman build -q -t lab-jenkins:1 -f "$(cygpath -m $dir/Containerfile)" "$(cygpath -m $dir)" > /dev/null
-podman images --format '{{.Repository}}:{{.Tag}}' | grep '/lab-jenkins:'
+podman images --format '{{.Repository}}:{{.Tag}}' | grep '/lab-jenkins:1$'
 ```
 
 ```out
@@ -20216,7 +20256,7 @@ lab：admin、cbom-collect-key、工作 cbom 已設定
 base=http://localhost:18088
 pass=$(cat ~/kafka-lab/jenkins/secrets/admin.pass)
 # Windows 版的 curl 不認得 /tmp、/dev/null：檔名用 cygpath 轉成 Windows 的寫法，要丟掉的輸出用 > /dev/null（由 shell 處理）
-cookies=$(cygpath -m /tmp/cbom-jenkins-cookies.txt)
+cookies=$(cygpath -m /tmp/lab-jenkins-cookies.txt)
 
 # 1. Jenkins 的 API 要帶 crumb（防跨站請求）；同一個 cookie 檔之後都用
 crumb_json=$(curl -s -c $cookies -u "admin:$pass" $base/crumbIssuer/api/json)
@@ -20228,8 +20268,10 @@ number=$(echo "$job_json" | grep -o '"nextBuildNumber":[0-9]*' | cut -d: -f2)
 curl -s -b $cookies -u "admin:$pass" -H "Jenkins-Crumb: $crumb" -X POST $base/job/cbom/build > /dev/null
 
 # 3. 等這次執行結束：每 10 秒看一次，最多 20 分鐘
+# 查詢偶爾會斷線：--retry 讓 curl 自己再試，不因為一次斷線就中斷等待
+status=$base/job/cbom/$number/api/json
 for i in $(seq 1 120); do
-  build_json=$(curl -s -b $cookies -u "admin:$pass" $base/job/cbom/$number/api/json)
+  build_json=$(curl -s --retry 5 --retry-all-errors -b $cookies -u "admin:$pass" $status)
 
   if echo "$build_json" | grep -q '"result":"[A-Z]*"'; then
     break
@@ -20249,10 +20291,10 @@ echo "$log" | grep -o '合規：.*'
 ```
 
 ```out
-第 1 次執行："result":"SUCCESS"（約 670 秒）
+第 1 次執行："result":"SUCCESS"（約 360 秒）
 這次的範圍：controller,broker,rest,c3,shared；執行期證據：不錄
-CBOM（CycloneDX 1.7）：150 個元件 {algorithm=23, certificate=9, file=44, library=25, protocol=8, related-crypto-material=41}
-PASS: 22/22
+CBOM（CycloneDX 1.7）：151 個元件 {algorithm=23, certificate=9, data=1, file=44, library=25, protocol=8, related-crypto-material=41}
+PASS: 38/38
 合規：沒有違規項目 {"quantum-vulnerable":69,"unknown":0,"violation":0,"warning":3}
 ```
 
@@ -20300,8 +20342,10 @@ params="$params&RUNTIME_EVIDENCE=true&JFR_SECONDS=20"
 curl -s -b $cookies -u "admin:$pass" -H "Jenkins-Crumb: $crumb" -X POST \
   --data "$params" $base/job/cbom/buildWithParameters > /dev/null
 
+# 查詢偶爾會斷線：--retry 讓 curl 自己再試，不因為一次斷線就中斷等待
+status=$base/job/cbom/$number/api/json
 for i in $(seq 1 120); do
-  build_json=$(curl -s -b $cookies -u "admin:$pass" $base/job/cbom/$number/api/json)
+  build_json=$(curl -s --retry 5 --retry-all-errors -b $cookies -u "admin:$pass" $status)
 
   if echo "$build_json" | grep -q '"result":"[A-Z]*"'; then
     break
@@ -20349,6 +20393,7 @@ rm -f /tmp/cbom-partial.html $cookies
 | 全部 | `/usr/bin/cat /etc/confluent/secrets/security.properties` |
 | 全部 | `/usr/bin/cat /etc/confluent/ssl/mds-token-public.pem` |
 | 全部 | `/usr/bin/find /etc/confluent/ssl -type f -printf …`（列出金鑰檔的權限、擁有者、大小、路徑，不讀內容；格式字串那一段在 sudoers 的寫法和 OS 團隊定） |
+| 全部 | 以服務的帳號執行 `/opt/java/current/bin/jcmd <pid> VM.system_properties`（看服務有沒有另外指定 JDK 的安全設定檔；和下面的 JFR 一樣，pid 每次不同，要包成小腳本） |
 
 執行期證據（33.7）另外要以服務的帳號執行 `jcmd`，而且 pid 每次重啟都不同，沒辦法逐條寫死；要做的話和 OS 團隊定一個包好的小腳本（只接受 start／dump），sudoers 開那支腳本。沒有這幾條 sudo 時收集腳本會在那一台停下來，不會交出不完整的原料。
 

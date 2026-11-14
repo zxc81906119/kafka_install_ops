@@ -1,0 +1,263 @@
+// web app 的密碼學資產盤點（CBOM）與合規報告
+//
+// 和 Confluent Platform 那支（cbom/Jenkinsfile）用同一套合併、規則與報告，差在「原料怎麼來」：
+// web app 的原始碼與建置在我們手上，所以照生命週期收三段：
+//   建置時   建置（順便得到 SBOM）→ 原始碼掃描（cbomkit-action）→ 原始碼目錄裡的憑證、私鑰、寫死的秘密（cbomkit-theia）
+//   部署物   建成容器映像 → 掃映像（cbomkit-theia）→ 映像裡 JDK 與 OS 的密碼設定
+//   執行期   （勾選才做）用映像啟動 app → 把端點打一輪 → testssl.sh → JFR
+// 每個階段只是叫 webapp-collect.sh 的一個步驟，所以同樣的事不靠 Jenkins 也能手動做。
+//
+// agent 上要有：JDK 17 以上（java、jfr）、podman（本機或連到遠端引擎）、curl、tar、unzip、openssl、git、
+//               host 或 dig、hexdump（testssl.sh 要用）；
+//               /opt/cbom：bin/cbom-tools.jar、bin/opa、bin/cbomkit-theia、bin/testssl/、bin/cbom-report.sh、
+//               lib/cbom-lib.sh、policy/、VERSIONS、webapp/webapp-collect.sh；沒填 GIT_URL 時另外要 webapp-src/。
+// Jenkins 要有：Pipeline、HTML Publisher、Timestamper（options 的 timestamps()）三個 plugin。
+// lab 的環境由 cbom/webapp/lab.sh up 建（容器 cbom-jenkins，http://localhost:18089，工作 cbom-webapp）。
+//
+// 每次執行留下：out/cbom.json、out/findings.json、out/report.html、out/inventory-check.txt（下載用）
+//               與左邊選單的「CBOM 合規報告」頁。
+// 結果的顏色：綠＝合規；紅＝有違規項目而且 GATE 有勾，或某個 stage 失敗；黃（不穩定）＝有違規項目但 GATE 沒勾。
+// 和 Confluent Platform 那支（cbom/Jenkinsfile）的差別：
+//   - 原料來源不同：那支用 ssh 請操作機收集（一個「收集」stage）；這支在 agent 上自己建置、掃描（建置到執行期五個 stage）。
+//   - 這支多一個 GATE 參數：取消勾選時有違規只標成不穩定（黃），pipeline 照樣算完成；那支沒有這個參數，有違規一律失敗（紅）。
+//   - 這支可以選配上傳 CBOMkit（CBOMKIT_URL）；那支沒有。
+pipeline {
+  agent any
+
+  options {
+    // 保留最近 30 次的 CBOM 與報告
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+    // 同一時間只跑一次（兩次同時跑會共用同一個 workspace 的 src/、raw/、out/）
+    disableConcurrentBuilds()
+    // log 的每一行前面加時間（Timestamper plugin）
+    timestamps()
+    // 整個 pipeline 超過 60 分鐘就中止
+    timeout(time: 60, unit: 'MINUTES')
+  }
+
+  parameters {
+    string(name: 'GIT_URL', defaultValue: '',
+      description: 'web app 的 git 網址；留空就用 agent 上 /opt/cbom/webapp-src 的那份（lab）')
+    string(name: 'GIT_BRANCH', defaultValue: 'main', description: '分支（有填 GIT_URL 才有用）')
+    booleanParam(name: 'RUNTIME_EVIDENCE', defaultValue: false,
+      description: '執行期：用映像把 app 跑起來，做 TLS 掃描與 JFR 錄製（多 2–3 分鐘）')
+    booleanParam(name: 'GATE', defaultValue: true, description: '有違規項目就讓這次執行失敗')
+    choice(name: 'SPEC_VERSION', choices: ['1.7', '1.6'], description: 'CBOM 的 CycloneDX 版本')
+    string(name: 'CBOMKIT_URL', defaultValue: '',
+      description: '（選配）CBOMkit 平台的 API 網址，例如 http://cbomkit.example:8081；有填才把 CBOM 上傳過去供瀏覽')
+  }
+
+  // 每個 sh 步驟都看得到的環境變數：工具裝在哪、兩支腳本的位置
+  // MAVEN_OPTS=-Xmx384m：建置時 Maven 的 heap 上限（lab 的 Jenkins 容器總共只有 2200m，見 cbom/webapp/lab.sh）
+  environment {
+    CBOM_HOME = '/opt/cbom'
+    REPORT = '/opt/cbom/bin/cbom-report.sh'
+    COLLECT = '/opt/cbom/webapp/webapp-collect.sh'
+    MAVEN_OPTS = '-Xmx384m'
+  }
+
+  stages {
+    // 做什麼：檢查參數的格式、清掉上次的檔、取得原始碼（有填 GIT_URL 就 clone，沒填就複製 agent 上的那一份）、
+    //         叫收集腳本的 init 寫下這次的範圍。
+    // 產出：workspace 的 src/（原始碼）、raw/collect.env、空的 out/html/。
+    // 失敗：GIT_URL 不是 http(s) 網址、GIT_BRANCH 有不允許的字元、clone 失敗、原始碼裡沒有 pom.xml。
+    stage('準備') {
+      steps {
+        script {
+          // 參數明確存成變數再給後面的 sh 用：工作第一次執行時，參數的預設值還不會變成 shell 的環境變數
+          // 寫法說明：「甲?.trim()」＝甲有值才去掉前後空白，沒有值（null）就還是 null，不會出錯；
+          //           「甲 ?: 乙」＝甲是空的（null 或空字串）就用乙。
+          //   例：GIT_URL 填「 http://x/y 」→ 'http://x/y'；沒填 → ''；GIT_BRANCH 沒填 → 'main'
+          env.CBOM_GIT_URL = params.GIT_URL?.trim() ?: ''
+          env.CBOM_GIT_BRANCH = params.GIT_BRANCH?.trim() ?: 'main'
+          env.CBOM_SPEC = params.SPEC_VERSION ?: '1.7'
+          env.CBOM_KIT_URL = params.CBOMKIT_URL?.trim() ?: ''
+
+          // 這兩個值會放進 git clone 的指令，所以只收固定的字元。==~ 是「整個字串都要符合這個樣式」
+          //   網址：http:// 或 https:// 開頭，後面只能有英數字與 . _ : / @ -
+          //   例：'http://demo-git/local/crypto-lab' 符合；'ssh://x'、'http://x/y; rm' 不符合
+          if (env.CBOM_GIT_URL && !(env.CBOM_GIT_URL ==~ /https?:\/\/[A-Za-z0-9._:\/@-]+/)) {
+            error('GIT_URL 要是 http 或 https 的網址')
+          }
+
+          if (!(env.CBOM_GIT_BRANCH ==~ /[A-Za-z0-9._\/-]+/)) {
+            error('GIT_BRANCH 有不允許的字元')
+          }
+        }
+
+        // 清掉上次留下的，建好空目錄
+        sh 'rm -rf src raw raw.work out && mkdir -p out/html'
+
+        // 原始碼：有填網址就只抓那個分支最新的一版（--depth 1），沒填就用 agent 上的那一份（空字串在 if 裡當成「否」）
+        script {
+          if (env.CBOM_GIT_URL) {
+            sh 'git clone -q --depth 1 --branch "$CBOM_GIT_BRANCH" "$CBOM_GIT_URL" src'
+          } else {
+            sh 'cp -r "$CBOM_HOME/webapp-src" src'
+          }
+        }
+
+        sh 'bash "$COLLECT" init --src src --raw raw'
+      }
+    }
+
+    // 做什麼：用專案自己的 mvnw 建置並跑測試；建置時順便產生 SBOM（相依的函式庫清單）。
+    // 產出：src/target/ 的 jar；raw/shared/jars/groups.txt、sbom-<雜湊>.json（函式庫那一層的原料）。
+    // 失敗：編譯或測試沒過，或 pom.xml 沒有產生 SBOM 的 plugin。
+    stage('建置') {
+      steps {
+        sh 'bash "$COLLECT" build --src src --raw raw'
+      }
+    }
+
+    // 做什麼：用 cbomkit-action（容器）掃 Java 原始碼裡呼叫密碼學 API 的地方。
+    // 產出：raw/shared/source/cbom.json（原始碼那一層的原料）。
+    // 失敗：掃描工具出錯（log 在 raw.work/source-scan.log，訊息會指過去）。
+    stage('原始碼掃描') {
+      steps {
+        sh 'bash "$COLLECT" source --src src --raw raw'
+      }
+    }
+
+    // 做什麼：用 cbomkit-theia 掃原始碼目錄裡的憑證檔、私鑰檔、寫死的秘密（只記位置與種類，不記內容）。
+    // 產出：raw/shared/theia.json（檔案那一層的原料）。
+    // 失敗：cbomkit-theia 出錯（log 在 raw.work/theia-dir.log）。找到私鑰或秘密「不會」讓這裡失敗，那是規則判斷的事。
+    stage('憑證與秘密') {
+      steps {
+        sh 'bash "$COLLECT" files --src src --raw raw'
+      }
+    }
+
+    // 做什麼：把 app 建成容器映像，掃映像裡的憑證與秘密，讀映像裡 JDK 與 OS 的密碼設定。
+    // 產出：映像 localhost/crypto-lab-web:cbom；raw/shared/theia-image.json；
+    //       raw/app/java.security、java-version.txt、java-security-effective.txt、os-crypto.txt。
+    // 失敗：映像建不起來，或 cbomkit-theia 出錯（log 在 raw.work/theia-image.log）。
+    stage('映像') {
+      steps {
+        sh 'bash "$COLLECT" image --src src --raw raw'
+      }
+    }
+
+    // 做什麼：（參數 RUNTIME_EVIDENCE 有勾才做，沒勾時這個 stage 顯示成略過）用映像把 app 跑起來並錄 JFR，
+    //         把端點打一輪，用 testssl.sh 掃 TLS，停掉 app 後取回 JFR 的紀錄。
+    // 產出：raw/app/tls/<埠>.json、raw/app/jfr/service.json、raw/app/served/<埠>.pem。
+    // 失敗：app 起不來、testssl.sh 沒掃成、JFR 檔取不回來。
+    stage('執行期') {
+      when {
+        expression { return params.RUNTIME_EVIDENCE }
+      }
+      steps {
+        sh 'bash "$COLLECT" runtime --src src --raw raw'
+      }
+    }
+
+    // 做什麼：兩步。先叫收集腳本的 finish 檢查原料（collect.env 完整、沒有私鑰內容）並刪掉暫存目錄 raw.work；
+    //         再由 cbom-tools.jar 把各層原料合併成一份 CBOM。
+    // 產出：out/cbom.json（CycloneDX，版本照參數 SPEC_VERSION；已通過官方 schema 驗證）。
+    // 失敗：原料檢查不合格、某一層的原料格式不對、或產出的 CBOM 沒通過 schema。
+    stage('產生 CBOM') {
+      steps {
+        sh 'bash "$COLLECT" finish --src src --raw raw'
+        sh 'bash "$REPORT" build --raw raw --out out --spec "$CBOM_SPEC"'
+      }
+    }
+
+    // 做什麼：先跑規則自己的測試（opa test），再用 OPA 以 /opt/cbom/policy 的規則判斷 out/cbom.json。
+    // 產出：out/findings.json（每一筆發現與等級）、out/counts.json（各等級的數量）。
+    // 失敗：規則的測試沒過（規則檔被改壞）或 OPA 執行出錯。有違規項目「不會」讓這個 stage 失敗，那是最後一個 stage 的事。
+    stage('規則判斷') {
+      steps {
+        sh 'bash "$REPORT" evaluate --out out'
+      }
+    }
+
+    // 做什麼：對答案。拿這次的 out/cbom.json、out/findings.json 對原始碼裡的標準答案 src/expected-inventory.json，
+    //         列出沒找到與等級不符的項目（摘要也印在這個 stage 的 log）。只是量測，不是關卡。
+    // 產出：out/inventory-check.txt（和另外三個產出一起存成這次執行的檔案）。
+    // 失敗：不會改變這次執行的結果。對出來有沒找到的項目，這個 stage 照樣是成功；
+    //       只有檔案讀不到或對答案的程式出錯時，這個 stage 自己標成失敗（紅），整次執行的結果不受影響，後面的 stage 照做。
+    //       原始碼裡沒有 expected-inventory.json（別的 app）時，這個 stage 顯示成略過。
+    stage('對答案') {
+      when {
+        expression { return fileExists('src/expected-inventory.json') }
+      }
+      steps {
+        // catchError：裡面的步驟失敗時不往外丟，只把這個 stage 標成失敗（stageResult），整次執行維持原來的結果（buildResult）
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+          sh 'bash "$REPORT" inventory --out out --expected src/expected-inventory.json'
+        }
+      }
+    }
+
+    // 做什麼：把 CBOM 與判斷結果做成 HTML 報告。
+    // 產出：out/report.html（單一檔，下載用）、out/html/index.html＋report.css（給 Jenkins 的報告頁顯示）。
+    // 失敗：報告程式出錯，或 out/cbom.json、out/findings.json 不在。
+    stage('報告') {
+      steps {
+        sh 'bash "$REPORT" report --out out'
+      }
+    }
+
+    // 做什麼：（參數 CBOMKIT_URL 有填才做）從 CBOM 挑出密碼學資產，上傳到 CBOMkit 平台，專案名稱固定是 crypto-lab-webapp。
+    // 產出：out/cbom-crypto-only.json；CBOMkit 上多一份（或蓋掉同名的）CBOM。
+    // 失敗：連不上 CBOMkit 或它回錯誤時只印一行訊息，這個 stage 照樣算成功；
+    //       只有「挑出密碼學資產」那一步（cbom-tools.jar crypto-only）出錯才會失敗。
+    stage('上傳 CBOMkit（選配）') {
+      when {
+        // 空字串當成「否」：沒填網址就略過這個 stage
+        expression { return env.CBOM_KIT_URL }
+      }
+      steps {
+        // CBOMkit 只是檢視器；連不上或上傳被拒絕不影響這次的結果（腳本只印一行訊息，不讓這一步失敗）
+        sh 'bash "$REPORT" upload --out out --cbomkit "$CBOM_KIT_URL" --project crypto-lab-webapp'
+      }
+    }
+
+    // 做什麼：讀規則的結論，決定這次執行的結果，並把「有沒有做執行期」與各等級的數量寫在這次執行的說明欄。
+    // 產出：不產生檔案。
+    // 結果：合規 → 成功（綠）；有違規而且 GATE 有勾 → 失敗（紅）；有違規但 GATE 沒勾 → 不穩定（黃）；
+    //       判斷本身出錯（結束碼不是 0 也不是 3）→ 失敗（紅）。
+    stage('合規結果') {
+      steps {
+        script {
+          // 腳本的結束碼：0 合規；3 有違規項目。只有「違規」算不合規；量子脆弱與警告不擋，看報告排進遷移計畫
+          // returnStatus: true：腳本回非 0 時不讓這一步直接失敗，而是把結束碼交回來，由下面自己決定
+          def code = sh(returnStatus: true, script: 'bash "$REPORT" verdict --out out')
+          def counts = readFile('out/counts.json').trim()
+          currentBuild.description = "執行期 ${params.RUNTIME_EVIDENCE ? '有' : '無'}｜${counts}"
+
+          // 四種情況由上往下判斷（和 Confluent Platform 那支比，多了最後的「不穩定」）
+          if (code == 0) {
+            // 合規：什麼都不用做。腳本已經印出「合規：沒有違規項目 …」
+          } else if (code != 3) {
+            error("判斷合規結果時失敗（結束碼 ${code}）")
+          } else if (params.GATE) {
+            error("不合規：有違規項目 ${counts}，看報告的「違規」一節")
+          } else {
+            unstable("不合規（沒有開關卡，只標成不穩定）：${counts}")
+          }
+        }
+      }
+    }
+  }
+
+  // 不管成功或失敗，最後都做（前面的 stage 失敗時檔案可能不在，所以兩個步驟都設成「沒有檔也不算錯」）
+  post {
+    always {
+      // 原始碼、原料、暫存目錄不留在 workspace；四個產出存成這次執行的檔案，供下載
+      sh 'rm -rf src raw raw.work'
+      archiveArtifacts artifacts: 'out/cbom.json, out/findings.json, out/report.html, out/inventory-check.txt',
+        allowEmptyArchive: true
+
+      // 把 out/html/ 掛成這次執行的一頁「CBOM 合規報告」（HTML Publisher）；每次執行各留一份，工作首頁連到最新一次
+      publishHTML(target: [
+        reportName: 'CBOM 合規報告',
+        reportDir: 'out/html',
+        reportFiles: 'index.html',
+        keepAll: true,
+        alwaysLinkToLastBuild: true,
+        allowMissing: true
+      ])
+    }
+  }
+}

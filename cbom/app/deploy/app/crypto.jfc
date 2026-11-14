@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  crypto-lab 的 JFR 設定：只錄密碼學相關事件（pipeline 的執行期那一段：cbom/webapp/webapp-collect.sh 的 runtime 步驟）。
+  用法：java -XX:StartFlightRecording=filename=app.jfr,settings=deploy/app/crypto.jfc,dumponexit=true -jar app.jar
+  （映像裡這個檔在 /deployments/crypto.jfc，見 deploy/app/Containerfile）
+
+  jdk.SecurityProviderService  每次向 JCA 要演算法時觸發（Cipher/Signature/MessageDigest/Mac/KeyAgreement…getInstance）
+                               需要 JDK 20 以上；附上呼叫堆疊，才知道是 app 自己還是哪個函式庫在用
+  jdk.TLSHandshake             每次 TLS 交握完成時觸發：實際協商出的協定版本與 cipher suite（JDK 12 以上）
+
+  這兩個事件預設都是關閉的，所以要用這個檔案明確開啟。其他事件全部不錄，檔案很小、對效能幾乎沒有影響。
+  （jdk.X509Certificate 也可以錄，但 JDK 載入內建 CA 時會產生大量事件，憑證已由原始碼目錄、映像、TLS 三種掃描涵蓋，所以不錄）
+-->
+<configuration version="2.0" label="CBOM crypto" description="Records only cryptography-related JDK events for CBOM runtime detection">
+  <event name="jdk.SecurityProviderService">
+    <setting name="enabled">true</setting>
+    <setting name="stackTrace">true</setting>
+  </event>
+  <event name="jdk.TLSHandshake">
+    <setting name="enabled">true</setting>
+    <setting name="stackTrace">false</setting>
+  </event>
+</configuration>

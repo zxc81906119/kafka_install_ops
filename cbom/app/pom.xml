@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.2</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.example</groupId>
+    <artifactId>crypto-lab</artifactId>
+    <version>1.0.0</version>
+    <name>crypto-lab</name>
+    <description>CBOM lab: Spring Boot 4 web app with common (good and bad) cryptography usages</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <bouncycastle.version>1.86</bouncycastle.version>
+        <sonar-maven-plugin.version>5.8.0.7211</sonar-maven-plugin.version>
+    </properties>
+
+    <!--
+      Spring Boot 4 和 3 的差異（從 Boot 3 過來的人常見的疑惑）：
+        - starter 改名：spring-boot-starter-web → spring-boot-starter-webmvc
+                        spring-boot-starter-oauth2-resource-server → spring-boot-starter-security-oauth2-resource-server
+                        測試用的 MockMvc 移到 spring-boot-starter-webmvc-test
+        - JSON 改用 Jackson 3，套件名稱從 com.fasterxml.jackson 改成 tools.jackson（見 CryptoLabInventoryConsistencyTest）
+        - 基準是 Java 17（本專案即以 17 編譯）
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <!-- 帶入 nimbus-jose-jwt，用於 JWT 簽發/驗證 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- BouncyCastle：Argon2 (Spring Security 需要)、輕量 API、PEM 解析 -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <!-- SBOM：Spring Boot parent 已預先設定 makeAggregateBom，輸出到 META-INF/sbom/application.cdx.json -->
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.sonarsource.scanner.maven</groupId>
+                <artifactId>sonar-maven-plugin</artifactId>
+                <version>${sonar-maven-plugin.version}</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>

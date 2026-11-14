@@ -17,7 +17,7 @@ C3 的版本由原廠相容表決定：2.5.x 支援 CP 到 8.2.x，2.6.x 支援�
 
 | 文件 | 給誰 | 來源 |
 |---|---|---|
-| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0 章建 lab、第 1–33 章〔第 33 章是密碼學資產盤點 CBOM〕、附錄 B 監控覆蓋率；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
+| `docs/Confluent-安裝旅程-手把手.docx` | 安裝工程師：每一步誰做、在哪台、敲什麼、看到什麼（第 0 章建 lab、第 1–33 章〔第 33 章是 Confluent Platform 的密碼學資產盤點 CBOM〕、附錄 B 監控覆蓋率；基底 → 遷移） | `docs/journey-src/journey.md`（`node build.js`） |
 | `docs/Confluent-請銀行確認的事項.docx` | 銀行各團隊：待確認事項與我方預設 | `docs/questions-src/questions.md`（`node build.js`） |
 | `docs/Confluent-RPM安裝流程.pptx` | 銀行主管：RPM 安裝流程 14 頁 | `docs/deck-src/install.js`、`install-steps.js` |
 | `redesign/README.md` | 設計決策、教訓、待確認事項的紀錄 | 手寫 |
@@ -59,8 +59,10 @@ docs/deck-src/      RPM 安裝流程簡報
 install/            照手冊一章一支的安裝腳本（install.sh、steps/02–32（檔名照章號；第 7、25 章各拆成 07-1/2/3、25-1/2）、conf/site.env），說明見 install/README.md
                     install/lab/：lab 專用（bank-sim.sh 扮演銀行、run-customer.sh 從零跑整條主線＝基底＋遷移）
 opmenu/             維運選單（OP menu）原始碼；經離線引進流程送進操作機（手把手第 16 章）
-cbom/               密碼學資產盤點（CBOM）與合規報告（手把手第 33 章）：tools/（Maven 專案 cbom-tools）、policy/（OPA 規則）、
-                    cbom-collect.sh（操作機上的收集腳本）、Jenkinsfile、build.sh／package.sh（建置與打包交付物）
+cbom/               密碼學資產盤點（CBOM）與合規報告（Confluent Platform：手把手第 33 章；web app 不在手冊裡，見 cbom/webapp/README.md）：tools/（Maven 專案 cbom-tools）、policy/（OPA 規則）、
+                    cbom-collect.sh（平台：操作機上的收集腳本）、webapp/（web app：lab.sh 建環境、收集腳本、Jenkinsfile；和 Kafka lab 無關）、
+                    cbom-report.sh 與 lib/（兩邊共用的後半段）、Jenkinsfile、build.sh／package.sh（建置與打包交付物）、
+                    app/（典範 web app）、cbomkit-demo/（CBOMkit 平台測試）、deck/（簡報「Cbom 探討」的產生程式）
 redesign/           設計討論紀錄
 ```
 

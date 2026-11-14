@@ -205,6 +205,45 @@ function lintJourney(file, onlyChapter) {
   return problems;
 }
 
+// 分組的兩條規則（2026-11-13 定案）：目前只套用在 cbom/ 底下的腳本；install、opmenu、手冊還沒照這兩條排過
+function usesGroupRules(file) {
+  return /(^|[\\/])cbom[\\/]/.test(file);
+}
+
+// 把單引號與雙引號字串都拿掉（判斷 ; 是不是在字串裡用）
+function withoutStrings(line) {
+  return withoutQuoted(line).replace(/"[^"]*"/g, '""');
+}
+
+// 這一行是不是用 ; 把兩個指令放在同一行
+//   不算的：case 的 ;;、「; then」「; do」、算術 (( ; ; ))、註解裡的 ;
+//   例：「name() { echo x; }」算；「for h in $hosts; do」不算
+function hasTwoCommands(line) {
+  let bare = withoutStrings(line);
+  bare = bare.replace(/#.*$/, '').replace(/;;/g, '').replace(/;\s*(then|do)\b/g, '').replace(/\(\(.*?\)\)/g, '');
+
+  return /;\s*\S/.test(bare);
+}
+
+// 這一行是不是一個區塊的結束（fi、done、esac、函式的 }），而下一行緊接著別的指令（中間沒有空行）
+//   下一行是另一個結束、else、elif、;;、）或檔案結尾時不算；「done < 檔案」「done | 指令」這種也不算（區塊還沒寫完）
+function missingBlankAfterEnd(lines, i) {
+  const bare = withoutStrings(lines[i]);
+  const isEnd = /^\s*(fi|done|esac)\s*(#.*)?$/.test(bare) || /^\s*\}\s*(#.*)?$/.test(bare);
+
+  if (!isEnd) {
+    return false;
+  }
+
+  const next = lines[i + 1];
+
+  if (next === undefined || next.trim() === '') {
+    return false;
+  }
+
+  return !/^\s*(fi|done|esac|\}|else|elif|;;|then|\))/.test(next);
+}
+
 // 檢查腳本：heredoc 寫到檔案的內容跳過
 function lintScript(file) {
   const lines = fs.readFileSync(file, 'utf8').split('\n');
@@ -229,6 +268,16 @@ function lintScript(file) {
     if (!isExempt(lines, i)) {
       for (const rule of checkShellLine(line)) {
         problems.push({ file, line: i + 1, rule, text: line.trim().slice(0, 110) });
+      }
+
+      if (usesGroupRules(file) && !/^\s*#/.test(line)) {
+        if (hasTwoCommands(line)) {
+          problems.push({ file, line: i + 1, rule: '一行兩個指令', text: line.trim().slice(0, 110) });
+        }
+
+        if (missingBlankAfterEnd(lines, i)) {
+          problems.push({ file, line: i + 1, rule: '結束後沒有空一行', text: line.trim() + ' ↵ ' + lines[i + 1].trim().slice(0, 80) });
+        }
       }
     }
 

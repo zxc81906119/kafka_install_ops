@@ -1,0 +1,44 @@
+IBM 
+Research
+|
+CBOMkit-OPA檢查
+System theme
+CBOMkit-OPA檢查
+Explore the use of cryptography in software with 
+Cryptography Bills of Materials (CBOM)
+Explore previously scanned CBOMs
+Most recent scans	Date of scan	
+
+crypto-lab-webapp
+Open in a new tab
+	14/11/2026	
+See 270 cryptographic assets
+
+
+pkg:github/demo-git/local/crypto-lab@b10234f
+Open in a new tab
+	14/11/2026	
+See 142 cryptographic assets
+Generate a new CBOM
+
+Submit a new public Git repository to scan and generate a CBOM.
+
+Scan
+Advanced options
+Upload a CBOM
+
+Upload an existing CBOM to visualize it.
+
+Drop a CBOM here
+(or click to browse)
+The Cryptography Bill of Materials
+
+The Cryptography Bill of Materials (CBOM) is an object model that describes cryptographic assets and their dependencies, aiming to simplify the management of cryptography inventory and accelerate the migration to quantum-safe solutions. CycloneDX version 1.6, which incorporates the Cryptographic Bill of Materials (CBOM) capability, has recently achieved international recognition by being adopted as an ECMA standard. This development underscores the growing importance and acceptance of CycloneDX in the software supply chain security landscape. Overall, CBOM significantly enhances visibility into the cryptographic aspects of the software supply chain, enabling organizations to better manage risks, ensure compliance, and prepare for future cryptographic challenges, including the transition to quantum-safe cryptography.
+
+Specification
+Blog post
+Learn more
+Contact IBM
+Privacy
+Terms of use
+Accessibility

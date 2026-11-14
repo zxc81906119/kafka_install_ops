@@ -738,3 +738,43 @@ OS 內容（9.6 完整套件庫、9.6→9.8 更新集合）是**銀行套件庫�
 - JFR lab 實測（2026-11-11，kb01 錄 134 秒）：SecurityProviderService 2,007 筆、28 種（含 `KEM｜X25519MLKEM768` 8 次、`ML-KEM` 8 次，證實 PQC 混合金鑰交換真的被用到）、TLSHandshake 21 筆（沒有 named group 欄位）、X509Certificate 18 筆；.jfr 4.3 MB、JSON 12.8 MB。要用服務的帳號執行（`sudo -u cp-kafka jcmd`），`cpuser-ops` 要再加這幾條；錄製檔含連線對象的位址（敏感、不含金鑰）。**限制（已查清）**：`jdk.TLSHandshake` 在這個環境只記 TLS 1.3 的交握；用 openssl 與 Java 用戶端強制 TLS 1.2 連線都成功，但一筆事件都沒有（不帶憑證連要求 mTLS 的 9092 則是交握失敗，本來就不會有）。所以 JFR 不能用來找還在用 TLS 1.2 的用戶端；要找的話另外評估 Kafka 依協定版本統計連線數的指標。
 - lab 實測的前提（2026-11-11）：testssl.sh 一定要有 DNS 查詢工具（`dig`／`host`；`--nodns none` 也繞不過），操作機要從銀行套件庫裝 `bind-utils`；cbomkit-theia 只發行原始碼與容器映像，我們在下載機用 Go 編成靜態執行檔（v1.1.2，28 MB）；它讀 `.crt`／`.pem`，讀不了有密碼的 `.p12`。
 - 實作時定：章號（暫定 33）、Jenkins 取回原料的方式（操作機推送或 Jenkins 來拉）、各工具與 Jackson 的版本。
+
+
+## web app 的 CBOM 與 cbom-tools 的結構（2026-11-12 使用者定案，lab 實測）
+
+**對象**：典範 web app `cbom/app`（Spring Boot，從 untitled9 搬來；刻意好壞並存；附 49 項的標準答案 `expected-inventory.json`）。手冊第 34 章。
+
+**掃描方式照 web app 自己的需求設計，不沿用平台的**（使用者：有些不適合）。依據是工具的官方文件：cbomkit-action 要掃建置過的專案；cbomkit-theia 不掃原始碼，定位是和原始碼掃描搭配，掃目錄或映像。
+
+| 階段 | 做什麼 | 工具 |
+|---|---|---|
+| 建置時（每次都做） | 建置，取建置自己產生的 SBOM | Maven 的 CycloneDX plugin（取代 syft） |
+| | 原始碼掃描 | cbomkit-action 2.3.0 容器（和 SonarQube＋sonar-cryptography 是同一個引擎；選容器是因為不用另外養 SonarQube） |
+| | repo 裡的憑證、私鑰、寫死的秘密 | cbomkit-theia dir，開 secrets |
+| 部署物 | 建成容器映像再掃；讀映像裡的 JDK 與 OS 設定 | cbomkit-theia image；`JdkSettingsLayer` |
+| 執行期（Jenkins 參數勾選） | 用映像啟動，把端點打一輪，TLS 掃描與 JFR | testssl.sh、JFR |
+
+- 兩條路並行：Jenkins（上表）與 CBOMkit 平台（網頁掃描＋OPA 檢查，`cbom/cbomkit-demo`）。CBOMkit 2.3.0 收得下我們的 1.7 CBOM，OPA 檢查可用；內建檢查遇到沒有 `cryptoProperties` 的元件會回 500，所以上傳前用 `cbom-tools crypto-only` 濾掉。
+- 涵蓋率（標準答案 49 項）：46。找不到的 3 項（bcrypt、Argon2、JWT `none`）工具本來就看不到。各段互補：模式與填充只有原始碼掃描看得到；函式庫代為呼叫的只有執行期看得到。
+- 規則新增（同一份 `cbom.rego`）：私鑰放在 repo、寫死的秘密 → 違規；映像裡被秘密掃描命中的 → 待人工判斷（多為誤判）；亂數產生器 → 通過。
+- Jenkins 一個工作 `cbom-webapp`：建置時與部署物一定做，執行期用參數勾；`GATE` 關掉時有違規只標成不穩定。
+
+**程式結構**（使用者選的四項；Template Method、Builder、報告輸出的 Strategy 先不做）：
+
+| 模式 | 落在哪裡 |
+|---|---|
+| Adapter＋Strategy 註冊表 | 每個工具的輸出一個 `Layer`（tls、config、jdk、libraries、runtime、source、files、image），登記在 `Layers.ALL` |
+| Profile | `collect.env` 的 `PROFILE=cp` 或 `webapp`：用哪幾層、CBOM 的主角、路徑怎麼顯示 |
+| Pipes and Filters | 合併之後 `BomSteps.PIPELINE`：範圍 → 排序 → metadata → 驗證 → 版本 |
+| 共用的後半段 | `cbom-report.sh`（build／evaluate／report／upload／verdict）兩支 Jenkinsfile 都叫它；收集腳本共用 `lib/cbom-lib.sh`（含原料目錄的檢查 `check_raw`） |
+
+- 不做的：規則留在 OPA；收集腳本不做繼承式的抽象（兩邊拿原料的方式真的不同），介面是「原料目錄的格式」。
+- 驗收：重構前後用同一份平台原料與同一份 web app 原料，1.7／1.6 的 CBOM、判定結果、報告共八個檔的雜湊完全相同。
+
+**待問**（問題清單 13.12–13.16）：有容器引擎的 Jenkins agent、內部 registry 與 Maven 套件庫、要盤哪些 app 與部署方式、關卡政策、秘密掃描結果由誰處理。
+
+### web app 的盤點和 Kafka lab 脫鉤（2026-11-12 定案，同一天改過一次）
+
+- **最後的決定**（使用者：web app 和平台毫無關係）：手冊只留 Confluent Platform 的 CBOM（第 33 章），**第 34 章整章刪除**；Jenkins 分成兩台：CP 用 Kafka lab 裡的 `lab-jenkins`（33.10，精簡，沒有 podman），web app 用 Kafka lab 之外的 `cbom-jenkins`（`cbom/webapp/lab.sh`，`~/cbom-lab`、網路 `cbomnet`、port 18089）。web app 的步驟只剩一支建置腳本與 `cbom/webapp/README.md`；CP 的交付物 `cbom-kit` 不再含 `webapp/`；問題清單拿掉 13.12–13.16。
+- 同一天稍早的版本（已作廢）：一台 Jenkins 共用、搬出 Kafka lab，第 34 章改成獨立可做。照那個版本的手冊實跑過第 34 章（`run-customer-34-34-20261112-1600.log`），`lab.sh` 的步驟就是從那裡來的。
+- **另外修正**：CBOM 加 `serialNumber`（CBOMkit 2.3.0 的網頁沒有這個欄位就顯示「Invalid CBOM」；API 不檢查，所以上傳成功不代表打得開）。編號由內容算出，同樣原料產出相同的檔。
